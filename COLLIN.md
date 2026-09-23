@@ -23,7 +23,12 @@ Copper is Collin's fork of [Search](https://github.com/driceroland/Search), the 
 | 3. Split view (2–4 panes) | Tier 1 | **shipped**, 2 panes (`Fork/Split.swift`, ⌘⇧D) |
 | 4. Command bar | Tier 1 | **shipped** (`Fork/CommandBar.swift`, ⌘K) |
 | 5. Folders in the sidebar | Tier 2 | **shipped** as tab groups (`Fork/Groups.swift`, `GroupsUI.swift`) with model-assisted grouping (`Grouper.swift`, `Intelligence.swift`) |
-| 6. Auto-archive | Tier 2 | not started |
+| 6. Auto-archive | Tier 2 | **shipped** as part of the Sections piece: Today rows close through the normal path after 12h/24h/48h/never (`Fork/Sections.swift`, Settings, `bench sections archive`) |
+| Gauntlet · sidebar | Arc-grade | **shipped** (`Side.swift` reshaped, `Fork/SpaceTint.swift`, `Fork/Marks.swift`): space-tinted column, 3-wide favourites grid, 13px rows with real favicons, paper-white live pill, filled New Tab seam row |
+| Gauntlet · sections | Arc-grade | **shipped** (`Fork/Sections.swift`, `Session.Entry.saved`/`.seen`): Favourites / Saved / Today for real; arc-import marks Arc pinned as saved; drag or context menu across the seam |
+| Gauntlet · folders | Arc-grade | **shipped** (`Fork/Folders.swift`, `GroupsUI.swift`): groups drawn as Arc's nested folders from ` › ` names, chevron + tinted folder glyph, 16pt indent per level, New Folder Inside, `bench groups toggle` |
+| Gauntlet · command bar | Arc-grade | **shipped** (`Fork/CommandPalette.swift`): floating 640pt card, 40pt rows with site marks and a right-side hint, Switch to <space>; **partly**: input is 17.5pt not Arc's ~18, no extension-action rows |
+| Gauntlet · split | Arc-grade | **shipped** (`Fork/SplitPane.swift`, `SplitSpill.swift`): panes as rounded cards in an 8pt gutter, per-pane toolbar (← → · title · ✕), live pane outlined in the space hue, hover divider; **partly**: still 2 panes |
 | 7. Little Arc | Tier 2 | not started |
 | 8. Peek | Tier 2 | not started |
 | 9. Site Search / search engine choice | Tier 2 | not started |

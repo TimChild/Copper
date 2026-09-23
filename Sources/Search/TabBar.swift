@@ -622,6 +622,7 @@ struct TabMenu: View {
         Button("Close Tab", action: close)
         Button("Close Other Tabs") { browser.closeOthers(but: tab) }
             .disabled(browser.tabs.count < 2)
+        SaveMenu(browser: browser, tab: tab) // Fork: sections
         GroupMenu(browser: browser, tab: tab) // Fork: tab groups
     }
 }

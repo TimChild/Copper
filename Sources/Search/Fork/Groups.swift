@@ -88,6 +88,16 @@ final class Groups: ObservableObject {
         return all.first { $0.name.lowercased() == wanted }
     }
 
+    /// A folder by whichever half of its name you have: the whole path
+    /// (`Misc › BuildrFi`) or, when only one folder answers to it, the last
+    /// part on its own (`BuildrFi`).
+    func group(matching name: String) -> TabGroup? {
+        if let exact = group(named: name) { return exact }
+        let wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
+        let leaves = all.filter { Folders.leaf($0.name).lowercased() == wanted }
+        return leaves.count == 1 ? leaves[0] : nil
+    }
+
     /// The tabs in a group, in row order, across the visible row and the
     /// parked spaces.
     func members(of id: UUID, in browser: Browser) -> [Tab] {
@@ -138,11 +148,38 @@ final class Groups: ObservableObject {
         membership[tab.id] = nil
     }
 
+    /// Renaming a folder renames the folders inside it, since the nesting
+    /// lives in the names: `Misc` → `Odds` takes `Misc › lula` with it. Not
+    /// when two folders share the name, though — then there is no telling
+    /// whose children they are, and only the one folder is renamed.
     func rename(_ id: UUID, to name: String) {
         let clean = name.trimmingCharacters(in: .whitespaces)
         guard !clean.isEmpty, let i = all.firstIndex(where: { $0.id == id }) else { return }
+        let was = all[i].name
         all[i].name = clean
+        if all.filter({ $0.name == was }).isEmpty {
+            for j in all.indices where Folders.below(all[j].name, was) {
+                all[j].name = clean + Folders.mark + String(all[j].name.dropFirst(was.count + Folders.mark.count))
+            }
+        }
         save()
+    }
+
+    /// A folder inside another one, which is only a name: `<parent> › <name>`.
+    /// It takes the parent's colour and the parent opens to show it.
+    @discardableResult
+    func createInside(_ parent: TabGroup, named name: String) -> TabGroup? {
+        let clean = name.trimmingCharacters(in: .whitespaces)
+        guard !clean.isEmpty else { return nil }
+        let made = create(named: Folders.inside(parent, named: clean), hue: parent.hue)
+        // A folder inside a plain one is plain too: both wear the space's
+        // colour, and `create` would otherwise deal it one off the wheel.
+        if parent.hue == nil { tint(made.id, hue: nil) }
+        if let i = all.firstIndex(where: { $0.id == parent.id }), all[i].collapsed {
+            all[i].collapsed = false
+            save()
+        }
+        return group(made.id) ?? made
     }
 
     func tint(_ id: UUID, hue: Double?) {
@@ -205,7 +242,9 @@ final class Groups: ObservableObject {
     // MARK: - the bench
 
     /// `./bench groups` lists; `groups new NAME`; `groups assign TAB NAME`;
-    /// `groups remove TAB`; `groups suggest TAB`; `groups dissolve NAME`.
+    /// `groups remove TAB`; `groups suggest TAB`; `groups dissolve NAME`;
+    /// `groups toggle NAME` folds or opens a folder; `groups inside PARENT
+    /// NAME` makes one inside another.
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         let arg = request["arg"] as? String ?? ""
         let words = arg.split(separator: " ", maxSplits: 1).map(String.init)
@@ -222,12 +261,21 @@ final class Groups: ObservableObject {
             guard let t = tab(arg) else { return ["error": "no tab \(arg)"] }
             Grouper.shared.suggest(for: t, in: browser, forced: true)
         case "dissolve":
-            guard let g = group(named: arg) else { return ["error": "no group \(arg)"] }
+            guard let g = group(matching: arg) else { return ["error": "no group \(arg)"] }
             dissolve(g.id)
+        case "toggle":
+            // `groups toggle Misc` shuts or opens a folder, by its whole
+            // name or by its last part when that is unambiguous.
+            guard let g = group(matching: arg) else { return ["error": "no folder \(arg)"] }
+            toggleCollapsed(g.id)
+        case "inside":
+            guard words.count == 2, let parent = group(matching: words[0]) else { return ["error": "inside PARENT NAME"] }
+            createInside(parent, named: words[1])
         default: break
         }
         let rows: [[String: Any]] = all.map { g in
-            ["id": String(g.id.uuidString.prefix(8)).lowercased(), "name": g.name, "collapsed": g.collapsed,
+            ["id": String(g.id.uuidString.prefix(8)).lowercased(), "name": g.name,
+             "label": Folders.leaf(g.name), "collapsed": g.collapsed,
              "tabs": members(of: g.id, in: browser).map { String($0.id.uuidString.prefix(8)).lowercased() }]
         }
         var out: [String: Any] = ["groups": rows]

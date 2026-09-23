@@ -9,9 +9,11 @@ was left open.
 
 Arc's favourites become the pin grid. Arc folders become Copper's tab
 groups (groups.json + a group id on each entry); groups are flat, so a nested
-folder's name carries its parents. Pinned tabs and open tabs land in the loose
-row, in order, then whatever was left open. Arc documents and easels are skipped. Quit
-Copper first: it writes the session on quit and would overwrite this.
+folder's name carries its parents. Arc's per-space pinned tabs are Copper's
+Saved section; whatever was left open is Today, newest first, each row
+carrying when Arc last had it in front so the archive sweep knows its age.
+Arc documents and easels are skipped. Quit Copper first: it writes the
+session on quit and would overwrite this.
 """
 
 import colorsys
@@ -58,8 +60,8 @@ def main(argv):
     groups = []
 
     def tabs(parent_id, folder=None):
-        """Every tab under a container: (title, url, group id). Folders become
-        groups, nested names joined; splits are flattened."""
+        """Every tab under a container: (title, url, group id, last active).
+        Folders become groups, nested names joined; splits are flattened."""
         # A group is one contiguous run in Copper, so a folder's own tabs go
         # out before its subfolders; Arc interleaves them.
         children = [items[c] for c in items.get(parent_id, {}).get("childrenIds", []) if c in items]
@@ -69,7 +71,10 @@ def main(argv):
             if "tab" in data:
                 url = data["tab"].get("savedURL", "")
                 if url.startswith("http"):
-                    yield node.get("title") or data["tab"].get("savedTitle") or "", url, folder
+                    # Arc counts from 2001; everyone else counts from 1970.
+                    when = data["tab"].get("timeLastActiveAt")
+                    when = when + 978307200 if when else None
+                    yield node.get("title") or data["tab"].get("savedTitle") or "", url, folder, when
             elif "list" in data:
                 name = node.get("title") or "Folder"
                 if folder:
@@ -102,12 +107,17 @@ def main(argv):
         # Arc's favourites grid is Copper's pin grid; Arc's per-space pinned
         # tabs have titles, so they are loose tabs here, followed by what was
         # left open.
-        for title, url, _ in favourites:
+        for title, url, _, _ in favourites:
             host = url.split("/")[2].replace("www.", "")
             entries.append({"url": url, "title": title, "pin": host[:1].upper() or "•", "space": sid})
-        row = list(tabs(pinned)) + list(tabs(unpinned))
-        for i, (title, url, gid) in enumerate(row):
-            entries.append({"url": url, "title": title, "space": sid, **({"active": True} if i == 0 else {}),
+        # Saved first, then Today newest-first — except that a folder is one
+        # run in Copper, so grouped rows keep their own order after the rest.
+        today = sorted(tabs(unpinned), key=lambda t: (t[2] or "", -(t[3] or 0)))
+        row = [(t, True) for t in tabs(pinned)] + [(t, False) for t in today]
+        for i, ((title, url, gid, when), kept) in enumerate(row):
+            entries.append({"url": url, "title": title, "space": sid, "saved": kept,
+                            **({"seen": when} if when else {}),
+                            **({"active": True} if i == 0 else {}),
                             **({"group": gid} if gid else {})})
 
     current = next((sp["id"] for sp in spaces if sp["name"] == "Exowatt"), spaces[0]["id"])
@@ -116,8 +126,10 @@ def main(argv):
     for sp in spaces:
         n = sum(1 for e in entries if e["space"] == sp["id"])
         p = sum(1 for e in entries if e["space"] == sp["id"] and "pin" in e)
+        s = sum(1 for e in entries if e["space"] == sp["id"] and e.get("saved"))
+        t = sum(1 for e in entries if e["space"] == sp["id"] and e.get("saved") is False)
         g = {e["group"] for e in entries if e["space"] == sp["id"] and "group" in e}
-        print(f"{sp['name']:22} {n:4} tabs ({p} pinned, {len(g)} folders)  hue={sp.get('hue')}")
+        print(f"{sp['name']:22} {n:4} tabs ({p} favourites, {s} saved, {t} today, {len(g)} folders)  hue={sp.get('hue')}")
     if dry:
         return
     os.makedirs(os.path.dirname(out), exist_ok=True)

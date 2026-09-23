@@ -32,6 +32,13 @@
     ./bench ext-remove ID
     ./bench spaces [new NAME|select N|next|prev|move N|remove N|profile NAME]
     ./bench groups [new NAME|assign ID NAME|remove ID|suggest ID|dissolve NAME]
+    ./bench groups [toggle NAME|inside PARENT NAME]
+                                       folders: fold or open one (by its whole "A › B" name or
+                                       its last part), or make one inside another
+    ./bench sections [save ID|unsave ID|archive [HOURS]|window 12h|24h|48h|never]
+                                       the sidebar's Saved and Today blocks: counts per space,
+                                       move a tab across the seam, run the archive sweep now
+                                       (with HOURS, against that age instead of the setting)
     ./bench agent [on|off|rotate]    the MCP server agents drive the window through
     ./bench ai [mode off|ask|auto]   which model lanes have keys, and the grouper's last note
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
@@ -123,7 +130,7 @@ def main(argv):
     elif verb == "window":
         if not args: sys.exit("usage: bench window PATH")
         request["path"] = os.path.abspath(args[0])
-    elif verb in ("spaces", "groups", "agent", "ai"):
+    elif verb in ("spaces", "groups", "sections", "agent", "ai"):
         request["op"] = args[0] if args else "list"
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "ui":
@@ -193,6 +200,17 @@ def main(argv):
     elif verb == "spaces":
         for s in answer.get("spaces", []):
             print(f"{'●' if s['current'] else ' '} {s['index']}  {s['name']}  ({s['tabs']} tabs, {s['profile']})")
+    elif verb == "sections":
+        if "archived" in answer:
+            print(f"archived {answer['archived']} tab(s)")
+            if not answer["archived"]:
+                print(f"  nothing in Today is older than the window — oldest row is {answer.get('oldest')}h;"
+                      f" `sections archive HOURS` sweeps against that age instead")
+        print(f"archive window: {answer.get('window')}, oldest row in Today: {answer.get('oldest')}h")
+        for s in answer.get("spaces", []):
+            print(f"{'●' if s['current'] else ' '} {s['name']:22} {s['favourites']:3} favourites  {s['saved']:4} saved  {s['today']:4} today")
+        for t in answer.get("today", []):
+            print(f"    {t['id']}  {t['seen']}h  {t['title'] or '—'}")
     elif verb == "tabs":
         for tab in answer.get("tabs", []):
             mark = "⚗" if tab.get("bench") else ("●" if tab.get("active") else " ")

@@ -210,6 +210,8 @@ struct SettingsPanel: View {
             Line("Sleep tabs you aren't using", "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
                 Switch(on: $prefs.sleepsTabs)
             }
+            Rule()
+            ArchiveLine() // Fork: sections
         }
     }
 

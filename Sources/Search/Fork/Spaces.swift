@@ -54,6 +54,9 @@ final class Spaces: ObservableObject {
             browser.activeID = nil
             browser.select(active)
         }
+        // A row is only ever swept while it is the one on screen, so the
+        // archive never runs on a space behind your back. (Fork: sections)
+        Sections.shared.sweep(in: browser)
     }
 
     func step(_ by: Int, in browser: Browser) {
@@ -151,6 +154,8 @@ final class Spaces: ObservableObject {
                 guard var entry = Session.Entry(tab) else { continue }
                 entry.space = id
                 entry.group = Groups.shared.membership[tab.id]
+                entry.saved = tab.pin == nil ? Sections.shared.isSaved(tab) : nil
+                entry.seen = Sections.shared.lastSeen(tab).timeIntervalSince1970
                 entry.active = tab.id == activeID ? true : nil
                 if visible, entry.active == true { activeIndex = entries.count }
                 entries.append(entry)
@@ -169,6 +174,7 @@ final class Spaces: ObservableObject {
             current = saved.space.flatMap { c in spaces.first { $0.id == c }?.id } ?? spaces[0].id
         }
         var rows: [UUID: (tabs: [Tab], active: Tab.ID?)] = [:]
+        Sections.shared.clear()
         for (i, entry) in saved.tabs.enumerated() {
             guard let url = URL(string: entry.url) else { continue }
             let id = entry.space.flatMap { s in all.first { $0.id == s }?.id } ?? current
@@ -176,6 +182,9 @@ final class Spaces: ObservableObject {
             browser.prepare(tab)
             tab.restore(url: url, title: entry.title)
             tab.pin = entry.pin
+            // No flag at all is an upstream-shaped file: everything in it is
+            // something you kept, so the whole column comes back as Saved.
+            Sections.shared.restore(tab, saved: entry.saved ?? true, seen: entry.seen)
             Groups.shared.restore(tab, group: entry.group)
             var row = rows[id] ?? ([], nil)
             row.tabs.append(tab)
@@ -186,9 +195,11 @@ final class Spaces: ObservableObject {
         let mine = rows.removeValue(forKey: current) ?? ([], nil)
         parked = rows
         browser.tabs = mine.tabs
+        Sections.shared.begin(in: browser) // Fork: the archive sweep, at launch and every half hour
         guard let first = mine.tabs.first else { return }
         let active = mine.tabs.first { $0.id == mine.active } ?? first
         browser.activeID = active.id
+        Sections.shared.note(active.id)
         _ = active.wake()
     }
 }
@@ -208,53 +219,145 @@ extension Session.Entry {
 
 // MARK: - the strip at the foot of the column
 
-struct SpaceStrip: View {
+struct SpaceStrip<Tools: View>: View {
     @ObservedObject var browser: Browser
+    /// The column's own small doors — bookmarks, extensions. They used to sit
+    /// on a row of their own under this one, where a single glyph read as
+    /// something left behind; the foot is one line now, the way Arc's is.
+    @ViewBuilder var tools: () -> Tools
     @ObservedObject var spaces = Spaces.shared
+    @Environment(\.colorScheme) private var scheme
     @State private var renaming: UUID?
     @State private var profiling: UUID?
     @State private var draft = ""
+    @State private var hovering: UUID?
 
+    private var tint: SpaceTint { SpaceTint(hue: spaces.space.hue, dark: scheme == .dark) }
+
+    /// Arc's foot: the space you are in, named, on the left; every other
+    /// space as a dot in its own colour on the right; a plus at the end.
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(spaces.all) { space in
-                let live = space.id == spaces.current
-                Button { spaces.select(space.id, in: browser) } label: {
-                    HStack(spacing: 5) {
-                        Circle().fill(space.tint).frame(width: 7, height: 7)
-                        if live {
-                            Text(space.name).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                        }
-                    }
-                    .padding(.horizontal, live ? 8 : 5)
-                    .frame(height: 22)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(live ? Palette.wash : .clear))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(live ? Palette.ink : Palette.muted)
-                .help(space.name)
-                .contextMenu { menu(for: space) }
-                .popover(isPresented: Binding(get: { renaming == space.id }, set: { if !$0 { renaming = nil } })) {
+        HStack(spacing: 2) {
+            here
+            Spacer(minLength: 4)
+            ForEach(spaces.all.filter { $0.id != spaces.current }) { space in
+                dot(space)
+            }
+            plus
+            tools()
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 2)
+        .padding(.bottom, 7)
+        .animation(Motion.glide, value: spaces.current)
+    }
+
+    private var here: some View {
+        let space = spaces.space
+        return Button { spaces.select(space.id, in: browser) } label: {
+            HStack(spacing: 6) {
+                badge(space, size: 15)
+                Text(space.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.pill))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(tint.ink)
+        .help(space.name)
+        // The name is the one thing in this row that must stay readable;
+        // the dots give up their air before it gives up a letter.
+        .layoutPriority(1)
+        .modifier(menus(for: space))
+    }
+
+    /// A space's emoji if its name starts with one — Arc's spaces nearly all
+    /// do — and its colour as a small rounded chip if it doesn't.
+    @ViewBuilder
+    private func badge(_ space: Space, size: CGFloat) -> some View {
+        if let first = space.name.unicodeScalars.first, first.properties.isEmojiPresentation {
+            Text(String(Character(first)))
+                .font(.system(size: size * 0.8))
+                .frame(width: size, height: size)
+        } else {
+            RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+                .fill(SpaceTint(hue: space.hue, dark: scheme == .dark).dot)
+                .frame(width: size * 0.6, height: size * 0.6)
+                .frame(width: size, height: size)
+        }
+    }
+
+    private func dot(_ space: Space) -> some View {
+        Button { spaces.select(space.id, in: browser) } label: {
+            Circle()
+                .fill(SpaceTint(hue: space.hue, dark: scheme == .dark).dot)
+                .frame(width: 8, height: 8)
+                .opacity(hovering == space.id ? 1 : 0.65)
+                .frame(width: 14, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { over in hovering = over ? space.id : (hovering == space.id ? nil : hovering) }
+        .help(space.name)
+        .modifier(menus(for: space))
+    }
+
+    private var plus: some View {
+        Button { spaces.add(in: browser) } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(tint.faint)
+                .frame(width: 18, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("New Space")
+    }
+
+    /// The right-click menu and the two little name fields, on whichever
+    /// shape stands for the space — the named chip or the dot.
+    private func menus(for space: Space) -> some ViewModifier {
+        SpaceMenus(
+            menu: AnyView(menu(for: space)),
+            renaming: Binding(get: { renaming == space.id }, set: { if !$0 { renaming = nil } }),
+            profiling: Binding(get: { profiling == space.id }, set: { if !$0 { profiling = nil } }),
+            draft: $draft,
+            rename: { spaces.rename(space.id, to: draft); renaming = nil },
+            profile: { spaces.profile(space.id, named: draft); profiling = nil }
+        )
+    }
+
+    private struct SpaceMenus: ViewModifier {
+        let menu: AnyView
+        @Binding var renaming: Bool
+        @Binding var profiling: Bool
+        @Binding var draft: String
+        let rename: () -> Void
+        let profile: () -> Void
+
+        func body(content: Content) -> some View {
+            content
+                .contextMenu { menu }
+                .popover(isPresented: $renaming) {
                     TextField("Name", text: $draft)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 160)
                         .padding(8)
-                        .onSubmit { spaces.rename(space.id, to: draft); renaming = nil }
+                        .onSubmit(rename)
                 }
-                .popover(isPresented: Binding(get: { profiling == space.id }, set: { if !$0 { profiling = nil } })) {
+                .popover(isPresented: $profiling) {
                     TextField("Profile name", text: $draft)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 160)
                         .padding(8)
-                        .onSubmit { spaces.profile(space.id, named: draft); profiling = nil }
+                        .onSubmit(profile)
                 }
-            }
-            Door(icon: "plus", help: "New Space") { spaces.add(in: browser) }
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 6)
-        .animation(Motion.glide, value: spaces.current)
     }
 
     @ViewBuilder

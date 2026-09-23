@@ -37,6 +37,7 @@ enum Fork {
         switch verb {
         case "spaces": return Spaces.shared.bench(request, in: browser)
         case "groups": return Groups.shared.bench(request, in: browser)
+        case "sections": return Sections.shared.bench(request, in: browser)
         case "agent": return MCP.shared.bench(request)
         case "ai":
             // `ai` reports; `ai mode off|ask|auto`; `ai last` is the grouper's last note.

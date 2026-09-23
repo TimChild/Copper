@@ -14,7 +14,18 @@ struct Omnibox: View {
     @State private var refused = false
     @State private var breathing = false
 
+    @ViewBuilder
     var body: some View {
+        // Fork (command-bar-hooks): ⌘K is its own instrument and gets its own
+        // card; ⌘L over a page is still upstream's field.
+        if browser.summoning {
+            CommandPalette(browser: browser, over: over)
+        } else {
+            plain
+        }
+    }
+
+    private var plain: some View {
         ZStack {
             if over {
                 // The page is still there, just out of the way.
@@ -177,6 +188,13 @@ struct Omnibox: View {
 /// needs a real text field and its delegate.
 struct AddressField: NSViewRepresentable {
     @ObservedObject var browser: Browser
+    /// Fork (command-bar-hooks): show what was typed and nothing else. The
+    /// address field completes as you type and shows the row the arrows have
+    /// walked to; a command bar must keep your question on screen while you
+    /// walk past six answers to it.
+    var literal = false
+    var size: CGFloat = 15.5
+    var placeholder = "Enter a web address"
 
     func makeCoordinator() -> Coordinator { Coordinator(browser: browser) }
 
@@ -186,7 +204,7 @@ struct AddressField: NSViewRepresentable {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = .systemFont(ofSize: 15.5)
+        field.font = .systemFont(ofSize: size)
         field.textColor = Palette.NS.ink
         field.lineBreakMode = .byTruncatingTail
         field.cell?.usesSingleLineMode = true
@@ -194,9 +212,9 @@ struct AddressField: NSViewRepresentable {
         // SwiftUI picks its own colour for a placeholder, and on a pale ground
         // that colour was near-white.
         field.placeholderAttributedString = NSAttributedString(
-            string: "Enter a web address",
+            string: placeholder,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 15.5),
+                .font: NSFont.systemFont(ofSize: size),
                 .foregroundColor: NSColor(Palette.ink.opacity(0.3)),
             ]
         )
@@ -206,6 +224,7 @@ struct AddressField: NSViewRepresentable {
     func updateNSView(_ field: NSTextField, context: Context) {
         let coordinator = context.coordinator
         coordinator.browser = browser
+        coordinator.literal = literal
 
         // Only when something other than typing changed it — ⌘L arriving with
         // an address, a walk through the list, a submit clearing it.
@@ -215,7 +234,7 @@ struct AddressField: NSViewRepresentable {
         // still considers complete, and the next update would helpfully type
         // it back in. That is a field you cannot shorten, and it reads exactly
         // like one that has stopped responding.
-        let want = browser.completed
+        let want = literal ? browser.typed : browser.completed
         if want != coordinator.synced {
             coordinator.synced = want
             field.stringValue = want
@@ -234,13 +253,19 @@ struct AddressField: NSViewRepresentable {
                     .backgroundColor: NSColor(Palette.ink.opacity(0.12)),
                     .foregroundColor: Palette.NS.ink,
                 ]
-                editor.selectAll(nil)
+                // Fork: the command bar keeps what you typed and a caret at
+                // the end of it. Selecting the whole query would say "type
+                // over me", and in ⌘K the query is the thing you are
+                // refining, not an address you are replacing.
+                if literal { editor.selectedRange = NSRange(location: field.stringValue.count, length: 0) }
+                else { editor.selectAll(nil) }
             }
         }
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var browser: Browser
+        var literal = false
         var answered = -1
         /// The last value pushed in from the browser side, so an update can
         /// tell a change worth applying from one it made itself.
@@ -263,7 +288,7 @@ struct AddressField: NSViewRepresentable {
             guard !deleting, let ending = browser.ending else {
                 if deleting { browser.stopCompleting() }
                 deleting = false
-                synced = browser.completed
+                synced = literal ? text : browser.completed
                 return
             }
             deleting = false

@@ -12,6 +12,20 @@ struct Suggestion: Identifiable, Equatable {
     let kind: Kind
     /// Set when this is a page you already have open somewhere.
     var tab: UUID?
+    /// Fork (command-bar-hooks): what Return would do with this row —
+    /// "Switch to Tab", "Open", "Run", "Search Google". Drawn muted, on
+    /// the right of the row. Empty means the row says nothing about itself.
+    var hint: String = ""
+    /// Fork: the quiet half of the row — a host, or "· Exowatt" for a page
+    /// that is open in another space.
+    var detail: String = ""
+    /// Fork: an SF Symbol for rows that have no site to take an icon from.
+    var glyph: String = ""
+    /// Fork: the one piece of a row that must never be truncated away —
+    /// "· Exowatt" on a page that is open in another space. Everything else
+    /// on the row can be worked out by looking at it; which space it lives in
+    /// cannot, so it gives way last.
+    var badge: String = ""
 
     enum Kind {
         /// A page that is open right now.

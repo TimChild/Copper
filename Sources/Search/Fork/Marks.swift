@@ -26,14 +26,37 @@ import Foundation
 //   3. /apple-touch-icon.png, for the sites that have only ever thought
 //      about the home screen.
 //
+//   4. the parent site's /favicon.ico, for a room inside a larger house:
+//      a Google glyph on a calendar row is not the calendar's own mark, but
+//      it is the truth about where the row leads, which a letter is not.
+//
 // Whatever comes back goes to `Favicons.adopt`, which squares it, keeps it
 // next to the history and tells every tab on that host. A host that answers
 // nothing is never asked twice in a launch.
+//
+// The sidebar asks through `warm(tabs)`; the command bar, whose rows are
+// bookmarks and history with no Tab behind them, through `want(urls)`. Both
+// go through the same doors into the same cache, so a mark fetched for one
+// is on the other the moment it lands.
 
 @MainActor
 enum Marks {
     /// Hosts already tried this launch, answered or not.
     private static var asked: Set<String> = []
+
+    /// Bumped when a mark lands, for views drawing marks for rows that have
+    /// no Tab to observe — the command bar's. The count itself means
+    /// nothing; that it changed is the whole message.
+    final class Ticker: ObservableObject { @Published fileprivate(set) var landed = 0 }
+    static let ticker = Ticker()
+
+    /// The host a URL's mark is filed under — the same spelling upstream
+    /// files a tab's under, so `cached` here and there agree.
+    static func key(for url: URL) -> String? {
+        guard url.scheme?.hasPrefix("http") == true,
+              let host = url.host()?.lowercased(), host.contains(".") else { return nil }
+        return host
+    }
 
     /// How many hosts are in flight at once. Enough to fill a column of 150
     /// rows in a few seconds, few enough that a space switch doesn't look
@@ -72,6 +95,20 @@ enum Marks {
         Task { await fetch(borrow(hosts)) }
     }
 
+    /// Every host in these addresses that has no mark yet. Cheap to call on
+    /// every keystroke: a host known, in flight or known to have nothing
+    /// falls out before it costs anything.
+    static func want(_ urls: [URL]) {
+        var hosts: [String] = []
+        for url in urls {
+            guard let host = key(for: url), Favicons.shared.cached(host) == nil, !asked.contains(host) else { continue }
+            asked.insert(host)
+            hosts.append((url.scheme ?? "https") + "://" + host + (url.port.map { ":\($0)" } ?? ""))
+        }
+        guard !hosts.isEmpty else { return }
+        Task { await fetch(borrow(hosts)) }
+    }
+
     // MARK: - what the browser next door already has
 
     /// Host → the file Arc keeps its mark in. Read once a launch, or left
@@ -92,6 +129,7 @@ enum Marks {
                   data.count > 60
             else { left.append(origin); continue }
             await Favicons.shared.adopt(data, for: host)
+            ticker.landed += 1
         }
         return left
     }
@@ -147,6 +185,7 @@ enum Marks {
                 for await (origin, data) in group {
                     guard let data, let host = URL(string: origin)?.host()?.lowercased() else { continue }
                     await Favicons.shared.adopt(data, for: host)
+                    ticker.landed += 1
                 }
             }
         }
@@ -158,7 +197,21 @@ enum Marks {
         for href in await declared(origin, session) {
             if let hit = await image(href, session) { return hit }
         }
-        return await image(origin + "/apple-touch-icon.png", session)
+        if let hit = await image(origin + "/apple-touch-icon.png", session) { return hit }
+        guard let host = URL(string: origin)?.host(), let parent = parent(of: host) else { return nil }
+        return await image("https://" + parent + "/favicon.ico", session)
+    }
+
+    /// `calendar.google.com` → `google.com`; `www.bbc.co.uk` → `bbc.co.uk`;
+    /// a bare registrable host → nil. Same rough public-suffix rule as
+    /// `Fork.brand`.
+    private nonisolated static func parent(of host: String) -> String? {
+        let labels = host.split(separator: ".").map(String.init)
+        guard labels.count > 2 else { return nil }
+        let two: Set<String> = ["co", "com", "org", "net", "ac", "gov", "edu"]
+        let take = labels.count > 3 && two.contains(labels[labels.count - 2]) && labels.last!.count == 2 ? 3 : 2
+        let parent = labels.suffix(take).joined(separator: ".")
+        return parent == host ? nil : parent
     }
 
     /// One candidate, fetched and checked. "Checked" means it decodes as a

@@ -30,7 +30,7 @@ struct CommandPalette: View {
 
     @State private var place = WindowRuler.Place()
     /// The site marks, arriving a moment after the rows they belong to.
-    @ObservedObject private var icons = HostIcons.shared
+    @ObservedObject private var marks = Marks.ticker
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -52,9 +52,9 @@ struct CommandPalette: View {
         .background(WindowRuler { place = $0 })
         .animation(Motion.settle, value: browser.offers)
         // Every row that names a site wants that site's mark, and most of
-        // these rows have no page behind them to ask. See Fork/HostIcons.
-        .onAppear { icons.want(browser.offers.map(\.url)) }
-        .onChange(of: browser.offers) { _, offers in icons.want(offers.map(\.url)) }
+        // these rows have no page behind them to ask. See Fork/Marks.
+        .onAppear { Marks.want(browser.offers.map(\.url)) }
+        .onChange(of: browser.offers) { _, offers in Marks.want(offers.map(\.url)) }
     }
 
     /// Where to put the top of the card, counted from the top of the region
@@ -116,7 +116,7 @@ struct CommandPalette: View {
     private var rows: some View {
         VStack(spacing: 1) {
             ForEach(Array(browser.offers.enumerated()), id: \.offset) { index, offer in
-                Row(offer: offer, picked: browser.picked == index, tint: tint, stamp: icons.landed)
+                Row(offer: offer, picked: browser.picked == index, tint: tint, stamp: marks.landed)
                     .contentShape(Rectangle())
                     .onTapGesture { browser.take(offer) }
             }
@@ -228,7 +228,7 @@ struct CommandPalette: View {
             case .search:
                 glyph("magnifyingglass")
             default:
-                if let host = HostIcons.key(for: offer.url), let icon = Favicons.shared.cached(host) {
+                if let host = Marks.key(for: offer.url), let icon = Favicons.shared.cached(host) {
                     Image(nsImage: icon)
                         .resizable()
                         .interpolation(.high)

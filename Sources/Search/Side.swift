@@ -392,7 +392,7 @@ struct SideBar: View {
 /// Upstream's `Mark` draws its letter on a grey chip, which on a tinted
 /// column reads as a hole punched through it. This is the same thing with
 /// the chip borrowed from the space instead.
-private struct RowMark: View {
+struct RowMark: View {
     let icon: NSImage?
     let letter: String
     let tint: SpaceTint

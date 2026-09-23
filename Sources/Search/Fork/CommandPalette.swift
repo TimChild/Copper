@@ -221,6 +221,8 @@ struct CommandPalette: View {
         let picked: Bool
         let stamp: Int
 
+        @Environment(\.colorScheme) private var scheme
+
         var body: some View {
             switch offer.kind {
             case .command:
@@ -228,17 +230,10 @@ struct CommandPalette: View {
             case .search:
                 glyph("magnifyingglass")
             default:
-                if let host = Marks.key(for: offer.url), let icon = Favicons.shared.cached(host) {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 16, height: 16)
-                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                        .transition(.opacity)
-                } else {
-                    letter
-                }
+                // The same mark the sidebar row wears — icon or tinted letter
+                // chip — so a site looks like itself on both surfaces.
+                RowMark(icon: Marks.key(for: offer.url).flatMap { Favicons.shared.cached($0) },
+                        letter: initial, tint: SpaceTint(scheme))
             }
         }
 
@@ -253,31 +248,12 @@ struct CommandPalette: View {
                 .frame(width: 18, height: 18)
         }
 
-        /// No icon yet — a fresh profile has none, and a sleeping tab has
-        /// never asked its site for one. A grey square for every row would
-        /// make the whole card grey, so each host gets a colour of its own,
-        /// steady between launches because it comes from the letters.
-        private var letter: some View {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color(hue: hue, saturation: 0.42, brightness: 0.78))
-                .overlay(
-                    Text(initial)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                )
-        }
-
         private var source: String {
             let host = offer.url.host() ?? offer.key
             return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
         }
 
         private var initial: String { String(source.prefix(1)).uppercased() }
-
-        private var hue: Double {
-            let sum = source.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) % 9973 }
-            return Double(sum % 360) / 360
-        }
     }
 }
 

@@ -106,22 +106,17 @@ struct SplitBar: View {
     @ObservedObject var tab: Tab
     let live: Bool
 
-    @State private var hovering = false
-
     var body: some View {
         HStack(spacing: 1) {
             PaneGlyph(icon: "arrow.left", help: "Back", on: tab.canGoBack) { tab.back() }
             PaneGlyph(icon: "arrow.right", help: "Forward", on: tab.canGoForward) { tab.forward() }
-            // Reload keeps out of the way until the pointer is over the bar.
-            // Arc shows the doors on the pane you are working in, not on both.
             PaneGlyph(
                 icon: tab.loading ? "xmark" : "arrow.clockwise",
                 help: tab.loading ? "Stop" : "Reload",
-                on: hovering
+                on: true
             ) {
                 tab.loading ? tab.stop() : tab.reload()
             }
-            .opacity(hovering ? 1 : 0)
 
             Spacer(minLength: 2)
 
@@ -144,26 +139,26 @@ struct SplitBar: View {
         .padding(.horizontal, 7)
         .frame(height: SplitMetrics.bar)
         .background(alignment: .bottom) {
-            // The bar is opaque so the page cannot show through it, with a
-            // hairline where the two meet and nothing else. Separation by a
-            // line, not by a box.
+            // The bar is a band a shade off the page, the way Arc's is, so
+            // chrome still reads as chrome over a white page; the hairline
+            // where the two meet does the rest.
             ZStack(alignment: .bottom) {
                 Palette.ground
+                Palette.ink.opacity(0.05)
                 Rectangle().fill(Palette.hairline).frame(height: 1)
             }
         }
         // A click anywhere on the bar is a click into the pane.
         .contentShape(Rectangle())
         .onTapGesture { Split.shared.touched(tab, in: browser) }
-        .onHover { hovering = $0 }
-        .animation(Motion.quick, value: hovering)
     }
 
-    /// The page's name, or its address while it has none — the same rule the
-    /// row of tabs uses, so a pane and its tab never disagree.
+    /// Where the pane is, not what it is called: the tab in the column already
+    /// says the title, and with no address row anywhere else in the window
+    /// this strip is the one place the address can be read.
     private var name: String {
-        if !tab.title.isEmpty { return tab.title }
         if let address = tab.address { return Address.pretty(address) }
+        if !tab.title.isEmpty { return tab.title }
         return "New Tab"
     }
 }
@@ -183,7 +178,7 @@ private struct PaneGlyph: View {
         Button(action: on ? act : {}) {
             Image(systemName: icon)
                 .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(Palette.muted.opacity(on ? (over ? 1 : 0.8) : 0.25))
+                .foregroundStyle(on ? Palette.ink.opacity(over ? 0.9 : 0.65) : Palette.muted.opacity(0.3))
                 .frame(width: 21, height: 21)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)

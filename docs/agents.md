@@ -82,6 +82,37 @@ Each tool call is announced in the line at the bottom of the window (turn
 that off in Settings › Agents). `./bench agent` reports status; `./bench
 agent on|off|rotate`.
 
+## Jev mode — hand over a goal
+
+Settings › Agents › **Let the agent hand Copper a goal**. Three more tools
+appear, and the server's instructions tell the agent to reach for them
+first:
+
+| tool | does |
+|---|---|
+| `jev_run` | `goal` (+ `url`, `newTab`, `maxSteps`, `elements`) — runs [browser-use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in the current tab until DONE, BLOCKED or the budget (60 actions, 120 decisions, 3 minutes); answers with the trace, the page, and the indexed element table |
+| `jev_step` | one decision and its action; same `goal` continues the session |
+| `jev_observe` | what Jev sees: `[3] combobox  Where to? · London` for every visible control, plus the visible text |
+
+The loop is theirs, in Swift (`Fork/MCP/Ultrafast.swift`): one script reads
+the visible controls into an indexed table with a semantic marker; **one**
+TypeSafe System One request asks for the operation and, speculatively, a
+target for every operation that has candidates — only the head the chosen
+operation names is consumed; freshness (the marker, or for a click the form
+state plus the target's own guard) and occlusion are checked again before the
+input goes in as real events. `TYPE_TEXT` asks the router (Settings ›
+Intelligence) for the value and types only what came back as `{"text": …}`.
+Model output never becomes a selector, a coordinate or JavaScript.
+
+Needs a TypeSafe key (shared with Intelligence — the Agents page has the
+field too) and, for anything that types, the router key. DONE is the model's
+claim; the tool says so and the agent is told to check.
+
+**Copy prompt** on the Agents page gives you one paragraph to paste into the
+chat with your agent — endpoint, token, how to add the server, what it can
+do. There is one for the Playwright-shaped tools and one for Jev mode.
+`./bench agent jev on|off`.
+
 ## What it is not
 
 Not a sandbox. The agent acts as you, in your sessions. Turn it off when you

@@ -28,6 +28,29 @@ final class MCP: ObservableObject {
         /// Say each tool call in the line at the bottom, so you can see the
         /// agent's hands.
         var announces = true
+        /// Jev mode: the jev_run / jev_step / jev_observe tools, which drive
+        /// the page with TypeSafe's Jev at ~200 ms a decision (Ultrafast.swift).
+        var jev = false
+
+        init(enabled: Bool = false, port: UInt16 = 4123, token: String = "", announces: Bool = true, jev: Bool = false) {
+            self.enabled = enabled
+            self.port = port
+            self.token = token
+            self.announces = announces
+            self.jev = jev
+        }
+
+        // Lenient on purpose: a field added later must not make an older
+        // agent.json unreadable, or the token would rotate under every
+        // client that has it.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+            port = try c.decodeIfPresent(UInt16.self, forKey: .port) ?? 4123
+            token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
+            announces = try c.decodeIfPresent(Bool.self, forKey: .announces) ?? true
+            jev = try c.decodeIfPresent(Bool.self, forKey: .jev) ?? false
+        }
     }
 
     @Published var config: Config {
@@ -41,6 +64,8 @@ final class MCP: ObservableObject {
     @Published private(set) var trouble: String?
     @Published private(set) var calls = 0
     @Published private(set) var lastTool = ""
+    /// The last Jev run, in a few words, for Settings.
+    @Published var jevNote = ""
 
     private weak var browser: Browser?
     private var listener: NWListener?
@@ -110,6 +135,21 @@ final class MCP: ObservableObject {
             }
           }
         }
+        """
+    }
+
+    /// One paragraph to paste into a chat with an agent: where Copper is,
+    /// how to connect, what it can do. The Playwright-shaped tools.
+    var agentPrompt: String {
+        """
+        My browser, Copper, is running a local MCP server you can drive — it's the browser I'm already signed into, with my open tabs. Connect to it as an MCP server named `copper`: Streamable HTTP at \(endpoint) with the header `Authorization: Bearer \(config.token)` (Claude Code: `claude mcp add --transport http copper \(endpoint) --header "Authorization: Bearer \(config.token)"`; phi/Cursor: add `{"type":"http","url":"\(endpoint)","headers":{"Authorization":"Bearer \(config.token)"}}` under mcpServers.copper). It speaks Playwright MCP's tool set against the tab I have open — browser_tabs, browser_navigate, browser_snapshot (accessibility tree with refs like e12), browser_click, browser_type, browser_fill_form, browser_press_key, browser_hover, browser_select_option, browser_drag, browser_scroll, browser_take_screenshot, browser_evaluate, browser_wait_for, browser_get_text, browser_find, browser_console_messages, browser_resize, browser_close, plus browser_groups for my tab groups — so anything you know how to do with Playwright MCP works unchanged. Start with browser_tabs, then browser_snapshot to get refs, then act with those refs; work in the tab I'm on unless I say otherwise, and remember you're acting as me, signed in as me.
+        """
+    }
+
+    /// The same, with Jev mode: hand over a goal, get a finished run back.
+    var jevPrompt: String {
+        """
+        My browser, Copper, is running a local MCP server you can drive — the browser I'm already signed into, with my open tabs — and it's in Jev mode. Connect to it as an MCP server named `copper`: Streamable HTTP at \(endpoint) with the header `Authorization: Bearer \(config.token)` (Claude Code: `claude mcp add --transport http copper \(endpoint) --header "Authorization: Bearer \(config.token)"`; phi/Cursor: add `{"type":"http","url":"\(endpoint)","headers":{"Authorization":"Bearer \(config.token)"}}` under mcpServers.copper). Prefer `jev_run` with ONE plain-English goal (optional `url`, `newTab`): Copper runs browser-use's jev-ultrafast loop natively — TypeSafe's Jev picks an operation and an indexed element every ~200 ms, a small model writes any text, and it acts with real clicks and keystrokes until DONE or BLOCKED — so a multi-step task takes seconds, not a snapshot-and-click round trip per step. Put every concrete value in the goal (places, dates, names, filters, and when to stop). Use `jev_observe` for a fast indexed read of what's actionable, `jev_step` to supervise one decision at a time, and the full Playwright-shaped set (browser_snapshot, browser_click, browser_type, browser_take_screenshot, browser_evaluate…) for anything Jev reports BLOCKED on — frames, canvas, uploads, odd keyboard widgets — then hand back to jev_run. DONE is the model's claim: check the page yourself before telling me it worked. Work in the tab I'm on unless I say otherwise; you're acting as me, signed in as me.
         """
     }
 
@@ -264,14 +304,14 @@ final class MCP: ObservableObject {
                 "protocolVersion": version,
                 "capabilities": ["tools": ["listChanged": false], "resources": [:], "prompts": [:]],
                 "serverInfo": ["name": "copper", "version": Fork.version],
-                "instructions": Tools.instructions,
+                "instructions": Tools.instructions(jev: config.jev),
             ])
         case "notifications/initialized", "notifications/cancelled", "notifications/roots/list_changed":
             return nil
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": Tools.catalogue])
+            return reply(["tools": Tools.catalogue(jev: config.jev)])
         case "tools/call":
             guard let browser else { return fail(-32000, "Copper has no window") }
             let name = params["name"] as? String ?? ""
@@ -306,9 +346,11 @@ final class MCP: ObservableObject {
         case "on": config.enabled = true
         case "off": config.enabled = false
         case "rotate": rotateToken()
+        case "jev": config.jev = (request["arg"] as? String ?? "on") != "off"
         default: break
         }
-        return ["enabled": config.enabled, "running": running, "port": Int(config.port), "endpoint": endpoint, "calls": calls, "last": lastTool, "trouble": trouble ?? ""]
+        return ["enabled": config.enabled, "running": running, "port": Int(config.port), "endpoint": endpoint, "calls": calls, "last": lastTool, "trouble": trouble ?? "",
+                "jev": config.jev, "jevKey": Intelligence.shared.jevReady, "jevLast": jevNote]
     }
 }
 

@@ -192,6 +192,7 @@ struct KeyField: View {
 struct AgentsPage: View {
     @ObservedObject var browser: Browser
     @ObservedObject var mcp = MCP.shared
+    @ObservedObject var brain = Intelligence.shared
     @State private var copied: String?
 
     var body: some View {
@@ -210,7 +211,7 @@ struct AgentsPage: View {
                 }
                 Rule()
                 Line("Port", "Change it if something else has \(mcp.config.port)") {
-                    TextField("4123", value: $mcp.config.port, format: .number)
+                    TextField("4123", value: $mcp.config.port, format: .number.grouping(.never))
                         .textFieldStyle(.plain)
                         .font(.system(size: 12, design: .monospaced))
                         .frame(width: 60)
@@ -219,8 +220,37 @@ struct AgentsPage: View {
                 }
             }
 
+            Caption("Jev mode — ultrafast")
+            Card {
+                Line("Let the agent hand Copper a goal", "Adds jev_run, jev_step and jev_observe — browser-use's jev-ultrafast loop, run in this window. Jev picks an operation and an element every ~200 ms; Copper does it with real clicks and keys until the goal is done. Seconds, not a round trip per step.") {
+                    Switch(on: $mcp.config.jev)
+                }
+                if mcp.config.jev {
+                    Rule()
+                    Line("Jev key", brain.jevReady ? "TypeSafe System One — the same key as Intelligence" : "Needed. A TypeSafe key (ts-…) — typesafe.ai. Shared with Settings › Intelligence.") {
+                        KeyField(text: $brain.keys.jevKey, placeholder: "ts-…", ready: brain.jevReady)
+                    }
+                    Rule()
+                    Line("Text helper", brain.routerReady ? "The router (\(brain.keys.routerModel)) writes what gets typed into fields" : "TYPE_TEXT needs the router — add a key under Settings › Intelligence, or runs that must type will stop") {
+                        Circle().fill(brain.routerReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8)).frame(width: 8, height: 8)
+                    }
+                    Rule()
+                    Line("Prompt for your agent", "One paragraph: how to connect, and to hand over goals with jev_run. Paste it into the chat.") {
+                        Pill(copied == "jevprompt" ? "Copied" : "Copy prompt", filled: true) { copy(mcp.jevPrompt, "jevprompt") }
+                    }
+                    if !mcp.jevNote.isEmpty {
+                        Rule()
+                        Line("Last run", mcp.jevNote) { EmptyView() }
+                    }
+                }
+            }
+
             Caption("Connect a client")
             Card {
+                Line("Prompt for your agent", "One paragraph: where Copper listens, the token, and the Playwright-shaped tools it has. Paste it into the chat.") {
+                    Pill(copied == "prompt" ? "Copied" : "Copy prompt", filled: true) { copy(mcp.agentPrompt, "prompt") }
+                }
+                Rule()
                 Line("Claude Code / phi / Cursor (HTTP)", "Paste into ~/.claude.json, ~/.pi/agent/mcp.json or the editor's MCP settings") {
                     Pill(copied == "http" ? "Copied" : "Copy config") { copy(mcp.clientConfig, "http") }
                 }

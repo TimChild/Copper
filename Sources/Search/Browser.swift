@@ -890,6 +890,10 @@ final class Browser: NSObject, ObservableObject {
         summoning = false
         suggesting = nil
         guard tab.id != activeID else { return }
+        // Fork: if this tab is the one in the side pane, the two panes trade
+        // places now rather than after the stage has drawn a frame with the
+        // same page in both of them. See Split.arriving.
+        Split.shared.arriving(tab, in: self)
         // Coming back to the tab whose video is out brings it home first, so
         // it is never lifted and landed in the same breath.
         if floating == tab.id { land() }

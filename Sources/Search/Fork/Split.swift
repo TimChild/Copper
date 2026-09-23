@@ -34,29 +34,79 @@ final class Split: ObservableObject {
         tab.touch()
     }
 
-    func close() { side = nil }
+    func close() { side = nil; swapped = false }
+
+    /// The cross on a pane's own toolbar. The tab goes, the split goes with
+    /// it, and the other pane's page is what you are left looking at — which
+    /// is the only outcome that doesn't need explaining.
+    func dismiss(_ tab: Tab, in browser: Browser) {
+        let other = tab.id == side ? browser.active : browser.tabs.first { $0.id == side }
+        side = nil
+        swapped = false
+        browser.close(tab)
+        if let other, other.id != tab.id, browser.tabs.contains(where: { $0.id == other.id }) {
+            browser.select(other)
+        }
+    }
+
+    /// The name the stage measures the handle's drag against.
+    static let space = "split.stage"
+
+    /// The space's colour, for the live pane's outline — the accent when the
+    /// space has no colour of its own, because grey would say nothing.
+    var tint: Color {
+        Spaces.shared.space.hue.map { Color(hue: $0, saturation: 0.62, brightness: 0.72) } ?? Color.accentColor
+    }
 
     /// Which pane a tab is in: left (active), right (side), or nowhere.
     func has(_ id: Tab.ID?) -> Bool { id != nil && id == side }
 
-    /// Called when a tab's page is clicked. The side pane becoming active
-    /// swaps the two, so the pages stay where they are on screen.
+    /// Called when a tab's page is clicked, and by a pane's own toolbar.
+    /// Nothing to do but select it: selecting is what trades the panes over.
     func touched(_ tab: Tab, in browser: Browser) {
-        guard tab.id == side, let active = browser.active else { return }
-        side = active.id
-        swapped.toggle()
+        guard tab.id == side else { return }
         browser.select(tab)
+    }
+
+    /// `tab` is about to become the live one. If it is the tab already in the
+    /// side pane, the panes trade places here — in the same breath as the
+    /// selection, before anything redraws.
+    ///
+    /// Doing it afterwards, off the stage's `onChange`, leaves one frame in
+    /// which the active tab and the side tab are the same tab. Both panes ask
+    /// for that one page, a web view can only live in one of them, and the
+    /// pane that loses the fight is blank from then on. That is the whole
+    /// reason this is called from `Browser.select` rather than from the view.
+    func arriving(_ tab: Tab, in browser: Browser) {
+        guard tab.id == side, let was = browser.activeID, was != tab.id,
+              browser.tabs.contains(where: { $0.id == was })
+        else { return }
+        side = was
+        swapped.toggle()
     }
 
     /// The side pane sits right unless a swap put the old active there.
     @Published private(set) var swapped = false
 
-    /// Selecting the tab already in the side pane just swaps the panes.
     /// Selecting a third tab replaces the active pane, as it always did.
     /// Closing either pane's tab ends the split.
-    func reconcile(_ browser: Browser) {
+    ///
+    /// Selecting the tab that is *already* in the side pane doesn't end the
+    /// split — it moves the focus into that pane. The two trade places as it
+    /// happens, so the outline moves across the window and neither page does.
+    /// That is what a click into the other pane does, and `⌘⌥→` and
+    /// `bench select` come down the same road, so they behave the same way
+    /// without knowing anything about panes.
+    func reconcile(_ browser: Browser, was: Tab.ID? = nil) {
         guard let side else { return }
-        if !browser.tabs.contains(where: { $0.id == side }) || side == browser.activeID { self.side = nil }
+        guard browser.tabs.contains(where: { $0.id == side }) else { self.side = nil; return }
+        guard side == browser.activeID else { return }
+        if let was, was != side, browser.tabs.contains(where: { $0.id == was }) {
+            self.side = was
+            swapped.toggle()
+        } else {
+            self.side = nil
+        }
     }
 }
 
@@ -65,43 +115,85 @@ extension Tab {
     static var touched: ((Tab) -> Void)?
 }
 
+/// The page area: one page, or two cards with air between them.
+///
+/// The pair floats — a margin around, a gutter down the middle, the space's
+/// colour washed behind so the cards read as cards rather than as a window
+/// sawn in half. Only the live one is outlined.
 struct SplitStage: View {
     @ObservedObject var browser: Browser
     @ObservedObject var split = Split.shared
+    @ObservedObject var spaces = Spaces.shared
     let active: Tab
+
+    /// How far the page area spills past the window's top and bottom edges.
+    /// Zero in a sane layout; see `PaneSpill`.
+    @State private var spill = PaneSpill.none
 
     var body: some View {
         if let id = split.side, let side = browser.tabs.first(where: { $0.id == id }) {
+            let left = split.swapped ? side : active
+            let right = split.swapped ? active : side
             GeometryReader { geo in
-                let left = split.swapped ? side : active
-                let right = split.swapped ? active : side
-                HStack(spacing: 0) {
-                    pane(left, live: left.id == active.id)
-                        .frame(width: max(200, geo.size.width * split.fraction) - 2)
-                    Divider()
-                        .frame(width: 4)
-                        .background(Palette.hairline)
-                        .contentShape(Rectangle().inset(by: -4))
-                        .gesture(DragGesture(minimumDistance: 1).onChanged { drag in
-                            split.fraction = min(0.85, max(0.15, drag.location.x / geo.size.width))
-                        })
-                        .onHover { inside in inside ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
-                    pane(right, live: right.id == active.id)
+                // What the fraction divides: the width left once the margins
+                // and the gutter have taken theirs.
+                let span = max(geo.size.width - 2 * SplitMetrics.margin - SplitMetrics.gutter, 1)
+                // And the height, once the margins and whatever the stage
+                // hangs off the window have taken theirs.
+                let tall = max(geo.size.height - spill.top - spill.bottom - 2 * SplitMetrics.margin, 1)
+                let least = min(SplitMetrics.least, span / 2)
+                let leftWidth = min(span - least, max(least, span * split.fraction))
+
+                ZStack(alignment: .topLeading) {
+                    HStack(spacing: SplitMetrics.gutter) {
+                        card(left, CGSize(width: leftWidth, height: tall))
+                        card(right, CGSize(width: span - leftWidth, height: tall))
+                    }
+                    .padding(.horizontal, SplitMetrics.margin)
+                    .padding(.top, SplitMetrics.margin + spill.top)
+                    .padding(.bottom, SplitMetrics.margin + spill.bottom)
+
+                    SplitHandle(span: span, inset: SplitMetrics.margin)
+                        .frame(height: tall + 2 * SplitMetrics.margin)
+                        .offset(
+                            x: SplitMetrics.margin + leftWidth + SplitMetrics.gutter / 2 - SplitMetrics.grip / 2,
+                            y: spill.top
+                        )
                 }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                .background(PaneSpill.probe { spill = $0 })
             }
-            .onChange(of: browser.activeID) { _, _ in split.reconcile(browser) }
+            .background(backdrop)
+            .coordinateSpace(name: Split.space)
+            .onChange(of: browser.activeID) { was, _ in split.reconcile(browser, was: was) }
             .onChange(of: browser.tabs.map(\.id)) { _, _ in split.reconcile(browser) }
         } else {
             Page(tab: active)
         }
     }
 
-    private func pane(_ tab: Tab, live: Bool) -> some View {
-        Page(tab: tab)
-            .overlay {
-                RoundedRectangle(cornerRadius: 0).strokeBorder(live ? Palette.ink.opacity(0.35) : .clear, lineWidth: 2)
-                    .allowsHitTesting(false)
-            }
-            .animation(Motion.quick, value: live)
+    /// The ground the cards sit on: the window's own, with the space's colour
+    /// over it — enough that a white page reads as a card laid on something
+    /// rather than as the window with two lines scratched into it.
+    private var backdrop: some View {
+        ZStack {
+            Palette.ground
+            wash
+        }
+    }
+
+    /// Deliberately stronger than the sidebar's wash. The sidebar's job is to
+    /// stay behind the tabs; this one has to be seen in a 7pt margin.
+    private var wash: Color { split.tint.opacity(0.22) }
+
+    private func card(_ tab: Tab, _ size: CGSize) -> some View {
+        SplitCard(
+            browser: browser,
+            tab: tab,
+            live: tab.id == browser.activeID,
+            tint: split.tint,
+            wash: wash,
+            size: CGSize(width: max(size.width, 1), height: max(size.height, 1))
+        )
     }
 }

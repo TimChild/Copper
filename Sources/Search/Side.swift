@@ -337,7 +337,9 @@ struct SideBar: View {
     }
 
     private var newTab: some View {
-        Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.hover, ink: tint.muted) {
+        // Arc's is the one filled row in the column — the seam you can find
+        // from across the room. The favourites' square, the pill's ink.
+        Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.pill, ink: tint.ink, fill: tint.square) {
             browser.newTab()
         }
         .padding(.horizontal, SideBar.inset)
@@ -609,6 +611,10 @@ struct Quiet: View {
     /// hands its own in, so this row belongs to the same surface.
     var glow: Color?
     var ink: Color?
+    /// What it wears at rest. Nothing, for a row that should disappear into
+    /// the column; the favourites' soft square for the one row Arc lets you
+    /// see from across the room.
+    var fill: Color?
     let act: () -> Void
 
     @State private var hovering = false
@@ -629,7 +635,7 @@ struct Quiet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(hovering ? (glow ?? Palette.hover) : .clear)
+                    .fill(hovering ? (glow ?? Palette.hover) : (fill ?? .clear))
             )
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }

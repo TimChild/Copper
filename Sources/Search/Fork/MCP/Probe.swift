@@ -519,7 +519,20 @@ extension Tools {
                 return [.text(Tools.Page.render(value))]
             }
             guard let text = value as? String else { throw Failure(text: "performance probe returned no text") }
-            return [.text(text)]
+            return [.text(processes(for: tab) + text)]
+        }
+
+        /// What the OS says about this tab's processes, ahead of what the page says about itself.
+        @MainActor
+        private static func processes(for tab: Tab) -> String {
+            var lines: [String] = []
+            if let reading = Heat.shared.reading(for: tab) {
+                let shared = reading.shared ? " (process shared with other tabs)" : ""
+                lines.append("- WebContent (pid \(reading.pid)): \(Int(reading.cpu))% now, \(Int(reading.sustained))% over ~10 s\(shared)")
+            }
+            if let gpu = Heat.shared.gpu { lines.append("- GPU process (all tabs): \(Int(gpu))%") }
+            guard !lines.isEmpty else { return "" }
+            return "## Processes (% of one core)\n" + lines.joined(separator: "\n") + "\n\n"
         }
 
         @MainActor

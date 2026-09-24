@@ -344,9 +344,12 @@ enum Tools {
             let marker = tab.id == browser.activeID ? "(current) " : ""
             let group = Groups.shared.group(of: tab).map { " [\($0.name)]" } ?? ""
             let pin = tab.pin != nil ? " (pinned)" : ""
-            lines.append("- \(i): \(marker)[\(tab.title)] (\(tab.address?.absoluteString ?? "about:blank"))\(pin)\(group)")
+            // Only a tab that is actually burning gets a figure; the rest stay quiet.
+            let heat = Heat.shared.reading(for: tab).flatMap { $0.sustained >= 10 ? " {cpu \(Int($0.sustained))%}" : nil } ?? ""
+            lines.append("- \(i): \(marker)[\(tab.title)] (\(tab.address?.absoluteString ?? "about:blank"))\(pin)\(group)\(heat)")
         }
-        return "### Open tabs\n" + lines.joined(separator: "\n")
+        let gpu = Heat.shared.gpu.flatMap { $0 >= 10 ? "\nGPU process (shared by all tabs): \(Int($0))% of a core" : nil } ?? ""
+        return "### Open tabs\n" + lines.joined(separator: "\n") + gpu
     }
 
     @MainActor

@@ -18,8 +18,9 @@ extension Tools {
             ] as [String: Any],
         ]]
 
+        // callAsyncJavaScript runs this as a function body: the promise must be returned, not just evaluated.
         private static let script = #"""
-        (async function () {
+        return (async function () {
           var duration = Math.max(1, Math.min(10, Number(probeSeconds) || 3));
           var rowLimit = Math.max(1, Math.min(100, Math.floor(Number(probeTop) || 8)));
           var outputFormat = probeFormat === 'json' ? 'json' : 'text';
@@ -345,6 +346,11 @@ extension Tools {
             function finding(severity, text) { findings.push({ severity: severity, text: text }); }
             function listed(values) { return values.join(', ') || 'unknown properties'; }
             animationGroups.forEach(function (group) {
+              // A one-shot entrance that ends in a couple of seconds is not a standing cost; only
+              // what keeps running (infinite, or a finite run longer than the sample) earns a finding.
+              var standing = group.iterations === 'Infinity' || group.iterations === 'varies' ||
+                (typeof group.iterations === 'number' && typeof group.durationMs === 'number' && group.iterations * group.durationMs > duration * 1000);
+              if (!standing) return;
               if (hasValue(group.flags, 'animated under an SVG/CSS filter: re-rasterized every frame') && hasValue(group.flags, 'SVG element (not composited in WebKit)')) {
                 finding(100, group.name + ' animates ' + listed(group.properties) + ' on ' + (group.targets[0] || 'an SVG element') + ' under an SVG/CSS filter — WebKit re-rasterizes the blurred surface every frame (Blink composites it).');
               }

@@ -24,10 +24,31 @@ final class Intelligence: ObservableObject {
         var routerKey = ""
         var routerURL = "https://llm.dev.exowatt.com"
         var routerModel = "sonnet"
+        /// The small model Jev mode asks to write field values (TYPE_TEXT).
+        /// Empty means the router model; a small fast one is the point.
+        var textModel = ""
         /// Grouping: off, suggest and wait, or just do it.
         var grouping: GroupingMode = .ask
         /// Jev's confidence has to clear this before its pick is taken as is.
         var threshold: Double = 0.6
+
+        init() {}
+
+        // Lenient: a field added later must never make an older
+        // intelligence.json unreadable — that would drop the keys.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let fresh = Keys()
+            jevKey = try c.decodeIfPresent(String.self, forKey: .jevKey) ?? fresh.jevKey
+            jevModel = try c.decodeIfPresent(String.self, forKey: .jevModel) ?? fresh.jevModel
+            jevEndpoint = try c.decodeIfPresent(String.self, forKey: .jevEndpoint) ?? fresh.jevEndpoint
+            routerKey = try c.decodeIfPresent(String.self, forKey: .routerKey) ?? fresh.routerKey
+            routerURL = try c.decodeIfPresent(String.self, forKey: .routerURL) ?? fresh.routerURL
+            routerModel = try c.decodeIfPresent(String.self, forKey: .routerModel) ?? fresh.routerModel
+            textModel = try c.decodeIfPresent(String.self, forKey: .textModel) ?? fresh.textModel
+            grouping = try c.decodeIfPresent(GroupingMode.self, forKey: .grouping) ?? fresh.grouping
+            threshold = try c.decodeIfPresent(Double.self, forKey: .threshold) ?? fresh.threshold
+        }
     }
 
     enum GroupingMode: String, Codable, CaseIterable, Identifiable {
@@ -43,6 +64,9 @@ final class Intelligence: ObservableObject {
     }
 
     @Published var keys: Keys { didSet { if keys != oldValue { save() } } }
+
+    /// What Jev mode types with: the text model when one is named, else the router's.
+    var textModelName: String { keys.textModel.trimmingCharacters(in: .whitespaces).isEmpty ? keys.routerModel : keys.textModel }
 
     /// Whether Jev can be asked at all.
     var jevReady: Bool { !keys.jevKey.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -170,7 +194,7 @@ enum Router {
         let model: String
     }
 
-    static func ask(system: String, user: String, keys: Intelligence.Keys, timeout: TimeInterval = 20, maxTokens: Int = 400) async throws -> Reply {
+    static func ask(system: String, user: String, keys: Intelligence.Keys, timeout: TimeInterval = 20, maxTokens: Int = 400, model override: String? = nil) async throws -> Reply {
         guard !keys.routerKey.isEmpty else { throw Failure(detail: "No router key — Settings › Intelligence") }
         guard let base = URL(string: keys.routerURL) else { throw Failure(detail: "Bad router address: \(keys.routerURL)") }
         let url = base.appendingPathComponent("v1/chat/completions")
@@ -179,8 +203,9 @@ enum Router {
         request.setValue("Bearer \(keys.routerKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
+        let chosen = (override ?? "").trimmingCharacters(in: .whitespaces)
         let body: [String: Any] = [
-            "model": keys.routerModel,
+            "model": chosen.isEmpty ? keys.routerModel : chosen,
             "temperature": 0,
             "max_tokens": maxTokens,
             "messages": [
@@ -208,7 +233,7 @@ enum Router {
         else if let parts = message["content"] as? [[String: Any]] {
             text = parts.compactMap { $0["text"] as? String }.joined()
         }
-        let model = (payload["model"] as? String) ?? keys.routerModel
+        let model = (payload["model"] as? String) ?? (chosen.isEmpty ? keys.routerModel : chosen)
         return Reply(json: Router.json(in: text), text: text, latencyMs: latency, model: model)
     }
 

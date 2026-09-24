@@ -2,7 +2,7 @@
 
 Copper is Collin's fork of [Search](https://github.com/driceroland/Search), the 3 MB WebKit browser for macOS by Office Commun. The goal is an Arc-class replacement built on WebKit: spaces, profiles, split view, a command bar, and the rest of the daily Arc features, without a Chromium engine. On top of that, Copper adds a Liquid Glass aesthetic for macOS 26, deep customizability through one theme file and one settings pane, and a sidebar widget board. Scope: Part 1, Part 1b A/B/D and Part 2 of FORK-PLAN.md, in the order listed there.
 
-**Not Collin's — Felipe owns the agent side:** MCP integration (Copper as an MCP server / client), any Jev integration, and Stagehand-style browser automation. Those sections stay in the plan below for context only; do not start them from this document.
+**Not Collin's — Felipe owns the agent side:** MCP integration (Copper as an MCP server / client) and any Jev integration. Those sections stay in the plan below for context only; do not start them from this document. Stagehand-style automation is **dropped**: Jev mode (`jev_run` act, `jev_extract` extract, `jev_observe` observe) covers it natively, no second automation layer needed.
 
 ## Where things live
 
@@ -41,7 +41,7 @@ Copper is Collin's fork of [Search](https://github.com/driceroland/Search), the 
 | 16. Reader mode auto-detect + Ask on page | Tier 3 | reader auto-detect only; Ask on page is Felipe's (agent side) |
 | A. Apple aesthetic (Liquid Glass) | Part 1b | not started |
 | B. Customizability | Part 1b | not started |
-| C. MCP integration (server, then client) | Part 1b | **Felipe's**, not Collin's — see note at top. Server **shipped** (`Fork/MCP/`, Settings › Agents, Playwright-MCP tool names, `--mcp-stdio` bridge, `docs/agents.md`); client not started |
+| C. MCP integration (server, then client) | Part 1b | **Felipe's**, not Collin's — see note at top. Server **shipped** (`Fork/MCP/`, Settings › Agents, Playwright-MCP tool names, `--mcp-stdio` bridge, `docs/agents.md`). **Jev mode shipped** (`Fork/MCP/Ultrafast.swift`: jev-ultrafast in the open tab — `jev_run` / `jev_step` / `jev_observe` / `jev_extract`, Copy-prompt pills; 10-game Wikipedia bench 5.3× median vs Sonnet on the Playwright tools). Client (C2) not started — waits on D |
 | D. Sidebar widgets | Part 1b | not started |
 | Maintenance automation (sync workflows, PATCHES.md, release) | Part 2 | **partly shipped**: `PATCHES.md`, updater off, Copper bundle id, `sync-main.yml` + `sync-fork.yml` (Layers 1–2). Left: agent conflict step (Layer 3, wait for the first conflict), release-on-tag |
 

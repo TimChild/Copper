@@ -222,7 +222,7 @@ struct AgentsPage: View {
 
             Caption("Jev mode — ultrafast")
             Card {
-                Line("Let the agent hand Copper a goal", "Adds jev_run, jev_step and jev_observe — browser-use's jev-ultrafast loop, run in this window. Jev picks an operation and an element every ~200 ms; Copper does it with real clicks and keys until the goal is done. Seconds, not a round trip per step.") {
+                Line("Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract — browser-use's jev-ultrafast loop, run in this window. Jev picks an operation and an element every ~200 ms; Copper does it with real clicks and keys until the goal is done. Seconds, not a round trip per step.") {
                     Switch(on: $mcp.config.jev)
                 }
                 if mcp.config.jev {
@@ -231,8 +231,16 @@ struct AgentsPage: View {
                         KeyField(text: $brain.keys.jevKey, placeholder: "ts-…", ready: brain.jevReady)
                     }
                     Rule()
-                    Line("Text helper", brain.routerReady ? "The router (\(brain.keys.routerModel)) writes what gets typed into fields" : "TYPE_TEXT needs the router — add a key under Settings › Intelligence, or runs that must type will stop") {
-                        Circle().fill(brain.routerReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8)).frame(width: 8, height: 8)
+                    Line("Text model", brain.routerReady ? "Writes what gets typed and answers jev_extract, through the router. Small and fast is the point — empty means the router model (\(brain.keys.routerModel))." : "TYPE_TEXT and jev_extract need the router — add a key under Settings › Intelligence") {
+                        HStack(spacing: 8) {
+                            Circle().fill(brain.routerReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8)).frame(width: 8, height: 8)
+                            TextField(brain.keys.routerModel, text: $brain.keys.textModel)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, design: .monospaced))
+                                .frame(width: 120)
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        }
                     }
                     Rule()
                     Line("Prompt for your agent", "One paragraph: how to connect, and to hand over goals with jev_run. Paste it into the chat.") {

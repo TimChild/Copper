@@ -33,7 +33,7 @@ enum Tools {
     static func instructions(jev: Bool) -> String {
         let base = "This is Copper, the user's own browser: their tabs, their sign-ins. Call browser_tabs to see what is open, browser_snapshot to read the current page as an accessibility tree with refs (e12), then browser_click / browser_type / browser_press_key with those refs. Prefer working in the tab the user is already on; open a new one only when asked. Take a screenshot when layout matters. Nothing here is sandboxed — act as the user would."
         guard jev else { return base }
-        return base + " Jev mode is on: for any multi-step task prefer jev_run with one plain-English goal (every concrete value in it) — Copper drives the page itself with browser-use's jev-ultrafast loop, ~200 ms a decision, and returns the trace. jev_observe is the fast indexed read; jev_step supervises one decision at a time. Fall back to the browser_* tools where Jev reports BLOCKED, and verify DONE yourself."
+        return base + " Jev mode is on: for any multi-step task prefer jev_run with one plain-English goal (every concrete value in it) — Copper drives the page itself with browser-use's jev-ultrafast loop, ~200 ms a decision, and returns the trace. jev_observe is the fast indexed read; jev_extract answers a question about the page as JSON; jev_step supervises one decision at a time. Fall back to the browser_* tools where Jev reports BLOCKED, and verify DONE yourself."
     }
 
     // MARK: - the catalogue
@@ -157,7 +157,7 @@ enum Tools {
             window.setFrame(frame, display: true, animate: false)
             return [.text("Window is \(Int(w.doubleValue))×\(Int(h.doubleValue))")]
         case "browser_groups": return groups(args, in: browser)
-        case "jev_run", "jev_step", "jev_observe": return try await Ultrafast.call(name, args, in: browser)
+        case "jev_run", "jev_step", "jev_observe", "jev_extract": return try await Ultrafast.call(name, args, in: browser)
         default: break
         }
 

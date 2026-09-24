@@ -93,6 +93,7 @@ first:
 | `jev_run` | `goal` (+ `url`, `newTab`, `maxSteps`, `elements`) — runs [browser-use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in the current tab until DONE, BLOCKED or the budget (60 actions, 120 decisions, 3 minutes); answers with the trace, the page, and the indexed element table |
 | `jev_step` | one decision and its action; same `goal` continues the session |
 | `jev_observe` | what Jev sees: `[3] combobox  Where to? · London` for every visible control, plus the visible text |
+| `jev_extract` | `instruction` (+ `schema`, `full`) — one JSON object drawn from the page by the text model: values, not a tree |
 
 The loop is theirs, in Swift (`Fork/MCP/Ultrafast.swift`): one script reads
 the visible controls into an indexed table with a semantic marker; **one**
@@ -105,7 +106,11 @@ Intelligence) for the value and types only what came back as `{"text": …}`.
 Model output never becomes a selector, a coordinate or JavaScript.
 
 Needs a TypeSafe key (shared with Intelligence — the Agents page has the
-field too) and, for anything that types, the router key. DONE is the model's
+field too) and, for anything that types or extracts, the router key. **Text
+model** on the Agents page names the small model used for typing and
+`jev_extract`; empty means the router model. Small and fast is the point:
+Sonnet spends ~2.5 s writing a search string, a mercury-class model well under
+a second. DONE is the model's
 claim; the tool says so and the agent is told to check.
 
 **Copy prompt** on the Agents page gives you one paragraph to paste into the

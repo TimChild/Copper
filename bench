@@ -184,7 +184,7 @@ def main(argv):
         sys.exit(f"unknown command “{verb}” — see bench help")
 
     answer = ask(os.path.join(folder(world), "bench.sock"), request)
-    if "error" in answer:
+    if answer.get("error"):
         sys.exit("error: " + str(answer["error"]))
     if verb == "text":
         print(answer.get("text", ""))
@@ -197,6 +197,8 @@ def main(argv):
     elif verb in ("eval", "ext-popup"):
         value = answer.get("value")
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
+    elif verb == "updates":
+        print(json.dumps(answer, ensure_ascii=False, sort_keys=True))
     elif verb == "bar":
         for o in answer.get("offers", []):
             print(f"{o['kind']:9} {o['key']}  {o['title']}")

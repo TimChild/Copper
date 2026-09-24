@@ -47,7 +47,8 @@ enum CLI {
         var args = raw
         let json = args.contains("--json")
         let dryRun = args.contains("--dry-run")
-        args.removeAll { $0 == "--json" || $0 == "--dry-run" }
+        let launchRequested = args.contains("--launch") || ProcessInfo.processInfo.environment["COPPER_LAUNCH"] == "1"
+        args.removeAll { $0 == "--json" || $0 == "--dry-run" || $0 == "--launch" }
 
         guard let command = args.first else {
             print(usage)
@@ -60,23 +61,24 @@ enum CLI {
         if command == "setup" {
             return runSetup(Array(args.dropFirst()), json: json)
         }
+        if command == "session" {
+            return runSession(Array(args.dropFirst()), json: json, dryRun: dryRun)
+        }
 
         guard let spec = makeRequest(command, Array(args.dropFirst())) else { return 2 }
         if dryRun {
-            if let request = spec.request { printJSON(request) }
-            else if spec.health { print("GET /health") }
-            return 0
+            return dryRunDecision(spec, launchRequested: launchRequested)
         }
 
         guard var config = readConfig() else {
-            error("open Copper → Settings › Agents › Let agents drive this window")
+            error(notRunningMessage)
             return 2
         }
         guard config.enabled, !config.token.isEmpty else {
-            error("open Copper → Settings › Agents › Let agents drive this window")
+            error(notRunningMessage)
             return 2
         }
-        guard ensureRunning(&config) else { return 2 }
+        guard ensureRunning(&config, launchRequested: launchRequested) else { return 2 }
 
         if spec.health {
             return doHealth(config, json: json)
@@ -346,32 +348,226 @@ enum CLI {
         return nil
     }
 
-    // MARK: - app discovery and HTTP
+    // MARK: - session recovery
 
-    private static func readConfig() -> Config? {
-        guard let data = try? Data(contentsOf: Store.file("agent.json")) else { return nil }
-        return try? JSONDecoder().decode(Config.self, from: data)
+    private static func sessionDirectory() -> URL {
+        if let override = ProcessInfo.processInfo.environment["COPPER_SESSION_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        return Store.folder
     }
 
-    private static func ensureRunning(_ config: inout Config) -> Bool {
-        if health(config.port)?.running != true {
-            launch()
-            let deadline = Date().addingTimeInterval(20)
-            while Date() < deadline {
-                if health(config.port)?.running == true { break }
-                Thread.sleep(forTimeInterval: 0.25)
-            }
-            if let fresh = readConfig() { config = fresh }
+    private static func sessionAppName() -> String {
+        ProcessInfo.processInfo.environment["COPPER_APP_NAME"] ?? "Copper"
+    }
+
+    private static func sessionAppRunning() -> Bool {
+        // A fake app name is the documented scratch-world escape hatch. It
+        // must never make a recovery test notice, quit, or wait on live Copper.
+        if ProcessInfo.processInfo.environment["COPPER_APP_NAME"] != nil,
+           ProcessInfo.processInfo.environment["COPPER_BUNDLE_ID"] == nil { return false }
+        let bundle = ProcessInfo.processInfo.environment["COPPER_BUNDLE_ID"] ?? Fork.bundle
+        return !NSRunningApplication.runningApplications(withBundleIdentifier: bundle).isEmpty
+    }
+
+    private static func runSession(_ input: [String], json: Bool, dryRun: Bool) -> Int {
+        guard let operation = input.first else {
+            error("session needs list or restore")
+            return 2
         }
-        guard config.enabled, !config.token.isEmpty else {
-            error("open Copper → Settings › Agents › Let agents drive this window")
+        switch operation {
+        case "list":
+            guard input.count == 1 else {
+                error("session list takes no arguments")
+                return 2
+            }
+            let directory = sessionDirectory()
+            let names = ["session.json", "session.previous.json"]
+            let rows = names.map { name -> [String: Any] in
+                let file = directory.appendingPathComponent(name)
+                guard let data = try? Data(contentsOf: file),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { return ["file": name, "exists": false] }
+                let tabs = (object["tabs"] as? [[String: Any]])?.count ?? 0
+                let spaces = (object["spaces"] as? [[String: Any]])?.count ?? 0
+                let mtime = (try? FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date)
+                    .map { ISO8601DateFormatter().string(from: $0) } ?? "unknown"
+                return ["file": name, "exists": true, "tabs": tabs, "spaces": spaces, "mtime": mtime]
+            }
+            if json {
+                printJSON(["directory": directory.path, "sessions": rows])
+            } else {
+                for row in rows {
+                    let name = row["file"] as? String ?? "session.json"
+                    guard row["exists"] as? Bool == true else {
+                        print("\(name): missing")
+                        continue
+                    }
+                    print("\(name): tabs=\(row["tabs"] as? Int ?? 0) spaces=\(row["spaces"] as? Int ?? 0) mtime=\(row["mtime"] as? String ?? "unknown")")
+                }
+            }
+            return 0
+
+        case "restore":
+            var chosen: String?
+            var quit = false
+            for argument in input.dropFirst() {
+                if argument == "--quit" {
+                    quit = true
+                } else if argument.hasPrefix("-") || chosen != nil {
+                    error("session restore takes PATH and optional --quit")
+                    return 2
+                } else {
+                    chosen = argument
+                }
+            }
+            let directory = sessionDirectory()
+            let source = URL(fileURLWithPath: (chosen ?? "session.previous.json"), relativeTo: directory).standardizedFileURL
+            let destination = directory.appendingPathComponent("session.json")
+            guard FileManager.default.fileExists(atPath: source.path) else {
+                error("session file not found: \(source.path)")
+                return 2
+            }
+            let running = sessionAppRunning()
+            guard !running || quit else {
+                error("Copper is running; pass --quit to restore a session")
+                return 2
+            }
+            if dryRun {
+                if running { print("would quit \(sessionAppName())") }
+                print("would copy \(source.path) to \(destination.path) and relaunch \(sessionAppName())")
+                return 0
+            }
+            if running {
+                let appName = sessionAppName().replacingOccurrences(of: "\"", with: "")
+                let script = "tell application \"\(appName)\" to quit"
+                guard runProcess("/usr/bin/osascript", arguments: ["-e", script]) == 0 else {
+                    Self.error("could not ask \(sessionAppName()) to quit")
+                    return 2
+                }
+                let deadline = Date().addingTimeInterval(20)
+                while sessionAppRunning() && Date() < deadline { Thread.sleep(forTimeInterval: 0.25) }
+                guard !sessionAppRunning() else {
+                    error("Copper did not quit within 20 seconds")
+                    return 2
+                }
+            }
+            let files = FileManager.default
+            try? files.createDirectory(at: directory, withIntermediateDirectories: true)
+            if files.fileExists(atPath: destination.path) {
+                let stamp = Int(Date().timeIntervalSince1970)
+                let replaced = directory.appendingPathComponent("session.replaced-\(stamp).json")
+                try? files.removeItem(at: replaced)
+                do { try files.copyItem(at: destination, to: replaced) }
+                catch {
+                    Self.error("could not save current session: \(error.localizedDescription)")
+                    return 2
+                }
+            }
+            let temporary = directory.appendingPathComponent(".session-restore-\(UUID().uuidString).json")
+            do {
+                let data = try Data(contentsOf: source)
+                try data.write(to: temporary, options: .atomic)
+                if files.fileExists(atPath: destination.path) {
+                    _ = try files.replaceItemAt(destination, withItemAt: temporary)
+                } else {
+                    try files.moveItem(at: temporary, to: destination)
+                }
+            } catch {
+                try? files.removeItem(at: temporary)
+                Self.error("could not restore session: \(error.localizedDescription)")
+                return 2
+            }
+            let open = ProcessInfo.processInfo.environment["COPPER_OPEN_COMMAND"] ?? "/usr/bin/open"
+            guard runProcess(open, arguments: ["-a", sessionAppName()]) == 0 else {
+                Self.error("could not relaunch \(sessionAppName())")
+                return 2
+            }
+            if json { printJSON(["restored": source.path, "session": destination.path]) }
+            else { print("restored \(source.path) and relaunched \(sessionAppName())") }
+            return 0
+
+        default:
+            error("unknown session command: \(operation) (use list or restore)")
+            return 2
+        }
+    }
+
+    private static func runProcess(_ executable: String, arguments: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        } catch { return -1 }
+    }
+
+    // MARK: - app discovery and HTTP
+
+    private static let notRunningMessage = "Copper isn't running (or Settings › Agents is off). Start it with `open -a Copper`, or pass --launch."
+
+    private static func readConfig() -> Config? {
+        guard let data = try? Data(contentsOf: Store.file("agent.json")),
+              var config = try? JSONDecoder().decode(Config.self, from: data)
+        else { return nil }
+        if let raw = ProcessInfo.processInfo.environment["COPPER_AGENT_PORT"], let port = UInt16(raw) {
+            config.port = port
+        }
+        return config
+    }
+
+    private static func dryRunDecision(_ spec: RequestSpec, launchRequested: Bool) -> Int {
+        let config = readConfig()
+        let running = config.flatMap { health($0.port)?.running } == true
+        if running {
+            if let request = spec.request { printJSON(request) }
+            else if spec.health { print("GET /health") }
+            return 0
+        }
+        if copperProcessExists() {
+            print("would wait for Copper")
+        } else if launchRequested {
+            print("would launch Copper")
+        } else {
+            print("would not launch Copper (pass --launch)")
+        }
+        return 0
+    }
+
+    private static func ensureRunning(_ config: inout Config, launchRequested: Bool) -> Bool {
+        guard health(config.port)?.running != true else { return true }
+        guard launchRequested else {
+            error(notRunningMessage)
             return false
         }
-        guard health(config.port)?.running == true else {
-            error("Copper did not answer on its agent port")
+
+        // A process with Copper's bundle id may be in the middle of quitting.
+        // Wait for that instance instead of opening a second one into its
+        // session file. If it disappears without answering, leave the choice
+        // to the caller rather than resurrecting it after the quit.
+        let hadProcess = copperProcessExists()
+        if !hadProcess { launch() }
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if health(config.port)?.running == true { break }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        if let fresh = readConfig() { config = fresh }
+        guard config.enabled, !config.token.isEmpty,
+              health(config.port)?.running == true else {
+            error(notRunningMessage)
             return false
         }
         return true
+    }
+
+    private static func copperProcessExists() -> Bool {
+        let current = ProcessInfo.processInfo.processIdentifier
+        let bundle = ProcessInfo.processInfo.environment["COPPER_PROCESS_BUNDLE_ID"] ?? Fork.bundle
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundle)
+            .contains { $0.processIdentifier != current }
     }
 
     private static func launch() {
@@ -439,7 +635,7 @@ enum CLI {
 
     private static func doHealth(_ config: Config, json: Bool) -> Int {
         guard let got = health(config.port) else {
-            error("Copper did not answer on its agent port")
+            error(notRunningMessage)
             return 2
         }
         let initialize = [
@@ -557,7 +753,7 @@ enum CLI {
     }
 
     private static let usage = """
-    Usage: copper [--json] <command> [arguments]
+    Usage: copper [--json] [--launch] <command> [arguments]
 
       tabs                                      list open tabs
       open URL                                  open URL in a new tab
@@ -576,10 +772,13 @@ enum CLI {
       key KEY                                   press a key
       tools                                     list available tools
       health                                    check the agent server and Jev mode
-      setup [phi|claude|cli|status]              install terminal-agent setup (default: status)
+      session list                              list session files and tab counts
+      session restore [PATH] [--quit]           restore a session (default: previous)
+      setup [phi|claude|cli|status]             install terminal-agent setup (default: status)
       call TOOL [JSON-ARGS]                     call any MCP tool
       help                                      show this help
 
-    Use --json for the raw JSON-RPC result. (Hidden: --dry-run prints the request.)
+    Use --json for the raw JSON-RPC result. Pass --launch (or COPPER_LAUNCH=1)
+    to opt into starting Copper when it is down. (Hidden: --dry-run prints the decision.)
     """
 }

@@ -44,10 +44,7 @@ enum Session {
         let file = Session.file
         let put = {
             guard let data = try? JSONEncoder().encode(shape) else { return }
-            try? FileManager.default.createDirectory(
-                at: file.deletingLastPathComponent(), withIntermediateDirectories: true
-            )
-            try? data.write(to: file, options: .atomic)
+            _ = SessionGuard.write(data, tabCount: shape.tabs.count, file: file)
         }
         if now {
             put()

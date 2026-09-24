@@ -169,6 +169,8 @@ final class Spaces: ObservableObject {
     /// Yesterday's rows. The visible one lands in `browser.tabs` (built,
     /// nothing fetched); the rest are parked the same way.
     func restore(_ saved: Session.Shape, into browser: Browser) {
+        SessionGuard.beginRestore()
+        defer { SessionGuard.finishRestore() }
         if let spaces = saved.spaces, !spaces.isEmpty {
             all = spaces
             current = saved.space.flatMap { c in spaces.first { $0.id == c }?.id } ?? spaces[0].id

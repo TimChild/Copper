@@ -122,15 +122,22 @@ Bench tabs are never selected for you, never enter the session or the history, a
 
 Copper ships a `copper` command and a Jev-first `/jev <goal>` command for driving the signed-in browser already open on your Mac. In **Settings › Agents › Terminal agents**, press **Set up** for phi, **Set up** for Claude Code, or **Install** for the CLI; Copper merges its current token into the user-scoped config and writes the command file, so no bearer token needs to ride in a pasted prompt. First enable **Settings › Agents › Let agents drive this window**. For Claude Code, start a new session after setup.
 
-The CLI shim lives at `Copper.app/Contents/Resources/bin/copper` (Homebrew links it into your `PATH`) and starts Copper when needed. `/jev` and `copper run` hand Jev the whole goal as the first call; there is no tab-list or snapshot reconnaissance first.
+The CLI shim lives at `Copper.app/Contents/Resources/bin/copper` (Homebrew links it into your `PATH`) and never starts Copper implicitly. If the browser is down it prints one safe error and exits 2; add `--launch` (or set `COPPER_LAUNCH=1`) when you explicitly want the current launch-and-wait behaviour. `/jev` and `copper run` hand Jev the whole goal as the first call; there is no tab-list or snapshot reconnaissance first.
 
 ```sh
 copper tabs
+copper health
 copper run "find the Acme invoice for March 2026 and stop when it is visible"
 copper observe --no-text -n 20
+copper session list
+copper session restore                 # previous backup; add --quit if Copper is running
 ```
 
-Use `copper extract "…"` for structured reads, `copper shot` for a screenshot, and `copper --json …` when a script needs the result object. Jev actions return a claim of DONE; verify the page yourself.
+Use `copper extract "…"` for structured reads, `copper shot` for a screenshot, and `copper --json …` when a script needs the result object. Jev actions return a claim of DONE; verify the page yourself. `copper session list` reports both `session.json` and the one retained `session.previous.json` backup with tab/space counts and mtimes. `copper session restore [PATH]` saves the current file as `session.replaced-<timestamp>.json`, then restores a chosen file and relaunches Copper; it refuses to touch a running browser unless `--quit` is explicit.
+
+### Sessions
+
+Copper refuses to replace a non-empty session with an empty shape while launch-time restoration is still in progress. Writes remain atomic, and a single `session.previous.json` is rotated before a write drops the tab count below half (or to zero). If a quit or upgrade goes wrong, use the CLI recovery command above or press **⌘K → Restore previous session**; the command appears only when the backup exists.
 
 ### Contributing
 

@@ -12,6 +12,7 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | Command | Use |
 |---|---|
 | `copper tabs` | List tabs. |
+| `copper health` | Check connectivity and Jev mode. |
 | `copper open URL` / `copper go URL` | Open a tab / navigate the current tab. |
 | `copper run "GOAL" [--url URL] [--new-tab]` | Let Jev complete a multi-step goal. |
 | `copper observe [-n N]` | Fast indexed read of the visible page. |
@@ -20,7 +21,10 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper click REF` / `copper type REF TEXT` / `copper key KEY` | Act on a snapshot ref. |
 | `copper shot [PATH]` / `copper eval 'JS'` | Save a screenshot / evaluate JavaScript. |
 | `copper --json COMMAND` | Return the raw result object for scripts. |
-| `copper tools` / `copper health` | Inspect capabilities or connectivity. |
+| `copper tools` | Inspect available capabilities. |
+| `copper session list` | List session.json and session.previous.json with counts and mtimes. |
+| `copper session restore [PATH] [--quit]` | Restore a session backup; default is session.previous.json. |
+| `copper --launch …` | Explicitly opt into launching Copper when it is down (also `COPPER_LAUNCH=1`). |
 
 Examples:
 
@@ -29,6 +33,8 @@ copper run "search Acme invoices for March 2026 and stop when the result is visi
 copper observe -n 20 --no-text
 copper extract "Return the visible flight options with airline, time, and price" --schema '{"type":"array"}'
 ```
+
+The CLI does not launch Copper by default. When it is down, commands print `copper: Copper isn't running (or Settings › Agents is off). Start it with \`open -a Copper\`, or pass --launch.` and exit 2. This is deliberate: probes during a quit must not create a second app instance. `copper session restore` refuses while Copper is running unless `--quit` is supplied; it saves the current session before replacing it and relaunches after the copy.
 
 Jev's DONE is a claim, not proof: read the page again with `copper observe` or
 `snapshot` before reporting that an action succeeded.

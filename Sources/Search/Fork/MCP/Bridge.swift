@@ -46,10 +46,18 @@ enum Bridge {
             return
         }
 
-        // Wake the app when it isn't up, then wait for its port.
+        // Wake the app when it isn't up, then wait for its port. During a
+        // quit the old process can still be registered while its listener is
+        // already gone; opening another Copper there would race the session
+        // restore, so an existing instance always gets the waiting path.
         if !reachable(conf.port) {
-            log("copper: launching Copper…")
-            launch()
+            let existing = copperProcessExists()
+            if existing {
+                log("copper: Copper is already quitting; waiting for its agent port…")
+            } else {
+                log("copper: launching Copper…")
+                launch()
+            }
             let deadline = Date().addingTimeInterval(12)
             while Date() < deadline, !reachable(conf.port) { Thread.sleep(forTimeInterval: 0.25) }
             if let fresh = config() { conf = fresh } // the token may have rotated
@@ -103,6 +111,12 @@ enum Bridge {
         request.httpMethod = "GET"
         let (_, status) = send(request)
         return status == 200
+    }
+
+    private static func copperProcessExists() -> Bool {
+        let current = ProcessInfo.processInfo.processIdentifier
+        return NSRunningApplication.runningApplications(withBundleIdentifier: Fork.bundle)
+            .contains { $0.processIdentifier != current }
     }
 
     private static func launch() {

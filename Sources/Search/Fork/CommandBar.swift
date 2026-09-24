@@ -55,6 +55,9 @@ enum CommandBar {
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },
             .init(id: "prev-space", name: "Previous Space", glyph: "chevron.left") { Spaces.shared.step(-1, in: $0) },
         ]
+        if FileManager.default.fileExists(atPath: Store.file("session.previous.json").path) {
+            list.append(.init(id: "session-restore", name: "Restore previous session", glyph: "arrow.counterclockwise") { $0.restorePreviousSession() })
+        }
         if Updates.shared.available {
             list.insert(.init(id: "update", name: "Update Copper to \(Updates.shared.latest?.version ?? "")", glyph: "arrow.down.circle") { _ in Updates.shared.upgrade() }, at: 0)
         }

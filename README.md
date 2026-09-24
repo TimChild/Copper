@@ -105,6 +105,20 @@ Turn on **Settings › General › Let a script drive Search** and the running a
 
 Bench tabs are never selected for you, never enter the session or the history, and go when the script says so. It is how this browser is tested while somebody is using it.
 
+### Command line
+
+Copper ships a `copper` command and a Jev-first `/jev <goal>` command for driving the signed-in browser already open on your Mac. In **Settings › Agents › Terminal agents**, press **Set up** for phi, **Set up** for Claude Code, or **Install** for the CLI; Copper merges its current token into the user-scoped config and writes the command file, so no bearer token needs to ride in a pasted prompt. First enable **Settings › Agents › Let agents drive this window**. For Claude Code, start a new session after setup.
+
+The CLI shim lives at `Copper.app/Contents/Resources/bin/copper` (Homebrew links it into your `PATH`) and starts Copper when needed. `/jev` and `copper run` hand Jev the whole goal as the first call; there is no tab-list or snapshot reconnaissance first.
+
+```sh
+copper tabs
+copper run "find the Acme invoice for March 2026 and stop when it is visible"
+copper observe --no-text -n 20
+```
+
+Use `copper extract "…"` for structured reads, `copper shot` for a screenshot, and `copper --json …` when a script needs the result object. Jev actions return a claim of DONE; verify the page yourself.
+
 ### Contributing
 
 Issues and pull requests are genuinely welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how this is reviewed and what tends to get merged. The short version: small changes, no new dependencies, nothing that phones home.

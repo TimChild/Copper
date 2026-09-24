@@ -12,6 +12,7 @@ struct AgentPane: View {
     @ObservedObject var agent = Agent.shared
     @ObservedObject var servers = Servers.shared
     @FocusState private var focused: Bool
+    @State private var copiedJev = false
 
     static let width: CGFloat = 360
 
@@ -157,6 +158,19 @@ struct AgentPane: View {
                 .focused($focused)
                 .disabled(!agent.ready)
                 .onSubmit { agent.send(in: browser) }
+            Button {
+                let goal = agent.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(MCP.jevCommand(goal: goal.isEmpty ? nil : goal), forType: .string)
+                copiedJev = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copiedJev = false }
+            } label: {
+                Text(copiedJev ? "Copied" : "→ /jev")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(Palette.muted)
+            }
+            .buttonStyle(.plain)
+            .help("Copy this goal as a /jev command")
             Button { agent.send(in: browser) } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 11, weight: .semibold))

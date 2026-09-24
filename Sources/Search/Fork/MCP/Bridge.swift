@@ -13,6 +13,7 @@ import Foundation
 
 enum Bridge {
     static func runIfAsked() {
+        CLI.runIfAsked()
         guard CommandLine.arguments.contains("--mcp-stdio") else { return }
         run()
         exit(0)

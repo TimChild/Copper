@@ -50,8 +50,10 @@ swift build -c "$CONFIG"
 BINARY=".build/$CONFIG/Search"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Resources/bin"
 cp "$BINARY" "$APP/Contents/MacOS/$NAME"
+cp bin/copper "$APP/Contents/Resources/bin/copper"
+chmod 755 "$APP/Contents/Resources/bin/copper"
 
 # Symbols stay out of the app. The linker leaves every function's name and a
 # map back to the source in the binary — 15,000 entries, more than half of

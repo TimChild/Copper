@@ -1,0 +1,33 @@
+#!/bin/sh
+# The CLI lives inside Copper.app; this shim also works when Homebrew symlinks it.
+set -u
+
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self") || break
+  case "$link" in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+own_dir=$(CDPATH= cd -- "$(dirname -- "$self")" 2>/dev/null && pwd -P) || own_dir=$(dirname -- "$self")
+
+run() {
+  if [ -x "$1" ]; then
+    binary=$1
+    shift
+    exec "$binary" --cli "$@"
+  fi
+}
+
+run "$own_dir/../../MacOS/Copper" "$@"
+run "/Applications/Copper.app/Contents/MacOS/Copper" "$@"
+run "${HOME:-}/Applications/Copper.app/Contents/MacOS/Copper" "$@"
+
+hit=$(mdfind "kMDItemCFBundleIdentifier == 'com.collinrijock.copper'" 2>/dev/null | head -n 1)
+if [ -n "$hit" ] && [ -x "$hit/Contents/MacOS/Copper" ]; then
+  exec "$hit/Contents/MacOS/Copper" --cli "$@"
+fi
+
+echo "copper: Copper.app not found — install it: curl -fsSL https://forca.apps.exowatt.com/downloads/copper-install.sh | sh   (or: brew install --cask exowatt-labs/copper/copper)" >&2
+exit 2

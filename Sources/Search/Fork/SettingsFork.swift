@@ -196,6 +196,8 @@ struct AgentsPage: View {
     @ObservedObject var chat = Agent.shared
     @ObservedObject var servers = Servers.shared
     @State private var copied: String?
+    @State private var setupStatus = Setup.Status()
+    @State private var setupResult: [String: String] = [:]
 
     private var serversLine: String {
         if let trouble = servers.trouble { return trouble }
@@ -250,10 +252,6 @@ struct AgentsPage: View {
                                 .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                         }
                     }
-                    Rule()
-                    Line("Prompt for your agent", "One paragraph: how to connect, and to hand over goals with jev_run. Paste it into the chat.") {
-                        Pill(copied == "jevprompt" ? "Copied" : "Copy prompt", filled: true) { copy(mcp.jevPrompt, "jevprompt") }
-                    }
                     if !mcp.jevNote.isEmpty {
                         Rule()
                         Line("Last run", mcp.jevNote) { EmptyView() }
@@ -293,24 +291,42 @@ struct AgentsPage: View {
                 }
             }
 
-            Caption("Connect a client")
+            Caption("Terminal agents")
             Card {
-                Line("Prompt for your agent", "One paragraph: where Copper listens, the token, and the Playwright-shaped tools it has. Paste it into the chat.") {
-                    Pill(copied == "prompt" ? "Copied" : "Copy prompt", filled: true) { copy(mcp.agentPrompt, "prompt") }
+                terminalRow(.phi)
+                Rule()
+                terminalRow(.claude)
+                Rule()
+                terminalRow(.cli)
+                Rule()
+                Line("Copy /jev", "A goal-first command for the agent in your terminal") {
+                    Pill(copied == "jev" ? "Copied" : "Copy /jev", filled: true) { copy(MCP.jevCommand(goal: nil), "jev") }
                 }
                 Rule()
-                Line("Claude Code / phi / Cursor (HTTP)", "Paste into ~/.claude.json, ~/.pi/agent/mcp.json or the editor's MCP settings") {
+                Line("Copy prompt", mcp.config.jev ? "Jev-first instructions for this mode" : "Snapshot-first instructions for this mode") {
+                    Pill(copied == "prompt" ? "Copied" : "Copy prompt", filled: true) {
+                        copy(mcp.config.jev ? mcp.jevPrompt : mcp.agentPrompt, "prompt")
+                    }
+                }
+                Rule()
+                Line("Copy config", "The current HTTP config for a client that is not set up yet") {
                     Pill(copied == "http" ? "Copied" : "Copy config") { copy(mcp.clientConfig, "http") }
                 }
                 Rule()
-                Line("Claude Desktop and other stdio clients", "Runs this app with --mcp-stdio as a pipe to the running window; launches Copper if it isn't up") {
-                    Pill(copied == "stdio" ? "Copied" : "Copy config") { copy(mcp.stdioConfig, "stdio") }
-                }
-                Rule()
-                Line("One-liner for Claude Code", "claude mcp add --transport http copper …") {
-                    Pill(copied == "cli" ? "Copied" : "Copy") {
-                        copy("claude mcp add --transport http copper \(mcp.endpoint) --header \"Authorization: Bearer \(mcp.config.token)\"", "cli")
+                VStack(alignment: .leading, spacing: 4) {
+                    Line("Copy install command", "The one-liner for the Copper CLI") {
+                        Pill(copied == "install" ? "Copied" : "Copy install") { copy(Setup.installCommand, "install") }
                     }
+                    Text(Setup.installCommand)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(Palette.muted)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 14)
+                    Text("Alternative: \(Setup.brewCommand)")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Palette.muted)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 10)
                 }
             }
 
@@ -334,6 +350,91 @@ struct AgentsPage: View {
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .onAppear { setupStatus = Setup(endpoint: mcp.endpoint, token: mcp.config.token).status() }
+    }
+
+    private enum TerminalAgent: String {
+        case phi, claude, cli
+
+        var title: String {
+            switch self {
+            case .phi: return "phi"
+            case .claude: return "Claude Code"
+            case .cli: return "copper CLI"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .phi: return "User-scoped ~/.pi/agent/mcp.json and /jev prompt"
+            case .claude: return "User-scoped ~/.claude.json and /jev command"
+            case .cli: return "The bundled copper command in your PATH"
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func terminalRow(_ agent: TerminalAgent) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Line(agent.title, setupResult[agent.rawValue] ?? agent.detail) {
+                HStack(spacing: 8) {
+                    Text(stateTitle(state(for: agent)))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                    Pill(actionTitle(for: agent), filled: state(for: agent) != .ready) {
+                        runSetup(agent)
+                    }
+                }
+            }
+            if let result = setupResult[agent.rawValue] {
+                Text(result)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(result.hasPrefix("Error") ? Color.orange.opacity(0.9) : Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
+        }
+    }
+
+    private func state(for agent: TerminalAgent) -> Setup.State {
+        switch agent {
+        case .phi: return setupStatus.phi
+        case .claude: return setupStatus.claude
+        case .cli: return setupStatus.cli
+        }
+    }
+
+    private func stateTitle(_ state: Setup.State) -> String {
+        switch state {
+        case .missing: return "Not set up"
+        case .stale: return "Update"
+        case .ready: return "Ready"
+        }
+    }
+
+    private func actionTitle(for agent: TerminalAgent) -> String {
+        switch agent {
+        case .phi, .claude: return state(for: agent) == .missing ? "Set up" : "Update"
+        case .cli: return "Install"
+        }
+    }
+
+    private func runSetup(_ agent: TerminalAgent) {
+        do {
+            let report: Setup.Report
+            let setup = Setup(endpoint: mcp.endpoint, token: mcp.config.token)
+            switch agent {
+            case .phi: report = try setup.phi()
+            case .claude: report = try setup.claude()
+            case .cli: report = try setup.cli()
+            }
+            setupResult[agent.rawValue] = (report.paths + report.notes).joined(separator: "\\n")
+        } catch {
+            let text = (error as? Tools.Failure)?.text ?? error.localizedDescription
+            setupResult[agent.rawValue] = "Error: \(text)"
+        }
+        setupStatus = Setup(endpoint: mcp.endpoint, token: mcp.config.token).status()
     }
 
     private var status: String {

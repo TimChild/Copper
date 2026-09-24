@@ -31,9 +31,10 @@ enum Tools {
     }
 
     static func instructions(jev: Bool) -> String {
-        let base = "This is Copper, the user's own browser: their tabs, their sign-ins. Call browser_tabs to see what is open, browser_snapshot to read the current page as an accessibility tree with refs (e12), then browser_click / browser_type / browser_press_key with those refs. Prefer working in the tab the user is already on; open a new one only when asked. Take a screenshot when layout matters. Nothing here is sandboxed — act as the user would."
-        guard jev else { return base }
-        return base + " Jev mode is on: for any multi-step task prefer jev_run with one plain-English goal (every concrete value in it) — Copper drives the page itself with browser-use's jev-ultrafast loop, ~200 ms a decision, and returns the trace. jev_observe is the fast indexed read; jev_extract answers a question about the page as JSON; jev_step supervises one decision at a time. Fall back to the browser_* tools where Jev reports BLOCKED, and verify DONE yourself."
+        guard jev else {
+            return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. First action: call browser_snapshot with interactive: true on the current tab, then act with its refs. Call browser_tabs only when another tab is named. Take a screenshot when layout matters. Nothing is sandboxed — act as the user would."
+        }
+        return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. ANY task: the FIRST call is jev_run with the whole goal, every concrete place/date/name/filter and stop condition; no browser_tabs or snapshot first. Add url only for a named page that is not current. jev_observe = fast indexed read; jev_extract = JSON values; jev_step = one decision. BLOCKED → browser_snapshot/click/type for that part, then jev_run again. DONE is Jev's claim — verify with jev_observe/jev_extract. Screenshot when layout matters; nothing is sandboxed — act as the user."
     }
 
     // MARK: - the catalogue

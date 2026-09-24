@@ -39,7 +39,8 @@
                                        the sidebar's Saved and Today blocks: counts per space,
                                        move a tab across the seam, run the archive sweep now
                                        (with HOURS, against that age instead of the setting)
-    ./bench agent [on|off|rotate]    the MCP server agents drive the window through
+    ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
+                                       the MCP server agents drive the window through; setup bridges terminal agents
     ./bench ai [mode off|ask|auto]   which model lanes have keys, and the grouper's last note
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
     ./bench bar TEXT [--go]          what ⌘K offers for TEXT; --go takes the first row

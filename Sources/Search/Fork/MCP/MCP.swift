@@ -142,15 +142,24 @@ final class MCP: ObservableObject {
     /// how to connect, what it can do. The Playwright-shaped tools.
     var agentPrompt: String {
         """
-        My browser, Copper, is running a local MCP server you can drive — it's the browser I'm already signed into, with my open tabs. Connect to it as an MCP server named `copper`: Streamable HTTP at \(endpoint) with the header `Authorization: Bearer \(config.token)` (Claude Code: `claude mcp add --transport http copper \(endpoint) --header "Authorization: Bearer \(config.token)"`; phi/Cursor: add `{"type":"http","url":"\(endpoint)","headers":{"Authorization":"Bearer \(config.token)"}}` under mcpServers.copper). It speaks Playwright MCP's tool set against the tab I have open — browser_tabs, browser_navigate, browser_snapshot (accessibility tree with refs like e12), browser_click, browser_type, browser_fill_form, browser_press_key, browser_hover, browser_select_option, browser_drag, browser_scroll, browser_take_screenshot, browser_evaluate, browser_wait_for, browser_get_text, browser_find, browser_console_messages, browser_resize, browser_close, plus browser_groups for my tab groups — so anything you know how to do with Playwright MCP works unchanged. Start with browser_tabs, then browser_snapshot to get refs, then act with those refs; work in the tab I'm on unless I say otherwise, and remember you're acting as me, signed in as me.
+        If you already have Copper set up, just type `/jev <goal>`.
+        Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. First action: call browser_snapshot with interactive: true on the current tab, then act with its refs. Call browser_tabs only when another tab is named; take a screenshot when layout matters; nothing is sandboxed — act as the user would.
+        Connect MCP server `copper` at \(endpoint) with `Authorization: Bearer \(config.token)`. Claude Code: `claude mcp add -s user --transport http copper \(endpoint) --header \"Authorization: Bearer \(config.token)\"`.
         """
     }
 
     /// The same, with Jev mode: hand over a goal, get a finished run back.
     var jevPrompt: String {
         """
-        My browser, Copper, is running a local MCP server you can drive — the browser I'm already signed into, with my open tabs — and it's in Jev mode. Connect to it as an MCP server named `copper`: Streamable HTTP at \(endpoint) with the header `Authorization: Bearer \(config.token)` (Claude Code: `claude mcp add --transport http copper \(endpoint) --header "Authorization: Bearer \(config.token)"`; phi/Cursor: add `{"type":"http","url":"\(endpoint)","headers":{"Authorization":"Bearer \(config.token)"}}` under mcpServers.copper). Prefer `jev_run` with ONE plain-English goal (optional `url`, `newTab`): Copper runs browser-use's jev-ultrafast loop natively — TypeSafe's Jev picks an operation and an indexed element every ~200 ms, a small model writes any text, and it acts with real clicks and keystrokes until DONE or BLOCKED — so a multi-step task takes seconds, not a snapshot-and-click round trip per step. Put every concrete value in the goal (places, dates, names, filters, and when to stop). Use `jev_observe` for a fast indexed read of what's actionable, `jev_extract` to get values off the page as JSON, `jev_step` to supervise one decision at a time, and the full Playwright-shaped set (browser_snapshot, browser_click, browser_type, browser_take_screenshot, browser_evaluate…) for anything Jev reports BLOCKED on — frames, canvas, uploads, odd keyboard widgets — then hand back to jev_run. DONE is the model's claim: check the page yourself before telling me it worked. Work in the tab I'm on unless I say otherwise; you're acting as me, signed in as me.
+        If you already have Copper set up, just type `/jev <goal>`.
+        Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless task names another tab. ANY task: FIRST call `jev_run` with whole goal (all concrete values: places, dates, names, filters; stop condition); no `browser_tabs` or snapshot first. Add `url` only for named non-current page. `jev_observe` = indexed read; `jev_extract` = JSON; `jev_step` = one decision. BLOCKED → browser_snapshot/click/type for that part then `jev_run`; DONE is Jev's claim — verify with `jev_observe`/`jev_extract`.
+        Connect MCP server `copper` at \(endpoint) with `Authorization: Bearer \(config.token)`. Claude Code: `claude mcp add -s user --transport http copper \(endpoint) --header \"Authorization: Bearer \(config.token)\"`.
         """
+    }
+
+    static func jevCommand(goal: String?) -> String {
+        guard let goal, !goal.isEmpty else { return "/jev " }
+        return "/jev \(goal)"
     }
 
     // MARK: - starting and stopping
@@ -350,6 +359,14 @@ final class MCP: ObservableObject {
         case "off": config.enabled = false
         case "rotate": rotateToken()
         case "jev": config.jev = (request["arg"] as? String ?? "on") != "off"
+        case "setup-phi":
+            do { return try Setup(endpoint: endpoint, token: config.token).phi().dictionary } catch let error { return ["error": (error as? Tools.Failure)?.text ?? error.localizedDescription] }
+        case "setup-claude":
+            do { return try Setup(endpoint: endpoint, token: config.token).claude().dictionary } catch let error { return ["error": (error as? Tools.Failure)?.text ?? error.localizedDescription] }
+        case "setup-cli":
+            do { return try Setup(endpoint: endpoint, token: config.token).cli().dictionary } catch let error { return ["error": (error as? Tools.Failure)?.text ?? error.localizedDescription] }
+        case "setup-status":
+            return Setup(endpoint: endpoint, token: config.token).status().dictionary
         default: break
         }
         return ["enabled": config.enabled, "running": running, "port": Int(config.port), "endpoint": endpoint, "calls": calls, "last": lastTool, "trouble": trouble ?? "",

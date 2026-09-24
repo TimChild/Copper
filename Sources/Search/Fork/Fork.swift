@@ -68,6 +68,25 @@ enum Fork {
             return ["offers": rows]
         case "swipe": return SpaceSwipe.bench(request["arg"] as? String ?? "left", in: browser)
         case "heat": return Heat.shared.bench(request, in: browser)
+        case "updates":
+            let op = request["op"] as? String ?? "status"
+            switch op {
+            case "status": return Updates.shared.status
+            case "check":
+                Updates.shared.check(force: true)
+                return ["checking": true]
+            case "stub":
+                guard let raw = request["arg"] as? String, let url = URL(string: raw) else { return ["error": "updates stub needs a URL"] }
+                Updates.shared.manifestURL = url
+                return ["manifestURL": url.absoluteString]
+            case "dry-run":
+                Updates.shared.dryRun = (request["arg"] as? String ?? "off") == "on"
+                return ["dryRun": Updates.shared.dryRun]
+            case "upgrade":
+                Updates.shared.upgrade()
+                return ["state": Updates.shared.state == .upgrading ? "upgrading" : "idle", "lastScript": Updates.shared.lastScript?.path ?? ""]
+            default: return ["error": "unknown updates operation \(op)"]
+            }
         case "summon":
             // ⌘K left open with this text in it, for a look at the bar itself.
             browser.summon()

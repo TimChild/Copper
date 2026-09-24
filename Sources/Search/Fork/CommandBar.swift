@@ -46,6 +46,7 @@ enum CommandBar {
             .init(id: "downloads", name: "Downloads", glyph: "arrow.down.circle") { $0.hoarding = true },
             .init(id: "passwords", name: "Passwords", glyph: "key") { $0.managing = true },
             .init(id: "settings", name: "Settings", glyph: "gearshape") { $0.tuning = true },
+            .init(id: "update-check", name: "Check for Copper updates", glyph: "arrow.triangle.2.circlepath") { _ in Updates.shared.check(force: true) },
             .init(id: "clear-history", name: "Clear History", glyph: "trash") { $0.clearHistory() },
             .init(id: "split", name: Split.shared.on ? "Close Split View" : "Split View", glyph: "rectangle.split.2x1") { Split.shared.toggle(in: $0) },
             .init(id: "agent", name: Agent.shared.open ? "Close Agent" : "Agent", glyph: "sparkles") { _ in Agent.shared.toggle() },
@@ -54,6 +55,9 @@ enum CommandBar {
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },
             .init(id: "prev-space", name: "Previous Space", glyph: "chevron.left") { Spaces.shared.step(-1, in: $0) },
         ]
+        if Updates.shared.available {
+            list.insert(.init(id: "update", name: "Update Copper to \(Updates.shared.latest?.version ?? "")", glyph: "arrow.down.circle") { _ in Updates.shared.upgrade() }, at: 0)
+        }
         for space in Spaces.shared.all where space.id != Spaces.shared.current {
             list.append(.init(id: "space-\(space.id)", name: "Switch to \(space.name)", glyph: "circle.grid.2x2") {
                 Spaces.shared.select(space.id, in: $0)

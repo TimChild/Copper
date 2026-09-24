@@ -43,7 +43,7 @@ Copper is Collin's fork of [Search](https://github.com/driceroland/Search), the 
 | B. Customizability | Part 1b | not started |
 | C. MCP integration (server, then client) | Part 1b | **Felipe's**, not Collin's — see note at top. Server **shipped** (`Fork/MCP/`, Settings › Agents, Playwright-MCP tool names, `--mcp-stdio` bridge, `docs/agents.md`). **Jev mode shipped** (`Fork/MCP/Ultrafast.swift`: jev-ultrafast in the open tab — `jev_run` / `jev_step` / `jev_observe` / `jev_extract`, Copy-prompt pills; 10-game Wikipedia bench 5.3× median vs Sonnet on the Playwright tools). **CLI shipped** (`copper` shim + `Copper --cli`, with `copper run` / observe / extract / screenshot commands; `copper setup phi|claude|cli|status`). **Terminal setup shipped** (`Fork/MCP/Setup.swift`: token-free phi/Claude/CLI setup and status). **Client (C2) shipped** as a pane beside the page (⌘E, `Fork/Agent/`): chat with Copper's tools bound locally + mcp.json servers (HTTP + stdio). Ask on page (#16) = ⌘⇧E. Moves into the widget board (D7) when D exists |
 | D. Sidebar widgets | Part 1b | not started |
-| Maintenance automation (sync workflows, PATCHES.md, release) | Part 2 | **partly shipped**: `PATCHES.md`, updater off, Copper bundle id, `sync-main.yml` + `sync-fork.yml` (Layers 1–2). Left: agent conflict step (Layer 3, wait for the first conflict), release-on-tag |
+| Maintenance automation (sync workflows, PATCHES.md, release) | Part 2 | **partly shipped**: `PATCHES.md`, updater off, Copper bundle id, fork-owned feed updater (`Fork/Updates.swift`), `sync-main.yml` + `sync-fork.yml` (Layers 1–2). Left: agent conflict step (Layer 3, wait for the first conflict), release-on-tag |
 
 ## How to help / coordinate
 

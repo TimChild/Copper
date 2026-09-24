@@ -15,7 +15,7 @@ struct SettingsPanel: View {
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
 
     enum Page: String, CaseIterable, Identifiable {
-        case general, tabs, intelligence, agents, extensions, passwords, downloads, privacy, about // Fork: intelligence, agents
+        case general, tabs, intelligence, agents, updates, extensions, passwords, downloads, privacy, about // Fork: intelligence, agents, updates
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -23,6 +23,7 @@ struct SettingsPanel: View {
             case .tabs: return "Tabs"
             case .intelligence: return "Intelligence" // Fork
             case .agents: return "Agents" // Fork
+            case .updates: return "Updates" // Fork
             case .extensions: return "Extensions"
             case .passwords: return "Passwords"
             case .downloads: return "Downloads"
@@ -36,6 +37,7 @@ struct SettingsPanel: View {
             case .tabs: return "rectangle.split.3x1"
             case .intelligence: return "sparkles" // Fork
             case .agents: return "cpu" // Fork
+            case .updates: return "arrow.triangle.2.circlepath" // Fork
             case .extensions: return "puzzlepiece.extension"
             case .passwords: return "key"
             case .downloads: return "arrow.down.circle"
@@ -139,6 +141,7 @@ struct SettingsPanel: View {
                     case .tabs: tabs
                     case .intelligence: IntelligencePage(browser: browser) // Fork
                     case .agents: AgentsPage(browser: browser) // Fork
+                    case .updates: UpdatesPage(browser: browser) // Fork
                     case .extensions: ExtensionsPage(browser: browser)
                     case .passwords: passwords
                     case .downloads: downloads

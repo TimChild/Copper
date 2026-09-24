@@ -28,7 +28,7 @@ It was built by a design studio that spends its whole day in a browser and was t
 - **Light, dark, or the Mac's own.** The frame and the pages follow.
 - **Bookmarks, history, downloads** — each a panel, each searchable, each one keystroke away.
 - **Chrome extensions, without Chrome.** Paste a Chrome Web Store link in Settings › Extensions, or open the extension's page in Search and press Add. It runs on WebKit's own extension engine — the one Safari uses — and where Chrome has APIs WebKit doesn't (bookmarks, history, downloads, side panel, offscreen documents, fonts, notifications, speech, OAuth sign-in), Search fills them in itself. They live behind the puzzle button; pin the ones you use often. Building your own? Load its folder as an unpacked extension and press Reload after each change, as in Chrome's developer mode. macOS 15.4 or later.
-- **Updates itself, quietly.** Once a day it checks for a newer build, downloads it, verifies it is signed by Office Commun, and swaps it in for the next launch. Nothing restarts on its own.
+- **Updates itself, quietly.** Once every six hours it checks Copper's internal feed. When a newer build is out, Settings › Updates or ⌘K can install it in one click, keeping your tabs intact.
 
 ## What it doesn't do
 
@@ -50,6 +50,19 @@ On purpose:
 | Anything else | Nowhere. There is no server. | — |
 
 A **private tab** (`⇧⌘N`) has its own cookie jar and leaves nothing behind when it closes.
+
+## Updating
+
+Copper checks `https://forca.apps.exowatt.com/downloads/copper-version.json` after launch and then every six hours. It never restarts without your say-so. When a newer build is available, open **Settings › Updates** or press **⌘K** and choose **Update Copper**. The update backs up `session.json`, quits Copper, upgrades through Homebrew when the app is brew-managed, otherwise runs the feed installer, and relaunches the browser.
+
+The equivalent terminal paths are:
+
+```sh
+brew upgrade --cask copper
+curl -fsSL https://forca.apps.exowatt.com/downloads/copper-install.sh | sh
+```
+
+The feed installer accepts `COPPER_NO_LAUNCH=1` / `--no-launch` for scripts that want to relaunch separately. Offline or off-VPN checks stay quiet; the sentence explaining a failed check is only shown in Settings › Updates.
 
 ## Keyboard
 

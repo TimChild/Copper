@@ -187,6 +187,73 @@ struct KeyField: View {
     }
 }
 
+// MARK: - Updates
+
+struct UpdatesPage: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject var updates = Updates.shared
+
+    private var isDevBuild: Bool {
+        Fork.version == "dev" || Fork.version.split(separator: ".").count == 2
+    }
+
+    private var currentLine: String {
+        "Copper \(updates.current)" + (isDevBuild ? " · dev build" : "")
+    }
+
+    private var latestLine: String {
+        if let error = updates.error { return "Couldn't check: \(error)" }
+        guard let latest = updates.latest else { return "Couldn't check: Not checked yet." }
+        guard updates.available else { return "Up to date" }
+        let date = Self.publishedDate(latest.publishedAt)
+        return "Latest \(latest.version) · \(date)"
+    }
+
+    private var installLine: String {
+        updates.managedByBrew ? "Installed via Homebrew" : "Installed from the feed"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Caption("Updates")
+            Card {
+                Line(currentLine, latestLine) {
+                    if updates.checking {
+                        Ring(size: 12)
+                    } else {
+                        Pill("Check now") { updates.check(force: true) }
+                    }
+                }
+                if updates.available {
+                    Rule()
+                    Line("Copper \(updates.latest?.version ?? "") is ready", "Backs up your tabs, quits, upgrades via \(updates.managedByBrew ? "Homebrew" : "the feed installer"), relaunches") {
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Pill(updates.state == .upgrading ? "Updating…" : "Update", filled: true) {
+                                updates.upgrade()
+                            }
+                            .disabled(updates.state == .upgrading)
+                        }
+                    }
+                }
+            }
+            Text(installLine)
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.muted)
+            if let checked = updates.checkedAt {
+                Text("Last checked \(checked.formatted(.relative(presentation: .named)))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+            }
+        }
+    }
+
+    private static func publishedDate(_ raw: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: raw) else { return raw }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+}
+
 // MARK: - Agents
 
 struct AgentsPage: View {

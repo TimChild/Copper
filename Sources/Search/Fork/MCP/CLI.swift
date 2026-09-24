@@ -446,14 +446,20 @@ enum CLI {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-11-25", "capabilities": [:], "clientInfo": ["name": "copper-cli", "version": Fork.version]],
         ] as [String: Any]
-        guard let response = post(initialize, config: config, timeout: 10),
-              let result = response["result"] as? [String: Any] else { return 2 }
-        let instructions = result["instructions"] as? String ?? ""
-        let jev = instructions.contains("Jev mode is on")
+        guard post(initialize, config: config, timeout: 10) != nil else { return 2 }
+        let toolsList = [
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:],
+        ] as [String: Any]
+        guard let response = post(toolsList, config: config, timeout: 10),
+              let result = response["result"] as? [String: Any],
+              let tools = result["tools"] as? [[String: Any]] else { return 2 }
+        let jev = tools.contains { ($0["name"] as? String) == "jev_run" }
         if json {
             printJSON(["health": got.object, "jev": jev])
         } else {
-            print("Copper health: running: \(got.running) (port \(config.port))")
+            let version = got.object["version"] as? String
+            let versionSuffix = version.map { " · version: \($0)" } ?? ""
+            print("Copper health: running: \(got.running) (port \(config.port))\(versionSuffix)")
             print("Jev mode: \(jev ? "on" : "off")")
         }
         return 0

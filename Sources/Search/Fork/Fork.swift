@@ -67,6 +67,7 @@ enum Fork {
             else { browser.editing = false; browser.typed = "" }
             return ["offers": rows]
         case "swipe": return SpaceSwipe.bench(request["arg"] as? String ?? "left", in: browser)
+        case "heat": return Heat.shared.bench(request, in: browser)
         case "summon":
             // ⌘K left open with this text in it, for a look at the bar itself.
             browser.summon()

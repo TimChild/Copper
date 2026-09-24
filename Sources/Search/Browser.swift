@@ -715,6 +715,7 @@ final class Browser: NSObject, ObservableObject {
             watchForSleep()
             Tab.touched = { [weak self] tab in if let self { Split.shared.touched(tab, in: self) } }
             SpaceSwipe.watch(self)
+            Heat.shared.start(for: self)
         }
 
         let saved = Session.read()

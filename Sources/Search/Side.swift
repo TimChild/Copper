@@ -485,6 +485,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
 
     @State private var hovering = false
     @State private var shake: CGFloat = 0
+    @ObservedObject private var heat = Heat.shared
 
     private var editing: Bool { browser.editingTab == tab.id }
 
@@ -531,6 +532,12 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                     Image(systemName: "speaker.wave.2.fill")
                         .font(.system(size: 8))
                         .foregroundStyle(tint.muted)
+                        .transition(.opacity)
+                } else if heat.isHot(tab), let reading = heat.reading(for: tab) {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(Color.orange.opacity(0.9))
+                        .help("Using \(Int(reading.cpu))% CPU")
                         .transition(.opacity)
                 }
             }

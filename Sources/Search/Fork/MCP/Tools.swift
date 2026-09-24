@@ -136,7 +136,7 @@ enum Tools {
                 "action": string("list, assign, remove, suggest", ["enum": ["list", "assign", "remove", "suggest"]]),
                 "group": string("Group name for assign (created if new)"),
             ], required: ["action"]),
-        ]
+        ] + Probe.catalogue
     }
 
     // MARK: - dispatch
@@ -167,6 +167,7 @@ enum Tools {
         let web = tab.web
 
         switch name {
+        case "browser_perf_probe": return try await Probe.run(args, in: browser)
         case "browser_navigate":
             guard let raw = args["url"] as? String else { throw Failure(text: "url required") }
             guard let url = Address.url(from: raw) else { throw Failure(text: "not an address: \(raw)") }
@@ -331,7 +332,7 @@ enum Tools {
     // MARK: - tabs
 
     @MainActor
-    private static func current(_ browser: Browser) throws -> Tab {
+    static func current(_ browser: Browser) throws -> Tab {
         guard let tab = browser.active else { throw Failure(text: "no active tab") }
         return tab
     }

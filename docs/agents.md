@@ -72,6 +72,11 @@ Playwright MCP's names and argument shapes. `ref`s come from
 | `browser_get_text`, `browser_find`, `browser_console_messages` | reading without a snapshot; refs for text you name; console since load |
 | `browser_resize`, `browser_close` | the window; the tab |
 | `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove`, `suggest` |
+| `browser_perf_probe` | Samples the current tab for rAF loops, DOM churn, animations, filters, canvases, timers, long tasks, and slow resources (`seconds`, `top`, `format`) |
+
+### Why is this tab hot?
+`browser_perf_probe` samples the tab in one call instead of requiring a chain of evaluations: it groups frame loops and DOM mutations, inspects running animations and filters, and records canvases, timers, long tasks, and resources.
+Its findings are deliberately WebKit-specific. The three traps it calls out are a filtered SVG under an animated transform, off-screen `requestAnimationFrame` loops, and animations of properties other than `transform`/`opacity`.
 
 Input goes in as real events when the tab is on screen (trusted `isTrusted`
 clicks, key repeat, focus, default actions); when it is not, the DOM gets an

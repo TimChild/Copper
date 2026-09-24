@@ -129,8 +129,24 @@ struct SplitStage: View {
     /// How far the page area spills past the window's top and bottom edges.
     /// Zero in a sane layout; see `PaneSpill`.
     @State private var spill = PaneSpill.none
+    @ObservedObject private var agent = Agent.shared
 
+    /// The stage, and the agent's pane beside it when it is open. The pane
+    /// takes its width from the page, never from the sidebar.
     var body: some View {
+        HStack(spacing: 0) {
+            stage
+            if agent.open {
+                Rectangle().fill(Palette.hairline).frame(width: 1)
+                AgentPane(browser: browser)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.glide, value: agent.open)
+    }
+
+    @ViewBuilder
+    private var stage: some View {
         if let id = split.side, let side = browser.tabs.first(where: { $0.id == id }) {
             let left = split.swapped ? side : active
             let right = split.swapped ? active : side

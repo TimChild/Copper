@@ -38,7 +38,11 @@ enum Fork {
         case "spaces": return Spaces.shared.bench(request, in: browser)
         case "groups": return Groups.shared.bench(request, in: browser)
         case "sections": return Sections.shared.bench(request, in: browser)
-        case "agent": return MCP.shared.bench(request)
+        case "agent":
+            // `agent ask TEXT` / `agent chat|open|close|clear` are the pane's; the rest is the server's.
+            if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear"].contains(op) { return Agent.shared.bench(request, in: browser) }
+            if request["op"] as? String == "servers" { Task { await Servers.shared.reload() }; return ["reloading": true] }
+            return MCP.shared.bench(request)
         case "ai":
             // `ai` reports; `ai mode off|ask|auto`; `ai last` is the grouper's last note.
             let arg = request["arg"] as? String ?? ""

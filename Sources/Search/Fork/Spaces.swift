@@ -401,11 +401,16 @@ struct ForkCommands: Commands {
     @ObservedObject var browser: Browser
     @ObservedObject var spaces = Spaces.shared
     @ObservedObject var split = Split.shared
+    @ObservedObject var agent = Agent.shared
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
             Button(split.on ? "Close Split View" : "Split View") { split.toggle(in: browser) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+            Button(agent.open ? "Close Agent" : "Agent") { agent.toggle() }
+                .keyboardShortcut("e", modifiers: [.command])
+            Button("Ask About This Page") { agent.askOnPage(in: browser) }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
         }
         CommandMenu("Spaces") {
             Button("New Space") { spaces.add(in: browser) }

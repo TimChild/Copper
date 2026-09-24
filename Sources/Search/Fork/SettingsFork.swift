@@ -193,7 +193,15 @@ struct AgentsPage: View {
     @ObservedObject var browser: Browser
     @ObservedObject var mcp = MCP.shared
     @ObservedObject var brain = Intelligence.shared
+    @ObservedObject var chat = Agent.shared
+    @ObservedObject var servers = Servers.shared
     @State private var copied: String?
+
+    private var serversLine: String {
+        if let trouble = servers.trouble { return trouble }
+        if servers.all.isEmpty { return "The mcp.json shape Claude Code and phi use — http servers with headers, or a command to run. ${VAR} is filled from the environment." }
+        return "\(servers.all.filter(\.ready).count) of \(servers.all.count) connected · \(servers.readyTools) tools"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -253,6 +261,38 @@ struct AgentsPage: View {
                 }
             }
 
+            Caption("The agent in the window — ⌘E")
+            Card {
+                Line("Model", brain.routerReady ? "Through the router. Empty means the router model (\(brain.keys.routerModel)); it needs tool calling." : "Needs the router key — Settings › Intelligence") {
+                    TextField(brain.keys.routerModel, text: $chat.config.model)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(width: 120)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                Rule()
+                Line("Page in front of every question", "The current tab's address, title and the first 3000 characters of its text. Off, it still has the tools to look.") {
+                    Switch(on: $chat.config.pageContext)
+                }
+                Rule()
+                Line("Your other MCP servers", serversLine) {
+                    HStack(spacing: 8) {
+                        Pill("Open mcp.json") {
+                            if !FileManager.default.fileExists(atPath: Servers.file.path) {
+                                try? Servers.example.data(using: .utf8)?.write(to: Servers.file, options: .atomic)
+                            }
+                            NSWorkspace.shared.open(Servers.file)
+                        }
+                        Pill("Reload", filled: true) { Task { await servers.reload() } }
+                    }
+                }
+                ForEach(servers.all) { server in
+                    Rule()
+                    ServerRow(server: server)
+                }
+            }
+
             Caption("Connect a client")
             Card {
                 Line("Prompt for your agent", "One paragraph: where Copper listens, the token, and the Playwright-shaped tools it has. Paste it into the chat.") {
@@ -307,5 +347,33 @@ struct AgentsPage: View {
         NSPasteboard.general.setString(text, forType: .string)
         copied = tag
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { if copied == tag { copied = nil } }
+    }
+}
+
+
+/// One configured server: name, where it is, and whether it answered.
+struct ServerRow: View {
+    @ObservedObject var server: Server
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle().fill(colour).frame(width: 6, height: 6)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(server.name).font(.system(size: 12, design: .monospaced)).foregroundStyle(Palette.ink)
+                Text(server.spec.line).font(.system(size: 10.5)).foregroundStyle(Palette.muted).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer()
+            Text(server.ready ? "\(server.tools.count) tool\(server.tools.count == 1 ? "" : "s")" : server.state)
+                .font(.system(size: 11)).foregroundStyle(server.state.hasPrefix("failed") ? Color.orange : Palette.muted)
+                .lineLimit(2).frame(maxWidth: 220, alignment: .trailing)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+    }
+
+    private var colour: Color {
+        if server.ready { return Color.green.opacity(0.8) }
+        if server.state == "connecting" { return Color.yellow.opacity(0.8) }
+        if server.state.hasPrefix("failed") { return Color.orange.opacity(0.85) }
+        return Palette.faint
     }
 }

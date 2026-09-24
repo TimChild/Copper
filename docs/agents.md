@@ -118,6 +118,50 @@ chat with your agent — endpoint, token, how to add the server, what it can
 do. There is one for the Playwright-shaped tools and one for Jev mode.
 `./bench agent jev on|off`.
 
+## The agent in the window — ⌘E
+
+The other direction: Copper as an MCP **client**. ⌘E opens a pane beside
+the page with a chat; ⌘⇧E (or ⌘K › *Ask About This Page*) opens it with the
+page in front of the question. The model is whatever the router serves
+(Settings › Intelligence; the Agents page has a *Model* field for this pane
+alone — it needs tool calling). Nothing is configured out of the box.
+
+What it has in hand:
+
+- **Copper's own tools, bound locally** — the same `Tools.call` the MCP
+  server runs, no HTTP in between: `browser_*`, and `jev_run` /
+  `jev_extract` / `jev_observe` when Jev mode is on. Screenshots go back
+  to the model as pictures.
+- **Your other MCP servers**, from `mcp.json` beside the session
+  (Application Support/Copper/mcp.json — *Open mcp.json* on the Agents
+  page writes an empty one). Same shape Claude Code and phi read:
+
+  ```json
+  {
+    "mcpServers": {
+      "feads": { "type": "http", "url": "https://feads.mcp.exowatt.com/mcp", "headers": { "Authorization": "Bearer ${FEADS_TOKEN}" } },
+      "time":  { "command": "uvx", "args": ["mcp-server-time"] }
+    }
+  }
+  ```
+
+  Streamable HTTP (JSON or SSE replies, `Mcp-Session-Id` honoured) and
+  stdio (run through your login shell, so `npx` / `uvx` resolve). `${VAR}`
+  fills from the environment. Each server's tools appear to the model as
+  `server__tool` and are routed back by that prefix. Connected at launch
+  and on *Reload*; the row under the card says which answered.
+
+Tool calls are chips in the transcript — name, the arguments that matter,
+the first line of the answer, the time it took — so you can see the
+agent's hands. Stop with the square; clear with the bin. Every question
+carries the current tab's address, title and first 3000 characters unless
+*Page in front of every question* is off. `./bench agent ask TEXT`,
+`./bench agent chat`, `./bench agent servers`.
+
+Files: `Fork/Agent/Agent.swift` (the loop), `Fork/Agent/Servers.swift`
+(the client), `Fork/Agent/AgentPane.swift` (the pane). The pane rides in
+`SplitStage`; no upstream file changed.
+
 ## What it is not
 
 Not a sandbox. The agent acts as you, in your sessions. Turn it off when you

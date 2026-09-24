@@ -158,6 +158,9 @@ final class MCP: ObservableObject {
     func start(for browser: Browser) {
         self.browser = browser
         apply()
+        // The agent in the window connects to your other servers now, so its
+        // first question already has their tools. Same hook, no second one.
+        Task { await Servers.shared.reload() }
     }
 
     private func apply() {

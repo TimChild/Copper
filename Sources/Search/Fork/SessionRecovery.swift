@@ -47,6 +47,9 @@ extension Browser {
     func restorePreviousSession() {
         let previous = Store.file("session.previous.json")
         guard FileManager.default.fileExists(atPath: previous.path) else { return }
+        // Capture the live in-memory shape before the detached helper asks us
+        // to quit; pending debounce writes must not be lost in the backup.
+        flushSession()
         let session = Store.file("session.json")
         let directory = session.deletingLastPathComponent()
         let scriptURL = FileManager.default.temporaryDirectory

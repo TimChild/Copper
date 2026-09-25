@@ -198,6 +198,7 @@ final class Tab: ObservableObject, Identifiable {
     private let relay = ScrollRelay()
     private let veils_ = VeilRelay()
     private let forms = FormRelay()
+    private let passkeys = PasskeyRelay()
     private let images = ImageRelay()
     private let shop = StoreRelay()
     private let ears = AudioWatch()
@@ -291,6 +292,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.removeScriptMessageHandler(forName: ScrollRelay.name)
         controller.removeScriptMessageHandler(forName: VeilRelay.name)
         controller.removeScriptMessageHandler(forName: FormRelay.name)
+        controller.removeScriptMessageHandler(forName: Passkeys.name, contentWorld: .page)
         controller.removeScriptMessageHandler(forName: ImageRelay.name)
         controller.removeScriptMessageHandler(forName: StoreRelay.name)
         controller.add(relay, name: ScrollRelay.name)
@@ -298,6 +300,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.add(images, name: ImageRelay.name)
         controller.add(shop, name: StoreRelay.name)
         controller.add(forms, name: FormRelay.name)
+        controller.addScriptMessageHandler(passkeys, contentWorld: .page, name: Passkeys.name)
         Shield.shared.protect(controller)
         built = web
         arm(hiding: veils)
@@ -337,6 +340,7 @@ final class Tab: ObservableObject, Identifiable {
         relay.tab = self
         veils_.tab = self
         forms.tab = self
+        passkeys.tab = self
         images.tab = self
         shop.tab = self
         ears.watch(web) { [weak self] on in self?.noisy = on }
@@ -398,7 +402,11 @@ final class Tab: ObservableObject, Identifiable {
         controller.addUserScript(
             WKUserScript(source: StoreRelay.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         )
-        if !FormRelay.passkeysOffered {
+        if Passkeys.active {
+            controller.addUserScript(
+                WKUserScript(source: Passkeys.script, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+            )
+        } else if !FormRelay.passkeysOffered {
             controller.addUserScript(
                 WKUserScript(
                     source: FormRelay.withoutPasskeys,
@@ -891,6 +899,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.removeScriptMessageHandler(forName: ScrollRelay.name)
         controller.removeScriptMessageHandler(forName: VeilRelay.name)
         controller.removeScriptMessageHandler(forName: FormRelay.name)
+        controller.removeScriptMessageHandler(forName: Passkeys.name, contentWorld: .page)
         controller.removeScriptMessageHandler(forName: ImageRelay.name)
         controller.removeScriptMessageHandler(forName: StoreRelay.name)
         controller.removeAllUserScripts()

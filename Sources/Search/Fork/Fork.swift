@@ -11,6 +11,15 @@ enum Fork {
     /// feed. Running it from a Copper build would replace Copper with Search.
     /// Until there is a Copper feed and a signing identity, it stays off.
     static let updates = false
+
+    /// Copper owns the unentitled authenticator. Migrate the old upstream
+    /// default once, without overriding a person's later Settings choice.
+    @MainActor static func migratePasskeysPreference() {
+        guard !Preferences.entitledToPasskeys,
+              !Store.settings.bool(forKey: "passkeys.copper") else { return }
+        Store.settings.set(true, forKey: "passkeys")
+        Store.settings.set(true, forKey: "passkeys.copper")
+    }
     /// What the MCP server and the model clients say they are.
     static var version: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
@@ -38,9 +47,11 @@ enum Fork {
     /// The bench verbs Copper adds; see Bench.swift's switch.
     @MainActor static func bench(_ verb: String, _ request: [String: Any], in browser: Browser) -> [String: Any] {
         switch verb {
+        case "flow": return Flow.shared.bench(request, in: browser)
         case "spaces": return Spaces.shared.bench(request, in: browser)
         case "groups": return Groups.shared.bench(request, in: browser)
         case "sections": return Sections.shared.bench(request, in: browser)
+        case "passkeys": return PasskeysBench.handle(request)
         case "agent":
             // `agent ask TEXT` / `agent chat|open|close|clear` are the pane's; the rest is the server's.
             if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear"].contains(op) { return Agent.shared.bench(request, in: browser) }
@@ -180,17 +191,25 @@ enum Fork {
         case "window":
             // The whole window as the compositor shows it — sidebar, page,
             // panels — to a PNG. An app may always picture its own windows.
-            guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.level == .normal }),
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.level == .normal && $0.sheetParent == nil })
+                    ?? NSApp.keyWindow,
                   let path = request["path"] as? String else { return ["error": "window needs a path"] }
             // A probe may be behind the user's normal Copper window. Bring
             // only this isolated process forward before asking WindowServer
             // for its pixels; otherwise the PNG can be a stale surface.
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
-            guard let image = CGWindowListCreateImage(
-                window.frame, .optionIncludingWindow, CGWindowID(window.windowNumber),
-                [.boundsIgnoreFraming, .bestResolution]
-            ) else { return ["error": "no image"] }
+            // The window and whatever hangs off it — a sheet, a popover — in
+            // one picture, bottom to top, so a test can see the sheet it opened.
+            var ids: [CGWindowID] = [CGWindowID(window.windowNumber)]
+            if let sheet = window.attachedSheet { ids.append(CGWindowID(sheet.windowNumber)) }
+            for child in window.childWindows ?? [] where child.isVisible { ids.append(CGWindowID(child.windowNumber)) }
+            let list = ids.reversed().map { NSNumber(value: $0) } as CFArray
+            // Compositing several windows can come back empty without the
+            // screen-recording grant; then the frontmost one alone.
+            guard let image = CGImage(windowListFromArrayScreenBounds: .null, windowArray: list, imageOption: [.boundsIgnoreFraming, .bestResolution])
+                    ?? CGWindowListCreateImage(.null, .optionIncludingWindow, ids.last ?? 0, [.boundsIgnoreFraming, .bestResolution])
+            else { return ["error": "no image", "windows": ids.map { Int($0) }] }
             let rep = NSBitmapImageRep(cgImage: image)
             guard let png = rep.representation(using: .png, properties: [:]) else { return ["error": "no png"] }
             do { try png.write(to: URL(fileURLWithPath: path)) } catch { return ["error": "\(error)"] }

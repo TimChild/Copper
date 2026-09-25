@@ -107,6 +107,71 @@ final class Spaces: ObservableObject {
         else if browser.activeID == tab.id { browser.activeID = nil; browser.select(browser.tabs[0]) }
     }
 
+    // MARK: - Flow import
+
+    /// Append imported spaces without replacing the space on screen. Every
+    /// restored tab stays asleep until the person visits its new space.
+    func adopt(_ imported: [FlowModel.Space], in browser: Browser) -> (spaces: [UUID], tabs: Int, groups: Int) {
+        adopt(imported, in: browser, sourceName: "Chrome", sourceIsArc: false)
+    }
+
+    func adopt(_ imported: [FlowModel.Space], in browser: Browser, sourceName: String, sourceIsArc: Bool) -> (spaces: [UUID], tabs: Int, groups: Int) {
+        guard !imported.isEmpty else { return ([], 0, 0) }
+        SessionGuard.beginRestore()
+        defer { SessionGuard.finishRestore() }
+        var made: [UUID] = []
+        var tabCount = 0
+        var groupCount = 0
+        var names = Set(all.map { $0.name.lowercased() })
+        for incoming in imported {
+            var name = incoming.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty { name = sourceName }
+            let original = name
+            if names.contains(name.lowercased()) {
+                let suffix = " (\(sourceIsArc ? "Arc" : "Chrome"))"
+                name = original + suffix
+                var n = 2
+                while names.contains(name.lowercased()) {
+                    name = "\(original)\(suffix) \(n)"
+                    n += 1
+                }
+            }
+            names.insert(name.lowercased())
+            let space = Space(name: name, hue: incoming.hue, profile: incoming.profile)
+            all.append(space)
+            made.append(space.id)
+
+            var groups: [UUID: TabGroup] = [:]
+            for incomingGroup in incoming.groups {
+                var groupName = incomingGroup.name
+                if Groups.shared.group(named: groupName) != nil {
+                    groupName += " (\(sourceIsArc ? "Arc" : "Chrome"))"
+                }
+                let group = Groups.shared.create(named: groupName, hue: incomingGroup.hue)
+                groups[incomingGroup.id] = group
+                groupCount += 1
+            }
+            var tabs: [Tab] = []
+            var active: Tab.ID?
+            for incomingTab in incoming.tabs {
+                let tab = building(for: space.id) { Tab() }
+                browser.prepare(tab)
+                tab.restore(url: incomingTab.url, title: incomingTab.title)
+                tab.pin = incomingTab.pinned ? (tab.monogram.isEmpty ? "•" : tab.monogram) : nil
+                Sections.shared.restore(tab, saved: incomingTab.saved || incomingTab.pinned, seen: incomingTab.seen)
+                if let groupID = incomingTab.group, let group = groups[groupID] {
+                    Groups.shared.restore(tab, group: group.id)
+                }
+                if incomingTab.active { active = tab.id }
+                tabs.append(tab)
+                tabCount += 1
+            }
+            parked[space.id] = (tabs, active ?? tabs.first?.id)
+        }
+        objectWillChange.send()
+        return (made, tabCount, groupCount)
+    }
+
     // MARK: - profiles
 
     /// The space a tab is being built for — the current one, unless a
@@ -407,6 +472,8 @@ struct ForkCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
+            Button("Move in from Another Browser…") { Flow.shared.open = true }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
             Button(split.on ? "Close Split View" : "Split View") { split.toggle(in: browser) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
             Button(agent.open ? "Close Agent" : "Agent") { agent.toggle() }

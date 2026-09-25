@@ -10,7 +10,10 @@ struct SearchApp: App {
     /// Links from other apps, and the Dock icon.
     @NSApplicationDelegateAdaptor(Links.self) private var links
 
-    init() { Bridge.runIfAsked() } // Fork: `--mcp-stdio` pipes to the running app and exits
+    init() {
+        Fork.migratePasskeysPreference()
+        Bridge.runIfAsked()
+    } // Fork: `--mcp-stdio` pipes to the running app and exits
 
     var body: some Scene {
         Window("Search", id: "browser") {

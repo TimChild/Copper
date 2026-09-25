@@ -81,8 +81,11 @@ enum Chromium {
     }
 
     static func read(_ source: Source) throws -> Found {
-        guard let passphrase = safeStorage(source) else { throw Trouble.noPassphrase }
-        let key = stretch(passphrase)
+        try read(source, key: key(for: source))
+    }
+
+    /// Password and cookie readers share the already stretched key.
+    static func read(_ source: Source, key: [UInt8]) throws -> Found {
 
         var logins: [Login] = []
         var never: [String] = []
@@ -265,7 +268,7 @@ enum Chromium {
 
     // MARK: - the key
 
-    private static func safeStorage(_ source: Source) -> String? {
+    static func safeStorage(_ source: Source) -> String? {
         var out: CFTypeRef?
         let status = SecItemCopyMatching([
             kSecClass as String: kSecClassGenericPassword,
@@ -282,7 +285,7 @@ enum Chromium {
 
     /// Chromium's own recipe, unchanged for a decade: PBKDF2 over SHA-1, the
     /// salt "saltysalt", 1003 rounds, sixteen bytes out.
-    private static func stretch(_ passphrase: String) -> [UInt8] {
+    static func stretch(_ passphrase: String) -> [UInt8] {
         var key = [UInt8](repeating: 0, count: 16)
         let salt = Array("saltysalt".utf8)
         let pass = Array(passphrase.utf8)
@@ -301,7 +304,7 @@ enum Chromium {
     }
 
     /// "v10" and then AES-128-CBC with an IV of sixteen spaces.
-    private static func unwrap(_ blob: Data, key: [UInt8]) -> String? {
+    static func unwrap(_ blob: Data, key: [UInt8]) -> String? {
         guard blob.count > 3, blob.prefix(3) == Data("v10".utf8) else {
             // Not encrypted at all, on some very old profiles.
             return String(data: blob, encoding: .utf8)

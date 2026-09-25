@@ -131,6 +131,7 @@ struct SplitStage: View {
     @State private var spill = PaneSpill.none
     @ObservedObject private var agent = Agent.shared
     @ObservedObject private var trace = JevTrace.shared
+    @ObservedObject private var flow = Flow.shared
 
     /// The stage, and the panes beside it when they are open — the agent's,
     /// and Jev's timeline while a run is on. Both may be open at once; they
@@ -151,6 +152,7 @@ struct SplitStage: View {
         }
         .animation(Motion.glide, value: agent.open)
         .animation(Motion.glide, value: trace.paneOpen)
+        .sheet(isPresented: $flow.open) { FlowSheet(browser: browser) }
     }
 
     /// The page area while something else has the wheel: the pill in the

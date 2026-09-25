@@ -203,6 +203,8 @@ struct SettingsPanel: View {
             Line("Let a script drive Search", "A local socket for testing. Its tabs open beside yours with a flask on them and never take over — see ./bench") {
                 Switch(on: $prefs.bench)
             }
+            Rule()
+            FlowSettingsLine(browser: browser)
         }
     }
 
@@ -261,7 +263,7 @@ struct SettingsPanel: View {
                     "Offer passkeys",
                     prefs.passkeysPossible
                         ? "Touch ID or an iCloud passkey, on sites that offer one"
-                        : "Needs an Apple entitlement this build doesn't have — off keeps sites to the password"
+                        : "Copper keeps its own passkeys — Touch ID to sign in; new passkeys are saved here and in your Passwords list"
                 ) {
                     Switch(on: $prefs.passkeys)
                 }
@@ -285,6 +287,7 @@ struct SettingsPanel: View {
                     }
                 }
             }
+            PasskeysSettings()
         }
     }
 

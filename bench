@@ -43,9 +43,18 @@
                                        the sidebar's Saved and Today blocks: counts per space,
                                        move a tab across the seam, run the archive sweep now
                                        (with HOURS, against that age instead of the setting)
+    ./bench flow sources               browsers Flow can see
+    ./bench flow scan --source Chrome  cheap counts (no keychain prompt)
+    ./bench flow root --source Chrome --path /tmp/copy
+                                       use a test-only read-only source copy
+    ./bench flow move --source Arc [--only tabs,bookmarks,history,extensions]
+                                       move in a test world; passwords/cookies ask macOS
+    ./bench flow open                  open the Move in sheet
     ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
                                        the MCP server agents drive the window through; setup bridges terminal agents
     ./bench ai [mode off|ask|auto]   which model lanes have keys, and the grouper's last note
+    ./bench passkeys list|count|forget --id ID|answer yes|no|ask
+                                       Copper's own test-world passkeys (no private keys in list)
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
     ./bench bar TEXT [--go]          what ⌘K offers for TEXT; --go takes the first row
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
@@ -135,9 +144,35 @@ def main(argv):
     elif verb == "window":
         if not args: sys.exit("usage: bench window PATH")
         request["path"] = os.path.abspath(args[0])
+    elif verb == "passkeys":
+        if not args: sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
+        request["op"] = args[0]
+        if args[0] == "forget":
+            if len(args) == 3 and args[1] == "--id": request["arg"] = args[2]
+            elif len(args) == 2: request["arg"] = args[1]
+            else: sys.exit("usage: bench passkeys forget --id ID")
+        elif args[0] == "answer":
+            if len(args) != 2 or args[1] not in ("yes", "no", "ask"): sys.exit("usage: bench passkeys answer yes|no|ask")
+            request["arg"] = args[1]
+        elif len(args) > 1:
+            sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
     elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw"):
         request["op"] = args[0] if args else ("status" if verb in ("updates", "bw") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
+    elif verb == "flow":
+        if not args: sys.exit("usage: bench flow sources|scan|move|open")
+        request["op"] = args[0]
+        rest = args[1:]
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--source" and i + 1 < len(rest):
+                request["source"] = rest[i + 1]; i += 2
+            elif rest[i] == "--path" and i + 1 < len(rest):
+                request["path"] = rest[i + 1]; i += 2
+            elif rest[i] == "--only" and i + 1 < len(rest):
+                request["only"] = rest[i + 1]; i += 2
+            else:
+                i += 1
     elif verb == "ui":
         if len(args) != 2: sys.exit("usage: bench ui KEY VALUE")
         key, value = args

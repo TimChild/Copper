@@ -700,3 +700,18 @@ struct ServerRow: View {
         return Palette.faint
     }
 }
+
+
+/// The small Settings doorway to the full Flow sheet.
+struct FlowSettingsLine: View {
+    @ObservedObject var browser: Browser
+
+    var body: some View {
+        Line("Move in from another browser", "Open tabs, spaces, bookmarks and signed-in state from Chrome or Arc") {
+            Pill("Flow…", filled: true) {
+                browser.tuning = false
+                Flow.shared.open = true
+            }
+        }
+    }
+}

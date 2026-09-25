@@ -58,6 +58,7 @@ struct BitwardenCard: View {
                     SecureField("Password", text: $password)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 220)
+                        .onSubmit { unlock() }
                     actionPill("Unlock") { unlock() }
                 }
             }
@@ -114,6 +115,7 @@ struct BitwardenCard: View {
             SecureField("Password", text: $password)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 260)
+                .onSubmit { signIn() }
         }
         Rule()
         Line("Two-factor code", "Optional — leave blank when the account has no 2FA") {

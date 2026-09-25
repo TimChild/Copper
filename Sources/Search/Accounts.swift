@@ -23,6 +23,17 @@ struct AccountList: View {
             }
             .frame(maxHeight: 6 * 44 + 22)
             .fixedSize(horizontal: false, vertical: asked.credentials.count <= 6)
+            if isBitwardenLoading && asked.credentials.isEmpty {
+                HStack(spacing: 10) {
+                    Ring(size: 10).frame(width: 22, height: 22)
+                    Text("Loading your Bitwarden vault…")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Palette.muted)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+            }
             if isBitwardenLocked {
                 Button {
                     browser.tuning = true
@@ -48,7 +59,7 @@ struct AccountList: View {
             HStack(spacing: 6) {
                 Image(systemName: "key")
                     .font(.system(size: 9, weight: .medium))
-                Text(asked.credentials.contains { $0.source == .bitwarden } || isBitwardenLocked
+                Text(asked.credentials.contains { $0.source == .bitwarden } || isBitwardenLocked || isBitwardenLoading
                      ? "From your keychain and Bitwarden"
                      : "From your keychain")
                     .font(.system(size: 10.5))
@@ -70,6 +81,11 @@ struct AccountList: View {
         // Just under the box, left edges lined up. The offset is from the
         // stage's top-left, which is also the web view's.
         .offset(x: asked.spot.minX, y: asked.spot.maxY + 6)
+    }
+
+    private var isBitwardenLoading: Bool {
+        if case .unlocked = Bitwarden.shared.state { return Bitwarden.shared.isLoadingCache }
+        return false
     }
 
     private var isBitwardenLocked: Bool {

@@ -97,7 +97,14 @@ enum Credentials {
                 throw Failure(message: "Could not save the credential to the keychain")
             }
         case .bitwarden:
-            _ = try await Bitwarden.shared.create(host: host, user: user, password: password)
+            // The same account already kept for this site: change its password
+            // there rather than adding a twin.
+            if let existing = candidates(for: host).first(where: { $0.source == .bitwarden && $0.user == user }),
+               case .bitwarden(let id) = existing.id {
+                try await Bitwarden.shared.update(id: id, password: password)
+            } else {
+                _ = try await Bitwarden.shared.create(host: host, user: user, password: password)
+            }
         }
     }
 

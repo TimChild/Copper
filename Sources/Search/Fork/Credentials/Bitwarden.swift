@@ -52,6 +52,15 @@ final class Bitwarden: ObservableObject {
     private(set) var cachedFolders: [Folder] = []
 
     private var sessionKey: String?
+    /// The secrets that came with the item list, kept only in memory and only
+    /// while unlocked, so a pick fills at once instead of starting `bw` for
+    /// three seconds. Same trust as the session key that decrypts them.
+    private var secrets: [String: (password: String, totp: String?)] = [:]
+    /// Bumped whenever the item cache changes, so an open account list can
+    /// redraw itself when the vault arrives.
+    @Published private(set) var cacheVersion = 0
+    /// Whether an item-list refresh is running (the list may be empty meanwhile).
+    var isLoadingCache: Bool { cacheRefreshInFlight }
     private var lastActivity = Date()
     private var lastCacheRefresh = Date.distantPast
     private var cacheRefreshInFlight = false
@@ -59,6 +68,39 @@ final class Bitwarden: ObservableObject {
     private var cacheTimer: Timer?
 
     private static let serverKey = "bitwarden.server"
+    private static let stayUnlockedKey = "bitwarden.stayUnlocked"
+
+    /// Keep the session across launches: the session key goes in a 0600 file
+    /// beside `bw`'s own data, and the vault opens with the app — the way the
+    /// keychain does. Off, the master password is asked once per launch.
+    var stayUnlocked: Bool {
+        get { Store.settings.object(forKey: Self.stayUnlockedKey) as? Bool ?? true }
+        set {
+            Store.settings.set(newValue, forKey: Self.stayUnlockedKey)
+            if newValue { persistSession() } else { forgetPersistedSession() }
+        }
+    }
+
+    private var sessionFile: URL { appDataURL.appendingPathComponent("session") }
+
+    private func persistSession() {
+        guard stayUnlocked, let sessionKey else { return }
+        let files = FileManager.default
+        try? files.createDirectory(at: appDataURL, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o700])
+        try? Data(sessionKey.utf8).write(to: sessionFile, options: [.atomic])
+        try? files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: sessionFile.path)
+    }
+
+    private func forgetPersistedSession() {
+        try? FileManager.default.removeItem(at: sessionFile)
+    }
+
+    private func restorePersistedSession() {
+        guard stayUnlocked, let data = try? Data(contentsOf: sessionFile) else { return }
+        let key = Self.trimTrailingNewlines(String(decoding: data, as: UTF8.self))
+        if !key.isEmpty { sessionKey = key }
+    }
     private static let defaultServer = "https://vault.bitwarden.com"
 
     private init() {
@@ -66,7 +108,13 @@ final class Bitwarden: ObservableObject {
         // What `bw` knows from last time — signed in, locked — so the picker
         // can say "Unlock Bitwarden…" from the first sign-in box, not only
         // after Settings has been opened.
-        if Self.installed { Task { await self.refreshStatus() } }
+        if Self.installed {
+            restorePersistedSession()
+            Task {
+                await self.refreshStatus()
+                await self.refreshCacheIfPossible()
+            }
+        }
     }
 
     // MARK: - Discovery and process boundary
@@ -250,14 +298,14 @@ final class Bitwarden: ObservableObject {
                 }
             case "locked":
                 sessionKey = nil
-                cachedItems = []
-                cachedFolders = []
+                clearCache()
+                forgetPersistedSession()
                 stopTimer()
                 state = .locked(email: status.userEmail)
             default:
                 sessionKey = nil
-                cachedItems = []
-                cachedFolders = []
+                clearCache()
+                forgetPersistedSession()
                 stopTimer()
                 state = .unauthenticated
             }
@@ -285,6 +333,7 @@ final class Bitwarden: ObservableObject {
         let key = Self.session(from: data)
         guard !key.isEmpty else { throw Failure(message: "Bitwarden did not return a session") }
         sessionKey = key
+        persistSession()
         await refreshStatus()
         await refreshCacheIfPossible()
     }
@@ -296,6 +345,7 @@ final class Bitwarden: ObservableObject {
         let key = Self.session(from: data)
         guard !key.isEmpty else { throw Failure(message: "Bitwarden did not return a session") }
         sessionKey = key
+        persistSession()
         await refreshStatus()
         await refreshCacheIfPossible()
     }
@@ -305,8 +355,8 @@ final class Bitwarden: ObservableObject {
         if case .missing = state { missing = true } else { missing = false }
         _ = try? await run(["lock"])
         sessionKey = nil
-        cachedItems = []
-        cachedFolders = []
+        clearCache()
+        forgetPersistedSession()
         let email = Self.email(from: state)
         state = missing ? .missing : .locked(email: email)
         stopTimer()
@@ -317,8 +367,8 @@ final class Bitwarden: ObservableObject {
         if case .missing = state { missing = true } else { missing = false }
         _ = try? await run(["logout"])
         sessionKey = nil
-        cachedItems = []
-        cachedFolders = []
+        clearCache()
+        forgetPersistedSession()
         state = missing ? .missing : .unauthenticated
         stopTimer()
     }
@@ -339,6 +389,7 @@ final class Bitwarden: ObservableObject {
 
     private struct RawLogin: Decodable {
         let username: String?
+        let password: String?
         let totp: String?
         let uris: [RawURI]?
     }
@@ -362,8 +413,12 @@ final class Bitwarden: ObservableObject {
         try await requireUnlocked()
         let data = try await run(["list", "items"])
         let rows = try JSONDecoder().decode([RawItem].self, from: data)
+        var fresh: [String: (password: String, totp: String?)] = [:]
         let result = rows.compactMap { row -> Item? in
             guard row.type == 1, let id = row.id, !id.isEmpty else { return nil }
+            if let password = row.login?.password, !password.isEmpty {
+                fresh[id] = (password, row.login?.totp.flatMap { $0.isEmpty ? nil : $0 })
+            }
             let uris = (row.login?.uris ?? []).compactMap { raw -> URI? in
                 guard let uri = raw.uri, !uri.isEmpty else { return nil }
                 return URI(uri: uri, match: raw.match)
@@ -377,7 +432,16 @@ final class Bitwarden: ObservableObject {
                         hasTOTP: !(row.login?.totp?.isEmpty ?? true), fields: fields)
         }
         cachedItems = result
+        secrets = fresh
+        cacheVersion += 1
         return result
+    }
+
+    private func clearCache() {
+        cachedItems = []
+        cachedFolders = []
+        secrets = [:]
+        cacheVersion += 1
     }
 
     private struct RawFolder: Decodable {
@@ -399,14 +463,35 @@ final class Bitwarden: ObservableObject {
 
     func password(for id: String) async throws -> String {
         try await requireUnlocked()
+        if let kept = secrets[id]?.password { return kept }
         let data = try await run(["get", "password", id])
         return Self.trimTrailingNewlines(String(decoding: data, as: UTF8.self))
     }
 
     func totp(for id: String) async throws -> String {
         try await requireUnlocked()
+        // Computed here when the seed is an ordinary otpauth URI or a bare
+        // base32 secret; anything else (Steam, odd parameters) is bw's job.
+        if let seed = secrets[id]?.totp, let code = TOTP.code(from: seed) { return code }
         let data = try await run(["get", "totp", id])
         return Self.trimTrailingNewlines(String(decoding: data, as: UTF8.self))
+    }
+
+    /// The account exists in the vault with another password: change it there.
+    func update(id: String, password: String) async throws {
+        try await requireUnlocked()
+        let current = try await run(["get", "item", id])
+        guard var object = try JSONSerialization.jsonObject(with: current) as? [String: Any]
+        else { throw Failure(message: "Bitwarden returned an invalid item") }
+        var login = object["login"] as? [String: Any] ?? [:]
+        login["password"] = password
+        object["login"] = login
+        let itemJSON = try JSONSerialization.data(withJSONObject: object, options: [])
+        let encoded = try await run(["encode"], stdin: itemJSON)
+        let value = Self.trimTrailingNewlines(String(decoding: encoded, as: UTF8.self))
+        guard !value.isEmpty else { throw Failure(message: "Bitwarden did not encode the item") }
+        _ = try await run(["edit", "item", id, value])
+        await refreshCacheIfPossible()
     }
 
     func create(host: String, user: String, password: String) async throws -> String {

@@ -77,6 +77,13 @@ struct BitwardenCard: View {
                 ))
             }
             Rule()
+            Line("Stay unlocked between launches", "The session is kept beside Bitwarden's own data on this Mac, readable by this user only — off asks for the master password once per launch") {
+                Switch(on: Binding(
+                    get: { bitwarden.stayUnlocked },
+                    set: { bitwarden.stayUnlocked = $0 }
+                ))
+            }
+            Rule()
             Line("Auto-lock", "Lock the local Bitwarden session after inactivity") {
                 Picker("Auto-lock", selection: Binding(
                     get: { autolock },

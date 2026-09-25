@@ -338,6 +338,11 @@ final class Browser: NSObject, ObservableObject {
 
     func dropChoice() { suggesting = nil }
 
+    static var bitwardenLocked: Bool {
+        if case .locked = Bitwarden.shared.state { return true }
+        return false
+    }
+
     // The list of what is kept.
 
     @Published var managing = false { didSet { if managing { relist() } } }
@@ -693,6 +698,19 @@ final class Browser: NSObject, ObservableObject {
             .store(in: &bag)
         bookmarks.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &bag)
+        // The vault's index arriving a moment after unlock: an account list
+        // that is already open redraws with what came.
+        Bitwarden.shared.$cacheVersion
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, let open = suggesting, let tab = tabs.first(where: { $0.id == open.tab }),
+                      let host = curtain.host(of: tab.address) else { return }
+                let known = Credentials.candidates(for: host, hint: tab.fieldHint)
+                suggesting = known.isEmpty && !Bitwarden.shared.isLoadingCache && !Self.bitwardenLocked
+                    ? nil : Suggesting(tab: tab.id, spot: open.spot, credentials: known)
+            }
             .store(in: &bag)
 
         // An icon that arrives is put on every tab showing that site, not only
@@ -1306,11 +1324,10 @@ final class Browser: NSObject, ObservableObject {
                   let host = curtain.host(of: tab.address)
             else { return }
             let known = Credentials.candidates(for: host, hint: tab.fieldHint)
-            let locked = {
-                if case .locked = Bitwarden.shared.state { return true }
-                return false
-            }()
-            suggesting = (known.isEmpty && !locked)
+            // Shown even when empty while the vault is locked (to offer the
+            // unlock) or still loading (to say so).
+            let pending = Self.bitwardenLocked || Bitwarden.shared.isLoadingCache
+            suggesting = (known.isEmpty && !pending)
                 ? nil
                 : Suggesting(tab: tab.id, spot: spot, credentials: known)
         }

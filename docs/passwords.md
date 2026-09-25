@@ -11,6 +11,20 @@ Copper never needs a browser extension for either source. A saved account is
 read only when the user picks it (or an agent is allowed to use it), not while
 the picker is being drawn.
 
+## Speed, staying unlocked, and updates
+
+- After unlock Copper reads the item list once (and every five minutes) and keeps
+  it in memory — names, sites, and the secrets that came with it. A pick fills
+  at once; one-time codes are computed locally from the stored seed (`bw get
+  totp` is the fallback for formats Copper does not parse). Locking clears all
+  of it.
+- **Stay unlocked between launches** (on by default, Bitwarden card) keeps the
+  session key in a 0600 file beside Bitwarden's own data under Copper's support
+  folder, so the vault opens with the app. Turn it off to be asked for the
+  master password once per launch. Lock deletes the file.
+- Saving a sign-in whose account already exists in Bitwarden for that site
+  **updates that item's password** instead of adding a twin.
+
 ## Connect Bitwarden
 
 Install the CLI first:

@@ -1,6 +1,6 @@
 # Changelog
 
-What changes in Search from one version to the next, newest first.
+What changes in Copper from one version to the next, newest first.
 
 **Unreleased** gathers what is done since the last version, as it lands:
 every fix and every addition gets its line the day it is merged. When a
@@ -13,6 +13,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added (Copper)
 
+- **Copper branding.** About and Welcome now use the copper-plate app icon, show the actual version and build, and keep the Search lineage attribution; extension prompts, update messages, defaults, and the installer say Copper.
 - **The keychain asks once, for the account you picked.** Drawing the list of saved accounts under a sign-in box used to read every saved password; each item kept by an earlier build made the keychain put up its dialog, one after another, on every click into the field — Google sign-in was unusable. Lists are now names only; the secret is read when you pick an account, copy it, or show it.
 - **Bitwarden sits beside the keychain in the browser.** Connect an existing vault in Settings › Passwords › Bitwarden (bitwarden.com, EU, self-hosted, or Vaultwarden), and Copper merges its saved logins into the under-field picker, TOTP included; choose Bitwarden as the destination for new save offers without changing where keychain fills come from. `./bench bw status|server|login|unlock|lock|sync|candidates|share` exercises the isolated backend for probe worlds; install the CLI with `brew install bitwarden-cli`.
 - **Agents can sign in for you without receiving the secret.** `browser_sign_in` fills (and submits by default) a shared account in-process; `copper signin [--account USER] [--otp] [--no-submit] [--json]` is the terminal form, and Jev's `SIGN_IN` control uses the same password fill when a password field and permitted candidate are present. Settings › Passwords › Agent access owns the share-everything switch and per-account toggles; a Bitwarden `Agents` folder allows an item, while `copper-agent: deny` always denies it. The sign-in result, CLI output, and Jev SIGN_IN traces contain status, host, source, and usernames only — never the password, TOTP code, or session key.

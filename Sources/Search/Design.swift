@@ -136,6 +136,25 @@ enum Motion {
     static let quick = Animation.easeOut(duration: 0.14)
 }
 
+/// The Copper app icon, as the product mark in onboarding and About.
+struct CopperIcon: View {
+    let size: CGFloat
+
+    init(size: CGFloat = 56) {
+        self.size = size
+    }
+
+    var body: some View {
+        Image(nsImage: NSApp.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+            .accessibilityLabel(Fork.name)
+    }
+}
+
 /// Search's mark — Drice's Subtract.svg, a pill with an S cut out of it,
 /// read from its own path data rather than loaded from a file, so it stays a
 /// crisp vector at any size. No plate, no square behind it: the mark draws exactly

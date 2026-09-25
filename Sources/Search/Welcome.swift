@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The first time. Four short pages over the window, in the app's own
 /// language: what this is, what to bring over, how to hold it, and whether
@@ -58,12 +59,12 @@ struct WelcomePanel: View {
 
     private var welcome: some View {
         VStack(spacing: 22) {
-            Plate(size: 72)
+            CopperIcon(size: 72)
             VStack(spacing: 10) {
-                Text("Search")
+                Text(Fork.name)
                     .font(.system(size: 34, weight: .medium))
                     .foregroundStyle(Palette.ink)
-                Text("A browser with nothing in the way. Four megabytes, the engine already in your Mac, and as little around the page as we could manage.")
+                Text("A browser that works for you. Spaces, an agent at your side, and the engine already in your Mac.")
                     .font(.system(size: 14.5))
                     .foregroundStyle(Palette.muted)
                     .multilineTextAlignment(.center)
@@ -143,12 +144,12 @@ struct WelcomePanel: View {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .medium))
-                        Text("Search is the default browser")
+                        Text("Copper is the default browser")
                     }
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.ink)
                 } else {
-                    Big("Make Search the default", filled: true) {
+                    Big("Make Copper the default", filled: true) {
                         asked = true
                         Links.becomeDefault { _ in isDefault = Links.isDefault }
                     }
@@ -275,18 +276,6 @@ struct WelcomePanel: View {
     }
 
     // MARK: - pieces
-
-    /// The mark alone, at whatever height the page wants — no plate behind
-    /// it, the same as everywhere else it's drawn.
-    private struct Plate: View {
-        let size: CGFloat
-        var body: some View {
-            Logomark()
-                .fill(Palette.ink, style: FillStyle(eoFill: true))
-                .aspectRatio(Logomark.canvas.width / Logomark.canvas.height, contentMode: .fit)
-                .frame(height: size * 0.56)
-        }
-    }
 
     private struct Big: View {
         let title: String

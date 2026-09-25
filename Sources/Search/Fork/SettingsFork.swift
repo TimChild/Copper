@@ -198,7 +198,7 @@ struct UpdatesPage: View {
     }
 
     private var currentLine: String {
-        "Copper \(updates.current)" + (isDevBuild ? " · dev build" : "")
+        "You have \(Updater.version) (build \(Updater.build))" + (isDevBuild ? " · dev build" : "")
     }
 
     private var latestLine: String {
@@ -206,7 +206,7 @@ struct UpdatesPage: View {
         guard let latest = updates.latest else { return "Couldn't check: Not checked yet." }
         guard updates.available else { return "Up to date" }
         let date = Self.publishedDate(latest.publishedAt)
-        return "Latest \(latest.version) · \(date)"
+        return "Latest Copper \(latest.version) · \(date)"
     }
 
     private var installLine: String {

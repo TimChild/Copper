@@ -16,7 +16,7 @@ struct SearchApp: App {
     } // Fork: `--mcp-stdio` pipes to the running app and exits
 
     var body: some Scene {
-        Window("Search", id: "browser") {
+        Window(Fork.name, id: "browser") {
             ContentView(browser: browser)
                 .frame(minWidth: 640, minHeight: 420)
         }

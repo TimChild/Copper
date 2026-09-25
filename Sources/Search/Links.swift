@@ -162,8 +162,8 @@ final class Links: NSObject, NSApplicationDelegate {
         text.scheme = "mailto"
         text.path = "hello@officecommun.com"
         text.queryItems = [
-            URLQueryItem(name: "subject", value: "Search feedback — \(Updater.version) (\(Updater.build))"),
-            URLQueryItem(name: "body", value: "\n\n—\nSearch \(Updater.version), build \(Updater.build), macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"),
+            URLQueryItem(name: "subject", value: "\(Fork.name) feedback — \(Updater.version) (\(Updater.build))"),
+            URLQueryItem(name: "body", value: "\n\n—\n\(Fork.name) \(Updater.version), build \(Updater.build), macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"),
         ]
         guard let url = text.url else { return }
         NSWorkspace.shared.open(url)

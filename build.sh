@@ -4,7 +4,7 @@
 # fetches.
 #
 #   ./build.sh                 debug-free release build, ad-hoc signed: runs here
-#   ./build.sh release dmg     + build/Search.dmg, build/Search.zip and
+#   ./build.sh release dmg     + build/Copper.dmg, build/Copper.zip and
 #                                build/appcast.json, signed with Developer ID
 #                                if there is one in the keychain
 #   ./build.sh release ship    + both notarised, the DMG stapled
@@ -60,7 +60,7 @@ chmod 755 "$APP/Contents/Resources/bin/copper"
 # what the app weighed (6.5 MB of binary, 2.7 without them), and nothing the
 # app reads while it runs. They are kept beside the build instead, as a dSYM
 # that turns the addresses in a crash report back into names (Console, or
-# atos -o build/Search.app.dSYM/Contents/Resources/DWARF/Search).
+# atos -o build/Copper.app.dSYM/Contents/Resources/DWARF/Search).
 if [ "$CONFIG" = "release" ]; then
   rm -rf "$APP.dSYM"
   dsymutil "$BINARY" -o "$APP.dSYM" 2>/dev/null || echo "no dSYM this time" >&2
@@ -90,7 +90,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>$MINIMUM</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
-  <key>NSHumanReadableCopyright</key><string>© Office Commun · Search</string>
+  <key>NSHumanReadableCopyright</key><string>© Collin Rijock and Felipe Arce. Built on Search by Office Commun.</string>
   <key>NSHighResolutionCapable</key><true/>
   <!-- Owning http and https is what lets macOS offer this app as the default
        browser, and what sends a link clicked in Mail here. -->
@@ -119,9 +119,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
        still wants a sentence to put in its own prompt, and touching the APIs
        without one is a crash rather than a refusal. -->
   <key>NSCameraUsageDescription</key>
-  <string>Websites you visit can ask to use your camera. Search asks you first, every time, for each site.</string>
+  <string>Websites you visit can ask to use your camera. Copper asks you first, every time, for each site.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Websites you visit can ask to use your microphone. Search asks you first, every time, for each site.</string>
+  <string>Websites you visit can ask to use your microphone. Copper asks you first, every time, for each site.</string>
   <key>NSDownloadsFolderUsageDescription</key>
   <string>Files you download are saved to your Downloads folder.</string>
 </dict>

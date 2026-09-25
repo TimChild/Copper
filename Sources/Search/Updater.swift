@@ -185,8 +185,8 @@ final class Updater: ObservableObject {
         guard case .fetching(let fetching) = stage, fetching == release else { return }
         stage = worked ? .ready(release) : .offered(release)
         say?(worked
-            ? "Search \(release.version) is ready — it's there the next time you open it"
-            : "Search \(release.version) is out — it's in Settings")
+            ? "\(Fork.name) \(release.version) is ready — it's there the next time you open it"
+            : "\(Fork.name) \(release.version) is out — it's in Settings")
     }
 
     /// Quit, and come back as the new one. A shell waits for this process
@@ -288,7 +288,7 @@ private enum Swap {
         try files.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? files.removeItem(at: scratch) }
 
-        let zip = scratch.appendingPathComponent("Search.zip")
+        let zip = scratch.appendingPathComponent("\(Fork.name).zip")
         try await download(release.archive, to: zip)
         if let expected = release.sha256 {
             guard try digest(of: zip) == expected else { throw Refused.hash }

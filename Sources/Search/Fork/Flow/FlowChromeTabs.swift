@@ -673,19 +673,28 @@ enum FlowChromeTabs {
     }
 
     private static func littleUInt32(_ bytes: Data, at offset: Int) -> UInt32 {
-        UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 |
-            UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24
+        var value: UInt32 = 0
+        for i in 0..<4 {
+            value |= UInt32(bytes[offset + i]) << UInt32(8 * i)
+        }
+        return value
     }
 
     private static func littleUInt32(_ bytes: [UInt8], at offset: Int) -> UInt32 {
-        UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 |
-            UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24
+        var value: UInt32 = 0
+        for i in 0..<4 {
+            value |= UInt32(bytes[offset + i]) << UInt32(8 * i)
+        }
+        return value
     }
 
     private static func littleUInt64(_ bytes: [UInt8], at offset: Int) -> UInt64 {
-        UInt64(bytes[offset]) | UInt64(bytes[offset + 1]) << 8 |
-            UInt64(bytes[offset + 2]) << 16 | UInt64(bytes[offset + 3]) << 24 |
-            UInt64(bytes[offset + 4]) << 32 | UInt64(bytes[offset + 5]) << 40 |
-            UInt64(bytes[offset + 6]) << 48 | UInt64(bytes[offset + 7]) << 56
+        // One shift per line: the eight-way expression is what an older
+        // compiler (the release runner's) gives up type-checking.
+        var value: UInt64 = 0
+        for i in 0..<8 {
+            value |= UInt64(bytes[offset + i]) << UInt64(8 * i)
+        }
+        return value
     }
 }

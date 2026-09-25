@@ -78,21 +78,31 @@ Playwright MCP's names and argument shapes. `ref`s come from
 
 `browser_sign_in` fills a saved account on the current tab in-process. Its
 arguments are `account` (optional username), `what` (`password` by default or
-`otp`), and `submit` (true by default). It returns only status, account, host,
-and whether submission happened; the password and one-time code never appear
-in MCP responses, CLI output, Jev traces, logs, or model-visible page reads.
-`copper signin [--account USER] [--otp] [--no-submit]` is the CLI equivalent.
+`otp`), and `submit` (true by default). With more than one shared match, omit
+`account` to get a username-only `candidates` list, or name the username. The
+result reports only `filled`, `account`, `host`, `source` (for password fills),
+`what` (for OTP), and `submitted`; the password, one-time code, and Bitwarden
+session key never appear in the MCP result, CLI output, or Jev trace.
+`copper signin [--account USER] [--otp] [--no-submit] [--json]` is the CLI
+equivalent (`--json` may be placed with the command).
 
-Jev's fast path exposes a `SIGN_IN` control when it sees a password field and a
-permitted saved account, and routes it through the same in-process operation.
-Unshared credentials simply error; there is no prompt, read-back, or audit
-record in this flattened lane.
+Jev's fast path exposes a `SIGN_IN` control labelled “Sign in with the saved
+account for this site” only when the current tab has a password field and at
+least one permitted candidate. It routes through the same password fill and
+submit path. OTP fills use `browser_sign_in` with `what: "otp"` (or `copper
+signin --otp`); Jev `SIGN_IN` does not guess an OTP. Unshared credentials,
+missing fields, locked Bitwarden, and private (`shy`) tabs return an error;
+there is no agent prompt or audit record in this flattened lane. When a
+credential exists but is not shared, the error points to Settings › Passwords ›
+Agent access. The operation is not a page sandbox: with `--no-submit`, the
+password intentionally remains in the page, so do not use ordinary
+page-reading/evaluate tools on that tab.
 
 Sharing is controlled by Settings › Passwords › **Agent access**. The user can
-turn on the `shareAll` switch or enable individual per-item toggles. A
+turn on the share-everything switch or enable individual per-item toggles. A
 Bitwarden item in the `Agents` folder is shared automatically; a custom field
-`copper-agent: deny` always means never shared. Private (`shy`) tabs cannot use
-agent sign-in.
+`copper-agent: deny` always means never shared, even when the broad switch is
+on. The policy is local to Copper and never editable through MCP or the CLI.
 
 ### Why is this tab hot?
 `browser_perf_probe` samples the tab in one call instead of requiring a chain of evaluations: it groups frame loops and DOM mutations, inspects running animations and filters, and records canvases, timers, long tasks, and resources.

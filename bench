@@ -31,8 +31,9 @@
     ./bench ext-enable ID on|off       switch an extension on or off
     ./bench ext-remove ID
     ./bench updates status|check|stub URL|dry-run on|off|upgrade
-    ./bench bw status|server URL|login EMAIL PW [OTP]|unlock PW|lock|sync|candidates HOST|share all|ID on|off
-                                       Copper feed status and the detached upgrade helper
+    ./bench bw status|server URL|login EMAIL PW [OTP]|unlock PW|lock|sync|candidates HOST|choose ID
+              |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
+                                       Bitwarden probe controls and Copper feed status
     ./bench spaces [new NAME|select N|next|prev|move N|remove N|profile NAME]
     ./bench groups [new NAME|assign ID NAME|remove ID|suggest ID|dissolve NAME]
     ./bench groups [toggle NAME|inside PARENT NAME]

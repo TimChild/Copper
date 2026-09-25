@@ -34,6 +34,10 @@ final class Browser: NSObject, ObservableObject {
     let prefs = Preferences()
     /// The settings panel.
     @Published var tuning = false
+    /// The page the settings panel should open on. Bench uses this to land on
+    /// Passwords without pretending a native sidebar row is a web element.
+    @Published var settingsPage: SettingsPanel.Page =
+        SettingsPanel.Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
     /// The first-launch walk-through, over everything. Also from the menu.
     @Published var welcoming = false
 
@@ -1319,9 +1323,10 @@ final class Browser: NSObject, ObservableObject {
             // saving itself.
             if #available(macOS 15.4, *), Extensions.shared.passwordSavingTakenBy != nil { return }
             let known = Vault.logins(for: host)
+            let target = Credentials.saveTarget
             // Nothing to ask about one that is already known. Only the
             // account with this name is read — one item, not the site's list.
-            if let same = known.first(where: { $0.user == user }) {
+            if target == .keychain, let same = known.first(where: { $0.user == user }) {
                 if let full = Vault.resolve(same), full.password == password {
                     Vault.touch(full)
                     return
@@ -1329,9 +1334,39 @@ final class Browser: NSObject, ObservableObject {
             }
             let offer = Offer(
                 login: Login(host: host, user: user, password: password, used: nil),
-                changed: known.contains { $0.user == user },
-                target: Credentials.saveTarget
+                changed: target == .keychain && known.contains { $0.user == user },
+                target: target
             )
+            // Bitwarden metadata deliberately omits the secret. For an
+            // existing username, fetch that one secret asynchronously so an
+            // unchanged sign-in is merely touched while a changed one reads
+            // as an Update offer. New usernames can show the offer at once.
+            if target == .bitwarden,
+               let same = Credentials.candidates(for: host).first(where: {
+                   $0.source == .bitwarden && $0.user == user
+               }) {
+                Task { [weak self] in
+                    do {
+                        let current = try await Credentials.secret(same.id)
+                        guard let self, self.prefs.savesPasswords else { return }
+                        if current == password {
+                            Credentials.touch(same)
+                            return
+                        }
+                        guard self.offering != offer else { return }
+                        self.offering = Offer(
+                            login: offer.login, changed: true, target: offer.target
+                        )
+                    } catch {
+                        // A transient Bitwarden read failure should not lose a
+                        // human's save offer; show it as a new save.
+                        guard let self, self.prefs.savesPasswords else { return }
+                        guard self.offering != offer else { return }
+                        self.offering = offer
+                    }
+                }
+                return
+            }
             guard offering != offer else { return }
             offering = offer
         }

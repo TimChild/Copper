@@ -760,7 +760,7 @@ enum Ultrafast {
             if history.count >= Ultrafast.maxSteps { status = "budget"; note = "Reached the \(Ultrafast.maxSteps)-action budget"; return nil }
             decisions += 1
             var signInAvailable = false
-            if let rawHost = tab.address?.host()?.lowercased() {
+            if !tab.shy, let rawHost = tab.address?.host()?.lowercased() {
                 var host = rawHost
                 if host.hasPrefix("www.") { host.removeFirst(4) }
                 signInAvailable = await tab.hasPasswordField() && !AgentAccess.permitted(for: host).isEmpty
@@ -947,7 +947,7 @@ enum Ultrafast {
             let obs = try await observe(tab)
             let limit = (args["limit"] as? NSNumber)?.intValue ?? 80
             var signInAvailable = false
-            if let rawHost = tab.address?.host()?.lowercased() {
+            if !tab.shy, let rawHost = tab.address?.host()?.lowercased() {
                 var host = rawHost
                 if host.hasPrefix("www.") { host.removeFirst(4) }
                 signInAvailable = await tab.hasPasswordField() && !AgentAccess.permitted(for: host).isEmpty

@@ -66,9 +66,17 @@ struct SettingsPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
         .onAppear {
+            page = browser.settingsPage
             Task { await Bitwarden.shared.refreshStatus() }
         }
-        .onChange(of: page) { _, page in Store.settings.set(page.rawValue, forKey: "settings.page") }
+        .onChange(of: page) { _, page in
+            Store.settings.set(page.rawValue, forKey: "settings.page")
+            if browser.settingsPage != page { browser.settingsPage = page }
+        }
+        .onReceive(browser.$settingsPage) { page = $0 }
+        // Bench can choose Passwords without a native click. Changing the
+        // identity also discards any in-flight sidebar animation.
+        .id(browser.settingsPage)
     }
 
     // MARK: - the rail

@@ -347,7 +347,10 @@ struct AgentAccessCard: View {
                     get: { allowed },
                     set: setAllowed
                 ))
-                .allowsHitTesting(!shareAll && !denied)
+                // A Bitwarden-side deny is a hard boundary, not merely a
+                // switch that ignores clicks. `.disabled` also gives it the
+                // same muted treatment as other unavailable controls.
+                .disabled(shareAll || denied)
                 .accessibilityLabel("Share \(credential.name) account \(credential.user) with agents")
             }
             .padding(.horizontal, 2)

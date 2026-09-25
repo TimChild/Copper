@@ -48,7 +48,7 @@ enum SignIn {
             selected = permitted.first(where: { $0.user == account })
                 ?? permitted.first(where: { $0.user.caseInsensitiveCompare(account) == .orderedSame })
             if selected == nil {
-                return ["candidates": permitted.map(\.user), "host": host]
+                throw Failure(message: "no shared account named \(account) for \(host); saved: \(permitted.map(\.user).joined(separator: ", "))")
             }
         } else if permitted.count == 1 {
             selected = permitted[0]
@@ -67,6 +67,9 @@ enum SignIn {
 
         switch what {
         case "password":
+            // The field first, the secret second: a page with nothing to fill
+            // never causes a read from the vault.
+            guard await tab.hasPasswordField() else { throw Failure(message: "sign-in fields not found on the page") }
             let secret: String
             do {
                 secret = try await Credentials.secret(credential.id)
@@ -97,6 +100,7 @@ enum SignIn {
 
         case "otp":
             guard credential.hasTOTP else { throw Failure(message: "no one-time code for this account") }
+            guard await tab.hasOTPField() else { throw Failure(message: "no one-time-code field on the page") }
             let code: String
             do {
                 code = try await Credentials.totp(credential.id)

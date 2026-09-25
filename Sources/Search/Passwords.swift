@@ -166,6 +166,8 @@ struct PasswordsPanel: View {
         @State private var hovering = false
         @State private var shown = false
         @State private var hide: DispatchWorkItem?
+        /// Read from the keychain only when shown; never kept past hiding.
+        @State private var secret = ""
 
         var body: some View {
             HStack(spacing: 10) {
@@ -176,7 +178,7 @@ struct PasswordsPanel: View {
                     .truncationMode(.middle)
                     .frame(minWidth: 120, alignment: .leading)
 
-                Text(shown ? login.password : String(repeating: "•", count: min(12, max(6, login.password.count))))
+                Text(shown ? secret : String(repeating: "•", count: 8))
                     .font(.system(size: shown ? 12.5 : 10, design: .monospaced))
                     .foregroundStyle(shown ? Palette.ink : Palette.muted)
                     .lineLimit(1)
@@ -202,7 +204,8 @@ struct PasswordsPanel: View {
 
         private func reveal() {
             Vault.prove("show the password for \(login.host)") { ok in
-                guard ok else { return }
+                guard ok, let full = Vault.resolve(login) else { return }
+                secret = full.password
                 shown = true
                 // Long enough to read or type across, and not a minute more.
                 let work = DispatchWorkItem { shown = false }
@@ -215,6 +218,7 @@ struct PasswordsPanel: View {
         private func conceal() {
             hide?.cancel()
             shown = false
+            secret = ""
         }
     }
 

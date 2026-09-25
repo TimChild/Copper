@@ -79,8 +79,12 @@ enum Vault {
         return rows
     }
 
-    /// One item's secret, by the two things that name it.
-    private static func secret(host: String, user: String) -> String? {
+    /// One item's secret, by the two things that name it. This is the one
+    /// call the keychain guards with its dialog: an item saved by an earlier
+    /// build of this app (a different ad-hoc signature) asks once, per item,
+    /// and "Always Allow" is remembered. So it is made only for the one
+    /// account you actually picked — never to draw a list.
+    static func secret(host: String, user: String) -> String? {
         var out: CFTypeRef?
         let status = SecItemCopyMatching([
             kSecClass as String: kSecClassInternetPassword,
@@ -97,15 +101,28 @@ enum Vault {
         return String(data: data, encoding: .utf8)
     }
 
+    /// A list entry: what names the account, without its secret. The
+    /// password is an empty string until `resolve` fills it in — reading
+    /// every secret just to show a list is what made the keychain ask for
+    /// each one in turn, on every click into a sign-in box.
     private static func login(from row: [String: Any]) -> Login? {
         guard let host = row[kSecAttrServer as String] as? String,
-              let user = row[kSecAttrAccount as String] as? String,
-              let password = secret(host: host, user: user)
+              let user = row[kSecAttrAccount as String] as? String
         else { return nil }
         // The keychain has no "last used" of its own; it rides in the comment.
         let used = (row[kSecAttrComment as String] as? String)
             .flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
-        return Login(host: host, user: user, password: password, used: used)
+        return Login(host: host, user: user, password: "", used: used)
+    }
+
+    /// The same account with its password read in. Nil when the keychain
+    /// refused (Deny in its dialog) or the item is gone.
+    static func resolve(_ login: Login) -> Login? {
+        if !login.password.isEmpty { return login }
+        guard let password = secret(host: login.host, user: login.user) else { return nil }
+        var full = login
+        full.password = password
+        return full
     }
 
     // MARK: - writing
@@ -136,9 +153,16 @@ enum Vault {
         return SecItemAdd(fresh as CFDictionary, nil) == errSecSuccess
     }
 
-    /// It was just used to sign in. Lists put it first from now on.
+    /// It was just used to sign in. Lists put it first from now on. Only the
+    /// comment moves; the secret is neither read nor rewritten.
     static func touch(_ login: Login) {
-        save(host: login.host, user: login.user, password: login.password, used: Date())
+        SecItemUpdate([
+            kSecClass as String: kSecClassInternetPassword,
+            kSecAttrServer as String: login.host,
+            kSecAttrAccount as String: login.user,
+        ] as CFDictionary, [
+            kSecAttrComment as String: String(Date().timeIntervalSince1970),
+        ] as CFDictionary)
     }
 
     static func forget(host: String, user: String) {

@@ -294,10 +294,15 @@ final class Browser: NSObject, ObservableObject {
         guard let tab = tabs.first(where: { $0.id == suggesting?.tab }) ?? active else { return }
         suggesting = nil
         pickedInto = tab.id
-        tab.fill(user: login.user, password: login.password) { [weak self] worked in
+        // The secret is read now, for this one account — the keychain may ask.
+        guard let full = Vault.resolve(login) else {
+            announce("The keychain didn't give up that password")
+            return
+        }
+        tab.fill(user: full.user, password: full.password) { [weak self] worked in
             if !worked { self?.announce("Couldn't find the sign-in fields anymore") }
         }
-        Vault.touch(login)
+        Vault.touch(full)
     }
 
     func dropChoice() { suggesting = nil }
@@ -342,8 +347,12 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func copy(_ login: Login) {
+        guard let full = Vault.resolve(login) else {
+            announce("The keychain didn't give up that password")
+            return
+        }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(login.password, forType: .string)
+        NSPasteboard.general.setString(full.password, forType: .string)
         announce("Password copied")
     }
 
@@ -1277,10 +1286,13 @@ final class Browser: NSObject, ObservableObject {
             // saving itself.
             if #available(macOS 15.4, *), Extensions.shared.passwordSavingTakenBy != nil { return }
             let known = Vault.logins(for: host)
-            // Nothing to ask about one that is already known.
-            if let same = known.first(where: { $0.user == user && $0.password == password }) {
-                Vault.touch(same)
-                return
+            // Nothing to ask about one that is already known. Only the
+            // account with this name is read — one item, not the site's list.
+            if let same = known.first(where: { $0.user == user }) {
+                if let full = Vault.resolve(same), full.password == password {
+                    Vault.touch(full)
+                    return
+                }
             }
             let offer = Offer(
                 login: Login(host: host, user: user, password: password, used: nil),

@@ -12,7 +12,7 @@ struct BitwardenCard: View {
     @State private var otp = ""
     @State private var busy = false
     @State private var error: String?
-    @State private var autolock = 15
+    @State private var autolock = 0
 
     var body: some View {
         Card {
@@ -138,10 +138,10 @@ struct BitwardenCard: View {
 
     private var storedAutolock: Int {
         guard let value = Store.settings.object(forKey: "bitwarden.autolockMinutes") as? NSNumber else {
-            return 15
+            return 0
         }
         let minutes = value.intValue
-        return [0, 5, 15, 60].contains(minutes) ? minutes : 15
+        return [0, 5, 15, 60].contains(minutes) ? minutes : 0
     }
 
     private func signIn() {

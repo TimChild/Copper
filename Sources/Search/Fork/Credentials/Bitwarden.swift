@@ -63,6 +63,10 @@ final class Bitwarden: ObservableObject {
 
     private init() {
         state = Self.installed ? .unauthenticated : .missing
+        // What `bw` knows from last time — signed in, locked — so the picker
+        // can say "Unlock Bitwarden…" from the first sign-in box, not only
+        // after Settings has been opened.
+        if Self.installed { Task { await self.refreshStatus() } }
     }
 
     // MARK: - Discovery and process boundary
@@ -489,7 +493,10 @@ final class Bitwarden: ObservableObject {
         if let value = Store.settings.object(forKey: "bitwarden.autolockMinutes") as? NSNumber {
             minutes = max(0, value.doubleValue)
         } else {
-            minutes = 15
+            // Never, unless asked: the vault is as open as the keychain is
+            // while the Mac is unlocked, and asking for the master password
+            // every quarter hour is what makes people turn a feature off.
+            minutes = 0
         }
         guard minutes > 0, Date().timeIntervalSince(lastActivity) >= minutes * 60 else { return }
         Task { await lock() }

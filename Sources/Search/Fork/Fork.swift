@@ -32,6 +32,9 @@ enum Fork {
         return core.prefix(1).uppercased() + core.dropFirst()
     }
 
+    /// The last thing Bitwarden refused over the bench, for `bw status`.
+    @MainActor static var bwLastError: String?
+
     /// The bench verbs Copper adds; see Bench.swift's switch.
     @MainActor static func bench(_ verb: String, _ request: [String: Any], in browser: Browser) -> [String: Any] {
         switch verb {
@@ -68,6 +71,55 @@ enum Fork {
             return ["offers": rows]
         case "swipe": return SpaceSwipe.bench(request["arg"] as? String ?? "left", in: browser)
         case "heat": return Heat.shared.bench(request, in: browser)
+        case "bw":
+            // Bitwarden without the Settings card, for a probe run: `bw status`,
+            // `bw server URL`, `bw login EMAIL PASSWORD [OTP]`, `bw unlock PASSWORD`,
+            // `bw lock`, `bw sync`, `bw candidates HOST`, `bw share ID on|off|all on|off`.
+            // Long ones start and return; `bw status` says where they got to.
+            let op = request["op"] as? String ?? "status"
+            let words = (request["arg"] as? String ?? "").split(separator: " ").map(String.init)
+            let bw = Bitwarden.shared
+            func describe() -> [String: Any] {
+                let state: String
+                switch bw.state {
+                case .missing: state = "missing"
+                case .unauthenticated: state = "unauthenticated"
+                case .locked: state = "locked"
+                case .unlocked: state = "unlocked"
+                }
+                return ["state": state, "server": bw.serverURL, "installed": Bitwarden.installed, "lastError": Fork.bwLastError ?? ""]
+            }
+            switch op {
+            case "status": return describe()
+            case "server":
+                guard let url = words.first else { return ["error": "bw server needs a URL"] }
+                Task { do { try await bw.configure(server: url) } catch { Fork.bwLastError = error.localizedDescription } }
+                return ["started": true]
+            case "login":
+                guard words.count >= 2 else { return ["error": "bw login EMAIL PASSWORD [OTP]"] }
+                Fork.bwLastError = nil
+                Task { do { try await bw.login(email: words[0], password: words[1], otp: words.count > 2 ? words[2] : nil) } catch { Fork.bwLastError = error.localizedDescription } }
+                return ["started": true]
+            case "unlock":
+                guard let password = words.first else { return ["error": "bw unlock PASSWORD"] }
+                Fork.bwLastError = nil
+                Task { do { try await bw.unlock(password: password) } catch { Fork.bwLastError = error.localizedDescription } }
+                return ["started": true]
+            case "lock": Task { await bw.lock() }; return ["started": true]
+            case "sync": Task { do { try await bw.sync() } catch { Fork.bwLastError = error.localizedDescription } }; return ["started": true]
+            case "candidates":
+                guard let host = words.first else { return ["error": "bw candidates HOST"] }
+                return ["candidates": Credentials.candidates(for: host).map { ["id": $0.id.string, "user": $0.user, "host": $0.host, "source": "\($0.source)", "totp": $0.hasTOTP, "agent": AgentAccess.isAllowed($0)] }]
+            case "share":
+                // `bw share all on|off` or `bw share <id> on|off`
+                guard words.count == 2 else { return ["error": "bw share all|ID on|off"] }
+                let on = ["on", "true", "1", "yes"].contains(words[1])
+                if words[0] == "all" { AgentAccess.shareAll = on; return ["shareAll": on] }
+                guard let c = Credentials.all().first(where: { $0.id.string == words[0] }) else { return ["error": "no credential \(words[0])"] }
+                AgentAccess.set(c, allowed: on)
+                return ["id": c.id.string, "agent": AgentAccess.isAllowed(c)]
+            default: return ["error": "unknown bw operation \(op)"]
+            }
         case "updates":
             let op = request["op"] as? String ?? "status"
             switch op {

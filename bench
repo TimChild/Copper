@@ -31,6 +31,7 @@
     ./bench ext-enable ID on|off       switch an extension on or off
     ./bench ext-remove ID
     ./bench updates status|check|stub URL|dry-run on|off|upgrade
+    ./bench bw status|server URL|login EMAIL PW [OTP]|unlock PW|lock|sync|candidates HOST|share all|ID on|off
                                        Copper feed status and the detached upgrade helper
     ./bench spaces [new NAME|select N|next|prev|move N|remove N|profile NAME]
     ./bench groups [new NAME|assign ID NAME|remove ID|suggest ID|dissolve NAME]
@@ -133,8 +134,8 @@ def main(argv):
     elif verb == "window":
         if not args: sys.exit("usage: bench window PATH")
         request["path"] = os.path.abspath(args[0])
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates"):
-        request["op"] = args[0] if args else ("status" if verb == "updates" else "list")
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw"):
+        request["op"] = args[0] if args else ("status" if verb in ("updates", "bw") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "ui":
         if len(args) != 2: sys.exit("usage: bench ui KEY VALUE")
@@ -197,7 +198,7 @@ def main(argv):
     elif verb in ("eval", "ext-popup"):
         value = answer.get("value")
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
-    elif verb == "updates":
+    elif verb in ("updates", "bw"):
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True))
     elif verb == "bar":
         for o in answer.get("offers", []):

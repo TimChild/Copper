@@ -275,6 +275,8 @@ struct SettingsPanel: View {
                     }
                 }
             }
+            BitwardenCard(browser: browser)
+            AgentAccessCard(browser: browser)
             Card {
                 Line("Bring yours in", "From Dia, Chrome, Arc, Brave or Edge on this Mac — nothing leaves it") {
                     Pill("Import…") {
@@ -283,8 +285,6 @@ struct SettingsPanel: View {
                     }
                 }
             }
-            BitwardenCard(browser: browser)
-            AgentAccessCard(browser: browser)
         }
     }
 
@@ -564,6 +564,9 @@ struct Pill: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11.5))
+                .lineLimit(1)
+                // A pill is as wide as its word, never a tall wrapped column.
+                .fixedSize()
                 .foregroundStyle(filled ? Palette.ground : tint)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)

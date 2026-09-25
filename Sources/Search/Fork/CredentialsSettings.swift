@@ -134,6 +134,7 @@ struct BitwardenCard: View {
             Pill(busy ? "Working…" : title, filled: !busy, action: action)
                 .disabled(busy)
         }
+        .fixedSize()
     }
 
     private var storedAutolock: Int {

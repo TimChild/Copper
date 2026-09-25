@@ -12,6 +12,7 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | Command | Use |
 |---|---|
 | `copper tabs` | List tabs. |
+| `copper signin [--account USER] [--otp] [--no-submit]` | Fill a shared saved account on the current tab (submits by default). |
 | `copper health` | Check connectivity and Jev mode. |
 | `copper open URL` / `copper go URL` | Open a tab / navigate the current tab. |
 | `copper run "GOAL" [--url URL] [--new-tab]` | Let Jev complete a multi-step goal. |
@@ -38,6 +39,25 @@ copper run "search Acme invoices for March 2026 and stop when the result is visi
 copper observe -n 20 --no-text
 copper extract "Return the visible flight options with airline, time, and price" --schema '{"type":"array"}'
 ```
+
+## Saved sign-in (no-secret contract)
+
+`copper signin` calls the `browser_sign_in` tool for the current tab. It fills a
+saved account inside Copper and submits by default; use `--account USER` when
+several shared accounts match, `--otp` for the saved one-time code, or
+`--no-submit` to leave the form filled. The MCP tool has the same arguments:
+`account`, `what` (`password` or `otp`), and `submit`.
+
+The password and one-time code never appear in tool results, CLI output, Jev
+traces, logs, or model-visible page reads. Sharing is controlled by Settings ›
+Passwords › **Agent access**: the `shareAll` switch and per-item toggles are
+the user-controlled policy. A Bitwarden item in the `Agents` folder is shared;
+a custom field `copper-agent: deny` always denies sharing. Unshared credentials
+simply return an error and are never prompted for or read by an agent.
+
+The Jev fast path exposes a `SIGN_IN` control when the current page has a
+password field and at least one permitted account. It uses the same in-process
+fill and no-secret contract as `browser_sign_in`.
 
 The CLI does not launch Copper by default. When it is down, commands print `copper: Copper isn't running (or Settings › Agents is off). Start it with \`open -a Copper\`, or pass --launch.` and exit 2. This is deliberate: probes during a quit must not create a second app instance. `copper session restore` refuses while Copper is running unless `--quit` is supplied; it saves the current session before replacing it and relaunches after the copy.
 

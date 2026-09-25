@@ -93,6 +93,11 @@ final class Preferences: ObservableObject {
     @Published var fillsPasswords: Bool {
         didSet { store.set(fillsPasswords, forKey: "passwords.fill") }
     }
+    /// Where newly saved passwords go. Fills always merge both backends; the
+    /// selected backend only changes the destination of a save offer.
+    @Published var passwordsBackend: Credentials.Backend {
+        didSet { store.set(passwordsBackend.rawValue, forKey: "passwords.backend") }
+    }
     /// The first launch has been walked through. Until then the welcome
     /// stands over the window.
     @Published var welcomed: Bool {
@@ -151,6 +156,8 @@ final class Preferences: ObservableObject {
         asksWhereToSave = store.bool(forKey: "downloads.ask")
         savesPasswords = store.object(forKey: "passwords.save") as? Bool ?? true
         fillsPasswords = store.object(forKey: "passwords.fill") as? Bool ?? true
+        passwordsBackend = store.string(forKey: "passwords.backend")
+            .flatMap(Credentials.Backend.init(rawValue:)) ?? .keychain
         // Anyone who already has a session was here before the welcome
         // existed; they are not asked to sit through it.
         welcomed = store.bool(forKey: "welcomed") || store.object(forKey: "glyph") != nil

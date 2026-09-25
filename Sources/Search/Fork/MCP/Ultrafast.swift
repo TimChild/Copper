@@ -383,7 +383,7 @@ enum Ultrafast {
 
     /// One index per observed element; each operation has its own valid
     /// targets. Controls (scroll, wait) are operations of their own.
-    static func actionSpace(_ actions: [[String: Any]]) -> (elements: [[String: Any]], targets: [String: [String: [String: Any]]], controls: [String: [String: Any]]) {
+    static func actionSpace(_ actions: [[String: Any]], signInAvailable: Bool = false) -> (elements: [[String: Any]], targets: [String: [String: [String: Any]]], controls: [String: [String: Any]]) {
         var elements: [[String: Any]] = []
         var indices: [Int: String] = [:]
         var targets: [String: [String: [String: Any]]] = [:]
@@ -426,12 +426,18 @@ enum Ultrafast {
             elements[position] = element
             targets[operation, default: [:]][target] = action
         }
+        if signInAvailable {
+            controls["SIGN_IN"] = [
+                "id": "SIGN_IN",
+                "label": "Sign in with the saved account for this site (fills and submits the password for you)",
+            ]
+        }
         return (elements, targets, controls)
     }
 
     /// The table an agent reads: `[3] combobox  Where to? · London`.
-    static func table(_ obs: Observation, limit: Int = 80) -> String {
-        let (elements, _, _) = actionSpace(obs.actions)
+    static func table(_ obs: Observation, limit: Int = 80, signInAvailable: Bool = false) -> String {
+        let (elements, _, controls) = actionSpace(obs.actions, signInAvailable: signInAvailable)
         var lines: [String] = []
         for element in elements.prefix(limit) {
             let index = element["index"] as? String ?? "?"
@@ -450,6 +456,7 @@ enum Ultrafast {
         }
         if elements.count > limit { lines.append("… \(elements.count - limit) more") }
         if obs.omitted > 0 { lines.append("… \(obs.omitted) beyond the 250-candidate cap") }
+        if let signIn = controls["SIGN_IN"]?["label"] as? String { lines.append("[SIGN_IN] \(signIn)") }
         return lines.isEmpty ? "(no interactive elements in view)" : lines.joined(separator: "\n")
     }
 
@@ -466,8 +473,8 @@ enum Ultrafast {
 
     /// One TypeSafe request: the operation, and a target for every operation
     /// that has candidates. Only the head the operation picked is consumed.
-    static func choose(_ obs: Observation, goal: String, history: [Step], keys: Intelligence.Keys) async throws -> Decision {
-        let (elements, targets, controls) = actionSpace(obs.actions)
+    static func choose(_ obs: Observation, goal: String, history: [Step], keys: Intelligence.Keys, signInAvailable: Bool = false) async throws -> Decision {
+        let (elements, targets, controls) = actionSpace(obs.actions, signInAvailable: signInAvailable)
         let labels = [
             "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
             "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
@@ -557,6 +564,7 @@ enum Ultrafast {
         case "select": return "Selecting \(short(label.components(separatedBy: " → ").last ?? label))"
         case "scroll": return ((action["delta"] as? NSNumber)?.doubleValue ?? 560) < 0 ? "Scrolling up" : "Scrolling down"
         case "wait": return "Waiting for the page"
+        case "SIGN_IN": return "Signing in with the saved account"
         default: return "Clicking \(short(label))"
         }
     }
@@ -601,9 +609,14 @@ enum Ultrafast {
     /// Freshness first, then geometry, then the input as the window would
     /// deliver it. A stale page throws `Stale`; the caller observes again.
     @MainActor
-    static func act(_ tab: Tab, _ action: [String: Any], _ obs: Observation, text: String?) async throws {
+    static func act(_ tab: Tab, _ action: [String: Any], _ obs: Observation, text: String?, browser: Browser) async throws {
         let web = tab.web
         let kind = action["kind"] as? String ?? ""
+        if kind == "SIGN_IN" {
+            guard await fresh(web, obs) else { throw Stale(text: "Page changed since this decision. Observe again.") }
+            _ = try await SignIn.run([:], in: browser, source: .jev)
+            return
+        }
         let node = (action["node"] as? NSNumber)?.intValue
         if kind == "click" || kind == "select", let node {
             guard await fresh(web, obs, target: node) else { throw Stale(text: "Page changed since this decision. Observe again.") }
@@ -746,8 +759,15 @@ enum Ultrafast {
             if decisions >= Ultrafast.maxSteps * 2 { status = "budget"; note = "Reached the \(Ultrafast.maxSteps * 2)-decision budget"; return nil }
             if history.count >= Ultrafast.maxSteps { status = "budget"; note = "Reached the \(Ultrafast.maxSteps)-action budget"; return nil }
             decisions += 1
+            var signInAvailable = false
+            if let rawHost = tab.address?.host()?.lowercased() {
+                var host = rawHost
+                if host.hasPrefix("www.") { host.removeFirst(4) }
+                signInAvailable = await tab.hasPasswordField() && !AgentAccess.permitted(for: host).isEmpty
+            }
             let asking = trace.phase(.ask, "Asking Jev which move")
-            let decision = try await Ultrafast.choose(obs, goal: goal, history: history, keys: keys)
+            let decision = try await Ultrafast.choose(obs, goal: goal, history: history, keys: keys,
+                                                      signInAvailable: signInAvailable)
             // No detail: the ms column already says how long Jev took.
             trace.close(phase: asking)
             if stopped() { return nil }
@@ -761,7 +781,14 @@ enum Ultrafast {
                                                pageChanged: nil, stale: false, candidates: []))
                 return nil
             }
-            guard let action = obs.action(decision.choice) else { observation = nil; return nil }
+            let action: [String: Any]
+            if decision.operation == "SIGN_IN" {
+                action = ["id": "SIGN_IN", "kind": "SIGN_IN",
+                          "label": "Sign in with the saved account for this site (fills and submits the password for you)"]
+            } else {
+                guard let observed = obs.action(decision.choice) else { observation = nil; return nil }
+                action = observed
+            }
             let kind = action["kind"] as? String ?? ""
             let label = action["label"] as? String ?? decision.choice
 
@@ -790,7 +817,7 @@ enum Ultrafast {
                 }
                 let acted = trace.phase(.act, Ultrafast.actTitle(action, label: label))
                 acting = acted
-                try await Ultrafast.act(tab, action, obs, text: text)
+                try await Ultrafast.act(tab, action, obs, text: text, browser: browser)
                 trace.close(phase: acted)
                 acting = nil
                 pending = nil
@@ -919,7 +946,13 @@ enum Ultrafast {
             if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
             let obs = try await observe(tab)
             let limit = (args["limit"] as? NSNumber)?.intValue ?? 80
-            var out = Tools.pageLine(tab) + "\n\n### Elements\n" + table(obs, limit: limit)
+            var signInAvailable = false
+            if let rawHost = tab.address?.host()?.lowercased() {
+                var host = rawHost
+                if host.hasPrefix("www.") { host.removeFirst(4) }
+                signInAvailable = await tab.hasPasswordField() && !AgentAccess.permitted(for: host).isEmpty
+            }
+            var out = Tools.pageLine(tab) + "\n\n### Elements\n" + table(obs, limit: limit, signInAvailable: signInAvailable)
             if (args["text"] as? Bool) ?? true { out += "\n\n### Visible text\n" + obs.text.prefix(4000) }
             return [.text(out)]
         case "jev_extract":

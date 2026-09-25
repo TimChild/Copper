@@ -65,6 +65,9 @@ struct SettingsPanel: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
+        .onAppear {
+            Task { await Bitwarden.shared.refreshStatus() }
+        }
         .onChange(of: page) { _, page in Store.settings.set(page.rawValue, forKey: "settings.page") }
     }
 
@@ -272,6 +275,8 @@ struct SettingsPanel: View {
                     }
                 }
             }
+            BitwardenCard(browser: browser)
+            AgentAccessCard(browser: browser)
         }
     }
 

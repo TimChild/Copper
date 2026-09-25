@@ -490,16 +490,21 @@ struct ContentView: View {
     /// there is nothing to be learned from reading your own password.
     private func keepAsking(_ offer: Browser.Offer) -> some View {
         let login = offer.login
+        let bitwarden = offer.target == .bitwarden
         return HStack(spacing: 12) {
-            Text(offer.changed
-                 ? "Update the password for \(login.user) on \(login.host)?"
-                 : (login.user.isEmpty
-                    ? "Save this password for \(login.host)?"
-                    : "Save the password for \(login.user) on \(login.host)?"))
+            Text(bitwarden
+                 ? (offer.changed
+                    ? "Update the password in Bitwarden for \(login.user) on \(login.host)?"
+                    : "Save to Bitwarden for \(login.user) on \(login.host)?")
+                 : (offer.changed
+                    ? "Update the password for \(login.user) on \(login.host)?"
+                    : (login.user.isEmpty
+                       ? "Save this password for \(login.host)?"
+                       : "Save the password for \(login.user) on \(login.host)?")))
                 .font(.system(size: 12.5))
                 .foregroundStyle(Palette.ink)
                 .lineLimit(1)
-            Button(offer.changed ? "Update" : "Save") { browser.keepOffer() }
+            Button(bitwarden ? "Save to Bitwarden" : (offer.changed ? "Update" : "Save")) { browser.keepOffer() }
                 .buttonStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(Palette.ground)

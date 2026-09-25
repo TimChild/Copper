@@ -146,6 +146,66 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         return false;
       }
 
+      function visible(box) {
+        if (!box) return false;
+        var r = box.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+        var style = window.getComputedStyle(box);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      }
+
+      // The one-time-code box sites call by several names. Prefer the
+      // autocomplete promise, then the clues in the field's own labels.
+      function otpField() {
+        var inputs = document.querySelectorAll('input');
+        var clues = /otp|one.?time|verif|code|totp|2fa|mfa|token/i;
+        var fallback = null;
+        for (var i = 0; i < inputs.length; i++) {
+          var input = inputs[i];
+          if (!visible(input)) continue;
+          var autocomplete = (input.autocomplete || input.getAttribute('autocomplete') || '').toLowerCase();
+          if (autocomplete === 'one-time-code') return input;
+          var kind = (input.type || 'text').toLowerCase();
+          var inputmode = (input.inputMode || input.getAttribute('inputmode') || '').toLowerCase();
+          var eligible = ['text', 'tel', 'number'].indexOf(kind) >= 0 ||
+            inputmode === 'numeric' || inputmode === 'tel';
+          var labels = [
+            input.name,
+            input.id,
+            input.getAttribute('aria-label'),
+            input.getAttribute('placeholder'),
+            autocomplete
+          ].join(' ');
+          if (!fallback && eligible && clues.test(labels)) fallback = input;
+        }
+        return fallback;
+      }
+
+      // Some sign-in pages use one box for each digit. Find the nearest
+      // ancestor that contains a complete, visible run of those boxes.
+      function splitOTPFields() {
+        var inputs = document.querySelectorAll('input');
+        var singles = [];
+        for (var i = 0; i < inputs.length; i++) {
+          var input = inputs[i];
+          if (!visible(input)) continue;
+          if (input.maxLength !== 1 && input.getAttribute('maxlength') !== '1') continue;
+          singles.push(input);
+        }
+        for (var first = 0; first < singles.length; first++) {
+          var container = singles[first].parentElement;
+          while (container && container !== document.documentElement) {
+            var inside = [];
+            for (var j = 0; j < singles.length; j++) {
+              if (container.contains(singles[j])) inside.push(singles[j]);
+            }
+            if (inside.length >= 4 && inside.length <= 8) return inside;
+            container = container.parentElement;
+          }
+        }
+        return null;
+      }
+
       window.__officeForms = {
         unsaved: unsaved,
         fill: function (user, password) {
@@ -155,6 +215,55 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
           put(both.pass, password);
           return true;
         },
+        submit: function () {
+          var both = pair();
+          if (!both) return false;
+          ['keydown', 'keypress', 'keyup'].forEach(function (kind) {
+            var event = new KeyboardEvent(kind, {
+              key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+              bubbles: true, cancelable: true
+            });
+            try { Object.defineProperty(event, 'keyCode', { value: 13 }); } catch (ignored) {}
+            try { Object.defineProperty(event, 'which', { value: 13 }); } catch (ignored) {}
+            both.pass.dispatchEvent(event);
+          });
+          if (both.pass.form) {
+            if (typeof both.pass.form.requestSubmit === 'function') {
+              both.pass.form.requestSubmit();
+            } else if (typeof both.pass.form.submit === 'function') {
+              both.pass.form.submit();
+            } else {
+              return false;
+            }
+            return true;
+          }
+          var container = both.pass.parentElement;
+          while (container) {
+            var button = container.querySelector(
+              'button[type="submit"], input[type="submit"], button'
+            );
+            if (button) {
+              button.click();
+              return true;
+            }
+            container = container.parentElement;
+          }
+          return false;
+        },
+        otpField: otpField,
+        fillOTP: function (code) {
+          var split = splitOTPFields();
+          if (split) {
+            if (String(code).length < split.length) return false;
+            for (var i = 0; i < split.length; i++) put(split[i], String(code).charAt(i));
+            return true;
+          }
+          var box = otpField();
+          if (!box) return false;
+          put(box, code);
+          return true;
+        },
+        hasOTP: function () { return !!otpField(); },
         // Whether there is still a sign-in on the page. Asked after a
         // password went out, to tell a sign-in that took from one refused.
         hasPassword: function () { return !!pair(); }

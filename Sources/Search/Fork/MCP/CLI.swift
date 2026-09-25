@@ -123,6 +123,21 @@ enum CLI {
         case "go":
             guard args.count == 1, let url = args.first else { return bad("go needs URL") }
             return call("browser_navigate", ["url": url])
+        case "signin":
+            var arguments: [String: Any] = [:]
+            var i = 0
+            while i < args.count {
+                switch args[i] {
+                case "--account":
+                    guard let value = next(&args, &i), !value.isEmpty else { return bad("signin --account needs USER") }
+                    arguments["account"] = value
+                case "--otp": arguments["what"] = "otp"
+                case "--no-submit": arguments["submit"] = false
+                default: return bad("unknown signin option: \(args[i])")
+                }
+                i += 1
+            }
+            return call("browser_sign_in", arguments)
         case "observe":
             var arguments: [String: Any] = [:]
             var i = 0
@@ -884,6 +899,8 @@ enum CLI {
       tabs                                      list open tabs
       open URL                                  open URL in a new tab
       go URL                                    navigate the current tab
+      signin [--account USER] [--otp] [--no-submit]
+                                                fill a shared saved account on the current tab
       observe [--no-text] [-n N]                fast Jev observation
       run "GOAL…" [--url URL] [--new-tab] [--max N] [--no-elements]
       step "GOAL…"                              supervise one Jev decision

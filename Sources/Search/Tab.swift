@@ -500,6 +500,42 @@ final class Tab: ObservableObject, Identifiable {
         }
     }
 
+    func submitSignIn(done: ((Bool) -> Void)? = nil) {
+        web.evaluateJavaScript(
+            "window.__officeForms && window.__officeForms.submit()"
+        ) { result, _ in
+            done?((result as? Bool) ?? false)
+        }
+    }
+
+    func fillOTP(_ code: String, done: ((Bool) -> Void)? = nil) {
+        web.evaluateJavaScript(
+            "window.__officeForms && window.__officeForms.fillOTP(`\(escape(code))`)"
+        ) { result, _ in
+            done?((result as? Bool) ?? false)
+        }
+    }
+
+    func hasOTPField() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            web.evaluateJavaScript(
+                "!!(window.__officeForms && window.__officeForms.hasOTP())"
+            ) { result, _ in
+                continuation.resume(returning: (result as? Bool) ?? false)
+            }
+        }
+    }
+
+    func hasPasswordField() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            web.evaluateJavaScript(
+                "!!(window.__officeForms && window.__officeForms.hasPassword())"
+            ) { result, _ in
+                continuation.resume(returning: (result as? Bool) ?? false)
+            }
+        }
+    }
+
     func picked(selector: String, label: String, note: String) {
         onPick?(self, selector, label, note)
     }

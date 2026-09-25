@@ -245,6 +245,8 @@ final class Browser: NSObject, ObservableObject {
         let login: Login
         /// The same account is already kept, with a different password.
         let changed: Bool
+        /// The destination selected in Settings when the offer was created.
+        let target: Credentials.Backend
     }
 
     /// The accounts kept for the site whose sign-in box has the caret, and
@@ -255,8 +257,11 @@ final class Browser: NSObject, ObservableObject {
     struct Suggesting: Equatable {
         let tab: Tab.ID
         let spot: CGRect
-        let logins: [Login]
+        let credentials: [Credential]
     }
+    /// The row whose secret is being fetched. Keeping it published lets the
+    /// picker show a small, transient "Fetching…" state without exposing it.
+    @Published private(set) var fetching: CredentialID?
     /// Set once you have picked, so the list doesn't come straight back for
     /// the box you are still in. Cleared when the caret leaves the boxes.
     private var pickedInto: Tab.ID?
@@ -269,12 +274,26 @@ final class Browser: NSObject, ObservableObject {
         guard let offer = offering else { return }
         offering = nil
         let login = offer.login
-        guard Vault.save(host: login.host, user: login.user, password: login.password, used: Date()) else {
-            announce("The keychain refused it")
+        // Preserve the old synchronous keychain path exactly when Bitwarden
+        // is not the active destination.
+        guard offer.target == .bitwarden else {
+            guard Vault.save(host: login.host, user: login.user, password: login.password, used: Date()) else {
+                announce("The keychain refused it")
+                return
+            }
+            relist()
+            announce(offer.changed ? "Password updated for \(login.host)" : "Password saved for \(login.host)")
             return
         }
-        relist()
-        announce(offer.changed ? "Password updated for \(login.host)" : "Password saved for \(login.host)")
+        Task { [weak self] in
+            do {
+                try await Credentials.save(host: login.host, user: login.user, password: login.password)
+                self?.relist()
+                self?.announce(offer.changed ? "Password updated in Bitwarden for \(login.host)" : "Password saved to Bitwarden")
+            } catch {
+                self?.announce(error.localizedDescription)
+            }
+        }
     }
 
     func dropOffer() { offering = nil }
@@ -288,21 +307,29 @@ final class Browser: NSObject, ObservableObject {
         announce("Never for \(offer.login.host)")
     }
 
-    /// One of the accounts in the list, picked by name.
-    func choose(_ login: Login) {
+    /// One of the accounts in the list, picked by name. Bitwarden secrets are
+    /// fetched only after the user chooses a row; metadata never contains one.
+    func choose(_ credential: Credential) {
         lowering?.cancel()
         guard let tab = tabs.first(where: { $0.id == suggesting?.tab }) ?? active else { return }
-        suggesting = nil
+        guard fetching == nil else { return }
         pickedInto = tab.id
-        // The secret is read now, for this one account — the keychain may ask.
-        guard let full = Vault.resolve(login) else {
-            announce("The keychain didn't give up that password")
-            return
+        fetching = credential.id
+        Task { [weak self, weak tab] in
+            do {
+                let secret = try await Credentials.secret(credential.id)
+                guard let self, let tab else { return }
+                tab.fill(user: credential.user, password: secret) { worked in
+                    if !worked { self.announce("Couldn't find the sign-in fields anymore") }
+                }
+                Credentials.touch(credential)
+                self.suggesting = nil
+            } catch {
+                self?.announce(error.localizedDescription)
+                self?.suggesting = nil
+            }
+            self?.fetching = nil
         }
-        tab.fill(user: full.user, password: full.password) { [weak self] worked in
-            if !worked { self?.announce("Couldn't find the sign-in fields anymore") }
-        }
-        Vault.touch(full)
     }
 
     func dropChoice() { suggesting = nil }
@@ -1274,8 +1301,14 @@ final class Browser: NSObject, ObservableObject {
             guard prefs.fillsPasswords, tab.id == activeID, pickedInto != tab.id,
                   let host = curtain.host(of: tab.address)
             else { return }
-            let known = Array(Vault.logins(matching: host).prefix(5))
-            suggesting = known.isEmpty ? nil : Suggesting(tab: tab.id, spot: spot, logins: known)
+            let known = Array(Credentials.candidates(for: host).prefix(5))
+            let locked = {
+                if case .locked = Bitwarden.shared.state { return true }
+                return false
+            }()
+            suggesting = (known.isEmpty && !locked)
+                ? nil
+                : Suggesting(tab: tab.id, spot: spot, credentials: known)
         }
 
         tab.onCredentials = { [weak self] tab, host, user, password in
@@ -1296,7 +1329,8 @@ final class Browser: NSObject, ObservableObject {
             }
             let offer = Offer(
                 login: Login(host: host, user: user, password: password, used: nil),
-                changed: known.contains { $0.user == user }
+                changed: known.contains { $0.user == user },
+                target: Credentials.saveTarget
             )
             guard offering != offer else { return }
             offering = offer

@@ -74,6 +74,26 @@ Playwright MCP's names and argument shapes. `ref`s come from
 | `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove`, `suggest` |
 | `browser_perf_probe` | Samples the current tab for rAF loops, DOM churn, animations, filters, canvases, timers, long tasks, and slow resources (`seconds`, `top`, `format`) |
 
+### Saved sign-in (no-secret contract)
+
+`browser_sign_in` fills a saved account on the current tab in-process. Its
+arguments are `account` (optional username), `what` (`password` by default or
+`otp`), and `submit` (true by default). It returns only status, account, host,
+and whether submission happened; the password and one-time code never appear
+in MCP responses, CLI output, Jev traces, logs, or model-visible page reads.
+`copper signin [--account USER] [--otp] [--no-submit]` is the CLI equivalent.
+
+Jev's fast path exposes a `SIGN_IN` control when it sees a password field and a
+permitted saved account, and routes it through the same in-process operation.
+Unshared credentials simply error; there is no prompt, read-back, or audit
+record in this flattened lane.
+
+Sharing is controlled by Settings › Passwords › **Agent access**. The user can
+turn on the `shareAll` switch or enable individual per-item toggles. A
+Bitwarden item in the `Agents` folder is shared automatically; a custom field
+`copper-agent: deny` always means never shared. Private (`shy`) tabs cannot use
+agent sign-in.
+
 ### Why is this tab hot?
 `browser_perf_probe` samples the tab in one call instead of requiring a chain of evaluations: it groups frame loops and DOM mutations, inspects running animations and filters, and records canvases, timers, long tasks, and resources.
 Its findings are deliberately WebKit-specific. The three traps it calls out are a filtered SVG under an animated transform, off-screen `requestAnimationFrame` loops, and animations of properties other than `transform`/`opacity`.

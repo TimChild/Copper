@@ -25,20 +25,22 @@ names the selected browser and disappears when those three choices are off. If
 the key is refused, tabs, bookmarks, history and extensions still move and Flow
 reports the refusal. The key is never written to disk.
 
-### macOS may keep Chrome private
+### macOS keeps Chrome private
 
-On macOS 26, App Data protection can deny Copper's first directory listing of
-`~/Library/Application Support/Google/Chrome`. Flow keeps Chrome in the picker
-as a locked source instead of silently dropping it. A Dock-launched Copper may
-show macOS's permission prompt on that first attempt; say **Allow**, then close
-and reopen Move in so Flow can try again.
+macOS 26 puts other apps' data behind "App Data" protection
+(`kTCCServiceSystemPolicyAppDataDetailed`, keyed by the other app's bundle id).
+Copper's first listing of `~/Library/Application Support/Google/Chrome` is
+denied — and, measured on 26.x with a Finder-launched build, **macOS never
+prompts for this service** (`tccd`: "does not allow prompting; recording
+denied"). Arc's folder is not covered. Flow keeps Chrome in the picker as a
+locked source instead of silently dropping it.
 
-If the prompt is not shown (including test worlds), choose **Choose folder…**
-on Chrome's card. The panel starts beside Chrome; pick the `Chrome` folder and
-press **Allow**. Copper verifies that the selected folder is the expected root,
-uses it only for this session, and never writes into it. You can also grant
-Copper under **System Settings › Privacy & Security › App Data** (or **Files &
-Folders**) and reopen the sheet.
+Press **Choose folder…** on Chrome's card. The panel opens beside Chrome; pick
+the `Chrome` folder and press **Allow**. Picking it yourself is the consent
+macOS accepts: Copper verifies the folder is the expected root, uses it only
+for this session, and never writes into it. The first denied attempt also
+records Copper under **System Settings › Privacy & Security** (Files & Folders
+/ App Data), where it can be switched on for good; reopen Move in afterwards.
 
 Flow does not move Apple Passwords, iCloud tabs, or a password manager's
 private vault. Chrome passkeys saved to iCloud Keychain (rather than Google

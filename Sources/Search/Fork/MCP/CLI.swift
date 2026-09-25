@@ -64,6 +64,9 @@ enum CLI {
         if command == "session" {
             return runSession(Array(args.dropFirst()), json: json, dryRun: dryRun)
         }
+        if command == "link" {
+            return runLink(Array(args.dropFirst()), json: json, dryRun: dryRun, launchRequested: launchRequested)
+        }
 
         guard let spec = makeRequest(command, Array(args.dropFirst())) else { return 2 }
         if dryRun {
@@ -493,6 +496,129 @@ enum CLI {
         }
     }
 
+    // MARK: - agent link
+
+    /// `copper link …`: the agent link (Link.swift) in the running app,
+    /// through the loopback server's `copper/link` method — so, like every
+    /// other command, it needs Settings › Agents › Let agents drive this
+    /// window. The link itself runs without it.
+    private static func runLink(_ input: [String], json: Bool, dryRun: Bool, launchRequested: Bool) -> Int {
+        var args = input
+        let op = args.isEmpty ? "status" : args.removeFirst()
+        if ["help", "-h", "--help"].contains(op) || args.contains(where: { ["-h", "--help"].contains($0) }) {
+            print(linkUsage)
+            return 0
+        }
+        let arg: String
+        switch op {
+        case "status", "on", "off", "grants", "calls":
+            guard args.isEmpty else { error("link \(op) takes no arguments"); return 2 }
+            arg = ""
+        case "token":
+            guard args.count == 1, args[0].hasPrefix("fxb_") else { error("link token needs a personal token (fxb_…)"); return 2 }
+            arg = args[0]
+        case "api":
+            guard args.count == 1, let url = URL(string: args[0]), url.scheme == "https" || url.host == "127.0.0.1" || url.host == "localhost" else {
+                error("link api needs an https URL")
+                return 2
+            }
+            arg = args[0]
+        case "grant":
+            guard args.count == 1 else { error("link grant needs @bot or a bot id"); return 2 }
+            arg = args[0]
+        case "revoke":
+            guard args.count <= 1 else { error("link revoke takes at most one @bot or bot id"); return 2 }
+            arg = args.first ?? ""
+        default:
+            error("unknown link command: \(op) (see copper link --help)")
+            return 2
+        }
+        let request: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "copper/link", "params": ["op": op, "arg": arg]]
+        if dryRun {
+            // Never print the token, even in a dry run.
+            var shown = request
+            if op == "token" { shown["params"] = ["op": op, "arg": "fxb_…"] }
+            return dryRunDecision(RequestSpec(request: shown), launchRequested: launchRequested)
+        }
+        guard var config = readConfig(), config.enabled, !config.token.isEmpty else {
+            error(notRunningMessage + " `copper link` reaches the app through that server.")
+            return 2
+        }
+        guard ensureRunning(&config, launchRequested: launchRequested) else { return 2 }
+        guard let response = post(request, config: config, timeout: 60),
+              let result = response["result"] as? [String: Any] else { return 2 }
+        if let message = result["error"] as? String, !message.isEmpty {
+            error(message)
+            return 1
+        }
+        if json {
+            printJSON(result)
+            return 0
+        }
+        switch op {
+        case "grants":
+            let grants = result["grants"] as? [[String: Any]] ?? []
+            if grants.isEmpty { print("no bots have access") }
+            for grant in grants { print(grantLine(grant)) }
+        case "grant":
+            if let grant = result["grant"] as? [String: Any] { print("granted " + grantLine(grant)) }
+        case "revoke":
+            if result["revoked"] as? Bool == true { print("link revoked — every bot lost these tools; Copper disconnected") }
+            else { print("removed \(arg)") }
+        case "calls":
+            let calls = result["calls"] as? [[String: Any]] ?? []
+            if calls.isEmpty { print("no calls yet") }
+            for call in calls {
+                let ok = call["ok"] as? Bool ?? true
+                let ms = call["ms"] as? Int ?? 0
+                let when = (call["at"] as? String).flatMap(LinkWire.date).map { LinkWire.ago(Date().timeIntervalSince($0)) } ?? ""
+                var line = "@\(call["bot"] as? String ?? "?") · \(call["tool"] as? String ?? "?") · \(LinkWire.duration(ms)) · \(when)"
+                if !ok { line += " · failed: \(call["error"] as? String ?? "error")" }
+                print(line)
+            }
+        default:
+            let state = result["statusText"] as? String ?? (result["status"] as? String ?? "")
+            print("agent link: \(result["enabled"] as? Bool == true ? "on" : "off") · \(state)")
+            print("app: \(result["api"] as? String ?? "")")
+            print("token: \(result["tokenSet"] as? Bool == true ? "set" : "not set")")
+            if let id = result["linkId"] as? String, !id.isEmpty { print("link: \(id)") }
+            let grants = result["grants"] as? [[String: Any]] ?? []
+            print("bots with access: \(grants.count)")
+            if let trouble = result["lastError"] as? String, !trouble.isEmpty, result["status"] as? String == "online" { print("last error: \(trouble)") }
+        }
+        return 0
+    }
+
+    private static func grantLine(_ grant: [String: Any]) -> String {
+        let handle = grant["handle"] as? String ?? ""
+        let name = grant["name"] as? String ?? ""
+        let id = grant["botId"] as? String ?? ""
+        let on = grant["enabled"] as? Bool ?? true
+        return "@\(handle.isEmpty ? id : handle)\(name.isEmpty ? "" : " · \(name)") · \(on ? "on" : "paused") · \(id)"
+    }
+
+    private static let linkUsage = """
+    Usage: copper [--json] link <command>
+
+    The agent link: your bots use this browser's tools through the agents app,
+    each only after you grant it.
+
+      status                     on/off, connection, bots with access (default)
+      on | off                   connect this browser to an agents app, or disconnect
+      token fxb_…                set the personal token (mint one at Agents › Connect in the agents app)
+      api URL                    set the agents app address
+      grants                     bots with access
+      grant @bot|BOT_ID          give a bot access
+      revoke @bot|BOT_ID         take one bot's access away
+      revoke                     revoke the whole link: every bot loses the tools, Copper disconnects
+      calls                      recent calls bots made (the agents app's record; this run's when unreachable)
+
+    --json prints the result object (status, grants, calls). The CLI reaches
+    the link through the running app's agent server, so Settings › Agents ›
+    Let agents drive this window must be on; the link itself runs without it.
+    Exit 0 on success, 1 when the agents app refuses, 2 on usage or when Copper is unreachable.
+    """
+
     private static func runProcess(_ executable: String, arguments: [String]) -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -775,6 +901,8 @@ enum CLI {
       session list                              list session files and tab counts
       session restore [PATH] [--quit]           restore a session (default: previous)
       setup [phi|claude|cli|status]             install terminal-agent setup (default: status)
+      link [status|on|off|token|api|grants|grant|revoke|calls]
+                                                the agent link (copper link --help)
       call TOOL [JSON-ARGS]                     call any MCP tool
       help                                      show this help
 

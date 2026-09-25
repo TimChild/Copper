@@ -24,6 +24,11 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper tools` | Inspect available capabilities. |
 | `copper session list` | List session.json and session.previous.json with counts and mtimes. |
 | `copper session restore [PATH] [--quit]` | Restore a session backup; default is session.previous.json. |
+| `copper link [status\|on\|off]` | The agent link: let the owner's bots use this browser (`--json` for status). |
+| `copper link token fxb_…` / `copper link api URL` | Set the personal token / app address. |
+| `copper link grants` / `grant @bot` / `revoke @bot` | Who has access; give or take one bot's access. |
+| `copper link revoke` | Revoke the whole link — every bot loses the tools, Copper disconnects. |
+| `copper link calls` | Recent calls bots made through the link (`--json` for scripts). |
 | `copper --launch …` | Explicitly opt into launching Copper when it is down (also `COPPER_LAUNCH=1`). |
 
 Examples:
@@ -35,6 +40,8 @@ copper extract "Return the visible flight options with airline, time, and price"
 ```
 
 The CLI does not launch Copper by default. When it is down, commands print `copper: Copper isn't running (or Settings › Agents is off). Start it with \`open -a Copper\`, or pass --launch.` and exit 2. This is deliberate: probes during a quit must not create a second app instance. `copper session restore` refuses while Copper is running unless `--quit` is supplied; it saves the current session before replacing it and relaunches after the copy.
+
+`copper link …` reaches the app through the same local server, so it needs **Settings › Agents › Let agents drive this window** on even though the agent link itself does not. It exits 1 when the agents app refuses (a bad token, an unknown bot) and 2 on usage errors or when Copper is unreachable. Never echo the `fxb_` token back into a transcript.
 
 Jev's DONE is a claim, not proof: read the page again with `copper observe` or
 `snapshot` before reporting that an action succeeded.

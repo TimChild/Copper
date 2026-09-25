@@ -31,13 +31,18 @@ final class MCP: ObservableObject {
         /// Jev mode: the jev_run / jev_step / jev_observe tools, which drive
         /// the page with TypeSafe's Jev at ~200 ms a decision (Ultrafast.swift).
         var jev = false
+        /// The agent link (Link.swift): the owner's bots reach this
+        /// window through the agents service. Absent until first set, so an
+        /// older file reads the same and a newer Copper's file still opens.
+        var agentLink: AgentLink.Config?
 
-        init(enabled: Bool = false, port: UInt16 = 4123, token: String = "", announces: Bool = true, jev: Bool = false) {
+        init(enabled: Bool = false, port: UInt16 = 4123, token: String = "", announces: Bool = true, jev: Bool = false, agentLink: AgentLink.Config? = nil) {
             self.enabled = enabled
             self.port = port
             self.token = token
             self.announces = announces
             self.jev = jev
+            self.agentLink = agentLink
         }
 
         // Lenient on purpose: a field added later must not make an older
@@ -50,7 +55,18 @@ final class MCP: ObservableObject {
             token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
             announces = try c.decodeIfPresent(Bool.self, forKey: .announces) ?? true
             jev = try c.decodeIfPresent(Bool.self, forKey: .jev) ?? false
+            // A malformed link object costs the link, never the token.
+            agentLink = (try? c.decodeIfPresent(AgentLink.Config.self, forKey: .agentLink)) ?? nil
         }
+    }
+
+    /// What the line at the bottom says for a tool call.
+    enum Announce {
+        /// "Agent · tool", when Settings says so.
+        case agent
+        /// "<prefix> · tool" — the agent link, with the bot's handle.
+        case prefix(String)
+        case quiet
     }
 
     @Published var config: Config {
@@ -80,11 +96,11 @@ final class MCP: ObservableObject {
     var endpoint: String { "http://127.0.0.1:\(config.port)\(MCP.path)" }
 
     private init() {
-        if let data = try? Data(contentsOf: MCP.file),
-           let saved = try? JSONDecoder().decode(Config.self, from: data), !saved.token.isEmpty {
+        let saved = (try? Data(contentsOf: MCP.file)).flatMap { try? JSONDecoder().decode(Config.self, from: $0) }
+        if let saved, !saved.token.isEmpty {
             config = saved
         } else {
-            config = Config(token: MCP.freshToken())
+            config = Config(token: MCP.freshToken(), agentLink: saved?.agentLink)
             save()
         }
     }
@@ -167,6 +183,8 @@ final class MCP: ObservableObject {
     func start(for browser: Browser) {
         self.browser = browser
         apply()
+        // The agent link dials out once there is a window to drive.
+        AgentLink.shared.start()
         // The agent in the window connects to your other servers now, so its
         // first question already has their tools. Same hook, no second one.
         Task { await Servers.shared.reload() }
@@ -260,7 +278,14 @@ final class MCP: ObservableObject {
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if let one = body as? [String: Any] {
+                if let one = body as? [String: Any], one["method"] as? String == "copper/link" {
+                    // `copper link …`: the agent link's controls, for the
+                    // CLI on this Mac. Only here, behind the bearer and the
+                    // loopback — `handle` never sees it, so nothing arriving
+                    // through the link can reach it.
+                    let result = await AgentLink.shared.control(one["params"] as? [String: Any] ?? [:])
+                    answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
+                } else if let one = body as? [String: Any] {
                     if let reply = await self.handle(one) {
                         answer(HTTPResponse(status: 200, json: reply))
                     } else {
@@ -294,7 +319,7 @@ final class MCP: ObservableObject {
     // MARK: - JSON-RPC
 
     /// One message in, one reply out — or none, for a notification.
-    func handle(_ message: [String: Any]) async -> [String: Any]? {
+    func handle(_ message: [String: Any], announce: Announce = .agent) async -> [String: Any]? {
         let id = message["id"]
         let method = message["method"] as? String ?? ""
         let params = message["params"] as? [String: Any] ?? [:]
@@ -330,7 +355,11 @@ final class MCP: ObservableObject {
             let arguments = params["arguments"] as? [String: Any] ?? [:]
             calls += 1
             lastTool = name
-            if config.announces { browser.announce("Agent · \(name)") }
+            switch announce {
+            case .agent: if config.announces { browser.announce("Agent · \(name)") }
+            case .prefix(let who): browser.announce("\(who) · \(name)")
+            case .quiet: break
+            }
             do {
                 let content = try await Tools.call(name, arguments, in: browser)
                 return reply(["content": content.map(\.json), "isError": false])
@@ -359,6 +388,7 @@ final class MCP: ObservableObject {
         case "off": config.enabled = false
         case "rotate": rotateToken()
         case "jev": config.jev = (request["arg"] as? String ?? "on") != "off"
+        case "link": return AgentLink.shared.bench(request["arg"] as? String ?? "")
         case "setup-phi":
             do { return try Setup(endpoint: endpoint, token: config.token).phi().dictionary } catch let error { return ["error": (error as? Tools.Failure)?.text ?? error.localizedDescription] }
         case "setup-claude":

@@ -167,6 +167,41 @@ Files: `Fork/Agent/Agent.swift` (the loop), `Fork/Agent/Servers.swift`
 (the client), `Fork/Agent/AgentPane.swift` (the pane). The pane rides in
 `SplitStage`; no upstream file changed.
 
+## Agent link — your bots use this browser
+
+Settings › Agents › **Connect this browser to an agents app**. The loopback server
+can't be reached from a bot running in the cloud, so this side dials out:
+Copper registers itself with the agents service as a *link*
+(`POST /v1/me/links`, name `copper`, label "Copper on <this Mac>"), holds one
+server-sent-events stream (`GET /v1/me/links/:id/frames`), and answers each
+`request` frame by handing its JSON-RPC message to the same server the
+loopback port uses, then posting the reply (`POST /v1/me/links/:id/frames`,
+`{frames:[{type:"reply", requestId, result|error}]}`, plus a heartbeat every
+15 s). Bots see the tools as `copper__<tool>` — `copper__jev_run`,
+`copper__browser_snapshot` and the rest, Jev tools only when Jev mode is on.
+
+- **Credential**: a personal token (`fxb_…`, minted at Agents › Connect
+  in the agents app), kept in `agent.json` under `agentLink` (0600), sent only to the
+  **App** address (https, default `https://agents.example`).
+  Copper's loopback token never leaves the Mac.
+- **Grants**: a bot sees nothing until you grant it — from the card (*Grant a
+  bot…*, a switch per bot to pause it, × to remove), from the agents app's Connect
+  page, or `copper link grant @bot`. Grant changes arrive live over the stream.
+- **Calls**: each call is said in the bottom line as `agents · @bot · tool`
+  and listed under *Recent calls* (this run, last 20); the agents app keeps the full
+  record (`copper link calls`).
+- **Revoke**: *Revoke link* (or `copper link revoke`, or the agents app's Connect page)
+  and every bot loses the tools at once; Copper disconnects and switches the
+  card off. A revoke made while the Mac slept holds — a reconnect never
+  re-creates a link, only switching it on again does. A second Copper that
+  links with the same token takes the link over; the first stops and says so.
+- **Reconnects** with backoff (1 s → 30 s) while on; a rejected token stops
+  retrying until the token changes.
+
+It works whether or not *Let agents drive this window* is on (the link does
+not use the port); it needs a window, like every tool call. `copper link …`
+does go through the port. `./bench agent link on|off|status`.
+
 ## What it is not
 
 Not a sandbox. The agent acts as you, in your sessions. Turn it off when you
@@ -178,5 +213,6 @@ don't need it. There is no server→client event stream (GET on `/mcp` answers
 `Sources/Search/Fork/MCP/`: `MCP.swift` (listener, HTTP, JSON-RPC),
 `Tools.swift` (the catalogue and dispatch), `Page.swift` (the injected
 helper: snapshot, refs, setters), `Input.swift` (NSEvent synthesis),
-`Bridge.swift` (`--mcp-stdio`). Hooks: `Browser.init` starts it,
+`Bridge.swift` (`--mcp-stdio`), `Link.swift` + `LinkWire.swift` (the agent
+link and its wire). Hooks: `Browser.init` starts it,
 `SearchApp.init` runs the bridge. See `PATCHES.md` › `mcp-hooks`.

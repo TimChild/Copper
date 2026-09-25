@@ -135,6 +135,10 @@ copper session restore                 # previous backup; add --quit if Copper i
 
 Use `copper extract "…"` for structured reads, `copper shot` for a screenshot, and `copper --json …` when a script needs the result object. Jev actions return a claim of DONE; verify the page yourself. `copper session list` reports both `session.json` and the one retained `session.previous.json` backup with tab/space counts and mtimes. `copper session restore [PATH]` saves the current file as `session.replaced-<timestamp>.json`, then restores a chosen file and relaunches Copper; it refuses to touch a running browser unless `--quit` is explicit.
 
+### Agent link
+
+**Settings › Agents › Connect this browser to an agents app** gives your bots the same tools the local agents get — `copper__jev_run`, `copper__browser_snapshot` and the rest — through the agents service. Copper dials out (nothing new listens on your Mac), each bot gets access only after you grant it, every call shows in the bottom line and under *Recent calls*, and *Revoke link* takes the tools away from every bot at once. Paste a personal token (`fxb_…`) minted at Agents › Connect in the agents app; it stays in `agent.json`, readable by you alone. From the shell: `copper link on|off|status|grants|grant @bot|revoke [@bot]|calls`. Details in [docs/agents.md](docs/agents.md#agent-link--your-bots-use-this-browser).
+
 ### Sessions
 
 Copper refuses to replace a non-empty session with an empty shape while launch-time restoration is still in progress. Writes remain atomic, and a single `session.previous.json` is rotated before a write drops the tab count below half (or to zero). If a quit or upgrade goes wrong, use the CLI recovery command above or press **⌘K → Restore previous session**; the command appears only when the backup exists.

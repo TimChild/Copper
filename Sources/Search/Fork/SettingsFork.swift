@@ -262,6 +262,7 @@ struct AgentsPage: View {
     @ObservedObject var brain = Intelligence.shared
     @ObservedObject var chat = Agent.shared
     @ObservedObject var servers = Servers.shared
+    @ObservedObject var link = AgentLink.shared
     @State private var copied: String?
     @State private var setupStatus = Setup.Status()
     @State private var setupResult: [String: String] = [:]
@@ -325,6 +326,9 @@ struct AgentsPage: View {
                     }
                 }
             }
+
+            Caption("Agent link — let your bots use this browser")
+            LinkCard(link: link)
 
             Caption("The agent in the window — ⌘E")
             Card {
@@ -518,6 +522,157 @@ struct AgentsPage: View {
     }
 }
 
+
+// MARK: - Agent link
+
+/// The agent link (Fork/MCP/Link.swift): on or off, where, the token, and
+/// — once linked — who may use it and what they did.
+struct LinkCard: View {
+    @ObservedObject var link: AgentLink
+    @State private var confirmRevoke = false
+
+    private var linked: Bool { link.config.enabled && link.config.linkId != nil }
+
+    private var ungranted: [AgentLink.Bot] {
+        let granted = Set(link.grants.map(\.botId))
+        return link.bots.filter { !granted.contains($0.id) }
+    }
+
+    private var dot: Color {
+        switch link.status {
+        case .online: return Color.green.opacity(0.8)
+        case .connecting: return Color.yellow.opacity(0.8)
+        case .offline, .tokenRejected, .revoked: return Color.orange.opacity(0.85)
+        case .off: return Palette.faint
+        }
+    }
+
+    private var grantsLine: String {
+        if let error = link.lastError, link.status.isOnline { return error }
+        if link.grants.isEmpty { return "None yet. A bot sees nothing here until you grant it." }
+        let on = link.grants.filter(\.enabled).count
+        return "\(on) of \(link.grants.count) on · switch one off to pause it"
+    }
+
+    var body: some View {
+        Card {
+            Line("Connect this browser to an agents app", "Your bots get these same tools, through the agents app. Each bot only after you grant it, and you see every call here.") {
+                Switch(on: $link.config.enabled)
+            }
+            Rule()
+            Line("App", "The agents app this browser dials") {
+                TextField(AgentLink.defaultAPI, text: $link.config.api)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(width: 220)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            Rule()
+            Line("Personal token", "Mint one at Agents › Connect in the agents app; it stays in a file only you can read") {
+                KeyField(text: $link.config.token, placeholder: "fxb_…", ready: link.tokenReady)
+            }
+            Rule()
+            Line("Status", link.status.text) {
+                Circle().fill(dot).frame(width: 8, height: 8)
+            }
+            if linked {
+                Rule()
+                Line("Bots with access", grantsLine) {
+                    Menu {
+                        if ungranted.isEmpty {
+                            Text(link.bots.isEmpty ? "No bots found" : "Every bot has access")
+                        }
+                        ForEach(ungranted) { bot in
+                            Button(bot.name.isEmpty ? "@\(bot.handle)" : "@\(bot.handle) · \(bot.name)") {
+                                Task { try? await link.setGrant(bot.id, enabled: true) }
+                            }
+                        }
+                        Divider()
+                        Button("Refresh") { Task { await load() } }
+                    } label: {
+                        Text("Grant a bot…").font(.system(size: 11.5))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+                ForEach(link.grants) { grant in
+                    Rule()
+                    GrantRow(grant: grant, link: link)
+                }
+                if !link.recentCalls.isEmpty {
+                    Rule()
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Recent calls").font(.system(size: 13)).foregroundStyle(Palette.ink)
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(link.recentCalls.prefix(8)) { call in
+                                    Text("@\(call.handle) · \(call.tool) · \(LinkWire.duration(call.ms)) · \(LinkWire.ago(context.date.timeIntervalSince(call.at)))")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(call.ok ? Palette.muted : Color.red.opacity(0.85))
+                                        .lineLimit(1).truncationMode(.middle)
+                                        .help(call.error ?? "")
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 11)
+                }
+                Rule()
+                Line("Revoke link", "Every bot loses these tools now; Copper disconnects.") {
+                    Pill("Revoke link", tint: Color.red.opacity(0.85)) { confirmRevoke = true }
+                }
+                .confirmationDialog("Revoke the agent link?", isPresented: $confirmRevoke) {
+                    Button("Revoke link", role: .destructive) { Task { try? await link.revokeLink() } }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Every bot loses these tools now; Copper disconnects.")
+                }
+            }
+        }
+        .task(id: link.config.linkId.map { "\($0)\(link.config.enabled)" }) { await load() }
+    }
+
+    private func load() async {
+        guard linked else { return }
+        _ = try? await link.refreshGrants()
+        _ = try? await link.listBots()
+    }
+}
+
+/// One bot with access: who, on or off, and the × that takes it away.
+private struct GrantRow: View {
+    let grant: AgentLink.Grant
+    @ObservedObject var link: AgentLink
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle().fill(grant.enabled ? Color.green.opacity(0.8) : Palette.faint).frame(width: 6, height: 6)
+            Text("@\(grant.handle.isEmpty ? grant.botId : grant.handle)")
+                .font(.system(size: 12, design: .monospaced)).foregroundStyle(Palette.ink)
+            if !grant.name.isEmpty {
+                Text("· \(grant.name)").font(.system(size: 12)).foregroundStyle(Palette.muted).lineLimit(1)
+            }
+            if !grant.toolAllowlist.isEmpty {
+                Text("· \(grant.toolAllowlist.count) tool\(grant.toolAllowlist.count == 1 ? "" : "s")")
+                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    .help(grant.toolAllowlist.joined(separator: ", "))
+            }
+            Spacer()
+            Switch(on: Binding(
+                get: { grant.enabled },
+                set: { on in Task { try? await link.setGrant(grant.botId, enabled: on) } }
+            ))
+            Button { Task { try? await link.removeGrant(grant.botId) } } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.muted)
+            }
+            .buttonStyle(.plain)
+            .help("Take away @\(grant.handle)'s access")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+    }
+}
 
 /// One configured server: name, where it is, and whether it answered.
 struct ServerRow: View {

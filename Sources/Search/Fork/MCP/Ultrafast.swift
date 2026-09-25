@@ -93,6 +93,8 @@ enum Ultrafast {
         let confidence: Double
         let probability: Double
         let latencyMs: Double
+        /// The head Jev was offered for the operation it chose, for the trace.
+        var candidates: [String] = []
     }
 
     struct Step {
@@ -451,6 +453,15 @@ enum Ultrafast {
         return lines.isEmpty ? "(no interactive elements in view)" : lines.joined(separator: "\n")
     }
 
+    /// The read as a fragment for the trace: `38 controls · Google Flights`.
+    static func read(_ obs: Observation) -> String {
+        let count = actionSpace(obs.actions).elements.count
+        var out = "\(count) control\(count == 1 ? "" : "s")"
+        let name = obs.title.isEmpty ? (URL(string: obs.url)?.host ?? "") : obs.title
+        if !name.isEmpty { out += " · \(name.prefix(40))" }
+        return out
+    }
+
     // MARK: - choose
 
     /// One TypeSafe request: the operation, and a target for every operation
@@ -513,11 +524,41 @@ enum Ultrafast {
                   let action = candidates[head.key], let id = action["id"] as? String
             else { throw Failure(text: "Invalid TypeSafe answer for the \(operation) target; nothing executed.") }
             return Decision(choice: id, operation: operation, target: head.key, confidence: op.confidence,
-                            probability: head.probabilities[head.key] ?? 0, latencyMs: answer.latencyMs)
+                            probability: head.probabilities[head.key] ?? 0, latencyMs: answer.latencyMs,
+                            candidates: offered(candidates))
         }
         let choice = (controls[operation]?["id"] as? String) ?? operation
         return Decision(choice: choice, operation: operation, target: nil, confidence: op.confidence,
                         probability: op.probabilities[operation] ?? 0, latencyMs: answer.latencyMs)
+    }
+
+    /// The first few targets that were on the table, in index order and in
+    /// the page's own words: `[7] button Search`.
+    private static func offered(_ candidates: [String: [String: Any]]) -> [String] {
+        candidates.keys.sorted { rank($0) < rank($1) }.prefix(5).map { index in
+            let action = candidates[index] ?? [:]
+            let role = action["role"] as? String ?? ""
+            let label = (action["label"] as? String ?? "").replacingOccurrences(of: "\n", with: " ")
+            return "[\(index)] \(role) \(label.prefix(60))"
+        }
+    }
+
+    /// `3` and `3:2` both sort as numbers, not as text.
+    private static func rank(_ index: String) -> (Int, Int) {
+        let parts = index.components(separatedBy: ":")
+        return (Int(parts.first ?? "") ?? 0, parts.count > 1 ? Int(parts[1]) ?? 0 : 0)
+    }
+
+    /// What the act phase is called in the pane, in the page's own words.
+    static func actTitle(_ action: [String: Any], label: String) -> String {
+        func short(_ s: String) -> String { String(s.replacingOccurrences(of: "\n", with: " ").prefix(40)) }
+        switch action["kind"] as? String ?? "" {
+        case "fill": return "Typing into \(short(label))"
+        case "select": return "Selecting \(short(label.components(separatedBy: " → ").last ?? label))"
+        case "scroll": return ((action["delta"] as? NSNumber)?.doubleValue ?? 560) < 0 ? "Scrolling up" : "Scrolling down"
+        case "wait": return "Waiting for the page"
+        default: return "Clicking \(short(label))"
+        }
     }
 
     /// A choice is only taken when it names an offered key and its
@@ -571,9 +612,13 @@ enum Ultrafast {
         }
         switch kind {
         case "wait":
+            // cosmetic only: the pointer breathes while nothing happens.
+            Trail.wait(web)
             try await Task.sleep(nanoseconds: 100_000_000)
         case "scroll":
             let delta = (action["delta"] as? NSNumber)?.doubleValue ?? 560
+            // cosmetic only: a chevron at the edge the page moved towards.
+            Trail.scroll(web, delta: delta)
             _ = try await js(web, "window.scrollBy({top: \(delta), left: 0, behavior: 'instant'}); true")
         default:
             guard let node else { throw Failure(text: "Invalid observed node") }
@@ -584,9 +629,27 @@ enum Ultrafast {
                 if kind == "select" { throw Failure(text: "Dropdown execution was not confirmed; observe before retrying.") }
                 throw Stale(text: "Target changed or is covered. Observe again.")
             }
-            if kind == "select" { return } // done in the page: value set, input and change fired
+            // cosmetic only: the target outlined and the move named over it —
+            // CSS px, before the zoom multiply below.
+            Trail.target(web, rect: action["rect"] as? [String: Any], label: action["label"] as? String,
+                         operation: kind == "fill" ? "TYPE_TEXT" : kind == "select" ? "SELECT" : "CLICK")
+            if kind == "select" {
+                // done in the page: value set, input and change fired. No
+                // pointer went anywhere, but the spot is still worth marking.
+                Trail.click(web, x: x, y: y)
+                return
+            }
+            // cosmetic, and the one wait: the pointer travels to the target.
+            await Trail.glide(web, x: x, y: y)
+            // The glide took time — where the target is now is what gets the
+            // click, and a target that left in the meantime is stale.
+            let again = try await js(web, "window.__jevFast.resolve(\(encode(action)))")
+            guard let landed = again as? [String: Any],
+                  let px = (landed["x"] as? NSNumber)?.doubleValue, let py = (landed["y"] as? NSNumber)?.doubleValue
+            else { throw Stale(text: "Target changed or is covered. Observe again.") }
+            Trail.click(web, x: px, y: py)
             let zoom = web.pageZoom
-            let at = CGPoint(x: x * zoom, y: y * zoom)
+            let at = CGPoint(x: px * zoom, y: py * zoom)
             let real = Input.canPost(to: web)
             if real { Input.click(web, at: at, button: "left", count: 1, modifiers: []) }
             else { _ = try await js(web, "window.__jevFast.domClick(\(node))") }
@@ -601,6 +664,8 @@ enum Ultrafast {
                 } else {
                     _ = try await js(web, "window.__jevFast.setValue(\(node), \(Page.quote(text)))")
                 }
+                // cosmetic only: a small label with the value beside the field.
+                Trail.typed(web, x: px, y: py, text: text)
             }
         }
     }
@@ -622,6 +687,7 @@ enum Ultrafast {
         private(set) var observation: Observation?
         private var pending: (context: String, text: String)?
         private var staleStreak = 0
+        private var traced = false
 
         init(goal: String, tab: Tab, browser: Browser) {
             self.goal = goal
@@ -632,29 +698,67 @@ enum Ultrafast {
         var elapsedMs: Int { Int(Date().timeIntervalSince(started) * 1000) }
         var finished: Bool { status != "ready" }
 
+        /// The trace ends once, whichever path got here first.
+        func finishTrace(_ status: String? = nil, note: String? = nil) {
+            guard !traced else { return }
+            traced = true
+            // cosmetic only: the run is over, take the layer off the page.
+            Trail.clear(tab.web)
+            JevTrace.shared.finish(JevTrace.Status(rawValue: status ?? self.status) ?? .error, note: note ?? self.note)
+        }
+
+        /// The hard stop, asked three times a tick: before the read, after
+        /// the decision, after the text. Nothing has gone in yet either way.
+        private func stopped() -> Bool {
+            guard JevTrace.shared.stopRequested else { return false }
+            status = "stopped"
+            note = "Stopped by the user"
+            return true
+        }
+
         /// Observe (if needed), choose, act, observe. Returns the step
         /// taken, or nil when the decision ended the run or the page went
         /// stale and was read again.
         func tick() async throws -> Step? {
             guard !finished else { return nil }
+            if stopped() { return nil }
             let keys = Intelligence.shared.keys
             guard Intelligence.shared.jevReady else { throw Failure(text: "No Jev key — Settings › Agents › Jev mode (or Settings › Intelligence)") }
             if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
             let web = tab.web
+            let trace = JevTrace.shared
+            trace.cycle()
 
             var obs: Observation
-            if let have = observation, await Ultrafast.fresh(web, have) { obs = have }
-            else { obs = try await Ultrafast.observe(tab); observation = obs }
+            let reading = trace.phase(.observe, "Reading the page")
+            if let have = observation, await Ultrafast.fresh(web, have) {
+                obs = have
+                trace.close(phase: reading, detail: "still fresh")
+            } else {
+                obs = try await Ultrafast.observe(tab)
+                observation = obs
+                trace.close(phase: reading, detail: Ultrafast.read(obs))
+                // cosmetic only: a pulse over everything the read can see.
+                Trail.seen(web, rects: obs.actions.compactMap { $0["rect"] as? [String: Any] })
+            }
+            trace.page(url: obs.url, title: obs.title)
 
             if decisions >= Ultrafast.maxSteps * 2 { status = "budget"; note = "Reached the \(Ultrafast.maxSteps * 2)-decision budget"; return nil }
             if history.count >= Ultrafast.maxSteps { status = "budget"; note = "Reached the \(Ultrafast.maxSteps)-action budget"; return nil }
             decisions += 1
+            let asking = trace.phase(.ask, "Asking Jev which move")
             let decision = try await Ultrafast.choose(obs, goal: goal, history: history, keys: keys)
+            // No detail: the ms column already says how long Jev took.
+            trace.close(phase: asking)
+            if stopped() { return nil }
 
             if decision.choice == "DONE" || decision.choice == "BLOCKED" {
                 guard await Ultrafast.fresh(web, obs) else { observation = nil; return nil }
                 status = decision.choice.lowercased()
                 note = String(format: "Jev said %@, %.0f%% sure", decision.choice, decision.probability * 100)
+                trace.outcome(JevTrace.Outcome(operation: decision.choice, label: "", text: nil,
+                                               probability: decision.probability, confidence: decision.confidence,
+                                               pageChanged: nil, stale: false, candidates: []))
                 return nil
             }
             guard let action = obs.action(decision.choice) else { observation = nil; return nil }
@@ -663,25 +767,42 @@ enum Ultrafast {
 
             var text: String?
             var textLatency = 0.0
+            var writing: UUID?
+            var acting: UUID?
             do {
                 if kind == "fill" {
                     guard await Ultrafast.fresh(web, obs) else { throw Stale(text: "Page changed before text generation.") }
                     let context = Ultrafast.fieldContext(goal: goal, action: action, obs: obs, history: history)
+                    let wrote = trace.phase(.write, "Writing text for '\(label.prefix(40))'")
+                    writing = wrote
                     if let pending, pending.context == context {
                         text = pending.text
+                        trace.close(phase: wrote, detail: "reused")
                     } else {
                         let got = try await Ultrafast.fieldText(context, keys: keys)
                         text = got.text
                         textLatency = got.latencyMs
                         pending = (context, got.text)
+                        trace.close(phase: wrote)
                     }
+                    writing = nil
+                    if stopped() { return nil }
                 }
+                let acted = trace.phase(.act, Ultrafast.actTitle(action, label: label))
+                acting = acted
                 try await Ultrafast.act(tab, action, obs, text: text)
+                trace.close(phase: acted)
+                acting = nil
                 pending = nil
                 staleStreak = 0
             } catch let stale as Stale {
                 staleStreak += 1
                 observation = nil
+                if let writing { trace.close(phase: writing) }
+                if let acting { trace.close(phase: acting) }
+                trace.outcome(JevTrace.Outcome(operation: decision.operation, label: label, text: text,
+                                               probability: decision.probability, confidence: decision.confidence,
+                                               pageChanged: nil, stale: true, candidates: decision.candidates))
                 if staleStreak > 6 { status = "blocked"; note = "The page kept changing under the agent: \(stale.text)" }
                 return nil
             }
@@ -694,11 +815,19 @@ enum Ultrafast {
                             textLatencyMs: textLatency, pageChanged: nil, url: obs.url)
             // Logged before the next read: a navigation there must not erase what was done.
             history.append(step)
+            let settling = trace.phase(.settle, "Watching the page settle")
             let next = try await Ultrafast.observe(tab, after: action)
             observation = next
+            // cosmetic only: what the page offers now that the action landed.
+            Trail.seen(web, rects: next.actions.compactMap { $0["rect"] as? [String: Any] })
             step.pageChanged = next.marker != obs.marker
             step.url = next.url
             history[history.count - 1] = step
+            trace.close(phase: settling, detail: step.pageChanged == true ? "changed" : "no change")
+            trace.page(url: next.url, title: next.title)
+            trace.outcome(JevTrace.Outcome(operation: decision.operation, label: label, text: text,
+                                           probability: decision.probability, confidence: decision.confidence,
+                                           pageChanged: step.pageChanged, stale: false, candidates: decision.candidates))
             let last = history.suffix(3)
             if last.count == 3, last.allSatisfy({ $0.pageChanged == false && $0.kind != "wait" }) {
                 status = "blocked"
@@ -714,6 +843,7 @@ enum Ultrafast {
                     note = (error as? Failure)?.text ?? (error as? Stale)?.text ?? error.localizedDescription
                 }
             }
+            finishTrace()
         }
 
         /// The trace, as text for the agent.
@@ -821,15 +951,27 @@ enum Ultrafast {
             guard let tab = browser.active else { throw Failure(text: "no active tab") }
             let session: Session
             if let have = sessions[tab.id], have.goal == goal, !have.finished { session = have }
-            else { session = Session(goal: goal, tab: tab, browser: browser); sessions[tab.id] = session }
-            let step = try await session.tick()
+            else {
+                session = Session(goal: goal, tab: tab, browser: browser)
+                sessions[tab.id] = session
+                JevTrace.shared.begin(goal: goal, tab: tab)
+            }
+            let step: Step?
+            do { step = try await session.tick() } catch {
+                session.finishTrace("error", note: (error as? Failure)?.text ?? (error as? Stale)?.text ?? error.localizedDescription)
+                sessions[tab.id] = nil
+                throw error
+            }
             var out: String
             if let step { out = "### Step\n\(step.line)" }
             else if session.finished { out = "### Run ended — \(session.status)\n\(session.note)" }
             else { out = "### Page changed under the decision — read again, call jev_step once more" }
             out += "\n\n" + Tools.pageLine(tab)
             if let obs = session.observation { out += "\n\n### Elements\n" + table(obs) }
-            if session.finished { sessions[tab.id] = nil }
+            if session.finished {
+                session.finishTrace()
+                sessions[tab.id] = nil
+            }
             MCP.shared.jevNote = "\(session.status) · \(session.history.count) actions"
             return [.text(out)]
         case "jev_run":
@@ -844,12 +986,29 @@ enum Ultrafast {
                     if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
                     tab.go(to: url)
                 }
-                try await Tools.settle(tab)
+                // The pane and the pill come up with the page, not after it:
+                // waiting for the first load is the first thing the run does,
+                // and it is the longest thing it does on a slow site.
+                JevTrace.shared.begin(goal: goal, tab: tab)
+                JevTrace.shared.cycle()
+                var host = url.host ?? raw
+                if host.hasPrefix("www.") { host.removeFirst(4) }
+                let opening = JevTrace.shared.phase(.observe, "Opening \(host)")
+                do {
+                    try await Tools.settle(tab)
+                } catch {
+                    JevTrace.shared.close(phase: opening)
+                    JevTrace.shared.finish(.error, note: (error as? Failure)?.text ?? error.localizedDescription)
+                    throw error
+                }
+                JevTrace.shared.close(phase: opening)
             } else {
                 guard let current = browser.active else { throw Failure(text: "no active tab") }
                 tab = current
                 if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
+                JevTrace.shared.begin(goal: goal, tab: tab)
             }
+            // begin() happened above, on whichever road got here.
             let session = Session(goal: goal, tab: tab, browser: browser)
             sessions[tab.id] = session
             let cap = min((args["maxSteps"] as? NSNumber)?.intValue ?? maxSteps, maxSteps)
@@ -857,12 +1016,15 @@ enum Ultrafast {
             while !session.finished, session.history.count < cap, Date() < deadline {
                 do { _ = try await session.tick() } catch {
                     let text = (error as? Failure)?.text ?? (error as? Stale)?.text ?? error.localizedDescription
+                    session.finishTrace("error", note: text)
                     sessions[tab.id] = nil
                     MCP.shared.jevNote = "error · \(text.prefix(80))"
                     return [.text("### Jev run — error after \(session.history.count) action\(session.history.count == 1 ? "" : "s")\n\(text)\n\n" +
                                   (session.history.isEmpty ? "" : session.history.map(\.line).joined(separator: "\n") + "\n\n") + Tools.pageLine(tab))]
                 }
             }
+            if session.finished { session.finishTrace() }
+            else { session.finishTrace("budget", note: "Stopped at the \(cap)-action cap") }
             sessions[tab.id] = nil
             MCP.shared.jevNote = String(format: "%@ · %d actions · %.1f s", session.status, session.history.count, Double(session.elapsedMs) / 1000)
             var report = session.report(elements: (args["elements"] as? Bool) ?? true)

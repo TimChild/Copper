@@ -132,6 +132,17 @@ not. `./bench agent link on|off|status` mirrors it. `--json` prints `AgentLink.s
 - Do not run mutating tools against the browser you use from a test. `browser_tabs`,
   `jev_observe`, `browser_get_text` are safe reads.
 
+## Sizes
+
+A reply frame is a whole tool result. `browser_snapshot` with `interactive: true` on a busy
+page runs to several MiB; the agents service accepts up to 32 MiB on
+`POST /v1/me/links/:id/frames` (its ordinary JSON cap is 1 MiB), stores it once and relays it,
+and the bot runner reads Claude Code's output line-by-line without a length cap. If a
+bot's turn still dies right after a snapshot, check those two before suspecting Copper —
+Copper does not truncate results, and `URLSession` has no upload cap. A bot that only needs
+part of a page should be given `jev_observe` / `browser_find` or a `limit`, not a smaller
+snapshot from Copper's side.
+
 ## Security notes
 
 - Two credentials, two directions, never crossed: the personal token goes only to the App URL;

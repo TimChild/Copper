@@ -178,6 +178,8 @@ final class Tab: ObservableObject, Identifiable {
     /// The caret has entered or left one of the sign-in boxes; where the box
     /// is, in the web view's points, or nil when it has left.
     var onField: ((Tab, CGRect?) -> Void)?
+    /// The account the page names beside the box the caret is in, if any.
+    var fieldHint = ""
     /// The site the sign-in was sent from — not the one it landed on —
     /// then the name and the password.
     var onCredentials: ((Tab, String, String, String) -> Void)?
@@ -423,7 +425,8 @@ final class Tab: ObservableObject, Identifiable {
 
     /// From the page, in CSS pixels; passed on in points. Page zoom is the
     /// only scale between the two that matters here.
-    func fieldFocused(_ rect: CGRect?) {
+    func fieldFocused(_ rect: CGRect?, hint: String = "") {
+        fieldHint = hint
         guard let rect else {
             onField?(self, nil)
             return

@@ -22,6 +22,26 @@ enum Credentials {
         return .bitwarden
     }
 
+    /// The accounts for a site, best first: the one the page already names
+    /// (`hint`), then those kept for this exact host over the site's other
+    /// subdomains, then the most recently used, then by name.
+    static func candidates(for host: String, hint: String = "") -> [Credential] {
+        let all = candidates(for: host)
+        let wanted = hint.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let exact = host.lowercased().hasPrefix("www.") ? String(host.lowercased().dropFirst(4)) : host.lowercased()
+        func rank(_ c: Credential) -> Int {
+            var score = 0
+            if !wanted.isEmpty, c.user.lowercased() == wanted { score -= 100 }
+            let mine = c.host.lowercased().hasPrefix("www.") ? String(c.host.lowercased().dropFirst(4)) : c.host.lowercased()
+            if mine == exact { score -= 10 }
+            return score
+        }
+        return all.enumerated().sorted { a, b in
+            let ra = rank(a.element), rb = rank(b.element)
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+    }
+
     static func candidates(for host: String) -> [Credential] {
         let keychain = Vault.logins(matching: host).map { login in
             Credential(id: .keychain(host: login.host, user: login.user), source: .keychain,

@@ -1305,7 +1305,7 @@ final class Browser: NSObject, ObservableObject {
             guard prefs.fillsPasswords, tab.id == activeID, pickedInto != tab.id,
                   let host = curtain.host(of: tab.address)
             else { return }
-            let known = Array(Credentials.candidates(for: host).prefix(5))
+            let known = Credentials.candidates(for: host, hint: tab.fieldHint)
             let locked = {
                 if case .locked = Bitwarden.shared.state { return true }
                 return false

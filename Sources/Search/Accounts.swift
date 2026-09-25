@@ -11,11 +11,18 @@ struct AccountList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(asked.credentials) { credential in
-                Row(credential: credential, fetching: browser.fetching == credential.id) {
-                    browser.choose(credential)
+            // Every account, not a handful: six rows show, the rest scroll.
+            ScrollView(showsIndicators: asked.credentials.count > 6) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(asked.credentials) { credential in
+                        Row(credential: credential, fetching: browser.fetching == credential.id) {
+                            browser.choose(credential)
+                        }
+                    }
                 }
             }
+            .frame(maxHeight: 6 * 44 + 22)
+            .fixedSize(horizontal: false, vertical: asked.credentials.count <= 6)
             if isBitwardenLocked {
                 Button {
                     browser.tuning = true

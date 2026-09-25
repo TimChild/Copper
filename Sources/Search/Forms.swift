@@ -38,7 +38,7 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
                 // page — so a list of accounts can hang from it.
                 if let rect = body["rect"] as? [String: Double],
                    let x = rect["x"], let y = rect["y"], let w = rect["w"], let h = rect["h"] {
-                    tab?.fieldFocused(CGRect(x: x, y: y, width: w, height: h))
+                    tab?.fieldFocused(CGRect(x: x, y: y, width: w, height: h), hint: body["hint"] as? String ?? "")
                 } else {
                     tab?.fieldFocused(nil)
                 }
@@ -339,6 +339,24 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
                 'date', 'datetime-local', 'month', 'week', 'time'].indexOf(kind) >= 0;
       }
 
+      // Which account the page is already talking about: what is typed in
+      // the name box, or — on the second step of a sign-in, where the name
+      // is printed above the password box — an address in the text nearby.
+      // Copper puts that account first in its list.
+      function hint(both) {
+        if (!both) return '';
+        if (both.user && both.user.value) return both.user.value.trim();
+        var scope = both.pass.form || (both.pass.closest && both.pass.closest('form, main, [role=main], section, div')) || document.body;
+        for (var i = 0; i < 4 && scope; i++) {
+          var text = (scope.innerText || '');
+          var m = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}/);
+          if (m) return m[0];
+          if (scope === document.body) break;
+          scope = scope.parentElement;
+        }
+        return '';
+      }
+
       function caret() {
         var el = document.activeElement;
         var both = pair();
@@ -350,7 +368,8 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         window.webkit.messageHandlers.officeForms.postMessage({
           kind: 'focus',
           typing: editable(el),
-          rect: rect
+          rect: rect,
+          hint: rect ? hint(both) : ''
         });
       }
 

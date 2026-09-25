@@ -130,19 +130,43 @@ struct SplitStage: View {
     /// Zero in a sane layout; see `PaneSpill`.
     @State private var spill = PaneSpill.none
     @ObservedObject private var agent = Agent.shared
+    @ObservedObject private var trace = JevTrace.shared
 
-    /// The stage, and the agent's pane beside it when it is open. The pane
-    /// takes its width from the page, never from the sidebar.
+    /// The stage, and the panes beside it when they are open — the agent's,
+    /// and Jev's timeline while a run is on. Both may be open at once; they
+    /// take their width from the page, never from the sidebar.
     var body: some View {
         HStack(spacing: 0) {
-            stage
+            driven
             if agent.open {
                 Rectangle().fill(Palette.hairline).frame(width: 1)
                 AgentPane(browser: browser)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+            if trace.paneOpen {
+                Rectangle().fill(Palette.hairline).frame(width: 1)
+                JevPane(browser: browser)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .animation(Motion.glide, value: agent.open)
+        .animation(Motion.glide, value: trace.paneOpen)
+    }
+
+    /// The page area while something else has the wheel: the pill in the
+    /// corner and a warm line just inside the edge, so it is never a surprise
+    /// that the page is moving on its own. Both go the moment the run ends.
+    private var driven: some View {
+        stage
+            .overlay {
+                RoundedRectangle(cornerRadius: split.on ? SplitMetrics.corner : 0, style: .continuous)
+                    .strokeBorder(JevStyle.accent.opacity(trace.live ? 0.35 : 0), lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+            .overlay(alignment: .topTrailing) {
+                if trace.live { JevPill().padding(8).transition(.opacity) }
+            }
+            .animation(Motion.quick, value: trace.live)
     }
 
     @ViewBuilder

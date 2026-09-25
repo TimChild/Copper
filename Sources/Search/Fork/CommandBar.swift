@@ -50,6 +50,7 @@ enum CommandBar {
             .init(id: "clear-history", name: "Clear History", glyph: "trash") { $0.clearHistory() },
             .init(id: "split", name: Split.shared.on ? "Close Split View" : "Split View", glyph: "rectangle.split.2x1") { Split.shared.toggle(in: $0) },
             .init(id: "agent", name: Agent.shared.open ? "Close Agent" : "Agent", glyph: "sparkles") { _ in Agent.shared.toggle() },
+            .init(id: "jev-trace", name: "Jev Trace", glyph: "waveform.path") { _ in JevTrace.shared.paneOpen.toggle() },
             .init(id: "ask-page", name: "Ask About This Page", glyph: "text.bubble") { Agent.shared.askOnPage(in: $0) },
             .init(id: "new-space", name: "New Space", glyph: "square.on.square") { Spaces.shared.add(in: $0) },
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },

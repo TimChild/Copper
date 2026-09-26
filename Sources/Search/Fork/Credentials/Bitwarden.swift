@@ -1,9 +1,19 @@
 import Combine
 import Foundation
 
-/// A small, in-process boundary around the official Bitwarden CLI. Metadata is
-/// retained only in memory; passwords, TOTP seeds, and the BW session key are
-/// fetched or held only for the operation that needs them.
+private extension KeyedDecodingContainer {
+    func decodeLossyString(forKey key: Key) throws -> String? {
+        if let value = try? decode(String.self, forKey: key) { return value }
+        if let value = try? decode(Int.self, forKey: key) { return String(value) }
+        if let value = try? decode(Double.self, forKey: key) { return String(value) }
+        if let value = try? decode(Bool.self, forKey: key) { return value ? "true" : "false" }
+        return nil
+    }
+}
+
+/// A small, in-process boundary around the official Bitwarden CLI. The
+/// unlocked cache contains the values needed for autofill, including cards,
+/// identities, notes, and hidden fields; it is wiped when the vault locks.
 @MainActor
 final class Bitwarden: ObservableObject {
     static let shared = Bitwarden()
@@ -28,18 +38,40 @@ final class Bitwarden: ObservableObject {
     struct Field: Hashable {
         let name: String
         let value: String
+        let hidden: Bool
+
+        init(name: String, value: String, hidden: Bool = false) {
+            self.name = name
+            self.value = value
+            self.hidden = hidden
+        }
     }
 
-    /// A deliberately stripped login item. In particular, there is no
-    /// password, TOTP seed, notes, or hidden/custom-field secret here.
+    /// A deliberately stripped vault item. Secret values stay in `secrets`;
+    /// card and identity values live in the unlocked autofill cache.
     struct Item: Hashable {
         let id: String
+        let type: Int
         let name: String
         let folderId: String?
         let username: String
         let uris: [URI]
         let hasTOTP: Bool
+        let hasNotes: Bool
         let fields: [Field]
+
+        init(id: String, type: Int = 1, name: String, folderId: String?, username: String,
+             uris: [URI], hasTOTP: Bool, hasNotes: Bool = false, fields: [Field]) {
+            self.id = id
+            self.type = type
+            self.name = name
+            self.folderId = folderId
+            self.username = username
+            self.uris = uris
+            self.hasTOTP = hasTOTP
+            self.hasNotes = hasNotes
+            self.fields = fields
+        }
     }
 
     struct Folder: Hashable {
@@ -50,17 +82,35 @@ final class Bitwarden: ObservableObject {
     @Published private(set) var state: State
     private(set) var cachedItems: [Item] = []
     private(set) var cachedFolders: [Folder] = []
+    private(set) var cachedIdentities: [AutofillIdentity] = []
+    private(set) var cachedCards: [AutofillCard] = []
 
     private var sessionKey: String?
+    private struct Secret {
+        var password: String?
+        var totp: String?
+        var notes: String?
+        var hiddenFields: [String: String]
+    }
     /// The secrets that came with the item list, kept only in memory and only
     /// while unlocked, so a pick fills at once instead of starting `bw` for
     /// three seconds. Same trust as the session key that decrypts them.
-    private var secrets: [String: (password: String, totp: String?)] = [:]
+    private var secrets: [String: Secret] = [:]
     /// Bumped whenever the item cache changes, so an open account list can
     /// redraw itself when the vault arrives.
     @Published private(set) var cacheVersion = 0
     /// Whether an item-list refresh is running (the list may be empty meanwhile).
     var isLoadingCache: Bool { cacheRefreshInFlight }
+
+    var counts: (logins: Int, identities: Int, cards: Int, notes: Int) {
+        (
+            cachedItems.count(where: { $0.type == 1 }),
+            cachedIdentities.count,
+            cachedCards.count,
+            cachedItems.count(where: { $0.type == 2 && $0.hasNotes })
+        )
+    }
+
     private var lastActivity = Date()
     private var lastCacheRefresh = Date.distantPast
     private var cacheRefreshInFlight = false
@@ -394,10 +444,104 @@ final class Bitwarden: ObservableObject {
         let uris: [RawURI]?
     }
 
+    private struct RawCard: Decodable {
+        let cardholderName: String?
+        let brand: String?
+        let number: String?
+        let expMonth: String?
+        let expYear: String?
+        let code: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case cardholderName, brand, number, expMonth, expYear, code
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            cardholderName = try container.decodeLossyString(forKey: .cardholderName)
+            brand = try container.decodeLossyString(forKey: .brand)
+            number = try container.decodeLossyString(forKey: .number)
+            expMonth = try container.decodeLossyString(forKey: .expMonth)
+            expYear = try container.decodeLossyString(forKey: .expYear)
+            code = try container.decodeLossyString(forKey: .code)
+        }
+    }
+
+    private struct RawIdentity: Decodable {
+        let title: String?
+        let firstName: String?
+        let middleName: String?
+        let lastName: String?
+        let address1: String?
+        let address2: String?
+        let address3: String?
+        let city: String?
+        let state: String?
+        let postalCode: String?
+        let country: String?
+        let company: String?
+        let email: String?
+        let phone: String?
+        let ssn: String?
+        let username: String?
+        let passportNumber: String?
+        let licenseNumber: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case title, firstName, middleName, lastName, address1, address2, address3
+            case city, state, postalCode, country, company, email, phone, ssn, username
+            case passportNumber, licenseNumber
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            title = try container.decodeLossyString(forKey: .title)
+            firstName = try container.decodeLossyString(forKey: .firstName)
+            middleName = try container.decodeLossyString(forKey: .middleName)
+            lastName = try container.decodeLossyString(forKey: .lastName)
+            address1 = try container.decodeLossyString(forKey: .address1)
+            address2 = try container.decodeLossyString(forKey: .address2)
+            address3 = try container.decodeLossyString(forKey: .address3)
+            city = try container.decodeLossyString(forKey: .city)
+            state = try container.decodeLossyString(forKey: .state)
+            postalCode = try container.decodeLossyString(forKey: .postalCode)
+            country = try container.decodeLossyString(forKey: .country)
+            company = try container.decodeLossyString(forKey: .company)
+            email = try container.decodeLossyString(forKey: .email)
+            phone = try container.decodeLossyString(forKey: .phone)
+            ssn = try container.decodeLossyString(forKey: .ssn)
+            username = try container.decodeLossyString(forKey: .username)
+            passportNumber = try container.decodeLossyString(forKey: .passportNumber)
+            licenseNumber = try container.decodeLossyString(forKey: .licenseNumber)
+        }
+    }
+
     private struct RawField: Decodable {
         let name: String?
         let value: String?
+        let boolean: Bool?
         let type: Int?
+
+        private enum CodingKeys: String, CodingKey { case name, value, type }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decodeIfPresent(String.self, forKey: .name)
+            type = try container.decodeIfPresent(Int.self, forKey: .type)
+            if let value = try? container.decode(String.self, forKey: .value) {
+                self.value = value
+                boolean = nil
+            } else if let value = try? container.decode(Bool.self, forKey: .value) {
+                self.value = value ? "true" : "false"
+                boolean = value
+            } else if let value = try? container.decode(Int.self, forKey: .value) {
+                self.value = String(value)
+                boolean = nil
+            } else {
+                self.value = nil
+                boolean = nil
+            }
+        }
     }
 
     private struct RawItem: Decodable {
@@ -405,7 +549,10 @@ final class Bitwarden: ObservableObject {
         let type: Int?
         let name: String?
         let folderId: String?
+        let notes: String?
         let login: RawLogin?
+        let card: RawCard?
+        let identity: RawIdentity?
         let fields: [RawField]?
     }
 
@@ -413,25 +560,102 @@ final class Bitwarden: ObservableObject {
         try await requireUnlocked()
         let data = try await run(["list", "items"])
         let rows = try JSONDecoder().decode([RawItem].self, from: data)
-        var fresh: [String: (password: String, totp: String?)] = [:]
+        var fresh: [String: Secret] = [:]
+        var identities: [AutofillIdentity] = []
+        var cards: [AutofillCard] = []
         let result = rows.compactMap { row -> Item? in
-            guard row.type == 1, let id = row.id, !id.isEmpty else { return nil }
+            guard let type = row.type, let id = row.id, !id.isEmpty else { return nil }
+
+            var secret = Secret(password: nil, totp: nil, notes: nil, hiddenFields: [:])
             if let password = row.login?.password, !password.isEmpty {
-                fresh[id] = (password, row.login?.totp.flatMap { $0.isEmpty ? nil : $0 })
+                secret.password = password
             }
+            if let totp = row.login?.totp, !totp.isEmpty {
+                secret.totp = totp
+            }
+            if let notes = row.notes, !notes.isEmpty {
+                secret.notes = notes
+            }
+
             let uris = (row.login?.uris ?? []).compactMap { raw -> URI? in
                 guard let uri = raw.uri, !uri.isEmpty else { return nil }
                 return URI(uri: uri, match: raw.match)
             }
-            let fields = (row.fields ?? []).compactMap { raw -> Field? in
-                guard raw.type == 0, let name = raw.name, let value = raw.value else { return nil }
-                return Field(name: name, value: value)
+            var fields: [Field] = []
+            for raw in row.fields ?? [] {
+                guard let name = raw.name, !name.isEmpty else { continue }
+                switch raw.type ?? 0 {
+                case 0:
+                    guard let value = raw.value else { continue }
+                    fields.append(Field(name: name, value: value, hidden: false))
+                case 1:
+                    secret.hiddenFields[name] = raw.value ?? ""
+                    fields.append(Field(name: name, value: "", hidden: true))
+                case 2:
+                    let value = raw.boolean.map { $0 ? "true" : "false" }
+                        ?? (raw.value?.lowercased() == "true" ? "true" : "false")
+                    fields.append(Field(name: name, value: value, hidden: false))
+                default:
+                    // Linked fields are references to another item, not values.
+                    continue
+                }
             }
-            return Item(id: id, name: row.name ?? "", folderId: row.folderId,
+
+            switch type {
+            case 3:
+                if let card = row.card {
+                    cards.append(AutofillCard(
+                        id: id,
+                        name: row.name ?? "",
+                        cardholderName: card.cardholderName ?? "",
+                        brand: card.brand ?? "",
+                        expMonth: card.expMonth ?? "",
+                        expYear: card.expYear ?? "",
+                        number: card.number ?? "",
+                        code: card.code ?? ""
+                    ))
+                }
+            case 4:
+                if let identity = row.identity {
+                    identities.append(AutofillIdentity(
+                        id: id,
+                        name: row.name ?? "",
+                        title: identity.title ?? "",
+                        firstName: identity.firstName ?? "",
+                        middleName: identity.middleName ?? "",
+                        lastName: identity.lastName ?? "",
+                        username: identity.username ?? "",
+                        company: identity.company ?? "",
+                        email: identity.email ?? "",
+                        phone: identity.phone ?? "",
+                        address1: identity.address1 ?? "",
+                        address2: identity.address2 ?? "",
+                        address3: identity.address3 ?? "",
+                        city: identity.city ?? "",
+                        state: identity.state ?? "",
+                        postalCode: identity.postalCode ?? "",
+                        country: identity.country ?? "",
+                        ssn: identity.ssn ?? "",
+                        passportNumber: identity.passportNumber ?? "",
+                        licenseNumber: identity.licenseNumber ?? ""
+                    ))
+                }
+            default:
+                break
+            }
+
+            if secret.password != nil || secret.totp != nil || secret.notes != nil
+                || !secret.hiddenFields.isEmpty {
+                fresh[id] = secret
+            }
+            return Item(id: id, type: type, name: row.name ?? "", folderId: row.folderId,
                         username: row.login?.username ?? "", uris: uris,
-                        hasTOTP: !(row.login?.totp?.isEmpty ?? true), fields: fields)
+                        hasTOTP: !(row.login?.totp?.isEmpty ?? true),
+                        hasNotes: secret.notes != nil, fields: fields)
         }
         cachedItems = result
+        cachedIdentities = identities
+        cachedCards = cards
         secrets = fresh
         cacheVersion += 1
         return result
@@ -440,6 +664,8 @@ final class Bitwarden: ObservableObject {
     private func clearCache() {
         cachedItems = []
         cachedFolders = []
+        cachedIdentities = []
+        cachedCards = []
         secrets = [:]
         cacheVersion += 1
     }
@@ -475,6 +701,14 @@ final class Bitwarden: ObservableObject {
         if let seed = secrets[id]?.totp, let code = TOTP.code(from: seed) { return code }
         let data = try await run(["get", "totp", id])
         return Self.trimTrailingNewlines(String(decoding: data, as: UTF8.self))
+    }
+
+    func fieldValue(itemID: String, name: String) -> String? {
+        guard let item = cachedItems.first(where: { $0.id == itemID }),
+              let field = item.fields.first(where: { $0.name == name })
+        else { return nil }
+        if field.hidden { return secrets[itemID]?.hiddenFields[name] ?? "" }
+        return field.value
     }
 
     /// The account exists in the vault with another password: change it there.

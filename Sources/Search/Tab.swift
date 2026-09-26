@@ -46,6 +46,13 @@ enum Web {
     }
 }
 
+/// The classified box the page says the caret is in, for the picker and agents.
+struct FocusedField: Equatable {
+    let kind: FieldKind
+    let group: FieldKind.Group
+    let label: String
+}
+
 @MainActor
 final class Tab: ObservableObject, Identifiable {
     let id = UUID()
@@ -178,6 +185,8 @@ final class Tab: ObservableObject, Identifiable {
     /// The caret has entered or left one of the sign-in boxes; where the box
     /// is, in the web view's points, or nil when it has left.
     var onField: ((Tab, CGRect?) -> Void)?
+    /// The classified box the caret is in, when the page knows its kind.
+    var fieldFocus: FocusedField?
     /// The account the page names beside the box the caret is in, if any.
     var fieldHint = ""
     /// The site the sign-in was sent from — not the one it landed on —
@@ -433,8 +442,9 @@ final class Tab: ObservableObject, Identifiable {
 
     /// From the page, in CSS pixels; passed on in points. Page zoom is the
     /// only scale between the two that matters here.
-    func fieldFocused(_ rect: CGRect?, hint: String = "") {
+    func fieldFocused(_ rect: CGRect?, hint: String = "", field: FocusedField? = nil) {
         fieldHint = hint
+        fieldFocus = field
         guard let rect else {
             onField?(self, nil)
             return
@@ -527,6 +537,73 @@ final class Tab: ObservableObject, Identifiable {
         }
     }
 
+    /// Fills every recognised box in the focused form without putting values
+    /// into the JavaScript source itself.
+    func fillValues(_ values: [FieldKind: String], done: ((Int) -> Void)? = nil) {
+        let object = Dictionary(uniqueKeysWithValues: values.map { ($0.key.rawValue, $0.value) })
+        guard let data = try? JSONSerialization.data(withJSONObject: object),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            done?(0)
+            return
+        }
+        web.evaluateJavaScript(
+            "window.__officeForms && window.__officeForms.fillValues(\(json))"
+        ) { result, _ in
+            done?((result as? NSNumber)?.intValue ?? (result as? Int) ?? 0)
+        }
+    }
+
+    /// Fills the page's active input, including a custom field that has no
+    /// recognised kind.
+    func fillFocused(_ value: String, done: ((Bool) -> Void)? = nil) {
+        guard let json = jsonLiteral(value) else {
+            done?(false)
+            return
+        }
+        web.evaluateJavaScript(
+            "window.__officeForms && window.__officeForms.fillFocused(\(json))"
+        ) { result, _ in
+            done?((result as? Bool) ?? false)
+        }
+    }
+
+    /// Fills the first visible field whose label names the requested custom
+    /// field.
+    func fillField(label: String, value: String, done: ((Bool) -> Void)? = nil) {
+        guard let label = jsonLiteral(label), let value = jsonLiteral(value) else {
+            done?(false)
+            return
+        }
+        web.evaluateJavaScript(
+            "window.__officeForms && window.__officeForms.fillField(\(label), \(value))"
+        ) { result, _ in
+            done?((result as? Bool) ?? false)
+        }
+    }
+
+    func hasFields(_ group: FieldKind.Group) async -> Bool {
+        guard let group = jsonLiteral(group.rawValue) else { return false }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            web.evaluateJavaScript(
+                "!!(window.__officeForms && window.__officeForms.hasFields(\(group)))"
+            ) { result, _ in
+                continuation.resume(returning: (result as? Bool) ?? false)
+            }
+        }
+    }
+
+    func fieldsPresent() async -> [FieldKind] {
+        await withCheckedContinuation { (continuation: CheckedContinuation<[FieldKind], Never>) in
+            web.evaluateJavaScript(
+                "(window.__officeForms && window.__officeForms.fieldsPresent()) || []"
+            ) { result, _ in
+                let raw = result as? [String] ?? []
+                continuation.resume(returning: raw.compactMap(FieldKind.init(rawValue:)))
+            }
+        }
+    }
+
     func hasOTPField() async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             web.evaluateJavaScript(
@@ -562,6 +639,13 @@ final class Tab: ObservableObject, Identifiable {
         web.evaluateJavaScript("window.__officeVeil && window.__officeVeil.unpeek(`\(escape(css))`)")
     }
 
+    private func jsonLiteral(_ text: String) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: text, options: [.fragmentsAllowed]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
     private func escape(_ text: String) -> String {
         text.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "`", with: "\\`")
@@ -590,6 +674,8 @@ final class Tab: ObservableObject, Identifiable {
         lastY = 0
         reader = false
         typing = false
+        fieldFocus = nil
+        fieldHint = ""
         immersed = false
         // Sent somewhere new, a sleeping tab is simply awake again — with
         // nothing of where it was before to bring back.

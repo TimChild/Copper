@@ -51,8 +51,7 @@ enum Credentials {
         guard isBitwardenUnlocked else { return sorted(deduplicated(keychain)) }
 
         let folders = Dictionary(uniqueKeysWithValues: Bitwarden.shared.cachedFolders.map { ($0.id, $0.name) })
-        let bitwarden = Bitwarden.shared.cachedItems
-            .filter { item in item.uris.contains { matches($0, host: host) } }
+        let bitwarden = itemsMatching(host: host)
             .map { credential(for: $0, folders: folders) }
         return sorted(deduplicated(keychain + bitwarden))
     }
@@ -65,7 +64,9 @@ enum Credentials {
         }
         guard isBitwardenUnlocked else { return sorted(deduplicated(keychain)) }
         let folders = Dictionary(uniqueKeysWithValues: Bitwarden.shared.cachedFolders.map { ($0.id, $0.name) })
-        let bitwarden = Bitwarden.shared.cachedItems.map { credential(for: $0, folders: folders) }
+        let bitwarden = Bitwarden.shared.cachedItems
+            .filter { $0.type == 1 }
+            .map { credential(for: $0, folders: folders) }
         return sorted(deduplicated(keychain + bitwarden))
     }
 
@@ -141,7 +142,14 @@ enum Credentials {
                           hasTOTP: item.hasTOTP, used: nil, folder: folder, agentHint: hint)
     }
 
-    private static func matches(_ uri: Bitwarden.URI, host: String) -> Bool {
+    static func itemsMatching(host: String) -> [Bitwarden.Item] {
+        guard isBitwardenUnlocked else { return [] }
+        return Bitwarden.shared.cachedItems.filter { item in
+            item.type == 1 && item.uris.contains { matches($0, host: host) }
+        }
+    }
+
+    static func matches(_ uri: Bitwarden.URI, host: String) -> Bool {
         let target = normalized(host)
         let match = uri.match ?? 0
         if match == 5 { return false }

@@ -275,6 +275,10 @@ enum LinkWire {
         case grants([Grant])
         case superseded
         case revoked
+        /// The owner pressed Stop on a call still being served: end it
+        /// gracefully if it can be (a Jev run ends "stopped"); the reply
+        /// still follows.
+        case cancel(requestId: String)
         case ping
         case unknown(String)
     }
@@ -304,6 +308,10 @@ enum LinkWire {
             return .grants(grants(object))
         case "superseded": return .superseded
         case "revoked": return .revoked
+        case "cancel":
+            guard let id = (object["requestId"] as? String) ?? (object["id"] as? String), !id.isEmpty
+            else { return .unknown("cancel without requestId") }
+            return .cancel(requestId: id)
         case "ping": return .ping
         default: return .unknown(type)
         }
@@ -328,6 +336,53 @@ enum LinkWire {
     }
 
     static let heartbeat: [String: Any] = ["type": "heartbeat"]
+
+    /// The service's cap on one progress object (contracts
+    /// `LINK_PROGRESS_MAX_BYTES`); the whole frame is held under it.
+    static let progressMaxBytes = 16_384
+
+    /// Tools whose calls report live progress and can be cancelled.
+    static func reportsProgress(_ tool: String?) -> Bool { tool == "jev_run" || tool == "jev_step" }
+
+    /// `{type:'progress', requestId, seq, at, tool, progress, final?}` —
+    /// the live state of a call still being served. `seq` counts up from 0
+    /// per request; the last frame of a call carries `final: true`. Over
+    /// 16 KB serialized, the oldest `progress.recent` entries go first
+    /// until it fits.
+    static func progress(requestId: String, seq: Int, at: Date, tool: String, progress: [String: Any], final: Bool = false) -> [String: Any] {
+        var body = progress
+        func frame() -> [String: Any] {
+            var out: [String: Any] = ["type": "progress", "requestId": requestId, "seq": max(0, seq),
+                                      "at": iso(at), "tool": String(tool.prefix(120)), "progress": body]
+            if final { out["final"] = true }
+            return out
+        }
+        var out = frame()
+        while size(out) > progressMaxBytes, var recent = body["recent"] as? [Any], !recent.isEmpty {
+            recent.removeFirst()
+            body["recent"] = recent
+            out = frame()
+        }
+        if size(out) > progressMaxBytes {
+            // Not reachable with JevProgress's caps; a last fence for any
+            // other progress object — keep only the scalar head.
+            body = body.filter { $0.value is String || $0.value is NSNumber || $0.value is Bool }
+                .mapValues { ($0 as? String).map { String($0.prefix(200)) as Any } ?? $0 }
+            out = frame()
+        }
+        return out
+    }
+
+    /// Serialized size, the way `body` writes it.
+    static func size(_ object: [String: Any]) -> Int {
+        (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))?.count ?? Int.max
+    }
+
+    static func iso(_ date: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: date)
+    }
 
     /// The body of `POST …/frames`.
     static func body(_ frames: [[String: Any]]) -> Data {

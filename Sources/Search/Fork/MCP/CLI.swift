@@ -70,6 +70,9 @@ enum CLI {
         if command == "intelligence" {
             return runIntelligence(Array(args.dropFirst()), dryRun: dryRun, launchRequested: launchRequested)
         }
+        if command == "bitwarden" {
+            return runBitwarden(Array(args.dropFirst()), dryRun: dryRun, launchRequested: launchRequested)
+        }
 
         guard let spec = makeRequest(command, Array(args.dropFirst())) else { return 2 }
         if dryRun {
@@ -700,6 +703,100 @@ enum CLI {
     Exit 0 on success, 1 when the app refuses a value, 2 on usage or when Copper is unreachable.
     """
 
+    // MARK: - Bitwarden
+
+    /// `copper bitwarden status|login -|lock|logout|sync|policy`: the vault
+    /// in the running app, through the loopback server's `copper/bitwarden`
+    /// method. Secrets never ride on argv: `login -` reads one JSON object
+    /// from stdin. Output is always the JSON control result — a status
+    /// report that never contains a password, API secret or session key.
+    private static func runBitwarden(_ input: [String], dryRun: Bool, launchRequested: Bool) -> Int {
+        var args = input
+        let op = args.isEmpty ? "status" : args.removeFirst()
+        if ["help", "-h", "--help"].contains(op) || args.contains(where: { ["-h", "--help"].contains($0) }) {
+            print(bitwardenUsage)
+            return 0
+        }
+        var params: [String: Any] = ["op": op]
+        var timeout: TimeInterval = 60
+        switch op {
+        case "status", "lock", "logout", "sync":
+            guard args.isEmpty else { error("bitwarden \(op) takes no arguments"); return 2 }
+        case "login":
+            guard args == ["-"] else {
+                error("bitwarden login reads its JSON from stdin: `copper bitwarden login -` (secrets are never accepted as arguments)")
+                return 2
+            }
+            let data = FileHandle.standardInput.readDataToEndOfFile()
+            guard data.count <= 64 * 1024,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                error("bitwarden login - : stdin must be one JSON object")
+                return 2
+            }
+            let fields = ["server", "email", "password", "clientId", "clientSecret", "otp", "otpMethod", "share", "stayUnlocked"]
+            for field in fields { if let value = object[field], !(value is NSNull) { params[field] = value } }
+            timeout = 120
+        case "policy":
+            var i = 0
+            while i < args.count {
+                switch args[i] {
+                case "--share":
+                    guard let value = next(&args, &i), ["folder", "all"].contains(value) else { error("--share needs folder or all"); return 2 }
+                    params["share"] = value
+                case "--stay-unlocked":
+                    guard let value = next(&args, &i), ["on", "off"].contains(value) else { error("--stay-unlocked needs on or off"); return 2 }
+                    params["stayUnlocked"] = value == "on"
+                default:
+                    error("unknown bitwarden policy option: \(args[i])")
+                    return 2
+                }
+                i += 1
+            }
+        default:
+            error("unknown bitwarden command: \(op) (see copper bitwarden --help)")
+            return 2
+        }
+        let request: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "copper/bitwarden", "params": params]
+        if dryRun {
+            var shown = params
+            for secret in ["password", "clientId", "clientSecret", "otp"] where shown[secret] != nil { shown[secret] = "…" }
+            return dryRunDecision(RequestSpec(request: ["jsonrpc": "2.0", "id": 1, "method": "copper/bitwarden", "params": shown]), launchRequested: launchRequested)
+        }
+        guard var config = readConfig(), config.enabled, !config.token.isEmpty else {
+            error(notRunningMessage + " `copper bitwarden` reaches the app through that server.")
+            return 2
+        }
+        guard ensureRunning(&config, launchRequested: launchRequested) else { return 2 }
+        guard let response = post(request, config: config, timeout: timeout),
+              let result = response["result"] as? [String: Any] else { return 2 }
+        printJSON(result)
+        return result["ok"] as? Bool == false ? 1 : 0
+    }
+
+    private static let bitwardenUsage = """
+    Usage: copper bitwarden <command>
+
+    The Bitwarden vault in the running Copper (Settings › Passwords › Bitwarden).
+    Output is always JSON: {ok, cli, cliVersion, state, email, server, lastSync,
+    agentAccess, stayUnlocked, counts, error?} — never a password, key or session.
+
+      status                     the report (default)
+      login -                    sign in and unlock; reads ONE JSON object from stdin:
+                                 {server?, email, password, clientId?, clientSecret?,
+                                  otp?, otpMethod? (0 app | 1 email | 3 YubiKey),
+                                  share? (folder|all), stayUnlocked?}
+                                 clientId + clientSecret = API-key login (recommended
+                                 unattended); the password then unlocks. Secrets are
+                                 never accepted as arguments.
+      lock                       drop the session (the master password unlocks again)
+      logout                     sign out and wipe the CLI's account state
+      sync                       pull the vault now (unlocked only)
+      policy [--share folder|all] [--stay-unlocked on|off]
+                                 what agents may use; keep the session across launches
+
+    Exit 0 on ok, 1 when the result says {ok: false}, 2 on usage or when Copper is unreachable.
+    """
+
     private static func grantLine(_ grant: [String: Any]) -> String {
         let handle = grant["handle"] as? String ?? ""
         let name = grant["name"] as? String ?? ""
@@ -1025,6 +1122,9 @@ enum CLI {
                                                 the agent link (copper link --help)
       intelligence [status|set|reload]          Jev/router keys and readiness; never prints a key
                                                 (copper intelligence --help)
+      bitwarden [status|login -|lock|logout|sync|policy]
+                                                the Bitwarden vault; JSON only, login reads stdin
+                                                (copper bitwarden --help)
       call TOOL [JSON-ARGS]                     call any MCP tool
       help                                      show this help
 

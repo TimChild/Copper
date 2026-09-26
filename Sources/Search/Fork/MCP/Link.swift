@@ -137,6 +137,11 @@ final class AgentLink: ObservableObject {
     /// Bumped on every connect and disconnect, so a stream or a reply from
     /// an earlier connection never writes over the current one's state.
     private var generation = 0
+    /// Requests being served right now: request id → the tool (or method)
+    /// and when it started. A `cancel` frame is honoured only for one of these.
+    private var serving: [String: (tool: String, started: Date)] = [:]
+    /// The live progress reporters of in-flight jev_run / jev_step calls.
+    private var reporters: [String: JevProgressReporter] = [:]
 
     private init() {
         config = MCP.shared.config.agentLink ?? Config()
@@ -334,6 +339,8 @@ final class AgentLink: ObservableObject {
                     Task { [weak self] in await self?.serve(request, linkId: id, generation: g) }
                 case .grants(let items):
                     grants = items
+                case .cancel(let requestId):
+                    cancel(requestId)
                 case .superseded:
                     throw Failure.superseded
                 case .revoked:
@@ -354,8 +361,28 @@ final class AgentLink: ObservableObject {
             // The loopback CLI's own control methods are never a bot's.
             rpc = ["jsonrpc": "2.0", "id": request.id, "error": ["code": -32601, "message": "Method not found: \(request.method)"]]
         } else {
+            serving[request.id] = (request.tool ?? request.method, began)
+            // A Jev call reports its trace live while it runs (progress
+            // frames), and the owner's Stop reaches it (cancel frames).
+            var reporter: JevProgressReporter?
+            if let tool = request.tool, LinkWire.reportsProgress(tool) {
+                let arguments = request.params["arguments"] as? [String: Any] ?? [:]
+                let goal = (arguments["goal"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let made = JevProgressReporter(requestId: request.id, tool: tool, goal: goal) { [weak self] frame in
+                    guard let self, self.current(g), self.config.enabled else { return }
+                    // Best effort: a lost progress frame costs a moment of
+                    // the live view, never the call.
+                    try? await self.post(frames: [frame], to: linkId, timeout: 10)
+                }
+                reporters[request.id] = made
+                reporter = made
+            }
             let who = request.caller.botHandle.isEmpty ? "bot" : request.caller.botHandle
             rpc = await MCP.shared.handle(request.message, announce: config.announces ? .prefix("agents · @\(who)") : .quiet)
+            // The last progress frame goes before the reply.
+            await reporter?.finish()
+            reporters[request.id] = nil
+            serving[request.id] = nil
         }
         let ms = Int(Date().timeIntervalSince(began) * 1000)
         if let tool = request.tool {
@@ -374,8 +401,17 @@ final class AgentLink: ObservableObject {
         }
     }
 
-    private func post(frames: [[String: Any]], to id: String) async throws {
-        var request = try makeRequest("POST", ["v1", "me", "links", id, "frames"], timeout: 60)
+    /// A `cancel` frame: the owner pressed Stop on a call. Only a request
+    /// this Copper is serving right now, and only a Jev call, can be
+    /// stopped — the run ends "stopped" and its reply still goes back.
+    /// Anything else is ignored.
+    private func cancel(_ requestId: String) {
+        guard let entry = serving[requestId], LinkWire.reportsProgress(entry.tool) else { return }
+        reporters[requestId]?.cancel()
+    }
+
+    private func post(frames: [[String: Any]], to id: String, timeout: TimeInterval = 60) async throws {
+        var request = try makeRequest("POST", ["v1", "me", "links", id, "frames"], timeout: timeout)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = LinkWire.body(frames)
         _ = try await perform(request, gone: .revoked)

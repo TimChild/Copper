@@ -337,14 +337,23 @@ enum Ultrafast {
         if let action, (action["kind"] as? String) != "wait" {
             var plain = action
             plain["rect"] = nil
-            _ = try? await withCheckedThrowingContinuation { (c: CheckedContinuation<Any?, Error>) in
-                web.callAsyncJavaScript("if (window.__jevFast && window.__jevFast.settle) { return await window.__jevFast.settle(action); } return false;",
-                                        arguments: ["action": plain], in: nil, in: .page) { result in
-                    switch result {
-                    case .success(let v): c.resume(returning: v)
-                    case .failure(let e): c.resume(throwing: e)
+            // Capped: when the action navigates (a form submit), the old
+            // document's timers and frames stop and WebKit may never call
+            // back — the run would hang in "Watching the page settle". The
+            // wait below picks up the new page either way.
+            final class Once: @unchecked Sendable { var done = false }
+            let once = Once()
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                let finish: @Sendable () -> Void = {
+                    DispatchQueue.main.async {
+                        guard !once.done else { return }
+                        once.done = true
+                        c.resume()
                     }
                 }
+                web.callAsyncJavaScript("if (window.__jevFast && window.__jevFast.settle) { return await window.__jevFast.settle(action); } return false;",
+                                        arguments: ["action": plain], in: nil, in: .page) { _ in finish() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { finish() }
             }
         }
         let loadDeadline = Date().addingTimeInterval(10)
@@ -987,6 +996,16 @@ enum Ultrafast {
         ]
     }
 
+    /// The call's one line for `_meta.summary` (the call audit):
+    /// "done · 7 actions · 12.3 s · example.com". ≤ 200 characters.
+    @MainActor static func summary(_ status: String, actions: Int, ms: Int, tab: Tab) -> String {
+        var host = tab.address?.host ?? ""
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        var parts = [status, "\(actions) action\(actions == 1 ? "" : "s")", String(format: "%.1f s", Double(ms) / 1000)]
+        if !host.isEmpty { parts.append(host) }
+        return String(parts.joined(separator: " · ").prefix(200))
+    }
+
     @MainActor
     static func call(_ name: String, _ args: [String: Any], in browser: Browser) async throws -> [Content] {
         guard MCP.shared.config.jev else { throw Failure(text: "Jev mode is off — Settings › Agents › Jev mode") }
@@ -1039,6 +1058,7 @@ enum Ultrafast {
             do { step = try await session.tick() } catch {
                 session.finishTrace("error", note: (error as? Failure)?.text ?? (error as? Stale)?.text ?? error.localizedDescription)
                 sessions[tab.id] = nil
+                Tools.summary?.line = summary("error", actions: session.history.count, ms: session.elapsedMs, tab: tab)
                 throw error
             }
             var out: String
@@ -1054,6 +1074,7 @@ enum Ultrafast {
                 sessions[tab.id] = nil
             }
             MCP.shared.jevNote = "\(session.status) · \(session.history.count) actions"
+            Tools.summary?.line = summary(session.finished ? session.status : "step", actions: session.history.count, ms: session.elapsedMs, tab: tab)
             return [.text(out)]
         case "jev_run":
             guard let goal = (args["goal"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty else { throw Failure(text: "goal required") }
@@ -1080,6 +1101,7 @@ enum Ultrafast {
                 } catch {
                     JevTrace.shared.close(phase: opening)
                     JevTrace.shared.finish(.error, note: (error as? Failure)?.text ?? error.localizedDescription)
+                    Tools.summary?.line = summary("error", actions: 0, ms: 0, tab: tab)
                     throw error
                 }
                 JevTrace.shared.close(phase: opening)
@@ -1100,6 +1122,7 @@ enum Ultrafast {
                     session.finishTrace("error", note: text)
                     sessions[tab.id] = nil
                     MCP.shared.jevNote = "error · \(text.prefix(80))"
+                    Tools.summary?.line = summary("error", actions: session.history.count, ms: session.elapsedMs, tab: tab)
                     return [.text("### Jev run — error after \(session.history.count) action\(session.history.count == 1 ? "" : "s")\n\(text)\n\n" +
                                   (session.history.isEmpty ? "" : session.history.map(\.line).joined(separator: "\n") + "\n\n") + Tools.pageLine(tab))]
                 }
@@ -1108,6 +1131,7 @@ enum Ultrafast {
             else { session.finishTrace("budget", note: "Stopped at the \(cap)-action cap") }
             sessions[tab.id] = nil
             MCP.shared.jevNote = String(format: "%@ · %d actions · %.1f s", session.status, session.history.count, Double(session.elapsedMs) / 1000)
+            Tools.summary?.line = summary(session.finished ? session.status : "budget", actions: session.history.count, ms: session.elapsedMs, tab: tab)
             var report = session.report(elements: (args["elements"] as? Bool) ?? true)
             if !session.finished { report = report.replacingOccurrences(of: "### Jev run — ready", with: "### Jev run — stopped at the \(cap)-action cap") }
             return [.text(report)]

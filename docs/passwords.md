@@ -48,12 +48,13 @@ under the current Copper support folder, so it does not read or mutate the
 user's normal Bitwarden CLI directory. Probe worlds have their own support
 folder as well.
 
-After sign-in or unlock, Copper holds the Bitwarden session key **only in its
-process memory**. Locking clears that key and the in-memory metadata. It is
-therefore expected that an external `bw status` can report `locked` while
-Copper's Settings card says `Unlocked`: the external CLI has no Copper session
-key. Relaunching Copper also starts locked; unlock it from Settings with the
-master password.
+After sign-in or unlock, Copper holds the Bitwarden session key in its process
+memory and — only while **Stay unlocked between launches** is on — in the 0600
+`session` file described below. Locking clears the key, the file and the
+in-memory metadata. It is expected that an external `bw status` can report
+`locked` while Copper's Settings card says `Unlocked`: the external CLI has no
+Copper session key. With Stay unlocked off, relaunching Copper starts locked;
+unlock it from Settings with the master password.
 
 The auto-lock picker is **5 minutes**, **15 minutes**, **60 minutes**, or
 **Never**. The default is **Never**. A background metadata refresh runs every
@@ -98,6 +99,80 @@ Settings › Passwords › Agent access and enable a per-item toggle (or the
 share-everything switch) before an agent can use one. The picker itself can
 still use every unlocked item; the agent allow-list only gates agent fills.
 
+## Signing in without a window: `copper bitwarden` and the agents app's Mac page
+
+A headless Copper (the bot Mac mini's LaunchAgent, docs/headless.md) has no
+Settings window to type into. The same backend is driven through the loopback
+agent server's `copper/bitwarden` method (127.0.0.1 + the bearer token in
+`agent.json`; the agent link refuses every `copper/*` method, so no bot can
+reach it) and its CLI:
+
+```sh
+copper bitwarden status                    # JSON report (default)
+copper bitwarden login - < payload.json    # sign in + unlock; ONE JSON object on stdin
+copper bitwarden lock | logout | sync
+copper bitwarden policy [--share folder|all] [--stay-unlocked on|off]
+```
+
+`login -` reads `{server?, email, password, clientId?, clientSecret?, otp?,
+otpMethod?, share?, stayUnlocked?}` from stdin. Secrets are refused on argv, so
+they never show up in `ps`. The agents app's Mac page seals the same object in the
+owner's browser to the Mac's device key; the host daemon decrypts it in
+memory and pipes it into `copper bitwarden login -`. The service only ever
+relays ciphertext.
+
+What `login` does, in order:
+
+1. `bw config server <server>`, but only when the CLI is signed out. With no
+   `server`, and no server configured in the CLI, it uses
+   `https://vault.bitwarden.com`. Only `https://` URLs are accepted, plus
+   `http://` to this Mac for a local Vaultwarden.
+2. If the CLI is already signed in to another account or server, `bw logout`
+   first. The same account on the same server is kept as it is.
+3. **API key** (recommended for an unattended Mac): with `clientId` +
+   `clientSecret` (Bitwarden web vault › Settings › Security › Keys › View API
+   key) it runs `bw login --apikey`, passing `BW_CLIENTID` / `BW_CLIENTSECRET`
+   only through the child's environment. This skips the two-step prompt and
+   new-device email verification. It leaves the account signed in but
+   **locked**.
+   **Email + master password** otherwise: `bw login EMAIL --passwordenv
+   BW_PASSWORD`, plus `--method N --code OTP` when `otp` is given. N is 0 for an
+   authenticator app (the default), 1 for email and 3 for YubiKey OTP.
+4. `bw unlock --passwordenv BW_PASSWORD` when the vault is locked. The master
+   password is always required, because it is what decrypts the vault.
+5. Applies the policy: `share` `folder` | `all` (below) and `stayUnlocked`.
+
+Every answer is `{ok, cli, cliVersion, state
+(missing|unauthenticated|locked|unlocked), email, server, lastSync,
+agentAccess (folder|all), stayUnlocked, counts {logins, identities, cards}}`. A
+failure adds `error`: one line of at most 200 characters, with anything the
+caller sent as a secret cut out. No answer ever holds a password, API secret,
+session key or vault value. Exit codes: 0 `ok`, 1 `ok: false`, 2 usage or Copper
+unreachable.
+
+`bw` itself is found in this order: `SEARCH_BW_PATH` (the daemon points its
+LaunchAgent at the CLI it installed), `~/.local/bin/bw`, `/opt/homebrew/bin/bw`,
+`/usr/local/bin/bw`, then `$PATH`.
+
+**What is stored where:**
+
+| Where | What | Who writes it |
+|---|---|---|
+| `<Copper support>/bitwarden/` (0700; `bitwarden (<world>)` in a probe world) | `bw`'s own `data.json`: the encrypted vault, auth tokens, and, after an API-key login, the client secret it keeps for token refresh (the Bitwarden CLI always does this) | `bw` |
+| `<Copper support>/bitwarden/session` (0600) | the session key, only while *stay unlocked* is on | Copper |
+| Copper's defaults | server URL, *stay unlocked*, agent-access policy | Copper |
+
+Nothing of Copper's writes a master password, or an API secret, to disk.
+**Lock** drops the session key and its file. **Sign out** (`logout`) wipes the
+CLI's account state. Turn *stay unlocked* off to need the master password after
+every restart, and keep FileVault on for the Mac.
+
+**Agent policy:** `share: folder`, the default, lets agents use only items in
+the Bitwarden folder named `Agents`, items with `copper-agent: allow`, and
+accounts shared one by one in Settings. `share: all` shares everything
+(Settings' share-everything switch). `copper-agent: deny` always wins. Either
+way, agents never receive the secret itself (next section).
+
 ## Agent access
 
 Open **Settings › Passwords › Agent access** to decide which saved accounts an
@@ -109,8 +184,9 @@ on the broad switch, enables that account, or uses the Bitwarden convention:
 - a custom field named `copper-agent` with value `deny` always denies that item,
   including when share-everything is enabled.
 
-The policy and toggles stay in Copper and are not editable through MCP or the
-CLI. See [Agents](agents.md) for `browser_sign_in`, `copper signin`, and Jev's
+The per-account toggles stay in Copper and are not editable through MCP. The
+broad switch can also be set by the owner from the shell or the agents app's Mac page
+(`copper bitwarden policy --share folder|all`, loopback only; see above). See [Agents](agents.md) for `browser_sign_in`, `copper signin`, and Jev's
 `SIGN_IN` control. Those operations fill in-process and return status only;
 they do not return a password, TOTP code, or Bitwarden session key. Private
 (`shy`) tabs are refused. With `--no-submit`, the secret remains in the page by

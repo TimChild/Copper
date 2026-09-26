@@ -312,6 +312,13 @@ final class MCP: ObservableObject {
                     // only for the same reason as copper/link. Never echoes a key.
                     let result = Intelligence.shared.control(one["params"] as? [String: Any] ?? [:])
                     answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
+                } else if let one = body as? [String: Any], one["method"] as? String == "copper/bitwarden" {
+                    // `copper bitwarden …` and the host daemon's sealed
+                    // sign-in: loopback + bearer only, like the two above —
+                    // the link refuses every copper/* method before `handle`.
+                    // The answer is a status report; never a secret.
+                    let result = await Bitwarden.shared.control(one["params"] as? [String: Any] ?? [:])
+                    answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
                 } else if let one = body as? [String: Any] {
                     if let reply = await self.handle(one) {
                         answer(HTTPResponse(status: 200, json: reply))
@@ -387,12 +394,23 @@ final class MCP: ObservableObject {
             case .prefix(let who): browser.announce("\(who) · \(name)")
             case .quiet: break
             }
+            // A tool may leave a one-line summary (jev_run / jev_step do:
+            // "done · 7 actions · 12.3 s · example.com"); it rides as
+            // `_meta.summary`, which the agents gateway copies into its audit.
+            let summary = Tools.SummaryBox()
+            func result(_ content: [[String: Any]], isError: Bool) -> [String: Any] {
+                var out: [String: Any] = ["content": content, "isError": isError]
+                if let line = summary.line { out["_meta"] = ["summary": line] }
+                return out
+            }
             do {
-                let content = try await Tools.call(name, arguments, in: browser)
-                return reply(["content": content.map(\.json), "isError": false])
+                let content = try await Tools.$summary.withValue(summary) {
+                    try await Tools.call(name, arguments, in: browser)
+                }
+                return reply(result(content.map(\.json), isError: false))
             } catch {
                 let text = (error as? Tools.Failure)?.text ?? error.localizedDescription
-                return reply(["content": [["type": "text", "text": text]], "isError": true])
+                return reply(result([["type": "text", "text": text]], isError: true))
             }
         case "resources/list":
             return reply(["resources": []])

@@ -18,6 +18,22 @@ enum Tools {
         let text: String
     }
 
+    /// Where a tool leaves its one-line summary for `_meta.summary`
+    /// (MCP.handle reads it back). Task-local, so two calls in flight never
+    /// see each other's line.
+    final class SummaryBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: String?
+        var line: String? {
+            get { lock.lock(); defer { lock.unlock() }; return value }
+            set {
+                lock.lock(); defer { lock.unlock() }
+                value = newValue.map { $0.count > 200 ? String($0.prefix(199)) + "…" : $0 }
+            }
+        }
+    }
+    @TaskLocal static var summary: SummaryBox?
+
     enum Content {
         case text(String)
         case image(Data, mime: String)

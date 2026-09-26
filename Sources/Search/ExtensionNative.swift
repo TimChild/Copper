@@ -119,6 +119,7 @@ final class HostPipe: @unchecked Sendable {
     var onMessage: ((Any) -> Void)?
     var onExit: (() -> Void)?
     private var waiters: [CheckedContinuation<Any?, Error>] = []
+    private var finished = false
 
     init(program: URL, origin: String) {
         process.executableURL = program
@@ -188,13 +189,20 @@ final class HostPipe: @unchecked Sendable {
         rest.forEach { onMessage?($0) }
     }
 
+    /// Reached twice for one host — once when its output closes, once when
+    /// the process ends — on two different queues. Only the first pass does
+    /// anything, and `onExit` changes hands under the lock so neither pass
+    /// can release the closure while the other is still calling it.
     private func finish() {
         lock.lock()
+        guard !finished else { lock.unlock(); return }
+        finished = true
         let pending = waiters
         waiters = []
+        let exit = onExit
+        onExit = nil
         lock.unlock()
         pending.forEach { $0.resume(throwing: ExtensionNative.Refused(why: "Native host has exited.")) }
-        onExit?()
-        onExit = nil
+        exit?()
     }
 }

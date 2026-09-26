@@ -151,7 +151,7 @@ final class Bitwarden: ObservableObject {
         let key = Self.trimTrailingNewlines(String(decoding: data, as: UTF8.self))
         if !key.isEmpty { sessionKey = key }
     }
-    private static let defaultServer = "https://vault.bitwarden.com"
+    static let defaultServer = "https://vault.bitwarden.com"
 
     private init() {
         state = Self.installed ? .unauthenticated : .missing
@@ -169,11 +169,21 @@ final class Bitwarden: ObservableObject {
 
     // MARK: - Discovery and process boundary
 
-    static var installed: Bool { executableURL != nil }
+    nonisolated static var installed: Bool { executableURL != nil }
 
-    private static var executableURL: URL? {
+    /// Where `bw` is, first match wins: `SEARCH_BW_PATH` (the host daemon
+    /// points its LaunchAgent at the CLI it installed), the user-local
+    /// `~/.local/bin/bw`, then Homebrew's, then `$PATH`.
+    nonisolated static var executableURL: URL? {
         let files = FileManager.default
-        for path in ["/opt/homebrew/bin/bw", "/usr/local/bin/bw"]
+        if let raw = ProcessInfo.processInfo.environment["SEARCH_BW_PATH"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            let path = (raw as NSString).expandingTildeInPath
+            if files.isExecutableFile(atPath: path) { return URL(fileURLWithPath: path) }
+        }
+        let external = files.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/bin/bw", isDirectory: false).path
+        for path in [external, "/opt/homebrew/bin/bw", "/usr/local/bin/bw"]
         where files.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
@@ -216,6 +226,8 @@ final class Bitwarden: ObservableObject {
         // the password is supplied only by login/unlock below.
         environment.removeValue(forKey: "BW_SESSION")
         environment.removeValue(forKey: "BW_PASSWORD")
+        environment.removeValue(forKey: "BW_CLIENTID")
+        environment.removeValue(forKey: "BW_CLIENTSECRET")
         environment["BITWARDENCLI_APPDATA_DIR"] = appDataURL.path
         environment["BW_NOINTERACTION"] = "true"
         if let sessionKey { environment["BW_SESSION"] = sessionKey }
@@ -224,7 +236,7 @@ final class Bitwarden: ObservableObject {
         let appDataPath = appDataURL.path
         let input = stdin
 
-        if sessionKey != nil && args.first != "status" {
+        if sessionKey != nil && args.first != "status" && args.first != "--version" {
             lastActivity = Date()
         }
 
@@ -319,6 +331,34 @@ final class Bitwarden: ObservableObject {
         let serverUrl: String?
     }
 
+    /// The server `bw status` reports, nil when the CLI has none configured
+    /// (it then talks to bitwarden.com). Only meaningful once `cliStatusKnown`.
+    private(set) var cliServer: String?
+    private(set) var cliStatusKnown = false
+
+    /// `bw --version`, read once per executable and kept; nil while there is
+    /// no CLI. `loadCLIVersion()` fills it — the property itself never
+    /// starts a process, so it is safe to read from the main actor.
+    private(set) var cliVersion: String?
+    private var cliVersionPath: String?
+
+    @discardableResult
+    func loadCLIVersion() async -> String? {
+        guard let path = Self.executableURL?.path else {
+            cliVersion = nil
+            cliVersionPath = nil
+            return nil
+        }
+        if cliVersionPath == path, let cliVersion { return cliVersion }
+        guard let data = try? await run(["--version"]) else { return nil }
+        let text = Self.trimTrailingNewlines(String(decoding: data, as: UTF8.self))
+            .trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty, text.count <= 40, !text.contains("\n") else { return nil }
+        cliVersion = text
+        cliVersionPath = path
+        return text
+    }
+
     var serverURL: String {
         get { Store.settings.string(forKey: Self.serverKey) ?? Self.defaultServer }
         set { Store.settings.set(newValue, forKey: Self.serverKey) }
@@ -334,7 +374,11 @@ final class Bitwarden: ObservableObject {
             let status = try JSONDecoder().decode(RawStatus.self, from: data)
             if let server = status.serverUrl, !server.isEmpty {
                 Store.settings.set(server, forKey: Self.serverKey)
+                cliServer = server
+            } else {
+                cliServer = nil
             }
+            cliStatusKnown = true
             switch status.status.lowercased() {
             case "unlocked":
                 // A relaunch must not claim an unlocked Copper session merely
@@ -372,12 +416,17 @@ final class Bitwarden: ObservableObject {
         serverURL = value
     }
 
-    func login(email: String, password: String, otp: String? = nil) async throws {
+    /// Email + master password, with a two-step code when the account has
+    /// one: `method` 0 authenticator app, 1 email, 3 YubiKey OTP.
+    func login(email: String, password: String, otp: String? = nil, method: Int = 0) async throws {
         guard !email.isEmpty, !password.isEmpty else {
             throw Failure(message: "Bitwarden email and password are required")
         }
+        guard [0, 1, 3].contains(method) else {
+            throw Failure(message: "Bitwarden two-step method must be 0 (authenticator), 1 (email) or 3 (YubiKey)")
+        }
         var args = ["login", email, "--passwordenv", "BW_PASSWORD"]
-        if let otp, !otp.isEmpty { args += ["--method", "0", "--code", otp] }
+        if let otp, !otp.isEmpty { args += ["--method", String(method), "--code", otp] }
         args.append("--raw")
         let data = try await run(args, env: ["BW_PASSWORD": password], timeout: 30)
         let key = Self.session(from: data)
@@ -386,6 +435,21 @@ final class Bitwarden: ObservableObject {
         persistSession()
         await refreshStatus()
         await refreshCacheIfPossible()
+    }
+
+    /// Personal API key login — the unattended path: no two-step prompt, no
+    /// new-device email. The id and secret reach `bw` only through the
+    /// child's environment. `bw login --apikey` leaves the account signed in
+    /// but locked, so the caller follows with `unlock(password:)`.
+    func loginWithAPIKey(clientId: String, clientSecret: String) async throws {
+        let id = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, !secret.isEmpty else {
+            throw Failure(message: "Bitwarden API key client_id and client_secret are both required")
+        }
+        _ = try await run(["login", "--apikey", "--raw"],
+                          env: ["BW_CLIENTID": id, "BW_CLIENTSECRET": secret], timeout: 30)
+        await refreshStatus()
     }
 
     func unlock(password: String) async throws {

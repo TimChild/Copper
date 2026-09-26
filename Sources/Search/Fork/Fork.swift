@@ -88,7 +88,10 @@ enum Fork {
             // `bw lock`, `bw sync`, `bw candidates HOST`, `bw choose ID`,
             // `bw share ID on|off|all on|off`, `bw backend keychain|bitwarden`,
             // `bw settings passwords`, and `bw offer keep`.
-            // Long ones start and return; `bw status` says where they got to.
+            // `bw identities`, `bw cards`, `bw fields HOST`, `bw usernames`,
+            // `bw counts`, and `bw autofill card|identity ID` expose the
+            // unlocked autofill cache to an isolated probe world. Long ones
+            // start and return; `bw status` says where they got to.
             let op = request["op"] as? String ?? "status"
             let words = (request["arg"] as? String ?? "").split(separator: " ").map(String.init)
             let bw = Bitwarden.shared
@@ -154,14 +157,65 @@ enum Fork {
             case "candidates":
                 guard let host = words.first else { return ["error": "bw candidates HOST"] }
                 return ["candidates": Credentials.candidates(for: host).map { ["id": $0.id.string, "user": $0.user, "host": $0.host, "source": "\($0.source)", "totp": $0.hasTOTP, "agent": AgentAccess.isAllowed($0)] }]
+            case "identities":
+                return ["identities": Autofill.identities.map { identity in
+                    ["id": identity.id, "name": identity.name, "fullName": identity.fullName,
+                     "summary": identity.summary, "agent": Autofill.isAllowed(identity.id)]
+                }]
+            case "cards":
+                return ["cards": Autofill.cards.map { card in
+                    ["id": card.id, "name": card.name, "label": card.label,
+                     "holder": card.cardholderName, "agent": Autofill.isAllowed(card.id)]
+                }]
+            case "fields":
+                guard let host = words.first else { return ["error": "bw fields HOST"] }
+                return ["fields": Autofill.fields(for: host).map { field in
+                    ["item": field.itemName, "name": field.name, "hidden": field.hidden]
+                }]
+            case "usernames":
+                return ["usernames": Autofill.topUsernames]
+            case "counts":
+                let counts = bw.counts
+                return ["counts": ["logins": counts.logins, "identities": counts.identities,
+                                   "cards": counts.cards, "notes": counts.notes]]
+            case "autofill":
+                guard words.count == 2, let tab = browser.active else {
+                    return ["error": "bw autofill card|identity ID (requires an active page)"]
+                }
+                let kind = words[0].lowercased()
+                let id = words[1].hasPrefix("bw:") ? String(words[1].dropFirst(3)) : words[1]
+                if kind == "card", let card = Autofill.cards.first(where: { $0.id == id }) {
+                    // Use the page-side path directly until Browser's Suggestion
+                    // picker API lands; it has the same in-process semantics.
+                    tab.fillValues(card.values())
+                    return ["started": true, "kind": kind, "id": card.id]
+                }
+                if kind == "identity", let identity = Autofill.identities.first(where: { $0.id == id }) {
+                    tab.fillValues(identity.values())
+                    return ["started": true, "kind": kind, "id": identity.id]
+                }
+                return ["error": "no \(kind) \(words[1])"]
             case "share":
                 // `bw share all on|off` or `bw share <id> on|off`
                 guard words.count == 2 else { return ["error": "bw share all|ID on|off"] }
                 let on = ["on", "true", "1", "yes"].contains(words[1])
                 if words[0] == "all" { AgentAccess.shareAll = on; return ["shareAll": on] }
-                guard let c = Credentials.all().first(where: { $0.id.string == words[0] }) else { return ["error": "no credential \(words[0])"] }
-                AgentAccess.set(c, allowed: on)
-                return ["id": c.id.string, "agent": AgentAccess.isAllowed(c)]
+                let rawID = words[0].hasPrefix("bw:") ? String(words[0].dropFirst(3)) : words[0]
+                if let c = Credentials.all().first(where: {
+                    $0.id.string == words[0] || $0.id.string == "bw:\(rawID)"
+                }) {
+                    AgentAccess.set(c, allowed: on)
+                    return ["id": c.id.string, "agent": AgentAccess.isAllowed(c)]
+                }
+                if Autofill.identities.contains(where: { $0.id == rawID })
+                    || Autofill.cards.contains(where: { $0.id == rawID }) {
+                    var ids = AgentAccess.allowed
+                    let stableID = "bw:\(rawID)"
+                    if on { ids.insert(stableID) } else { ids.remove(stableID) }
+                    AgentAccess.allowed = ids
+                    return ["id": stableID, "agent": Autofill.isAllowed(rawID)]
+                }
+                return ["error": "no credential \(words[0])"]
             default: return ["error": "unknown bw operation \(op)"]
             }
         case "updates":

@@ -381,9 +381,30 @@ enum Ultrafast {
 
     // MARK: - the action space
 
+    /// Work out the agent-only controls from the current page and shared vault.
+    @MainActor
+    static func availability(_ tab: Tab) async -> (signIn: Bool, autofill: Set<String>) {
+        guard !tab.shy else { return (false, []) }
+        var signIn = false
+        if let rawHost = tab.address?.host()?.lowercased(), !rawHost.isEmpty {
+            var host = rawHost
+            if host.hasPrefix("www.") { host.removeFirst(4) }
+            signIn = await tab.hasPasswordField() && !AgentAccess.permitted(for: host).isEmpty
+        }
+        let present = await tab.fieldsPresent()
+        var autofill = Set<String>()
+        if present.contains(where: { $0.group == .card }), Autofill.cards.contains(where: { Autofill.isAllowed($0.id) }) {
+            autofill.insert("AUTOFILL_CARD")
+        }
+        if present.contains(where: { $0.group == .identity }), Autofill.identities.contains(where: { Autofill.isAllowed($0.id) }) {
+            autofill.insert("AUTOFILL_IDENTITY")
+        }
+        return (signIn, autofill)
+    }
+
     /// One index per observed element; each operation has its own valid
     /// targets. Controls (scroll, wait) are operations of their own.
-    static func actionSpace(_ actions: [[String: Any]], signInAvailable: Bool = false) -> (elements: [[String: Any]], targets: [String: [String: [String: Any]]], controls: [String: [String: Any]]) {
+    static func actionSpace(_ actions: [[String: Any]], signInAvailable: Bool = false, autofill: Set<String> = []) -> (elements: [[String: Any]], targets: [String: [String: [String: Any]]], controls: [String: [String: Any]]) {
         var elements: [[String: Any]] = []
         var indices: [Int: String] = [:]
         var targets: [String: [String: [String: Any]]] = [:]
@@ -432,12 +453,24 @@ enum Ultrafast {
                 "label": "Sign in with the saved account for this site (fills and submits the password for you)",
             ]
         }
+        if autofill.contains("AUTOFILL_CARD") {
+            controls["AUTOFILL_CARD"] = [
+                "id": "AUTOFILL_CARD",
+                "label": "Fill the saved card — number, expiry, code — for you",
+            ]
+        }
+        if autofill.contains("AUTOFILL_IDENTITY") {
+            controls["AUTOFILL_IDENTITY"] = [
+                "id": "AUTOFILL_IDENTITY",
+                "label": "Fill your saved name, address, email and phone for you",
+            ]
+        }
         return (elements, targets, controls)
     }
 
     /// The table an agent reads: `[3] combobox  Where to? · London`.
-    static func table(_ obs: Observation, limit: Int = 80, signInAvailable: Bool = false) -> String {
-        let (elements, _, controls) = actionSpace(obs.actions, signInAvailable: signInAvailable)
+    static func table(_ obs: Observation, limit: Int = 80, signInAvailable: Bool = false, autofill: Set<String> = []) -> String {
+        let (elements, _, controls) = actionSpace(obs.actions, signInAvailable: signInAvailable, autofill: autofill)
         var lines: [String] = []
         for element in elements.prefix(limit) {
             let index = element["index"] as? String ?? "?"
@@ -456,7 +489,9 @@ enum Ultrafast {
         }
         if elements.count > limit { lines.append("… \(elements.count - limit) more") }
         if obs.omitted > 0 { lines.append("… \(obs.omitted) beyond the 250-candidate cap") }
-        if let signIn = controls["SIGN_IN"]?["label"] as? String { lines.append("[SIGN_IN] \(signIn)") }
+        for id in ["SIGN_IN", "AUTOFILL_CARD", "AUTOFILL_IDENTITY"] {
+            if let label = controls[id]?["label"] as? String { lines.append("[\(id)] \(label)") }
+        }
         return lines.isEmpty ? "(no interactive elements in view)" : lines.joined(separator: "\n")
     }
 
@@ -473,8 +508,8 @@ enum Ultrafast {
 
     /// One TypeSafe request: the operation, and a target for every operation
     /// that has candidates. Only the head the operation picked is consumed.
-    static func choose(_ obs: Observation, goal: String, history: [Step], keys: Intelligence.Keys, signInAvailable: Bool = false) async throws -> Decision {
-        let (elements, targets, controls) = actionSpace(obs.actions, signInAvailable: signInAvailable)
+    static func choose(_ obs: Observation, goal: String, history: [Step], keys: Intelligence.Keys, signInAvailable: Bool = false, autofill: Set<String> = []) async throws -> Decision {
+        let (elements, targets, controls) = actionSpace(obs.actions, signInAvailable: signInAvailable, autofill: autofill)
         let labels = [
             "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
             "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
@@ -565,6 +600,8 @@ enum Ultrafast {
         case "scroll": return ((action["delta"] as? NSNumber)?.doubleValue ?? 560) < 0 ? "Scrolling up" : "Scrolling down"
         case "wait": return "Waiting for the page"
         case "SIGN_IN": return "Signing in with the saved account"
+        case "AUTOFILL_CARD": return "Filling the saved card"
+        case "AUTOFILL_IDENTITY": return "Filling the saved identity"
         default: return "Clicking \(short(label))"
         }
     }
@@ -615,6 +652,12 @@ enum Ultrafast {
         if kind == "SIGN_IN" {
             guard await fresh(web, obs) else { throw Stale(text: "Page changed since this decision. Observe again.") }
             _ = try await SignIn.run([:], in: browser, source: .jev)
+            return
+        }
+        if kind == "AUTOFILL_CARD" || kind == "AUTOFILL_IDENTITY" {
+            guard await fresh(web, obs) else { throw Stale(text: "Page changed since this decision. Observe again.") }
+            let fillKind = kind == "AUTOFILL_CARD" ? "card" : "identity"
+            _ = try await AgentAutofill.run(["kind": fillKind, "first": true], in: browser, source: .jev)
             return
         }
         let node = (action["node"] as? NSNumber)?.intValue
@@ -698,6 +741,8 @@ enum Ultrafast {
         private(set) var status = "ready" // ready · done · blocked · budget · error
         private(set) var note = ""
         private(set) var observation: Observation?
+        private(set) var signInAvailable = false
+        private(set) var autofillAvailable: Set<String> = []
         private var pending: (context: String, text: String)?
         private var staleStreak = 0
         private var traced = false
@@ -759,15 +804,12 @@ enum Ultrafast {
             if decisions >= Ultrafast.maxSteps * 2 { status = "budget"; note = "Reached the \(Ultrafast.maxSteps * 2)-decision budget"; return nil }
             if history.count >= Ultrafast.maxSteps { status = "budget"; note = "Reached the \(Ultrafast.maxSteps)-action budget"; return nil }
             decisions += 1
-            var signInAvailable = false
-            if !tab.shy, let rawHost = tab.address?.host()?.lowercased() {
-                var host = rawHost
-                if host.hasPrefix("www.") { host.removeFirst(4) }
-                signInAvailable = await tab.hasPasswordField() && !AgentAccess.permitted(for: host).isEmpty
-            }
+            let available = await Ultrafast.availability(tab)
+            signInAvailable = available.signIn
+            autofillAvailable = available.autofill
             let asking = trace.phase(.ask, "Asking Jev which move")
             let decision = try await Ultrafast.choose(obs, goal: goal, history: history, keys: keys,
-                                                      signInAvailable: signInAvailable)
+                                                      signInAvailable: signInAvailable, autofill: autofillAvailable)
             // No detail: the ms column already says how long Jev took.
             trace.close(phase: asking)
             if stopped() { return nil }
@@ -782,10 +824,17 @@ enum Ultrafast {
                 return nil
             }
             let action: [String: Any]
-            if decision.operation == "SIGN_IN" {
+            switch decision.operation {
+            case "SIGN_IN":
                 action = ["id": "SIGN_IN", "kind": "SIGN_IN",
                           "label": "Sign in with the saved account for this site (fills and submits the password for you)"]
-            } else {
+            case "AUTOFILL_CARD":
+                action = ["id": "AUTOFILL_CARD", "kind": "AUTOFILL_CARD",
+                          "label": "Fill the saved card — number, expiry, code — for you"]
+            case "AUTOFILL_IDENTITY":
+                action = ["id": "AUTOFILL_IDENTITY", "kind": "AUTOFILL_IDENTITY",
+                          "label": "Fill your saved name, address, email and phone for you"]
+            default:
                 guard let observed = obs.action(decision.choice) else { observation = nil; return nil }
                 action = observed
             }
@@ -881,7 +930,9 @@ enum Ultrafast {
             out += "\nGoal: \(goal)"
             if !history.isEmpty { out += "\n\n" + history.map(\.line).joined(separator: "\n") }
             out += "\n\n" + Tools.pageLine(tab)
-            if elements, let obs = observation { out += "\n\n### Elements\n" + Ultrafast.table(obs) }
+            if elements, let obs = observation {
+                out += "\n\n### Elements\n" + Ultrafast.table(obs, signInAvailable: signInAvailable, autofill: autofillAvailable)
+            }
             if status == "done" { out += "\n\nDONE is Jev's claim — check the page (browser_snapshot / jev_observe) before telling the user it worked." }
             if status == "blocked" { out += "\n\nBLOCKED: take over with the browser_* tools for this part, then jev_run again." }
             return out
@@ -946,13 +997,8 @@ enum Ultrafast {
             if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
             let obs = try await observe(tab)
             let limit = (args["limit"] as? NSNumber)?.intValue ?? 80
-            var signInAvailable = false
-            if !tab.shy, let rawHost = tab.address?.host()?.lowercased() {
-                var host = rawHost
-                if host.hasPrefix("www.") { host.removeFirst(4) }
-                signInAvailable = await tab.hasPasswordField() && !AgentAccess.permitted(for: host).isEmpty
-            }
-            var out = Tools.pageLine(tab) + "\n\n### Elements\n" + table(obs, limit: limit, signInAvailable: signInAvailable)
+            let available = await availability(tab)
+            var out = Tools.pageLine(tab) + "\n\n### Elements\n" + table(obs, limit: limit, signInAvailable: available.signIn, autofill: available.autofill)
             if (args["text"] as? Bool) ?? true { out += "\n\n### Visible text\n" + obs.text.prefix(4000) }
             return [.text(out)]
         case "jev_extract":
@@ -1000,7 +1046,9 @@ enum Ultrafast {
             else if session.finished { out = "### Run ended — \(session.status)\n\(session.note)" }
             else { out = "### Page changed under the decision — read again, call jev_step once more" }
             out += "\n\n" + Tools.pageLine(tab)
-            if let obs = session.observation { out += "\n\n### Elements\n" + table(obs) }
+            if let obs = session.observation {
+                out += "\n\n### Elements\n" + table(obs, signInAvailable: session.signInAvailable, autofill: session.autofillAvailable)
+            }
             if session.finished {
                 session.finishTrace()
                 sessions[tab.id] = nil

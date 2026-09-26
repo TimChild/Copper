@@ -2,6 +2,11 @@ import SwiftUI
 import WebKit
 import Combine
 
+// The address-bar rows use the older, file-wide Suggestion type. The picker
+// rows below deliberately live under Browser so they cannot be confused with
+// history and command-bar offers.
+typealias OmniboxSuggestion = Suggestion
+
 // Everything the window knows: which tabs exist, which one is showing, and
 // whether the address field is up. Small enough to read in one sitting, which
 // is the point of a browser with no features.
@@ -100,7 +105,7 @@ final class Browser: NSObject, ObservableObject {
 
     let history = History()
     /// What the field is offering, best first.
-    @Published private(set) var offers: [Suggestion] = []
+    @Published private(set) var offers: [OmniboxSuggestion] = []
     /// The rest of the best match, drawn grey after the caret. Tab takes it.
     @Published private(set) var ending: String?
     /// Which row the arrow keys have walked to, if any.
@@ -258,10 +263,41 @@ final class Browser: NSObject, ObservableObject {
     /// Nothing is put into a page until you have pointed at it.
     @Published private(set) var suggesting: Suggesting?
 
+    enum Suggestion: Identifiable, Hashable {
+        case credential(Credential)
+        case username(String)
+        case identity(AutofillIdentity)
+        case card(AutofillCard)
+        case field(AutofillField)
+
+        var id: String {
+            switch self {
+            case .credential(let credential): return credential.stableID
+            case .username(let name): return "user:\(name)"
+            case .identity(let identity): return "id:\(identity.id)"
+            case .card(let card): return "card:\(card.id)"
+            case .field(let field): return "field:\(field.itemID)\u{1}\(field.name)"
+            }
+        }
+    }
+
     struct Suggesting: Equatable {
         let tab: Tab.ID
         let spot: CGRect
         let credentials: [Credential]
+        let rows: [Suggestion]
+
+        init(tab: Tab.ID, spot: CGRect, credentials: [Credential]) {
+            self.init(tab: tab, spot: spot, credentials: credentials,
+                      rows: credentials.map(Suggestion.credential))
+        }
+
+        init(tab: Tab.ID, spot: CGRect, credentials: [Credential], rows: [Suggestion]) {
+            self.tab = tab
+            self.spot = spot
+            self.credentials = credentials
+            self.rows = rows
+        }
     }
     /// The row whose secret is being fetched. Keeping it published lets the
     /// picker show a small, transient "Fetching…" state without exposing it.
@@ -333,6 +369,45 @@ final class Browser: NSObject, ObservableObject {
                 self?.suggesting = nil
             }
             self?.fetching = nil
+        }
+    }
+
+    /// Fill one of the non-password rows without putting its value in a log or
+    /// an announcement. The page reports only whether its boxes still exist.
+    func choose(_ suggestion: Suggestion) {
+        if case .credential(let credential) = suggestion {
+            choose(credential)
+            return
+        }
+        lowering?.cancel()
+        guard fetching == nil,
+              let tab = tabs.first(where: { $0.id == suggesting?.tab }) ?? active
+        else { return }
+        pickedInto = tab.id
+        suggesting = nil
+
+        func announceFailure() {
+            announce("Couldn't find the boxes anymore")
+        }
+        switch suggestion {
+        case .credential:
+            break
+        case .username(let name):
+            tab.fillFocused(name) { worked in
+                if !worked { announceFailure() }
+            }
+        case .identity(let identity):
+            tab.fillValues(identity.values()) { filled in
+                if filled == 0 { announceFailure() }
+            }
+        case .card(let card):
+            tab.fillValues(card.values()) { filled in
+                if filled == 0 { announceFailure() }
+            }
+        case .field(let field):
+            tab.fillFocused(field.value) { worked in
+                if !worked { announceFailure() }
+            }
         }
     }
 
@@ -707,9 +782,16 @@ final class Browser: NSObject, ObservableObject {
             .sink { [weak self] _ in
                 guard let self, let open = suggesting, let tab = tabs.first(where: { $0.id == open.tab }),
                       let host = curtain.host(of: tab.address) else { return }
-                let known = Credentials.candidates(for: host, hint: tab.fieldHint)
-                suggesting = known.isEmpty && !Bitwarden.shared.isLoadingCache && !Self.bitwardenLocked
-                    ? nil : Suggesting(tab: tab.id, spot: open.spot, credentials: known)
+                let rows = suggestions(for: tab, host: host)
+                let credentials = rows.compactMap { suggestion -> Credential? in
+                    guard case .credential(let credential) = suggestion else { return nil }
+                    return credential
+                }
+                let isLogin = (tab.fieldFocus?.group ?? .login) == .login
+                let pending = isLogin && (Self.bitwardenLocked || Bitwarden.shared.isLoadingCache)
+                suggesting = rows.isEmpty && !pending
+                    ? nil
+                    : Suggesting(tab: tab.id, spot: open.spot, credentials: credentials, rows: rows)
             }
             .store(in: &bag)
 
@@ -1288,6 +1370,39 @@ final class Browser: NSObject, ObservableObject {
         tab.web.evaluateJavaScript(Isolate.off)
     }
 
+    private func suggestions(for tab: Tab, host: String) -> [Suggestion] {
+        let kind = tab.fieldFocus?.kind
+        let group = tab.fieldFocus?.group ?? .login
+        let credentials: [Credential] = prefs.fillsPasswords
+            ? Credentials.candidates(for: host, hint: tab.fieldHint)
+            : []
+        guard prefs.fillsPasswords || prefs.fillsEverything else { return [] }
+
+        let fields: [Suggestion] = prefs.fillsEverything
+            ? Autofill.fields(for: host, matching: tab.fieldFocus?.label ?? "").map(Suggestion.field)
+            : []
+        var rows: [Suggestion] = []
+        switch group {
+        case .login:
+            rows += credentials.map(Suggestion.credential)
+            if prefs.fillsEverything && credentials.isEmpty,
+               (kind == .username || kind == .email) {
+                rows += Autofill.topUsernames.map(Suggestion.username)
+            }
+            // Custom fields are deliberately after the normal account rows.
+            rows += fields
+        case .card:
+            rows += fields
+            if prefs.fillsEverything { rows += Autofill.cards.map(Suggestion.card) }
+        case .identity:
+            rows += fields
+            if prefs.fillsEverything { rows += Autofill.identities.map(Suggestion.identity) }
+        case .other:
+            rows += fields
+        }
+        return rows
+    }
+
     func prepare(_ tab: Tab) {
         tab.delegate = self
         tab.onPick = { [weak self] tab, selector, label, note in
@@ -1320,16 +1435,21 @@ final class Browser: NSObject, ObservableObject {
                 return
             }
             lowering?.cancel()
-            guard prefs.fillsPasswords, tab.id == activeID, pickedInto != tab.id,
+            guard (prefs.fillsPasswords || prefs.fillsEverything), tab.id == activeID, pickedInto != tab.id,
                   let host = curtain.host(of: tab.address)
             else { return }
-            let known = Credentials.candidates(for: host, hint: tab.fieldHint)
-            // Shown even when empty while the vault is locked (to offer the
-            // unlock) or still loading (to say so).
-            let pending = Self.bitwardenLocked || Bitwarden.shared.isLoadingCache
-            suggesting = (known.isEmpty && !pending)
+            let rows = suggestions(for: tab, host: host)
+            let credentials = rows.compactMap { suggestion -> Credential? in
+                guard case .credential(let credential) = suggestion else { return nil }
+                return credential
+            }
+            let isLogin = (tab.fieldFocus?.group ?? .login) == .login
+            // Only a login box stays visible while Bitwarden is locked or
+            // loading, so it can offer the unlock control or say so.
+            let pending = isLogin && (Self.bitwardenLocked || Bitwarden.shared.isLoadingCache)
+            suggesting = (rows.isEmpty && !pending)
                 ? nil
-                : Suggesting(tab: tab.id, spot: spot, credentials: known)
+                : Suggesting(tab: tab.id, spot: spot, credentials: credentials, rows: rows)
         }
 
         tab.onCredentials = { [weak self] tab, host, user, password in
@@ -1473,7 +1593,7 @@ final class Browser: NSObject, ObservableObject {
            Address.url(from: typed) == nil,
            let asked = Google.url(for: typed) {
             list.append(
-                Suggestion(key: typed, title: Google.name, url: asked, kind: .search)
+                OmniboxSuggestion(key: typed, title: Google.name, url: asked, kind: .search)
             )
         }
         offers = list
@@ -1486,7 +1606,7 @@ final class Browser: NSObject, ObservableObject {
     /// What is open, most recently looked at first, filtered by what has been
     /// typed. On an empty field this is the whole point of the summon: it is
     /// the tab strip, except you read it only when you ask for it.
-    private func openPages(matching typed: String) -> [Suggestion] {
+    private func openPages(matching typed: String) -> [OmniboxSuggestion] {
         let needle = typed.trimmingCharacters(in: .whitespaces).lowercased()
         return tabs
             .filter { $0.id != activeID && !$0.isBlank }
@@ -1499,7 +1619,7 @@ final class Browser: NSObject, ObservableObject {
             .prefix(needle.isEmpty ? 6 : 3)
             .compactMap { tab in
                 guard let url = tab.address else { return nil }
-                return Suggestion(
+                return OmniboxSuggestion(
                     key: tab.label,
                     title: Address.pretty(url),
                     url: url,
@@ -1513,7 +1633,7 @@ final class Browser: NSObject, ObservableObject {
     /// keyboard's selection. The pointer and the arrow keys are answering the
     /// same question but must not share an answer: a list that appears under a
     /// resting cursor would otherwise rewrite the field before you had moved.
-    func take(_ offer: Suggestion) {
+    func take(_ offer: OmniboxSuggestion) {
         summoning = false
         if let id = offer.tab, let tab = tabs.first(where: { $0.id == id }) {
             select(tab)

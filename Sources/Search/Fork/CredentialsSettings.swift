@@ -70,6 +70,10 @@ struct BitwardenCard: View {
                 }
             }
             Rule()
+            Line("Vault", countsSummary) {
+                EmptyView()
+            }
+            Rule()
             Line("Save new passwords to Bitwarden", "New save offers use Bitwarden; fills still include both sources") {
                 Switch(on: Binding(
                     get: { browser.prefs.passwordsBackend == .bitwarden },
@@ -102,6 +106,15 @@ struct BitwardenCard: View {
                 .frame(width: 110)
             }
         }
+    }
+
+    private var countsSummary: String {
+        let counts = bitwarden.counts
+        var parts: [String] = []
+        if counts.logins > 0 { parts.append("\(counts.logins) \(counts.logins == 1 ? "login" : "logins")") }
+        if counts.identities > 0 { parts.append("\(counts.identities) \(counts.identities == 1 ? "identity" : "identities")") }
+        if counts.cards > 0 { parts.append("\(counts.cards) \(counts.cards == 1 ? "card" : "cards")") }
+        return parts.isEmpty ? "Nothing saved yet" : parts.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -272,6 +285,30 @@ struct AgentAccessCard: View {
         }
     }
 
+    private var identities: [AutofillIdentity] { Autofill.identities }
+    private var cards: [AutofillCard] { Autofill.cards }
+
+    private var filteredIdentities: [AutofillIdentity] {
+        let needle = hunt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return identities }
+        return identities.filter {
+            $0.name.lowercased().contains(needle)
+                || $0.fullName.lowercased().contains(needle)
+                || $0.email.lowercased().contains(needle)
+                || $0.summary.lowercased().contains(needle)
+        }
+    }
+
+    private var filteredCards: [AutofillCard] {
+        let needle = hunt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return cards }
+        return cards.filter {
+            $0.name.lowercased().contains(needle)
+                || $0.label.lowercased().contains(needle)
+                || $0.cardholderName.lowercased().contains(needle)
+        }
+    }
+
     var body: some View {
         Card {
             Line("Share every saved account with agents", "Agents can use saved sign-ins in Copper without receiving the password") {
@@ -308,6 +345,54 @@ struct AgentAccessCard: View {
                     }
                     .frame(maxHeight: 400)
                 }
+
+                Rule(inset: 0)
+                Caption("Identities")
+                if filteredIdentities.isEmpty {
+                    Nothing("No Bitwarden identities kept yet.")
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(filteredIdentities.enumerated()), id: \.element.id) { index, identity in
+                            if index > 0 { Rule(inset: 0) }
+                            AgentIdentityRow(
+                                identity: identity,
+                                shareAll: shareAll,
+                                allowed: AgentAccess.shareAll || AgentAccess.allowed.contains("bw:\(identity.id)"),
+                                setAllowed: { value in
+                                    var allowed = AgentAccess.allowed
+                                    if value { allowed.insert("bw:\(identity.id)") }
+                                    else { allowed.remove("bw:\(identity.id)") }
+                                    AgentAccess.allowed = allowed
+                                    policyRevision += 1
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Rule(inset: 0)
+                Caption("Cards")
+                if filteredCards.isEmpty {
+                    Nothing("No Bitwarden cards kept yet.")
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(filteredCards.enumerated()), id: \.element.id) { index, card in
+                            if index > 0 { Rule(inset: 0) }
+                            AgentCardRow(
+                                card: card,
+                                shareAll: shareAll,
+                                allowed: AgentAccess.shareAll || AgentAccess.allowed.contains("bw:\(card.id)"),
+                                setAllowed: { value in
+                                    var allowed = AgentAccess.allowed
+                                    if value { allowed.insert("bw:\(card.id)") }
+                                    else { allowed.remove("bw:\(card.id)") }
+                                    AgentAccess.allowed = allowed
+                                    policyRevision += 1
+                                }
+                            )
+                        }
+                    }
+                }
             }
             .padding(12)
             .id(policyRevision)
@@ -319,6 +404,72 @@ struct AgentAccessCard: View {
         // Bitwarden publishes lock/unlock/cache changes; keeping this observed
         // makes the union list redraw without a manual refresh button.
         .onChange(of: bitwarden.state) { _, _ in policyRevision += 1 }
+    }
+
+    private struct AgentIdentityRow: View {
+        let identity: AutofillIdentity
+        let shareAll: Bool
+        let allowed: Bool
+        let setAllowed: (Bool) -> Void
+
+        var body: some View {
+            HStack(spacing: 10) {
+                Image(systemName: "person.text.rectangle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(identity.fullName.isEmpty ? identity.name : identity.fullName)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1)
+                    Text(identity.summary)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                Switch(on: Binding(get: { allowed }, set: setAllowed))
+                    .disabled(shareAll)
+                    .accessibilityLabel("Share identity \(identity.name) with agents")
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private struct AgentCardRow: View {
+        let card: AutofillCard
+        let shareAll: Bool
+        let allowed: Bool
+        let setAllowed: (Bool) -> Void
+
+        var body: some View {
+            HStack(spacing: 10) {
+                Image(systemName: "creditcard")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(card.label.isEmpty ? card.name : card.label)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1)
+                    Text(card.cardholderName.isEmpty ? card.name : card.cardholderName)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                Switch(on: Binding(get: { allowed }, set: setAllowed))
+                    .disabled(shareAll)
+                    .accessibilityLabel("Share card \(card.name) with agents")
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 8)
+        }
     }
 
     private struct AgentCredentialRow: View {

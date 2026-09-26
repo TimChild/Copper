@@ -60,10 +60,11 @@ The auto-lock picker is **5 minutes**, **15 minutes**, **60 minutes**, or
 five minutes while unlocked; a cold `bw` start is about 2.5 seconds, so the
 picker uses an in-memory cache instead of launching `bw` for every row.
 
-The cache contains only matching metadata: item names, usernames, URI rules,
-folder information, whether a TOTP exists, and the agent-sharing hint. It does
-not retain passwords, TOTP seeds, or the Bitwarden session key. Copper fetches
-a password or TOTP code only for the single fill operation that needs it.
+While Bitwarden is unlocked, the in-memory cache holds matching metadata and the
+values needed for an immediate fill: passwords, TOTP seeds, identity details,
+card numbers/CVV, notes, and custom-field values. It is protected by the same
+process boundary as the session key, is never returned over MCP or the CLI, and
+is wiped (including identity/card values) when you lock the vault.
 
 ## Fills and saves
 
@@ -73,6 +74,29 @@ While Bitwarden is unlocked, turn on **Save new passwords to Bitwarden** in its
 Settings card to route new save offers there. Turn it off (or leave Bitwarden
 unavailable) to keep saving to the keychain. Existing fills continue to include
 both sources.
+
+## Autofill everything
+
+Turn on **Fill addresses and cards** in Settings › Passwords to let the
+under-field picker fill more than sign-ins (`prefs.fillsEverything` is on by
+default). Click any recognised field in a checkout or address form:
+
+- **Identities** fill a name, email, phone, company, street lines, city, state,
+  postal code, and country as one group. Copper shows the identity name and a
+  short address summary, never the private values in the row.
+- **Cards** fill the cardholder, number, expiry, brand, and security code as one
+  group. Card numbers and codes stay in memory only while unlocked.
+- **Custom fields** are matched by a field's name, id, placeholder, or label to
+  a custom field on a login item for the current host. Hidden custom fields are
+  treated like passwords and are never listed with their values.
+- **Most-used usernames** appear on an email or username field even when there
+  is no saved account for that site. They are deduplicated and limited to the
+  eight most-used names (then identity emails/usernames).
+
+Agent access applies to identities and cards as well as login credentials. Open
+Settings › Passwords › Agent access and enable a per-item toggle (or the
+share-everything switch) before an agent can use one. The picker itself can
+still use every unlocked item; the agent allow-list only gates agent fills.
 
 ## Agent access
 
@@ -123,6 +147,13 @@ Available verbs are:
 ./bench bw lock
 ./bench bw sync
 ./bench bw candidates HOST
+./bench bw identities
+./bench bw cards
+./bench bw fields HOST
+./bench bw usernames
+./bench bw counts
+./bench bw autofill card ID
+./bench bw autofill identity ID
 ./bench bw share all on|off
 ./bench bw share bw:<item-id> on|off
 ```

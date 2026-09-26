@@ -259,6 +259,10 @@ struct SettingsPanel: View {
                     Switch(on: $prefs.fillsPasswords)
                 }
                 Rule()
+                Line("Fill addresses and cards", "Click into a checkout or address form and your Bitwarden identities and cards hang from it") {
+                    Switch(on: $prefs.fillsEverything)
+                }
+                Rule()
                 Line(
                     "Offer passkeys",
                     prefs.passkeysPossible

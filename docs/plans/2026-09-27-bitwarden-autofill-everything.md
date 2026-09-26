@@ -189,7 +189,7 @@ identity `person.text.rectangle`, card `creditcard`, field `textformat.123`. Foo
 ### Agent: `browser_autofill`
 
 Tool schema: `{ kind: "card" | "identity" | "field", name?: string, submit?: bool (default false) }`.
-`Fork/MCP/Autofill.swift` (new) `enum AgentAutofill { static func run(_ args, in: Browser, source:) async throws -> [String: Any] }`:
+`Fork/MCP/AgentAutofill.swift` (new) `enum AgentAutofill { static func run(_ args, in: Browser, source:) async throws -> [String: Any] }`:
 - refuses `shy` tabs; requires an unlocked vault; `kind=card|identity`: candidates =
   `Autofill.cards/identities` filtered by `Autofill.isAllowed`; `name` matches item `name`,
   card `label`/`last4`, identity `fullName`/`email` case-insensitively; one candidate → fill;
@@ -231,7 +231,7 @@ Tool schema: `{ kind: "card" | "identity" | "field", name?: string, submit?: boo
 
 **Wave 2 (parallel, after Wave 1 compiles):**
 - W2-C UI: `Browser.swift` (Suggestion/rows/choose), `Accounts.swift`, `Prefs.swift`, `Settings.swift`, `Fork/CredentialsSettings.swift` (counts + agent access sections), `App.swift` only if required.
-- W2-D AGENT: `Fork/MCP/Autofill.swift` (new), `Tools.swift`, `CLI.swift`, `Ultrafast.swift`, `skill/copper-cli/SKILL.md`, `docs/agents.md`.
+- W2-D AGENT: `Fork/MCP/AgentAutofill.swift` (new), `Tools.swift`, `CLI.swift`, `Ultrafast.swift`, `skill/copper-cli/SKILL.md`, `docs/agents.md`.
 - W2-E BENCH+DOCS: `Fork/Fork.swift` bw verbs, `bench` help, `docs/passwords.md`, `CHANGELOG.md`, `PATCHES.md`, seed Vaultwarden fixture items (identity, card, login with custom fields incl. a hidden one) via `bw` against `~/exowatt/tmp/copper-creds/ENV.md`, plus a local fixture page `docs/fixtures/autofill.html` (checkout form with address + card + PIN fields, autocomplete attrs on half of them, plain names on the other half).
 
 **Wave 3 (serial, main thread + one worker):** build, fix, probe-world e2e with `./bench --world autofill …` against the fixture page; window-shot QA of the picker; commit → push `fork` → tap release.

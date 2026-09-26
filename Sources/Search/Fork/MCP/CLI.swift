@@ -141,6 +141,23 @@ enum CLI {
                 i += 1
             }
             return call("browser_sign_in", arguments)
+        case "autofill":
+            guard let kind = args.first, ["card", "identity", "field"].contains(kind) else {
+                return bad("autofill needs card, identity, or field")
+            }
+            var arguments: [String: Any] = ["kind": kind]
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--name":
+                    guard let value = next(&args, &i), !value.isEmpty else { return bad("autofill --name needs NAME") }
+                    arguments["name"] = value
+                case "--submit": arguments["submit"] = true
+                default: return bad("unknown autofill option: \(args[i])")
+                }
+                i += 1
+            }
+            return call("browser_autofill", arguments)
         case "observe":
             var arguments: [String: Any] = [:]
             var i = 0
@@ -985,6 +1002,8 @@ enum CLI {
       go URL                                    navigate the current tab
       signin [--account USER] [--otp] [--no-submit]
                                                 fill a shared saved account on the current tab
+      autofill card|identity|field [--name NAME] [--submit]
+                                                fill a shared Bitwarden card, identity, or field
       observe [--no-text] [-n N]                fast Jev observation
       run "GOAL…" [--url URL] [--new-tab] [--max N] [--no-elements]
       step "GOAL…"                              supervise one Jev decision

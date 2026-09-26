@@ -13,6 +13,7 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 |---|---|
 | `copper tabs` | List tabs. |
 | `copper signin [--account USER] [--otp] [--no-submit] [--json]` | Fill a shared saved account on the current tab (submits by default). |
+| `copper autofill card|identity|field [--name NAME] [--submit]` | Fill a shared Bitwarden card, identity, or custom field; vault values are never returned. |
 | `copper health` | Check connectivity and Jev mode. |
 | `copper open URL` / `copper go URL` | Open a tab / navigate the current tab. |
 | `copper run "GOAL" [--url URL] [--new-tab]` | Let Jev complete a multi-step goal. |
@@ -55,7 +56,10 @@ arguments: `account`, `what` (`password` or `otp`), and `submit`.
 The operation returns only status, host, username, source/what, and submitted
 state (or usernames when choosing among candidates). The password, one-time
 code, and Bitwarden session key never appear in its MCP result, CLI output, or
-Jev trace. Sharing is controlled by Settings › Passwords › **Agent access**:
+Jev trace. `copper autofill card|identity|field [--name NAME] [--submit]` fills
+from the unlocked Bitwarden vault; card numbers, security codes, addresses, and
+custom-field values are never returned in MCP, CLI output, or Jev traces.
+Sharing is controlled by Settings › Passwords › **Agent access**:
 the share-everything switch and per-item toggles are the user-controlled policy.
 A Bitwarden item in the `Agents` folder is shared automatically; a custom field
 `copper-agent: deny` always denies sharing. Unshared credentials return an

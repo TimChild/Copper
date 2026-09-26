@@ -104,6 +104,21 @@ Bitwarden item in the `Agents` folder is shared automatically; a custom field
 `copper-agent: deny` always means never shared, even when the broad switch is
 on. The policy is local to Copper and never editable through MCP or the CLI.
 
+### Saved cards, identities, and custom fields
+
+`browser_autofill` fills a shared Bitwarden `card`, `identity`, or `field` in the
+current tab. Use `copper autofill card|identity|field [--name NAME] [--submit]`
+for the CLI equivalent. It returns only the fill count, item name, and submitted
+state: card numbers, security codes, addresses, and custom-field values never
+cross the MCP/CLI boundary. The tool refuses private tabs, locked vaults,
+missing form groups, and items not enabled under Settings › Passwords › Agent
+access. When more than one shared item matches, it returns candidate names so a
+caller can choose one.
+
+Jev exposes `AUTOFILL_CARD` when the page has card fields and a shared card, and
+`AUTOFILL_IDENTITY` for identity fields and a shared identity. Jev chooses the
+first permitted item and fills in-process; neither control returns vault values.
+
 ### Why is this tab hot?
 `browser_perf_probe` samples the tab in one call instead of requiring a chain of evaluations: it groups frame loops and DOM mutations, inspects running animations and filters, and records canvases, timers, long tasks, and resources.
 Its findings are deliberately WebKit-specific. The three traps it calls out are a filtered SVG under an animated transform, off-screen `requestAnimationFrame` loops, and animations of properties other than `transform`/`opacity`.

@@ -17,6 +17,15 @@ presence of `Login Data`, so a browser with no saved passwords still appears.
 Each imported space is new. A name collision gets ` (Chrome)` or ` (Arc)`.
 Imported pages do not load until their space is visited.
 
+The new spaces are written to `session.json` the moment they are adopted,
+before the keychain prompt, cookie decryption, and extension downloads that
+follow. Quitting (or force-quitting) Copper during those later steps keeps the
+spaces. Extensions are queued and installed one after another in the
+background with no dialog per item — the Extensions switch is the yes — and
+the sheet's "All set" count updates when they have landed. Every step logs one
+`Copper: Flow …` line to the unified log (`log show --predicate 'process ==
+"Copper" AND eventMessage CONTAINS "Flow"'`).
+
 ## What needs an answer
 
 macOS may ask once for Chrome or Arc's keychain key. Say **Allow** to move

@@ -178,10 +178,14 @@ final class Flow: ObservableObject {
         guard !source.locked else { return }
         browserForUndo = browser
         selected = source
-        let haul = lastHaul.spaces.isEmpty && !lastHaul.notes.isEmpty ? Flow.read(source) : lastHaul
+        // A haul with no spaces and no note is one that was never scanned (or
+        // whose scan is stale); read again rather than move nothing.
+        let haul = lastHaul.spaces.isEmpty ? Flow.read(source) : lastHaul
         var report = Report()
         var lines: [String] = []
         phase = .moving(lines)
+        NSLog("Copper: Flow moving from %@ — %d spaces, %d tabs read; notes: %@",
+              source.name, haul.spaces.count, haul.tabCount, haul.notes.joined(separator: "; "))
 
         if choice.tabs {
             let adopted = Spaces.shared.adopt(haul.spaces, in: browser, sourceName: source.name, sourceIsArc: source.isArc)
@@ -191,6 +195,16 @@ final class Flow: ObservableObject {
             report.groups = adopted.groups
             lines.append("\(report.tabs) tabs in \(report.spaces) spaces")
             phase = .moving(lines)
+            // The new spaces are the one thing that cannot be re-fetched from
+            // the store or re-read later: write them down now, before the
+            // keychain prompt, cookie decryption and extension downloads that
+            // follow, so a quit or a hang during those keeps them.
+            Session.write(now: true, Spaces.shared.shape(visible: browser.tabs, active: browser.activeID))
+            NSLog("Copper: Flow adopted %d tabs in %d spaces (%d groups) and saved the session",
+                  report.tabs, report.spaces, report.groups)
+            if haul.spaces.isEmpty {
+                report.notes.append("\(source.name) had no spaces or tabs Copper could read")
+            }
         }
 
         if choice.bookmarks {
@@ -256,7 +270,15 @@ final class Flow: ObservableObject {
         if choice.extensions {
             let extensions = haul.extensions
             if #available(macOS 15.4, *) {
-                report.extensions = FlowExtensions.install(extensions)
+                report.extensions = FlowExtensions.install(extensions) { [weak self, weak browser] landed in
+                    guard let self, case .done(var report) = self.phase else { return }
+                    report.extensions = landed
+                    self.phase = .done(report)
+                    browser?.announce(landed == 0 ? "No extensions could be installed" : "\(landed) extensions installed")
+                }
+                if report.extensions > 0 {
+                    report.notes.append("extensions are still installing in the background")
+                }
             } else {
                 report.notes.append("extensions need macOS 15.4 or later")
             }

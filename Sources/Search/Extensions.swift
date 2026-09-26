@@ -295,6 +295,30 @@ final class Extensions: NSObject, ObservableObject {
         }
     }
 
+    /// A store extension the person has already agreed to in bulk — Flow's
+    /// "Extensions" switch is the consent, so no second dialog per item. Runs
+    /// to completion so a caller can install a list one after another instead
+    /// of racing twenty downloads and twenty prompts. True when it landed.
+    func installAgreed(id text: String) async -> Bool {
+        guard let id = Crx.id(in: text) else { return false }
+        if installed.contains(where: { $0.id == id }) { return true }
+        busy = id
+        defer { busy = nil }
+        do {
+            let crx = try await Crx.fetch(id)
+            let zip = try Crx.verifiedZip(crx, id: id)
+            let target = Extensions.folder(for: id)
+            let staged = Extensions.folder.appendingPathComponent(".staging-\(id)", isDirectory: true)
+            try Crx.unpack(zip, into: staged)
+            try ExtensionShims.prepare(staged)
+            try await admit(staged, as: id, fromStore: true, finalFolder: target, confirm: false)
+            return installed.contains(where: { $0.id == id })
+        } catch {
+            NSLog("Copper: Flow could not install extension %@: %@", id, error.localizedDescription)
+            return false
+        }
+    }
+
     /// An unpacked extension from disk — a developer's own, or one exported
     /// from another browser. Copied in, so moving the original breaks nothing.
     func installFolder() {

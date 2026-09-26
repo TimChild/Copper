@@ -43,17 +43,28 @@ enum FlowExtensions {
         }
     }
 
-    /// Starts a Web Store install for each extension that is not present.
+    /// Queues a Web Store install for each extension that is not present and
+    /// returns how many were queued. The installs themselves run one after
+    /// another in the background, without a dialog each — the Flow sheet's
+    /// "Extensions" switch was the yes — so the rest of the move (and the
+    /// session write that keeps the new spaces) never waits on the store.
+    /// `done` is called on the main actor with how many actually landed.
     @available(macOS 15.4, *)
     @MainActor
-    static func install(_ list: [FlowModel.Extension]) -> Int {
-        var count = 0
-        for item in list {
-            guard !Extensions.shared.installed.contains(where: { $0.id == item.id }) else { continue }
-            Extensions.shared.install(from: item.id)
-            count += 1
+    static func install(_ list: [FlowModel.Extension], done: (@MainActor (Int) -> Void)? = nil) -> Int {
+        let pending = list.filter { item in
+            !Extensions.shared.installed.contains(where: { $0.id == item.id })
         }
-        return count
+        guard !pending.isEmpty else { done?(0); return 0 }
+        Task { @MainActor in
+            var landed = 0
+            for item in pending where await Extensions.shared.installAgreed(id: item.id) {
+                landed += 1
+            }
+            NSLog("Copper: Flow installed %d of %d extensions", landed, pending.count)
+            done?(landed)
+        }
+        return pending.count
     }
 
     private static func makeExtension(

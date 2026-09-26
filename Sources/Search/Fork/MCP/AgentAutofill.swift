@@ -63,9 +63,12 @@ enum AgentAutofill {
             let filled = await withCheckedContinuation { (continuation: CheckedContinuation<Int, Never>) in
                 tab.fillValues(card.values()) { count in continuation.resume(returning: count) }
             }
-            guard filled > 0 else { throw Failure(message: "no card fields on the page") }
+            // The boxes were there but already held values: nothing was
+            // overwritten, and that is a result, not a failure.
             let submitted = shouldSubmit ? await submit(tab) : false
-            return ["filled": filled, "kind": kind, "name": card.name, "submitted": submitted]
+            var result: [String: Any] = ["filled": filled, "kind": kind, "name": card.name, "submitted": submitted]
+            if filled == 0 { result["note"] = "the card fields already hold values; nothing overwritten" }
+            return result
 
         case "identity":
             let all = Autofill.identities
@@ -97,9 +100,10 @@ enum AgentAutofill {
             let filled = await withCheckedContinuation { (continuation: CheckedContinuation<Int, Never>) in
                 tab.fillValues(identity.values()) { count in continuation.resume(returning: count) }
             }
-            guard filled > 0 else { throw Failure(message: "no identity fields on the page") }
             let submitted = shouldSubmit ? await submit(tab) : false
-            return ["filled": filled, "kind": kind, "name": identity.name, "submitted": submitted]
+            var result: [String: Any] = ["filled": filled, "kind": kind, "name": identity.name, "submitted": submitted]
+            if filled == 0 { result["note"] = "the identity fields already hold values; nothing overwritten" }
+            return result
 
         case "field":
             guard let name else { throw Failure(message: "name is required for field") }

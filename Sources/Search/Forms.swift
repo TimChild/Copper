@@ -210,11 +210,13 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         if (id) {
           var labels = document.getElementsByTagName('label');
           for (var i = 0; i < labels.length; i++) {
-            if (labels[i].htmlFor === id) add(labels[i].innerText || labels[i].textContent);
+            if (labels[i].htmlFor === id) add(ownText(labels[i]));
           }
         }
+        // A label wrapped around a select would otherwise read as every
+        // option in it — "Country United States Canada" says "unit" too.
         var wrapping = el.closest && el.closest('label');
-        if (wrapping) add(wrapping.innerText || wrapping.textContent);
+        if (wrapping) add(ownText(wrapping));
         var described = el.getAttribute('aria-labelledby') || '';
         described.split(/\\s+/).forEach(function (name) {
           if (name) {
@@ -227,6 +229,16 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         add(el.name);
         add(id);
         return parts;
+      }
+
+      // A label's words without the words of the controls inside it.
+      function ownText(node) {
+        var copy = node.cloneNode(true);
+        var inner = copy.querySelectorAll('input, select, textarea, option');
+        for (var i = 0; i < inner.length; i++) {
+          if (inner[i].parentNode) inner[i].parentNode.removeChild(inner[i]);
+        }
+        return copy.innerText || copy.textContent || '';
       }
 
       function fieldLabel(el) {
@@ -268,19 +280,19 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         if (/cc.?type|card.?brand|brand/.test(clues)) return 'cardBrand';
         if (/cc.?exp|expir|expdate|(^|[^a-z])exp([^a-z]|$)/.test(clues)) return 'cardExp';
         if (/cvv|cvc|csc|security[ ._-]*code/.test(clues)) return 'cardCode';
-        if (/card.?number|ccnum|pan/.test(clues)) return 'cardNumber';
+        if (/card.?number|ccnum|\\bpan\\b/.test(clues)) return 'cardNumber';
         if (/first.?name|fname|given/.test(clues)) return 'firstName';
         if (/middle.?name|mname/.test(clues)) return 'middleName';
         if (/last.?name|lname|surname|family/.test(clues)) return 'lastName';
         if (/full.?name|^name$/.test(clues)) return 'fullName';
         if (/street|address[ ._-]*(?:line[ ._-]*)?1|addr1/.test(clues)) return 'address1';
-        if (/apt|suite|unit|address[ ._-]*(?:line[ ._-]*)?2|addr2/.test(clues)) return 'address2';
+        if (/\\bapt\\b|\\bsuite\\b|\\bunit\\b|address[ ._-]*(?:line[ ._-]*)?2|addr2/.test(clues)) return 'address2';
         if (/address[ ._-]*(?:line[ ._-]*)?3|addr3/.test(clues)) return 'address3';
-        if (/city|town|locality/.test(clues)) return 'city';
-        if (/state|province|region/.test(clues)) return 'state';
+        if (/\\bcity\\b|\\btown\\b|locality/.test(clues)) return 'city';
+        if (/\\bstate\\b|province|\\bregion\\b/.test(clues)) return 'state';
         if (/country/.test(clues)) return 'country';
         if (/zip|postal/.test(clues)) return 'postalCode';
-        if (/phone|tel|mobile/.test(clues)) return 'phone';
+        if (/phone|\\btel\\b|mobile/.test(clues)) return 'phone';
         if (/company|organi[sz]ation/.test(clues)) return 'company';
         if (/ssn|social/.test(clues)) return 'ssn';
         if (/passport/.test(clues)) return 'passportNumber';

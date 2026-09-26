@@ -195,8 +195,14 @@ enum Autofill {
         return result
     }
 
+    /// A login item keeps the full policy — the Agents folder and the
+    /// `copper-agent: deny` field count; cards and identities have only the
+    /// switch and the list.
     static func isAllowed(_ id: String) -> Bool {
-        AgentAccess.shareAll || AgentAccess.allowed.contains("bw:\(id)")
+        if let credential = Credentials.all().first(where: { $0.id == .bitwarden(id) }) {
+            return AgentAccess.isAllowed(credential)
+        }
+        return AgentAccess.shareAll || AgentAccess.allowed.contains("bw:\(id)")
     }
 
     private static func normalized(_ value: String) -> String {

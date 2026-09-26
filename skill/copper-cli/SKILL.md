@@ -30,6 +30,9 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper link grants` / `grant @bot` / `revoke @bot` | Who has access; give or take one bot's access. |
 | `copper link revoke` | Revoke the whole link — every bot loses the tools, Copper disconnects. |
 | `copper link calls` | Recent calls bots made through the link (`--json` for scripts). |
+| `copper intelligence [status]` | Jev/router readiness as JSON: `{jevReady, routerReady, routerURL, routerModel, jevModel}` — never a key. |
+| `copper intelligence set [--jev K] [--router-key K] [--router-url U] [--router-model M] [--text-model M]` | Write keys/settings into `intelligence.json` (0600) through the running app; a value of `-` is read from stdin. |
+| `copper intelligence reload` | Re-read `intelligence.json` (same as `kill -HUP` on the app). |
 | `copper --launch …` | Explicitly opt into launching Copper when it is down (also `COPPER_LAUNCH=1`). |
 
 Examples:
@@ -70,6 +73,8 @@ Bitwarden, and unshared credentials return errors.
 The CLI does not launch Copper by default. When it is down, commands print `copper: Copper isn't running (or Settings › Agents is off). Start it with \`open -a Copper\`, or pass --launch.` and exit 2. This is deliberate: probes during a quit must not create a second app instance. `copper session restore` refuses while Copper is running unless `--quit` is supplied; it saves the current session before replacing it and relaunches after the copy.
 
 `copper link …` reaches the app through the same local server, so it needs **Settings › Agents › Let agents drive this window** on even though the agent link itself does not. It exits 1 when the agents app refuses (a bad token, an unknown bot) and 2 on usage errors or when Copper is unreachable. Never echo the `fxb_` token back into a transcript.
+
+`copper intelligence …` also goes through the local server. Its output is always JSON and never contains a key; pass keys with `-` (stdin) rather than on the command line where you can, and never echo them into a transcript. `copper health --json` reports `headless: true` when Copper runs as a background service (`Copper --headless`, docs/headless.md) — then there is no window to look at, dialogs are auto-declined, and the port may be set by `SEARCH_MCP_PORT` (the CLI honours it too).
 
 Jev's DONE is a claim, not proof: read the page again with `copper observe` or
 `snapshot` before reporting that an action succeeded.

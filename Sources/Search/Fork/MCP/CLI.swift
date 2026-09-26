@@ -67,6 +67,9 @@ enum CLI {
         if command == "link" {
             return runLink(Array(args.dropFirst()), json: json, dryRun: dryRun, launchRequested: launchRequested)
         }
+        if command == "intelligence" {
+            return runIntelligence(Array(args.dropFirst()), dryRun: dryRun, launchRequested: launchRequested)
+        }
 
         guard let spec = makeRequest(command, Array(args.dropFirst())) else { return 2 }
         if dryRun {
@@ -604,6 +607,82 @@ enum CLI {
         return 0
     }
 
+    // MARK: - intelligence keys
+
+    /// `copper intelligence status|set|reload`: the Jev and router keys in
+    /// the running app, through the loopback server's `copper/intelligence`
+    /// method. Output is always JSON and never contains a key.
+    private static func runIntelligence(_ input: [String], dryRun: Bool, launchRequested: Bool) -> Int {
+        var args = input
+        let op = args.isEmpty ? "status" : args.removeFirst()
+        if ["help", "-h", "--help"].contains(op) || args.contains(where: { ["-h", "--help"].contains($0) }) {
+            print(intelligenceUsage)
+            return 0
+        }
+        var params: [String: Any] = ["op": op]
+        switch op {
+        case "status", "reload":
+            guard args.isEmpty else { error("intelligence \(op) takes no arguments"); return 2 }
+        case "set":
+            let flags = ["--jev": "jevKey", "--router-key": "routerKey", "--router-url": "routerURL",
+                         "--router-model": "routerModel", "--text-model": "textModel"]
+            var i = 0
+            while i < args.count {
+                guard let name = flags[args[i]] else { error("unknown intelligence set option: \(args[i])"); return 2 }
+                guard var value = next(&args, &i) else { error("\(args[i - 1]) needs a value"); return 2 }
+                // `-` reads the value from stdin, so a key need not sit in
+                // the process list.
+                if value == "-" {
+                    guard let line = readLine(strippingNewline: true) else { error("\(args[i - 1]) - : nothing on stdin"); return 2 }
+                    value = line
+                }
+                params[name] = value
+                i += 1
+            }
+            guard params.count > 1 else {
+                error("intelligence set needs at least one of --jev, --router-key, --router-url, --router-model, --text-model")
+                return 2
+            }
+        default:
+            error("unknown intelligence command: \(op) (see copper intelligence --help)")
+            return 2
+        }
+        let request: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "copper/intelligence", "params": params]
+        if dryRun {
+            var shown = params
+            for secret in ["jevKey", "routerKey"] where shown[secret] != nil { shown[secret] = "…" }
+            return dryRunDecision(RequestSpec(request: ["jsonrpc": "2.0", "id": 1, "method": "copper/intelligence", "params": shown]), launchRequested: launchRequested)
+        }
+        guard var config = readConfig(), config.enabled, !config.token.isEmpty else {
+            error(notRunningMessage + " `copper intelligence` reaches the app through that server.")
+            return 2
+        }
+        guard ensureRunning(&config, launchRequested: launchRequested) else { return 2 }
+        guard let response = post(request, config: config, timeout: 30),
+              let result = response["result"] as? [String: Any] else { return 2 }
+        if let message = result["error"] as? String, !message.isEmpty {
+            error(message)
+            return 1
+        }
+        printJSON(result)
+        return 0
+    }
+
+    private static let intelligenceUsage = """
+    Usage: copper intelligence <command>
+
+    The models Copper asks (Settings › Intelligence): Jev (TypeSafe) and the
+    router (a LiteLLM gateway). Output is JSON and never contains a key.
+
+      status                     {jevReady, routerReady, routerURL, routerModel, jevModel} (default)
+      set [--jev KEY] [--router-key KEY] [--router-url URL] [--router-model M] [--text-model M]
+                                 write into intelligence.json (0600) through the running app;
+                                 a value of - is read from stdin, keeping keys out of `ps`
+      reload                     re-read intelligence.json (same as sending the app SIGHUP)
+
+    Exit 0 on success, 1 when the app refuses a value, 2 on usage or when Copper is unreachable.
+    """
+
     private static func grantLine(_ grant: [String: Any]) -> String {
         let handle = grant["handle"] as? String ?? ""
         let name = grant["name"] as? String ?? ""
@@ -654,6 +733,9 @@ enum CLI {
               var config = try? JSONDecoder().decode(Config.self, from: data)
         else { return nil }
         if let raw = ProcessInfo.processInfo.environment["COPPER_AGENT_PORT"], let port = UInt16(raw) {
+            config.port = port
+        } else if let port = MCP.portOverride {
+            // The same override the app listens on (SEARCH_MCP_PORT).
             config.port = port
         }
         return config
@@ -791,13 +873,15 @@ enum CLI {
               let result = response["result"] as? [String: Any],
               let tools = result["tools"] as? [[String: Any]] else { return 2 }
         let jev = tools.contains { ($0["name"] as? String) == "jev_run" }
+        let headless = got.object["headless"] as? Bool ?? false
         if json {
-            printJSON(["health": got.object, "jev": jev])
+            printJSON(["health": got.object, "jev": jev, "headless": headless])
         } else {
             let version = got.object["version"] as? String
             let versionSuffix = version.map { " · version: \($0)" } ?? ""
             print("Copper health: running: \(got.running) (port \(config.port))\(versionSuffix)")
             print("Jev mode: \(jev ? "on" : "off")")
+            print("Headless: \(headless ? "yes" : "no")")
         }
         return 0
     }
@@ -878,7 +962,7 @@ enum CLI {
     // MARK: - output
 
     private static func printJSON(_ object: Any) {
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
             error("could not encode JSON")
             return
         }
@@ -920,6 +1004,8 @@ enum CLI {
       setup [phi|claude|cli|status]             install terminal-agent setup (default: status)
       link [status|on|off|token|api|grants|grant|revoke|calls]
                                                 the agent link (copper link --help)
+      intelligence [status|set|reload]          Jev/router keys and readiness; never prints a key
+                                                (copper intelligence --help)
       call TOOL [JSON-ARGS]                     call any MCP tool
       help                                      show this help
 

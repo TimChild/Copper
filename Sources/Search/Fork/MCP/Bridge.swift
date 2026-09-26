@@ -14,7 +14,12 @@ import Foundation
 enum Bridge {
     static func runIfAsked() {
         CLI.runIfAsked()
-        guard CommandLine.arguments.contains("--mcp-stdio") else { return }
+        guard CommandLine.arguments.contains("--mcp-stdio") else {
+            // A real app launch: headless (Headless.swift) sets itself up
+            // here, before SwiftUI builds a window.
+            MainActor.assumeIsolated { Headless.bootIfAsked() }
+            return
+        }
         run()
         exit(0)
     }
@@ -26,8 +31,10 @@ enum Bridge {
     }
 
     private static func config() -> Config? {
-        guard let data = try? Data(contentsOf: Store.file("agent.json")) else { return nil }
-        return try? JSONDecoder().decode(Config.self, from: data)
+        guard let data = try? Data(contentsOf: Store.file("agent.json")),
+              var config = try? JSONDecoder().decode(Config.self, from: data) else { return nil }
+        if let port = MCP.portOverride { config.port = port }
+        return config
     }
 
     private static func run() {

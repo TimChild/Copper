@@ -63,7 +63,12 @@ final class Intelligence: ObservableObject {
         }
     }
 
-    @Published var keys: Keys { didSet { if keys != oldValue { save() } } }
+    @Published var keys: Keys { didSet { if keys != oldValue, !loading { save() } } }
+
+    /// True while `reload()` assigns what it read: that is the file, and
+    /// writing it straight back would only race whoever just wrote it.
+    private var loading = false
+    private var hangup: DispatchSourceSignal?
 
     /// What Jev mode types with: the text model when one is named, else the router's.
     var textModelName: String { keys.textModel.trimmingCharacters(in: .whitespaces).isEmpty ? keys.routerModel : keys.textModel }
@@ -82,6 +87,88 @@ final class Intelligence: ObservableObject {
             keys = saved
         } else {
             keys = Keys()
+        }
+    }
+
+    // MARK: - outside writers
+
+    /// intelligence.json, read again. The host daemon writes keys it was
+    /// provisioned with into the file, then signals (SIGHUP) or calls
+    /// `copper intelligence reload`, so nobody restarts the browser for a key.
+    @discardableResult
+    func reload() -> Bool {
+        guard let data = try? Data(contentsOf: Intelligence.file),
+              let saved = try? JSONDecoder().decode(Keys.self, from: data) else { return false }
+        loading = true
+        keys = saved
+        loading = false
+        return true
+    }
+
+    /// SIGHUP → reload. SIGHUP's default is to end the process, so it is
+    /// ignored first and taken as an event on the main queue instead.
+    func watchForReload() {
+        guard hangup == nil else { return }
+        signal(SIGHUP, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
+        source.setEventHandler {
+            MainActor.assumeIsolated {
+                let ok = Intelligence.shared.reload()
+                let line = ok
+                    ? "intelligence.json reloaded on SIGHUP — jevReady \(Intelligence.shared.jevReady), routerReady \(Intelligence.shared.routerReady)"
+                    : "SIGHUP: intelligence.json missing or unreadable; keys unchanged"
+                FileHandle.standardError.write(Data("\(ISO8601DateFormatter().string(from: Date())) copper: \(line)\n".utf8))
+            }
+        }
+        source.resume()
+        hangup = source
+    }
+
+    /// Readiness and the non-secret settings. Never a key.
+    var status: [String: Any] {
+        ["jevReady": jevReady, "routerReady": routerReady, "routerURL": keys.routerURL,
+         "routerModel": keys.routerModel, "jevModel": keys.jevModel]
+    }
+
+    /// The loopback server's `copper/intelligence` method (`copper
+    /// intelligence …`). `set` takes any of jevKey, routerKey, routerURL,
+    /// routerModel, textModel and writes through `keys`, so the file is
+    /// saved 0600 the same way Settings saves it. Answers name what changed,
+    /// never its value.
+    func control(_ params: [String: Any]) -> [String: Any] {
+        switch params["op"] as? String ?? "status" {
+        case "status":
+            return status
+        case "reload":
+            var out = status
+            out["reloaded"] = reload()
+            return out
+        case "set":
+            var next = keys
+            var applied: [String] = []
+            func take(_ name: String, _ apply: (String) -> Void) {
+                guard let value = params[name] as? String else { return }
+                apply(value.trimmingCharacters(in: .whitespacesAndNewlines))
+                applied.append(name)
+            }
+            if let raw = params["routerURL"] as? String {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let url = URL(string: trimmed), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
+                    return ["error": "routerURL must be an http(s) URL"]
+                }
+            }
+            take("jevKey") { next.jevKey = $0 }
+            take("routerKey") { next.routerKey = $0 }
+            take("routerURL") { next.routerURL = $0 }
+            take("routerModel") { next.routerModel = $0 }
+            take("textModel") { next.textModel = $0 }
+            guard !applied.isEmpty else { return ["error": "set needs at least one of jevKey, routerKey, routerURL, routerModel, textModel"] }
+            keys = next
+            var out = status
+            out["applied"] = applied
+            return out
+        case let op:
+            return ["error": "unknown intelligence op \(op) (status, set, reload)"]
         }
     }
 

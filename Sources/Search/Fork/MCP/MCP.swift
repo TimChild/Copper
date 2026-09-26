@@ -93,7 +93,19 @@ final class MCP: ObservableObject {
     /// Where the token and port live. Beside the session, this user only.
     static var file: URL { Store.file("agent.json") }
 
-    var endpoint: String { "http://127.0.0.1:\(config.port)\(MCP.path)" }
+    /// SEARCH_MCP_PORT: listen here instead of agent.json's port, without
+    /// writing it back — so a second Copper (a probe world, a headless run
+    /// beside the windowed app) can serve on its own port while the file,
+    /// and the port every configured client points at, stay as they are.
+    nonisolated static let portOverride: UInt16? = {
+        guard let raw = ProcessInfo.processInfo.environment["SEARCH_MCP_PORT"], let port = UInt16(raw), port > 0 else { return nil }
+        return port
+    }()
+
+    /// The port the listener actually uses.
+    var port: UInt16 { MCP.portOverride ?? config.port }
+
+    var endpoint: String { "http://127.0.0.1:\(port)\(MCP.path)" }
 
     private init() {
         let saved = (try? Data(contentsOf: MCP.file)).flatMap { try? JSONDecoder().decode(Config.self, from: $0) }
@@ -181,8 +193,14 @@ final class MCP: ObservableObject {
     // MARK: - starting and stopping
 
     func start(for browser: Browser) {
+        // Headless has no Settings: unsaid switches default on. Before the
+        // browser is set, so the didSet's apply() is inert and we listen once.
+        Headless.adoptDefaults(self)
         self.browser = browser
         apply()
+        // An external writer (the host daemon) nudges new keys in with SIGHUP.
+        Intelligence.shared.watchForReload()
+        Headless.start(for: browser)
         // The agent link dials out once there is a window to drive.
         AgentLink.shared.start()
         // The agent in the window connects to your other servers now, so its
@@ -198,7 +216,7 @@ final class MCP: ObservableObject {
             parameters.allowLocalEndpointReuse = true
             // Loopback only. Nothing on the network can reach this, whatever
             // the firewall says.
-            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: config.port) ?? 4123)
+            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port) ?? 4123)
             let listener = try NWListener(using: parameters)
             listener.stateUpdateHandler = { [weak self] state in
                 Task { @MainActor [weak self] in
@@ -209,7 +227,8 @@ final class MCP: ObservableObject {
                         self.trouble = nil
                     case .failed(let error):
                         self.running = false
-                        self.trouble = "Couldn't listen on port \(self.config.port): \(error.localizedDescription)"
+                        self.trouble = "Couldn't listen on port \(self.port): \(error.localizedDescription)"
+                        if Headless.on { Headless.log(self.trouble ?? "") }
                     case .cancelled:
                         self.running = false
                     default: break
@@ -259,7 +278,10 @@ final class MCP: ObservableObject {
         }
         let path = request.path.split(separator: "?").first.map(String.init) ?? request.path
         if path == "/" || path == "/health" {
-            answer(HTTPResponse(status: 200, json: ["name": "copper", "version": Fork.version, "mcp": MCP.path, "running": running]))
+            var health: [String: Any] = ["name": "copper", "version": Fork.version, "mcp": MCP.path, "running": running,
+                                         "headless": Headless.on, "port": Int(port)]
+            if Headless.on { health["headlessWindow"] = Headless.health }
+            answer(HTTPResponse(status: 200, json: health))
             return
         }
         guard path == MCP.path else {
@@ -284,6 +306,11 @@ final class MCP: ObservableObject {
                     // loopback — `handle` never sees it, so nothing arriving
                     // through the link can reach it.
                     let result = await AgentLink.shared.control(one["params"] as? [String: Any] ?? [:])
+                    answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
+                } else if let one = body as? [String: Any], one["method"] as? String == "copper/intelligence" {
+                    // `copper intelligence …`: readiness and keys, loopback
+                    // only for the same reason as copper/link. Never echoes a key.
+                    let result = Intelligence.shared.control(one["params"] as? [String: Any] ?? [:])
                     answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
                 } else if let one = body as? [String: Any] {
                     if let reply = await self.handle(one) {
@@ -399,7 +426,7 @@ final class MCP: ObservableObject {
             return Setup(endpoint: endpoint, token: config.token).status().dictionary
         default: break
         }
-        return ["enabled": config.enabled, "running": running, "port": Int(config.port), "endpoint": endpoint, "calls": calls, "last": lastTool, "trouble": trouble ?? "",
+        return ["enabled": config.enabled, "running": running, "port": Int(port), "headless": Headless.on, "endpoint": endpoint, "calls": calls, "last": lastTool, "trouble": trouble ?? "",
                 "jev": config.jev, "jevKey": Intelligence.shared.jevReady, "jevLast": jevNote]
     }
 }

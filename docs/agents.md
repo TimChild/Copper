@@ -231,7 +231,8 @@ loopback port uses, then posting the reply (`POST /v1/me/links/:id/frames`,
 It works whether or not *Let agents drive this window* is on (the link does
 not use the port); it needs a window, like every tool call. `copper link …`
 does go through the port. `./bench agent link on|off|status`. How it is built and
-tested: [agent-link.md](agent-link.md).
+tested: [agent-link.md](agent-link.md). On a Mac nobody sits at (the bot Mac mini), Copper runs
+as a background service with no window: [headless.md](headless.md).
 
 ## What it is not
 

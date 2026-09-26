@@ -337,14 +337,23 @@ enum Ultrafast {
         if let action, (action["kind"] as? String) != "wait" {
             var plain = action
             plain["rect"] = nil
-            _ = try? await withCheckedThrowingContinuation { (c: CheckedContinuation<Any?, Error>) in
-                web.callAsyncJavaScript("if (window.__jevFast && window.__jevFast.settle) { return await window.__jevFast.settle(action); } return false;",
-                                        arguments: ["action": plain], in: nil, in: .page) { result in
-                    switch result {
-                    case .success(let v): c.resume(returning: v)
-                    case .failure(let e): c.resume(throwing: e)
+            // Capped: when the action navigates (a form submit), the old
+            // document's timers and frames stop and WebKit may never call
+            // back — the run would hang in "Watching the page settle". The
+            // wait below picks up the new page either way.
+            final class Once: @unchecked Sendable { var done = false }
+            let once = Once()
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                let finish: @Sendable () -> Void = {
+                    DispatchQueue.main.async {
+                        guard !once.done else { return }
+                        once.done = true
+                        c.resume()
                     }
                 }
+                web.callAsyncJavaScript("if (window.__jevFast && window.__jevFast.settle) { return await window.__jevFast.settle(action); } return false;",
+                                        arguments: ["action": plain], in: nil, in: .page) { _ in finish() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { finish() }
             }
         }
         let loadDeadline = Date().addingTimeInterval(10)

@@ -247,11 +247,20 @@ final class Bitwarden: ObservableObject {
 
         guard result.status == 0 else {
             let text = String(data: result.stderr, encoding: .utf8) ?? ""
-            let line = text.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
-                .first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw Failure(message: line?.isEmpty == false ? line! : "Bitwarden command failed")
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            // The SDK's Rust log lines ("ERROR bitwarden_crypto::…: …") come
+            // before the sentence meant for people; prefer that sentence.
+            let line = lines.first(where: { !Self.isLogLine($0) }) ?? lines.first
+            throw Failure(message: line ?? "Bitwarden command failed")
         }
         return result.stdout
+    }
+
+    private nonisolated static func isLogLine(_ line: String) -> Bool {
+        guard let space = line.firstIndex(of: " ") else { return false }
+        let level = line[..<space]
+        return ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"].contains(String(level)) && line.contains("::")
     }
 
     private struct Execution {

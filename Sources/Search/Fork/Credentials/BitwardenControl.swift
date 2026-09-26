@@ -88,7 +88,9 @@ extension Bitwarden {
             return out
         } catch {
             await loadCLIVersion()
-            let raw = (error as? Failure)?.message ?? error.localizedDescription
+            var raw = (error as? Failure)?.message ?? error.localizedDescription
+            // What the SDK says when an unlock key is wrong, in words.
+            if raw.localizedCaseInsensitiveContains("decryption operation failed") { raw = "Invalid master password" }
             var out = statusReport()
             out["ok"] = false
             out["error"] = Self.sanitize(raw, hiding: secrets)

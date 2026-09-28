@@ -39,7 +39,8 @@ in [ROADMAP.md](ROADMAP.md).
 - **⌘← and ⌘→ move the caret when you are typing.** In a page's text box, the omnibox, or the agent's composer they jump to the start and end of the line (⌘⇧ extends the selection), as in Safari; with nothing editable focused they still go back and forward. A key the page hands back with nowhere to go is kept quiet instead of beeping.
 - **Middle-click opens a link in a new tab behind the current one**; ⇧+middle-click brings it forward. WebKit numbers mouse buttons differently from AppKit and the check matched the right button instead of the wheel, so the page navigated in place. A ⌘- or middle-clicked `target=_blank` link now stays behind too.
 - **Mouse buttons 4 and 5 go back and forward** — in whichever pane of a split the pointer is over, and on the active tab over the sidebar. Middle-click on a sidebar row or favourite closes that tab.
-- `./bench key ID TEXT [--app]` presses ⌘/⇧/←/→ and can send through the app's key monitor; `./bench mouse back|forward|middle [X Y] [--shift]` clicks the other mouse buttons in-process; `./bench probe` reports `firstResponder` and `lastLinkClick`.
+- **The agent and Jev panes are easy to close.** Every header button is a real 26pt door with a hover wash (the split's toolbar too), a second "close all" door appears whenever more than one pane is open, **Close All Panes** (⌘⌥E) and **Jev Timeline** (⌘⌥J) join the menu and ⌘K, and Escape closes the pane nearest the edge when the keyboard is not in a page.
+- `./bench key ID TEXT [--app]` presses ⌘/⇧/←/→/⎋ and can send through the app's key monitor; `./bench ui focus none` hands the keyboard to the window; `./bench mouse back|forward|middle [X Y] [--shift]` clicks the other mouse buttons in-process; `./bench probe` reports `firstResponder` and `lastLinkClick`.
 
 ### Added
 

@@ -54,16 +54,28 @@ struct JevPane: View {
             }
             Spacer(minLength: 6)
             elapsed
-            if trace.live {
-                Button { trace.stop() } label: { Image(systemName: "stop.fill").font(.system(size: 10)) }
-                    .buttonStyle(.plain).foregroundStyle(JevStyle.accent).help("Stop the run")
+            // Real doors, not bare glyphs: a square each, washed under the
+            // pointer (PaneDoor). "Close all" only shows beside a second pane.
+            HStack(spacing: 2) {
+                if trace.live {
+                    PaneDoor(icon: "stop.fill", help: "Stop the run", tint: JevStyle.accent) { trace.stop() }
+                }
+                if several {
+                    PaneDoor(icon: "xmark.square", help: "Close all panes (⌘⌥E)") { Panes.closeAll(in: browser) }
+                }
+                PaneDoor(icon: "xmark", help: "Close (⌘⌥J)") { close() }
             }
-            Button { close() } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
-                .buttonStyle(.plain).foregroundStyle(Palette.muted).help("Close")
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
         .frame(height: 38)
     }
+
+    /// Whether another pane is open beside this one — read off the three
+    /// objects so the header redraws as they change.
+    @ObservedObject private var agent = Agent.shared
+    @ObservedObject private var split = Split.shared
+    private var several: Bool { (agent.open ? 1 : 0) + (split.on ? 1 : 0) > 0 }
 
     /// Ticking while the run is, still after it ends.
     @ViewBuilder

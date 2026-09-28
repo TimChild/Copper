@@ -411,13 +411,13 @@ final class Bench {
                 return event
             }
             // ⌘ and ⇧ in the text hold for the key after them; ← → are the
-            // arrows. (Fork: for ⌘← and friends.)
+            // arrows, ⎋ is Escape. (Fork: for ⌘← and friends.)
             var holding: NSEvent.ModifierFlags = []
             for character in text {
                 if character == "\u{2318}" { holding.insert(.command); continue }
                 if character == "\u{21E7}" { holding.insert(.shift); continue }
-                let arrow = character == "\u{2190}" ? UInt16(123) : character == "\u{2192}" ? UInt16(124) : nil
-                let chars = arrow.map { $0 == 123 ? "\u{F702}" : "\u{F703}" } ?? String(character)
+                let arrow = character == "\u{2190}" ? UInt16(123) : character == "\u{2192}" ? UInt16(124) : character == "\u{238B}" ? UInt16(53) : nil
+                let chars = arrow.map { $0 == 123 ? "\u{F702}" : $0 == 124 ? "\u{F703}" : "\u{1B}" } ?? String(character)
                 let flags = holding
                 holding = []
                 for type in [NSEvent.EventType.keyDown, .keyUp] {
@@ -485,6 +485,10 @@ final class Bench {
             if let on = request["sidebar"] as? Bool { browser.prefs.sidebar = on }
             if let on = request["folded"] as? Bool { browser.folded = on }
             if let on = request["peek"] as? Bool { browser.peeking = on }
+            // `ui focus none`: the keyboard to the window itself, as after a
+            // click on the column — for keys whose meaning depends on who has
+            // it. (Fork)
+            if request["focus"] as? String == "none" { Links.window?.makeFirstResponder(nil) }
             if #available(macOS 15.4, *), let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
             answer(["ok": true])
 

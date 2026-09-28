@@ -697,9 +697,14 @@ struct ContentView: View {
                 browser.picked = nil
                 return true
             }
-            guard browser.editing, browser.active?.isBlank == false else { return false }
-            browser.dismiss()
-            return true
+            if browser.editing {
+                guard browser.active?.isBlank == false else { return false }
+                browser.dismiss()
+                return true
+            }
+            // Last of all, a pane beside the page — while the keyboard is
+            // not in a page, where Escape is the page's. (Fork: Panes)
+            return Panes.escape(event, in: browser)
         }
 
         // Tab walks the row and comes round to the first again; ⇧Tab walks it

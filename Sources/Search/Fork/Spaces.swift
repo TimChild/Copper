@@ -469,6 +469,7 @@ struct ForkCommands: Commands {
     @ObservedObject var spaces = Spaces.shared
     @ObservedObject var split = Split.shared
     @ObservedObject var agent = Agent.shared
+    @ObservedObject var trace = JevTrace.shared
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
@@ -480,6 +481,13 @@ struct ForkCommands: Commands {
                 .keyboardShortcut("e", modifiers: [.command])
             Button("Ask About This Page") { agent.askOnPage(in: browser) }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+            // Jev's timeline had no way back once closed; and with two or
+            // three panes open there was no one move that put them all away.
+            Button(trace.paneOpen ? "Close Jev Timeline" : "Jev Timeline") { trace.paneOpen.toggle() }
+                .keyboardShortcut("j", modifiers: [.command, .option])
+            Button("Close All Panes") { Panes.closeAll(in: browser) }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+                .disabled(!agent.open && !trace.paneOpen && !split.on)
         }
         CommandMenu("Spaces") {
             Button("New Space") { spaces.add(in: browser) }

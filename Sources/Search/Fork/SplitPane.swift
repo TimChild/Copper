@@ -107,13 +107,16 @@ struct SplitBar: View {
     let live: Bool
 
     var body: some View {
+        // The doors are PaneDoor, the same square the agent's and Jev's
+        // headers draw, at 24 here since the bar is only 32 tall.
         HStack(spacing: 1) {
-            PaneGlyph(icon: "arrow.left", help: "Back", on: tab.canGoBack) { tab.back() }
-            PaneGlyph(icon: "arrow.right", help: "Forward", on: tab.canGoForward) { tab.forward() }
-            PaneGlyph(
+            PaneDoor(icon: "arrow.left", help: "Back", on: tab.canGoBack, tint: Palette.ink.opacity(0.65), size: 24) { tab.back() }
+            PaneDoor(icon: "arrow.right", help: "Forward", on: tab.canGoForward, tint: Palette.ink.opacity(0.65), size: 24) { tab.forward() }
+            PaneDoor(
                 icon: tab.loading ? "xmark" : "arrow.clockwise",
                 help: tab.loading ? "Stop" : "Reload",
-                on: true
+                tint: Palette.ink.opacity(0.65),
+                size: 24
             ) {
                 tab.loading ? tab.stop() : tab.reload()
             }
@@ -132,8 +135,15 @@ struct SplitBar: View {
 
             Spacer(minLength: 2)
 
-            PaneGlyph(icon: "xmark", help: "Close this pane", on: true) {
-                Split.shared.dismiss(tab, in: browser)
+            HStack(spacing: 1) {
+                if Agent.shared.open || JevTrace.shared.paneOpen {
+                    PaneDoor(icon: "xmark.square", help: "Close all panes (⌘⌥E)", tint: Palette.ink.opacity(0.65), size: 24) {
+                        Panes.closeAll(in: browser)
+                    }
+                }
+                PaneDoor(icon: "xmark", help: "Close this pane", tint: Palette.ink.opacity(0.65), size: 24) {
+                    Split.shared.dismiss(tab, in: browser)
+                }
             }
         }
         .padding(.horizontal, 7)
@@ -160,36 +170,6 @@ struct SplitBar: View {
         if let address = tab.address { return Address.pretty(address) }
         if !tab.title.isEmpty { return tab.title }
         return "New Tab"
-    }
-}
-
-/// One glyph in a pane's toolbar. Small, muted, and dimmed to nothing when it
-/// has nowhere to go — a door that is not there is quieter than a door that
-/// is greyed out.
-private struct PaneGlyph: View {
-    let icon: String
-    let help: String
-    let on: Bool
-    let act: () -> Void
-
-    @State private var over = false
-
-    var body: some View {
-        Button(action: on ? act : {}) {
-            Image(systemName: icon)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(on ? Palette.ink.opacity(over ? 0.9 : 0.65) : Palette.muted.opacity(0.3))
-                .frame(width: 21, height: 21)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(over && on ? Palette.hover : .clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .onHover { over = $0 && on }
-        .animation(Motion.quick, value: over)
     }
 }
 

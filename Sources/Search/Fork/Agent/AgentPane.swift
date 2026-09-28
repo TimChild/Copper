@@ -40,19 +40,30 @@ struct AgentPane: View {
                     .help(servers.all.filter(\.ready).map { "\($0.name): \($0.tools.count)" }.joined(separator: "\n"))
             }
             Spacer()
-            if agent.busy {
-                Button { agent.stop() } label: { Image(systemName: "stop.fill").font(.system(size: 10)) }
-                    .buttonStyle(.plain).foregroundStyle(Palette.muted).help("Stop")
-            } else if !agent.items.isEmpty {
-                Button { agent.clear() } label: { Image(systemName: "trash").font(.system(size: 10)) }
-                    .buttonStyle(.plain).foregroundStyle(Palette.muted).help("Clear the conversation")
+            // Real doors, not bare glyphs: a square each, washed under the
+            // pointer (PaneDoor). "Close all" only shows beside a second pane.
+            HStack(spacing: 2) {
+                if agent.busy {
+                    PaneDoor(icon: "stop.fill", help: "Stop") { agent.stop() }
+                } else if !agent.items.isEmpty {
+                    PaneDoor(icon: "trash", help: "Clear the conversation") { agent.clear() }
+                }
+                if several {
+                    PaneDoor(icon: "xmark.square", help: "Close all panes (⌘⌥E)") { Panes.closeAll(in: browser) }
+                }
+                PaneDoor(icon: "xmark", help: "Close (⌘E)") { agent.open = false }
             }
-            Button { agent.open = false } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
-                .buttonStyle(.plain).foregroundStyle(Palette.muted).help("Close (⌘E)")
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
         .frame(height: 38)
     }
+
+    /// Whether another pane is open beside this one — read off the two other
+    /// objects so the header redraws as they change.
+    @ObservedObject private var trace = JevTrace.shared
+    @ObservedObject private var split = Split.shared
+    private var several: Bool { (trace.paneOpen ? 1 : 0) + (split.on ? 1 : 0) > 0 }
 
     private var transcript: some View {
         ScrollViewReader { proxy in

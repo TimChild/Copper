@@ -232,16 +232,19 @@ final class History: ObservableObject {
         let lower = strip(typed)
         guard !lower.isEmpty, lower.count >= 2 else { return nil }
         for hit in options {
-            let key = strip(hit.key)
-            if key.hasPrefix(lower) {
-                let rest = String(key.dropFirst(lower.count))
-                if !rest.isEmpty { return rest }
-            }
-            // Open tabs and bookmarks often use their title as the row key.
-            // Their address is still the useful completion.
+            // The address first: in a field for addresses, "git" carries on
+            // to "github.com" before it carries on to a tab called GitHub.
+            // Open tabs and bookmarks use their title as the row key, so the
+            // title is tried second — a kept page whose name you know is
+            // still a page you can reach by typing what you call it.
             let address = strip(Address.pretty(hit.url))
             if address.hasPrefix(lower) {
                 let rest = String(address.dropFirst(lower.count))
+                if !rest.isEmpty { return rest }
+            }
+            let key = strip(hit.key)
+            if key.hasPrefix(lower) {
+                let rest = String(key.dropFirst(lower.count))
                 if !rest.isEmpty { return rest }
             }
         }

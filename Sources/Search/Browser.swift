@@ -21,6 +21,7 @@ final class Browser: NSObject, ObservableObject {
             // from when it was first picked.
             guard oldValue != activeID, let old = oldValue else { return }
             tabs.first { $0.id == old }?.touch()
+            Recent.shared.touched(activeID)
         }
     }
 
@@ -1094,6 +1095,7 @@ final class Browser: NSObject, ObservableObject {
                 tab.close()
                 adopt(fresh)
                 tabs = [fresh]
+                Recent.shared.prune(tabs)
                 activeID = fresh.id
                 typed = ""
             }
@@ -1103,6 +1105,7 @@ final class Browser: NSObject, ObservableObject {
         remember(tab, at: index)
         tab.close()
         tabs.remove(at: index)
+        Recent.shared.prune(tabs)
         if activeID == tab.id {
             // The neighbour on the right, or the last one if there is no
             // right — through select(), same as everywhere else you land on

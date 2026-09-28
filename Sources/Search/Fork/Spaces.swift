@@ -154,6 +154,7 @@ final class Spaces: ObservableObject {
             browser.activeID = nil
             browser.select(active)
         }
+        Recent.shared.rebuild(from: browser.tabs)
         // A row is only ever swept while it is the one on screen, so the
         // archive never runs on a space behind your back. (Fork: sections)
         Sections.shared.sweep(in: browser)
@@ -416,10 +417,12 @@ final class Spaces: ObservableObject {
         let mine = rows.removeValue(forKey: current) ?? ([], nil)
         parked = rows
         browser.tabs = mine.tabs
+        Recent.shared.rebuild(from: browser.tabs)
         Sections.shared.begin(in: browser) // Fork: the archive sweep, at launch and every half hour
         guard let first = mine.tabs.first else { return }
         let active = mine.tabs.first { $0.id == mine.active } ?? first
         browser.activeID = active.id
+        Recent.shared.rebuild(from: browser.tabs)
         Sections.shared.note(active.id)
         _ = active.wake()
     }

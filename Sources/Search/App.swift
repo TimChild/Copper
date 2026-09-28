@@ -234,6 +234,7 @@ private struct MenuLine: View {
 
 struct ContentView: View {
     @ObservedObject var browser: Browser
+    @ObservedObject private var recent = Recent.shared
 
     @State private var keys: Any?
     @State private var window: NSWindow?
@@ -267,6 +268,12 @@ struct ContentView: View {
                     // One stage, always.
                     if let tab = browser.active {
                         SplitStage(browser: browser, active: tab)
+                            .overlay {
+                                if recent.showing {
+                                    RecentStrip(browser: browser)
+                                        .allowsHitTesting(false)
+                                }
+                            }
                             .overlay(alignment: .topTrailing) {
                                 if browser.finding {
                                     FindBar(browser: browser)
@@ -645,6 +652,10 @@ struct ContentView: View {
         guard keys == nil else { return }
         keys = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
             guard event.type == .keyDown else {
+                // Releasing ⌃ commits a most-recent tab walk wherever it stopped.
+                if !event.modifierFlags.contains(.control), Recent.shared.walking {
+                    Recent.shared.end(in: browser)
+                }
                 // ⌘ let go of ends a ⌘K walk, wherever it stopped.
                 if !event.modifierFlags.contains(.command) { browser.landSummon() }
                 return event
@@ -721,6 +732,10 @@ struct ContentView: View {
             if !browser.fieldShowing, browser.active?.typing == true { return false }
             if browser.fieldShowing, !browser.offers.isEmpty {
                 browser.walk(flags.contains(.shift) ? -1 : 1)
+                return true
+            }
+            if !browser.fieldShowing, flags.contains(.control), browser.prefs.tabSwitching == .recent {
+                Recent.shared.step(flags.contains(.shift) ? -1 : 1, in: browser)
                 return true
             }
             browser.step(flags.contains(.shift) ? -1 : 1)

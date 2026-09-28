@@ -23,6 +23,20 @@ enum Glyph: String, CaseIterable, Identifiable {
     }
 }
 
+/// What holding Control while pressing Tab should choose.
+enum TabSwitching: String, CaseIterable, Identifiable {
+    case row, recent
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .row: return "Next tab in the row"
+        case .recent: return "Most recent tab"
+        }
+    }
+}
+
 @MainActor
 final class Preferences: ObservableObject {
     private let store = Store.settings
@@ -49,6 +63,10 @@ final class Preferences: ObservableObject {
     }
     @Published var glyph: Glyph {
         didSet { store.set(glyph.rawValue, forKey: "glyph") }
+    }
+    /// Whether Control-Tab follows the row or the tabs used most recently.
+    @Published var tabSwitching: TabSwitching {
+        didSet { store.set(tabSwitching.rawValue, forKey: "tabs.switching") }
     }
     /// Tabs nobody has looked at for half an hour give their page back and
     /// keep where they were. On unless turned off.
@@ -132,6 +150,7 @@ final class Preferences: ObservableObject {
         let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
+        tabSwitching = store.string(forKey: "tabs.switching").flatMap(TabSwitching.init) ?? .row
         sleepsTabs = store.object(forKey: "tabs.sleep") as? Bool ?? true
         shielded = store.object(forKey: "shield") as? Bool ?? true
         // Offered by default only in a build that can actually do them —

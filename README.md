@@ -18,8 +18,9 @@ It was built by a design studio that spends its whole day in a browser and was t
 
 ## What it does
 
-- **One field.** Type an address and you go there; type words and you search. It finishes addresses from your own history and never sends what you type anywhere until you press Return.
-- **Tabs that stay out of the way.** Pin the pages you keep open all day and they shrink to a letter or their icon. Tabs from your last session come back instantly and cost nothing until you click them. `⌘K` lists your open tabs by name.
+- **One field.** Type an address and you go there; type words and you search. It finishes addresses from your own history — and from Arc's or Chrome's, whole, once you press **Bring in** under Settings › General — and from every tab you keep in any space, and never sends what you type anywhere until you press Return.
+- **Tabs that stay out of the way.** Pin the pages you keep open all day and they shrink to a letter or their icon. Tabs from your last session come back instantly and cost nothing until you click them. `⌘K` lists your open tabs by name. The tab you are on is unmistakable — paper on the column, a bar in the space's colour, a heavier title — and the column scrolls to it whenever the selection moves. `⌃Tab` walks the row, or, from Settings › Tabs, flips between the tabs you used most recently ([docs/tabs.md](docs/tabs.md)).
+- **Spaces.** Rows of tabs with a name, an icon, a colour the whole column wears, and optionally a profile of their own. A labelled header, icon chips at the foot, **Edit Space…** for everything, delete that offers to keep the tabs ([docs/spaces.md](docs/spaces.md)).
 - **Reading mode.** `⇧⌘R` strips a page down to the article.
 - **Hide anything, for good.** `⇧⌘H`, then click a cookie banner, a newsletter overlay, a rail of "related" nonsense — it goes, and it is still gone on that site next time, before the page has drawn a single frame.
 - **An ad blocker that runs before the page.** Third-party trackers and ad networks are stopped at the network level, so there is nothing to render and nothing to slow down. On by default, off per site if something breaks.
@@ -27,7 +28,7 @@ It was built by a design studio that spends its whole day in a browser and was t
 - **Passwords, in your keychain.** Copper offers to save a sign-in once it has actually worked, and offers your saved accounts under the field when you click it — the way Safari does, never filling anything on its own. Everything lives in the macOS keychain, encrypted by the system, readable only by Copper. Bring yours in from Chrome, Arc, Dia, Brave or Edge in one click; nothing leaves the Mac.
 - **Flow — move in from Chrome or Arc.** One button brings over open tabs, spaces, bookmarks, history, passwords, Google Password Manager passkeys, signed-in state and extensions. Imported pages stay asleep until you visit them, and macOS asks once before handing over the other browser's key.
 - **Light, dark, or the Mac's own.** The frame and the pages follow.
-- **Bookmarks, history, downloads** — each a panel, each searchable, each one keystroke away.
+- **Bookmarks, history, downloads** — each a panel, each searchable, each one keystroke away. A download shows a small door with a progress ring while it arrives and a popover with speed, time left, cancel, retry and Show in Finder — and nothing at all when there is nothing to show ([docs/downloads.md](docs/downloads.md)).
 - **Chrome extensions, without Chrome.** Paste a Chrome Web Store link in Settings › Extensions, or open the extension's page in Copper and press Add. It runs on WebKit's own extension engine — the one Safari uses — and where Chrome has APIs WebKit doesn't (bookmarks, history, downloads, side panel, offscreen documents, fonts, notifications, speech, OAuth sign-in), Copper fills them in itself. They live behind the puzzle button; pin the ones you use often. Building your own? Load its folder as an unpacked extension and press Reload after each change, as in Chrome's developer mode. macOS 15.4 or later.
 - **Updates itself, quietly.** Once every six hours it checks Copper's internal feed. When a newer build is out, Settings › Updates or ⌘K can install it in one click, keeping your tabs intact.
 
@@ -72,8 +73,9 @@ The feed installer accepts `COPPER_NO_LAUNCH=1` / `--no-launch` for scripts that
 | `⌘L` address · `⌘K` switch tab · `⌘T` new tab · `⌘W` close · `⇧⌘T` reopen | `⌘[` `⌘]` back, forward · `⇧⌘[` `⇧⌘]` previous, next tab · `⌘1`–`⌘9` jump |
 | `⇧⌘S` tabs across the top or down the left · `⌘S` fold the sidebar away · `⇧⌘B` bookmark this page | `⇧⌘R` reading mode · `⇧⌘P` float the video · `⇧⌘H` hide something · `⇧⌘U` what is hidden here |
 | `⌘F` find · `⌘D` duplicate tab · `⇧⌘C` copy address · `⇧⌘V` paste and go | `⌘Y` history · `⇧⌘J` downloads · `⌘,` settings · `⌥⌘L` passwords |
+| `⌘E` agent pane · `⌥⌘J` Jev timeline · `⌥⌘E` close every pane · `⇧⌘D` split | `⌃N` new space · `⌃⌥←` `⌃⌥→` previous, next space · `⌃1`–`⌃9` jump to a space |
 
-`Tab` walks along the row of tabs; `esc` puts away whatever is open.
+`Tab` walks along the row of tabs; `⌃Tab` does too, or flips between your most recent tabs (Settings › Tabs); `esc` puts away whatever is open. `⌘←` and `⌘→` move the caret when you are typing and go back and forward otherwise; a middle click opens a link behind the current tab; the thumb buttons on a mouse go back and forward.
 
 ---
 

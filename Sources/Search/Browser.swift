@@ -722,6 +722,17 @@ final class Browser: NSObject, ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.7, execute: work)
     }
 
+    /// A download door is present in either chrome mode unless the page owns
+    /// the whole window. Toasts remain the fallback only while the door cannot
+    /// be seen (folded sidebar or immersed page).
+    var downloadsDoorVisible: Bool {
+        Downloads.shared.doorShowing && active?.immersed != true && (!prefs.sidebar || !folded)
+    }
+
+    func openDownloadsFolder() {
+        NSWorkspace.shared.open(prefs.downloads)
+    }
+
     /// The names extensions asked their downloads to be saved under.
     var namedDownloads: [URL: String] = [:]
 
@@ -1883,6 +1894,11 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     func keep(_ download: WKDownload) {
         download.delegate = self
         downloading.append(download)
+        Downloads.shared.began(
+            download,
+            name: download.originalRequest?.url?.lastPathComponent,
+            from: download.originalRequest?.url?.host
+        )
     }
 
     /// Without this WebKit refuses every request out of hand, and a page that
@@ -2051,18 +2067,22 @@ extension Browser: WKDownloadDelegate {
                 return
             }
             completionHandler(url)
+            Downloads.shared.destined(download, to: url)
             announce("Downloading \(url.lastPathComponent)")
             return
         }
 
-        completionHandler(Browser.free(name, in: prefs.downloads))
+        let destination = Browser.free(name, in: prefs.downloads)
+        completionHandler(destination)
+        Downloads.shared.destined(download, to: destination)
         announce("Downloading \(name)")
     }
 
     func downloadDidFinish(_ download: WKDownload) {
         downloading.removeAll { $0 === download }
+        Downloads.shared.finished(download)
         guard let file = download.progress.fileURL else {
-            announce("Download finished")
+            if !downloadsDoorVisible { announce("Download finished") }
             return
         }
         loot.add(
@@ -2073,7 +2093,7 @@ extension Browser: WKDownloadDelegate {
                 date: Date()
             )
         )
-        announce("Saved \(file.lastPathComponent)")
+        if !downloadsDoorVisible { announce("Saved \(file.lastPathComponent)") }
     }
 
     func download(
@@ -2082,7 +2102,9 @@ extension Browser: WKDownloadDelegate {
         resumeData: Data?
     ) {
         downloading.removeAll { $0 === download }
-        announce("Download failed")
+        Downloads.shared.failed(download, error: error, resumeData: resumeData)
+        let cancelled = (error as NSError).code == NSURLErrorCancelled
+        if !cancelled && !downloadsDoorVisible { announce("Download failed") }
     }
 
     /// WebKit refuses to write over a file that is already there, so the name

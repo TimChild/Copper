@@ -193,22 +193,31 @@ struct HistoryPanel: View {
 struct DownloadsPanel: View {
     @ObservedObject var browser: Browser
     @ObservedObject var loot: Loot
+    @ObservedObject var downloads: Downloads
+
+    private var session: [Downloads.Item] {
+        downloads.items.filter { if case .cancelled = $0.state { return false }; return true }
+    }
+
+    private var older: [Keep] {
+        let paths = Set(session.compactMap { $0.file?.path })
+        return loot.kept.filter { !paths.contains($0.path) }
+    }
 
     var body: some View {
         Plate("Downloads", width: 560, close: { browser.hoarding = false }) {
-            if loot.kept.isEmpty {
+            if session.isEmpty && older.isEmpty {
                 Card { Nothing("Nothing downloaded yet.") }
             } else {
                 ScrollView(showsIndicators: false) {
                     Card {
-                        ForEach(Array(loot.kept.enumerated()), id: \.element.id) { index, keep in
-                            if index > 0 { Rule() }
-                            Row(
-                                keep: keep,
-                                open: { loot.open(keep) },
-                                reveal: { loot.reveal(keep) },
-                                forget: { loot.forget(keep) }
-                            )
+                        ForEach(session) { item in
+                            DownloadRow(item: item, browser: browser, downloads: downloads)
+                            if item.id != session.last?.id || !older.isEmpty { Rule() }
+                        }
+                        ForEach(older) { keep in
+                            DownloadRow(keep: keep, browser: browser, downloads: downloads)
+                            if keep.id != older.last?.id { Rule() }
                         }
                     }
                     .padding(.bottom, 2)
@@ -217,56 +226,22 @@ struct DownloadsPanel: View {
             }
         } foot: {
             HStack {
-                Text(loot.kept.isEmpty ? "Files land in \(browser.prefs.downloads.lastPathComponent)"
+                Text(session.isEmpty && loot.kept.isEmpty ? "Files land in \(browser.prefs.downloads.lastPathComponent)"
                      : "Clearing the list leaves the files where they are")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.muted)
                 Spacer()
-                if !loot.kept.isEmpty {
-                    Pill("Clear list") { loot.forgetAll() }
+                Button("Open Folder") { browser.openDownloadsFolder() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.muted)
+                if !loot.kept.isEmpty || !session.isEmpty {
+                    Pill("Clear list") {
+                        downloads.clearFinished()
+                        loot.forgetAll()
+                    }
                 }
             }
-        }
-    }
-
-    private struct Row: View {
-        let keep: Keep
-        let open: () -> Void
-        let reveal: () -> Void
-        let forget: () -> Void
-
-        @State private var hovering = false
-
-        var body: some View {
-            HStack(spacing: 12) {
-                Image(systemName: keep.stillThere ? "doc" : "doc.badge.ellipsis")
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(keep.stillThere ? Palette.muted : Palette.faint)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(keep.name)
-                        .font(.system(size: 13))
-                        .foregroundStyle(keep.stillThere ? Palette.ink : Palette.faint)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(keep.from.isEmpty ? When.said(keep.date) : "\(keep.from) · \(When.said(keep.date))")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Palette.muted)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if hovering {
-                    if keep.stillThere { Quick("Show in Finder", act: reveal) }
-                    Quick("Remove", tint: .red.opacity(0.75), act: forget)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(hovering ? Palette.hover : .clear)
-            .contentShape(Rectangle())
-            .onTapGesture { if keep.stillThere { open() } }
-            .onHover { hovering = $0 }
-            .animation(Motion.quick, value: hovering)
         }
     }
 }

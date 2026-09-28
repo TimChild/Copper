@@ -16,6 +16,7 @@ struct SideBar: View {
     @ObservedObject var prefs: Preferences
     @ObservedObject private var spaces = Spaces.shared
     @ObservedObject private var sections = Sections.shared
+    @ObservedObject private var downloads = Downloads.shared
 
     @Environment(\.colorScheme) private var scheme
 
@@ -385,11 +386,16 @@ struct SideBar: View {
     private var foot: some View {
         HStack(spacing: 0) {
             ExtensionSlot(edge: .trailing)
+            if downloads.doorShowing {
+                DownloadsDoor(browser: browser, size: 22, arrowEdge: .trailing)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
             Door(icon: "bookmark", help: "Bookmarks", size: 22) { browser.bookmarksOpen.toggle() }
                 .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .trailing) {
                     BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
                 }
         }
+        .animation(Motion.settle, value: downloads.doorShowing)
     }
 
 }

@@ -167,6 +167,7 @@ struct SearchApp: App {
                     .keyboardShortcut("y")
                 Button("Downloads…") { browser.hoarding = true }
                     .keyboardShortcut("j", modifiers: [.command, .shift])
+                Button("Open Downloads Folder") { browser.openDownloadsFolder() }
                 Divider()
                 Button("Clear History") { browser.clearHistory() }
             }
@@ -341,7 +342,7 @@ struct ContentView: View {
             sheet { HistoryPanel(browser: browser) } close: { browser.recalling = false }
         }
         if browser.hoarding {
-            sheet { DownloadsPanel(browser: browser, loot: browser.loot) }
+            sheet { DownloadsPanel(browser: browser, loot: browser.loot, downloads: Downloads.shared) }
                 close: { browser.hoarding = false }
         }
         if browser.tuning {

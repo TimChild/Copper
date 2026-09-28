@@ -44,6 +44,7 @@ enum CommandBar {
             .init(id: "hide", name: "Hide Something on This Page", glyph: "eye.slash") { $0.toggleHiding() },
             .init(id: "history", name: "History", glyph: "clock.arrow.circlepath") { $0.recalling = true },
             .init(id: "downloads", name: "Downloads", glyph: "arrow.down.circle") { $0.hoarding = true },
+            .init(id: "downloads-folder", name: "Open Downloads Folder", glyph: "folder") { $0.openDownloadsFolder() },
             .init(id: "passwords", name: "Passwords", glyph: "key") { $0.managing = true },
             .init(id: "passkeys", name: "Passkeys", glyph: "person.badge.key") { $0.tuning = true },
             .init(id: "settings", name: "Settings", glyph: "gearshape") { $0.tuning = true },

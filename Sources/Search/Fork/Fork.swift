@@ -83,6 +83,47 @@ enum Fork {
         case "swipe": return SpaceSwipe.bench(request["arg"] as? String ?? "left", in: browser)
         case "mouse": return MouseButtons.bench(request, in: browser)
         case "heat": return Heat.shared.bench(request, in: browser)
+        case "downloads":
+            let op = request["op"] as? String ?? "list"
+            let argument = request["arg"] as? String ?? ""
+            func state(_ item: Downloads.Item) -> String {
+                switch item.state {
+                case .running: return "running"
+                case .finished: return "finished"
+                case .failed: return "failed"
+                case .cancelled: return "cancelled"
+                }
+            }
+            func describe(_ item: Downloads.Item) -> [String: Any] {
+                let fraction: Any = item.total.map { $0 > 0 ? Double(item.done) / Double($0) : 0 } ?? NSNull()
+                return ["id": item.id.uuidString, "name": item.name, "state": state(item),
+                        "done": item.done, "total": item.total ?? NSNull(), "fraction": fraction,
+                        "speed": item.speed, "file": item.file?.path ?? ""]
+            }
+            let downloads = Downloads.shared
+            switch op {
+            case "open": downloads.popoverOpen = true; downloads.seen()
+            case "close": downloads.popoverOpen = false
+            case "cancel":
+                guard let item = downloads.items.first(where: { $0.id.uuidString.lowercased().hasPrefix(argument.lowercased()) }) else { return ["error": "no download \(argument)"] }
+                downloads.cancel(item)
+            case "retry":
+                guard let item = downloads.items.first(where: { $0.id.uuidString.lowercased().hasPrefix(argument.lowercased()) }) else { return ["error": "no download \(argument)"] }
+                downloads.retry(item, in: browser)
+            case "clear": downloads.clearFinished()
+            case "start":
+                guard Store.testing, let raw = URL(string: argument), let tab = browser.active else {
+                    return ["error": "downloads start needs a URL in a probe world"]
+                }
+                tab.web.startDownload(using: URLRequest(url: raw)) { download in
+                    browser.keep(download)
+                }
+                return ["started": true]
+            case "list": break
+            default: return ["error": "unknown downloads operation \(op)"]
+            }
+            return ["items": downloads.items.map(describe), "unseen": downloads.unseen,
+                    "doorShowing": downloads.doorShowing, "popoverOpen": downloads.popoverOpen]
         case "bw":
             // Bitwarden without the Settings card, for a probe run: `bw status`,
             // `bw server URL`, `bw login EMAIL PASSWORD [OTP]`, `bw unlock PASSWORD`,

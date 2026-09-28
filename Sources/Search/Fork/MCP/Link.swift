@@ -27,12 +27,64 @@ final class AgentLink: ObservableObject, Identifiable {
     typealias Bot = LinkWire.Bot
     typealias Call = LinkWire.Call
 
+    /// The service allows letters, digits, `_` and `-` in a link name. Keep
+    /// the device part deterministic so two headless Coppers do not silently
+    /// share the old, generic `copper` link.
+    nonisolated static func deviceSlug(_ raw: String) -> String {
+        var output = ""
+        var dash = false
+        for scalar in raw.lowercased().unicodeScalars {
+            let value = scalar.value
+            if (value >= 97 && value <= 122) || (value >= 48 && value <= 57) {
+                output.unicodeScalars.append(scalar)
+                dash = false
+            } else if !dash {
+                output.append("-")
+                dash = true
+            }
+        }
+        while output.hasPrefix("-") { output.removeFirst() }
+        while output.hasSuffix("-") { output.removeLast() }
+        if output.isEmpty { output = "device" }
+        output = String(output.prefix(33))
+        while output.hasSuffix("-") { output.removeLast() }
+        return output.isEmpty ? "device" : output
+    }
+
+    nonisolated static func defaultName(for device: String) -> String {
+        "copper-\(deviceSlug(device))"
+    }
+
+    nonisolated static var defaultName: String {
+        Headless.on ? defaultName(for: self.device) : "copper"
+    }
+
+    /// Pick the next deterministic name after a create/connect conflict.
+    /// The first repair is the device name; later repairs get a numeric
+    /// suffix, while retaining the service's 40-character limit.
+    nonisolated static func renamedName(from current: String, device: String) -> String {
+        let base = defaultName(for: device)
+        if current == base {
+            return boundedName(base, suffix: "-2")
+        }
+        let prefix = base + "-"
+        if current.hasPrefix(prefix), let number = Int(current.dropFirst(prefix.count)), number >= 2 {
+            return boundedName(base, suffix: "-\(number + 1)")
+        }
+        return base
+    }
+
+    nonisolated private static func boundedName(_ base: String, suffix: String) -> String {
+        let room = max(1, 40 - suffix.count)
+        return String(base.prefix(room)) + suffix
+    }
+
     struct Config: Codable, Equatable {
         var id = UUID().uuidString
         var enabled = false
         var api = ""
         var token = ""
-        var name = "copper"
+        var name = AgentLink.defaultName
         var linkId: String?
         var announces = true
         var label = ""
@@ -45,11 +97,11 @@ final class AgentLink: ObservableObject, Identifiable {
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
             api = try c.decodeIfPresent(String.self, forKey: .api) ?? ""
             token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
-            name = try c.decodeIfPresent(String.self, forKey: .name) ?? "copper"
+            name = try c.decodeIfPresent(String.self, forKey: .name) ?? AgentLink.defaultName
             linkId = try c.decodeIfPresent(String.self, forKey: .linkId)
             announces = try c.decodeIfPresent(Bool.self, forKey: .announces) ?? true
             label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
-            if name.isEmpty { name = "copper" }
+            if name.isEmpty { name = AgentLink.defaultName }
         }
     }
 
@@ -92,6 +144,8 @@ final class AgentLink: ObservableObject, Identifiable {
         case unauthorized
         case revoked
         case superseded
+        case nameTaken(String?)
+        case deviceMismatch
         case http(Int, String)
         case transport(String)
 
@@ -101,6 +155,9 @@ final class AgentLink: ObservableObject, Identifiable {
             case .unauthorized: return "Token rejected — mint a new one"
             case .revoked: return "The link was revoked"
             case .superseded: return "Another Copper took this link — switch off and on to take it back"
+            case .nameTaken(let takenBy):
+                return takenBy.map { "Another Copper (\($0)) owns this link name" } ?? "Another Copper owns this link name"
+            case .deviceMismatch: return "Another device is serving this link"
             case .http(let status, let why): return why.isEmpty ? "The app answered \(status)" : "The app answered \(status): \(why)"
             case .transport(let why): return why
             }
@@ -143,7 +200,9 @@ final class AgentLink: ObservableObject, Identifiable {
     init(config: Config, onChange: @escaping () -> Void = {}) {
         self.id = config.id
         self.onChange = onChange
-        self.config = config
+        var normalized = config
+        if Headless.on, normalized.name == "copper" { normalized.name = AgentLink.defaultName }
+        self.config = normalized
     }
 
     func bind(onChange: @escaping () -> Void) { self.onChange = onChange }
@@ -166,10 +225,12 @@ final class AgentLink: ObservableObject, Identifiable {
         return URL(string: config.api)?.host ?? config.api
     }
 
-    /// "Copper on Felipe's MacBook Pro".
-    static var label: String { "Copper on \(computerName)" }
+    /// "Copper on Felipe's MacBook Pro" (or its headless counterpart).
+    nonisolated static var label: String {
+        "Copper on \(computerName)" + (Headless.on ? " (headless)" : "")
+    }
 
-    static var computerName: String {
+    nonisolated static var computerName: String {
         // SCDynamicStoreCopyComputerName is the name in Sharing settings —
         // what Host.current().localizedName returns, without the DNS walk
         // Host does first.
@@ -177,7 +238,7 @@ final class AgentLink: ObservableObject, Identifiable {
         return device
     }
 
-    static var device: String {
+    nonisolated static var device: String {
         let host = ProcessInfo.processInfo.hostName
         return host.hasSuffix(".local") ? String(host.dropLast(6)) : host
     }
@@ -243,8 +304,15 @@ final class AgentLink: ObservableObject, Identifiable {
     private func loop(_ g: Int, fresh: Bool) async {
         var attempt = 0
         var fresh = fresh
+        var renames = 0
+        var renameNotice: String?
         while current(g), config.enabled {
-            status = .connecting
+            if let notice = renameNotice {
+                status = .offline(notice)
+                renameNotice = nil
+            } else {
+                status = .connecting
+            }
             do {
                 if fresh || config.linkId == nil {
                     try await createLink()
@@ -262,11 +330,44 @@ final class AgentLink: ObservableObject, Identifiable {
             } catch Failure.revoked {
                 if current(g) { markRevoked() }
                 return
+            } catch Failure.nameTaken, Failure.deviceMismatch {
+                guard current(g) else { return }
+                guard renames < 3 else {
+                    status = .offline("Could not find an available link name after 3 renames")
+                    return
+                }
+                let old = config.name
+                let renamed = Self.renamedName(from: old, device: Self.device)
+                renames += 1
+                config.name = renamed
+                config.linkId = nil
+                link = nil
+                renameNotice = "Renamed to \(renamed): another Copper owns \"\(old)\""
+                fresh = true
+                attempt = 0
+                continue
             } catch Failure.superseded {
                 if current(g) {
-                    disconnect()
-                    status = .offline(Failure.superseded.text)
+                    let superseding = await supersedingDevice()
+                    guard current(g) else { return }
+                    if let device = superseding, device != Self.device {
+                        guard renames < 3 else {
+                            status = .offline("Could not find an available link name after 3 renames")
+                            return
+                        }
+                        let old = config.name
+                        let renamed = Self.renamedName(from: old, device: Self.device)
+                        renames += 1
+                        config.name = renamed
+                        config.linkId = nil
+                        link = nil
+                        renameNotice = "Renamed to \(renamed): another Copper owns \"\(old)\""
+                        fresh = true
+                        attempt = 0
+                        continue
+                    }
                 }
+                if current(g) { status = .offline(Failure.superseded.text) }
                 return
             } catch Failure.setup(let why) {
                 // No token, or an address that isn't one: waiting won't fix
@@ -286,14 +387,34 @@ final class AgentLink: ObservableObject, Identifiable {
     }
 
     private func createLink() async throws {
+        // A pre-link config from an older headless Copper may still say
+        // `copper`; migrate that default before the first request so the
+        // payload itself is unambiguous and the rename is persisted.
+        if Headless.on, config.name == "copper" { config.name = AgentLink.defaultName }
         let body: [String: Any] = [
             "name": config.name, "label": AgentLink.label, "kind": "mcp",
             "device": AgentLink.device, "clientVersion": Fork.version,
+            "placement": Headless.on ? "remote" : "local", "headless": Headless.on,
         ]
         let object = try await send("POST", ["v1", "me", "links"], body: body, gone: .notFound)
         guard let made = LinkWire.Link(object) else { throw Failure.http(200, "no link in the answer") }
         link = made
         if config.linkId != made.id { config.linkId = made.id }
+    }
+
+    /// The superseded frame deliberately carries no device. Refresh the link
+    /// row before deciding whether this is another Copper or merely a stream
+    /// from this device winning a reconnect race.
+    private func supersedingDevice() async -> String? {
+        guard let id = config.linkId else { return nil }
+        do {
+            let object = try await send("GET", ["v1", "me", "links", id], gone: .notFound)
+            guard let known = LinkWire.Link(object) else { return nil }
+            link = known
+            return known.servedBy?.device
+        } catch {
+            return nil
+        }
     }
 
     /// On a reconnect: is the link still there and still ours to serve? A
@@ -314,7 +435,9 @@ final class AgentLink: ObservableObject, Identifiable {
         guard let id = config.linkId else { throw Failure.setup("No link yet") }
         var request = try makeRequest("GET", ["v1", "me", "links", id, "frames"],
                                       query: [URLQueryItem(name: "device", value: AgentLink.device),
-                                              URLQueryItem(name: "clientVersion", value: Fork.version)],
+                                              URLQueryItem(name: "clientVersion", value: Fork.version),
+                                              URLQueryItem(name: "placement", value: Headless.on ? "remote" : "local"),
+                                              URLQueryItem(name: "headless", value: Headless.on ? "true" : "false")],
                                       timeout: 45) // the service pings every 15 s; three missed is a dead stream
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
@@ -581,10 +704,18 @@ final class AgentLink: ObservableObject, Identifiable {
     /// wrong, and switching the link off for that would be a lie.
     private static func classify(_ code: Int, _ data: Data, gone: Gone) -> Failure {
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let errorObject = object?["error"] as? [String: Any]
+        let errorCode = (errorObject?["code"] as? String) ?? (errorObject?["code"] as? NSNumber)?.stringValue
         let message = (object?["error"] as? String) ?? (object?["message"] as? String)
-            ?? ((object?["error"] as? [String: Any])?["message"] as? String) ?? ""
+            ?? (errorObject?["message"] as? String) ?? ""
         switch code {
         case 401: return .unauthorized
+        case 409:
+            switch errorCode {
+            case "LINK_NAME_TAKEN": return .nameTaken(object?["takenBy"] as? String ?? errorObject?["takenBy"] as? String)
+            case "LINK_DEVICE_MISMATCH": return .deviceMismatch
+            default: return .http(code, String(message.prefix(200)))
+            }
         case 404, 410:
             // A framework's own 404 ("Route GET:/v1/… not found") is an app
             // without these routes, not a link that is gone.
@@ -610,6 +741,15 @@ final class AgentLink: ObservableObject, Identifiable {
 
     // MARK: - bench and the CLI
 
+    var placement: String {
+        if let placement = link?.placement { return placement }
+        if link?.headless == true { return "remote" }
+        return Headless.on ? "remote" : "local"
+    }
+    var headless: Bool { link?.headless ?? Headless.on }
+    var servedBy: LinkWire.ServedBy? { link?.servedBy }
+    var servingHere: Bool { servedBy?.device == AgentLink.device }
+
     /// Everything but the token.
     var summary: [String: Any] {
         [
@@ -618,6 +758,9 @@ final class AgentLink: ObservableObject, Identifiable {
             "status": status.key, "statusText": status.text, "online": status.isOnline,
             "id": id, "app": appName, "nickname": config.label,
             "label": link?.label ?? "", "grants": grants.map(\.json),
+            "placement": placement, "headless": headless,
+            "device": link?.device ?? AgentLink.device,
+            "servedBy": servedBy?.json ?? NSNull(), "servingHere": servingHere,
             "recentCalls": recentCalls.count, "lastError": lastError ?? "",
         ]
     }

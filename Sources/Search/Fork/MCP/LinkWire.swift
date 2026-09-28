@@ -94,6 +94,28 @@ enum LinkWire {
 
     // MARK: - the service's objects, read leniently
 
+    /// The stream currently serving a link, as the service describes it.
+    struct ServedBy: Equatable {
+        var device: String
+        var streamId: String?
+        var since: String?
+
+        init?(_ any: Any?) {
+            guard let o = any as? [String: Any],
+                  let device = o["device"] as? String, !device.isEmpty else { return nil }
+            self.device = device
+            streamId = o["streamId"] as? String
+            since = o["since"] as? String
+        }
+
+        var json: [String: Any] {
+            var out: [String: Any] = ["device": device]
+            if let streamId { out["streamId"] = streamId }
+            if let since { out["since"] = since }
+            return out
+        }
+    }
+
     /// The link as the service describes it. Only what Copper shows.
     struct Link: Equatable {
         var id: String
@@ -102,6 +124,9 @@ enum LinkWire {
         var state: String
         var online: Bool
         var device: String?
+        var placement: String?
+        var headless: Bool?
+        var servedBy: ServedBy?
         var revoked: Bool
 
         init?(_ any: Any?) {
@@ -112,6 +137,9 @@ enum LinkWire {
             state = o["state"] as? String ?? ""
             online = o["online"] as? Bool ?? (state == "online")
             device = o["device"] as? String
+            placement = o["placement"] as? String
+            headless = o["headless"] as? Bool
+            servedBy = ServedBy(o["servedBy"])
             revoked = state == "revoked" || (o["revokedAt"].map { !($0 is NSNull) } ?? false)
         }
     }

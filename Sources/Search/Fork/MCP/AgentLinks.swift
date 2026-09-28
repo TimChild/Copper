@@ -10,11 +10,13 @@ final class AgentLinks: ObservableObject {
     private var started = false
 
     private init() {
-        all = MCP.shared.config.links.compactMap { entry in
+        let saved = MCP.shared.config.links
+        all = saved.compactMap { entry in
             guard !entry.id.isEmpty else { return nil }
             return AgentLink(config: entry)
         }
         for link in all { bind(link) }
+        if all.map(\.config) != saved { persist() }
     }
 
     private func bind(_ link: AgentLink) {

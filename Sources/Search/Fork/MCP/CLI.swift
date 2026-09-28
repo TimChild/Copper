@@ -665,6 +665,10 @@ enum CLI {
         print("app: \(result["api"] as? String ?? "")")
         print("token: \(result["tokenSet"] as? Bool == true ? "set" : "not set")")
         if let id = result["linkId"] as? String, !id.isEmpty { print("link: \(id)") }
+        if let placement = result["placement"] as? String {
+            print("placement: \(placement)")
+        }
+        if let device = result["device"] as? String, !device.isEmpty { print("device: \(device)") }
         let grants = result["grants"] as? [[String: Any]] ?? []
         print("bots with access: \(grants.count)")
         if let trouble = result["lastError"] as? String, !trouble.isEmpty, result["status"] as? String == "online" { print("last error: \(trouble)") }

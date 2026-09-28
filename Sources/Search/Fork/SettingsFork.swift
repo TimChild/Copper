@@ -562,6 +562,10 @@ struct LinkCard: View {
         return "\(on) of \(link.grants.count) on · switch one off to pause it"
     }
 
+    private var placementLine: String {
+        link.placement == "remote" ? "Remote headless" : "This Mac — your own browser"
+    }
+
     var body: some View {
         Card {
             Line("Connect this browser", "An agents app gets these same tools, through its own service. Each bot only after you grant it, and you see every call here.") {
@@ -584,6 +588,22 @@ struct LinkCard: View {
                     .frame(width: 140)
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            Rule()
+            Line("Link name", link.config.name) { EmptyView() }
+            Rule()
+            Line("Placement", placementLine) { EmptyView() }
+            if let servedBy = link.servedBy?.device {
+                Rule()
+                Line("Served by", servedBy) { EmptyView() }
+                if !link.servingHere {
+                    Text("Another Copper (\(servedBy)) is serving this link")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Color.orange.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14).padding(.bottom, 10)
+                }
             }
             Rule()
             Line("Personal token", "Mint one at Agents › Connect; it stays in a file only you can read") {

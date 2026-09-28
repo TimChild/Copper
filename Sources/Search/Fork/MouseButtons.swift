@@ -51,9 +51,14 @@ enum MouseButtons {
     static let back = 3
     static let forward = 4
 
-    /// Posted when the wheel button is clicked over the column; the row under
-    /// the pointer closes its tab, the way Arc's and Chrome's do.
+    /// Posted when the wheel button is clicked over the column, with the
+    /// point clicked (`object`, an NSValue, in SwiftUI's global space: the
+    /// window's content from its top left); the row under it closes its
+    /// tab, the way Arc's and Chrome's do.
     static let middleClickedSidebar = Notification.Name("copper.middleClickedSidebar")
+
+    /// The point a sidebar notification carried, for a view's `onReceive`.
+    static func point(of note: Notification) -> CGPoint? { (note.object as? NSValue)?.pointValue }
 
     /// What the monitor did last, for the bench.
     private(set) static var lastAction: [String: Any] = [:]
@@ -103,8 +108,12 @@ enum MouseButtons {
             if page(under: location, in: window, browser: browser) != nil { return false }
             guard overSidebar(location, in: browser) else { return false }
             if !down {
-                NotificationCenter.default.post(name: middleClickedSidebar, object: nil)
-                lastAction = ["button": middle, "did": "sidebar"]
+                // AppKit's window point is from the bottom left; SwiftUI's
+                // global frames are from the top left of the content view.
+                let height = window.contentView?.bounds.height ?? window.frame.height
+                let point = CGPoint(x: location.x, y: height - location.y)
+                NotificationCenter.default.post(name: middleClickedSidebar, object: NSValue(point: point))
+                lastAction = ["button": middle, "did": "sidebar", "at": [Int(point.x), Int(point.y)]]
             }
             return true
 

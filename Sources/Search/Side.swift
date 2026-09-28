@@ -370,8 +370,9 @@ struct SideBar: View {
 
     private var newTab: some View {
         // Arc's is the one filled row in the column — the seam you can find
-        // from across the room. The favourites' square, the pill's ink.
-        Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.pill, ink: tint.ink, fill: tint.square) {
+        // from across the room. The favourites' square and its hover, the
+        // pill's ink: nothing but the live row wears the paper.
+        Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.hover, ink: tint.ink, fill: tint.square) {
             browser.newTab()
         }
         .padding(.horizontal, SideBar.inset)

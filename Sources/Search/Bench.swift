@@ -231,7 +231,7 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
-        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "heat", "updates", "bw", "flow":
+        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "updates", "bw", "flow":
             answer(Fork.bench(verb, request, in: browser))
 
         case "tabs":
@@ -370,6 +370,11 @@ final class Bench {
             }
             if let window = Links.window { out["lights"] = Bench.lights(of: window) }
             out["keysQuieted"] = PageView.quieted
+            // Who has the keyboard, and the last link click WebKit reported
+            // (its button number and modifiers) — for the mouse-button work. (Fork)
+            out["firstResponder"] = Links.window?.firstResponder.map { "\(type(of: $0))" } ?? ""
+            out["lastLinkClick"] = MouseButtons.lastLinkClick
+            out["panes"] = ["agent": Agent.shared.open, "jev": JevTrace.shared.paneOpen, "split": Split.shared.on]
             // The column folded away, out for a look, and the lights with it (see Fold.swift).
             out["folded"] = browser.folded
             out["peeking"] = browser.peeking
@@ -384,32 +389,57 @@ final class Bench {
             guard let tab = find(request, in: browser), let text = request["text"] as? String else { answer(missing(request)); return }
             house(tab)
             let view = tab.web
-            view.window?.makeFirstResponder(view)
+            // Through the app (`--app`): the key goes in at NSApp.sendEvent, so
+            // the app's own key monitor sees it first, as a real press would
+            // be seen — and whoever has the keyboard keeps it (`bench select`
+            // puts it in the page; `bench ui focus none` on the window). (Fork)
+            let viaApp = request["via"] as? String == "app"
+            if !viaApp { view.window?.makeFirstResponder(view) }
             let before = PageView.quieted
+            let lineKeysBefore = LineKeys.quieted
             // What WebKit sends back through the app because the page didn't
             // use it: a key press seen here again after it was handed over.
             var pressed: [NSEvent] = []
             var resent = 0
+            // Through the app, every press is seen here once on its way in;
+            // only a second sighting is the page handing it back.
+            var seen: [Int] = []
             let watch = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if pressed.contains(where: { PageView.same($0, event) }) { resent += 1 }
+                if let i = pressed.firstIndex(where: { PageView.same($0, event) }) {
+                    seen[i] += 1
+                    if seen[i] > (viaApp ? 1 : 0) { resent += 1 }
+                }
                 return event
             }
+            // ⌘ and ⇧ in the text hold for the key after them; ← → are the
+            // arrows, ⎋ is Escape. (Fork: for ⌘← and friends.)
+            var holding: NSEvent.ModifierFlags = []
             for character in text {
-                let chars = String(character)
+                if character == "\u{2318}" { holding.insert(.command); continue }
+                if character == "\u{21E7}" { holding.insert(.shift); continue }
+                let arrow = character == "\u{2190}" ? UInt16(123) : character == "\u{2192}" ? UInt16(124) : character == "\u{238B}" ? UInt16(53) : nil
+                let chars = arrow.map { $0 == 123 ? "\u{F702}" : $0 == 124 ? "\u{F703}" : "\u{1B}" } ?? String(character)
+                let flags = holding
+                holding = []
                 for type in [NSEvent.EventType.keyDown, .keyUp] {
                     guard let event = NSEvent.keyEvent(
-                        with: type, location: .zero, modifierFlags: [],
+                        with: type, location: .zero, modifierFlags: flags,
                         timestamp: ProcessInfo.processInfo.systemUptime,
                         windowNumber: view.window?.windowNumber ?? 0, context: nil,
                         characters: chars, charactersIgnoringModifiers: chars,
-                        isARepeat: false, keyCode: Bench.keyCode(for: character)
+                        isARepeat: false, keyCode: arrow ?? Bench.keyCode(for: character)
                     ) else { continue }
-                    if type == .keyDown { pressed.append(event); view.keyDown(with: event) } else { view.keyUp(with: event) }
+                    if type == .keyDown { pressed.append(event); seen.append(0) }
+                    if viaApp { NSApp.sendEvent(event) }
+                    else if type == .keyDown { view.keyDown(with: event) } else { view.keyUp(with: event) }
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 if let watch { NSEvent.removeMonitor(watch) }
-                answer(["typed": text, "sentBackUnused": resent, "quieted": PageView.quieted - before])
+                let responder = view.window?.firstResponder.map { "\(type(of: $0))" } ?? ""
+                answer(["typed": text, "sentBackUnused": resent, "quieted": PageView.quieted - before, "via": viaApp ? "app" : "view",
+                        "lineKeysQuieted": LineKeys.quieted - lineKeysBefore,
+                        "firstResponder": responder, "url": tab.address?.absoluteString ?? ""])
             }
 
         case "resize":
@@ -456,6 +486,12 @@ final class Bench {
             if let on = request["sidebar"] as? Bool { browser.prefs.sidebar = on }
             if let on = request["folded"] as? Bool { browser.folded = on }
             if let on = request["peek"] as? Bool { browser.peeking = on }
+            // `ui focus none`: the keyboard to the window itself, as after a
+            // click on the column — for keys whose meaning depends on who has
+            // it. (Fork)
+            if request["focus"] as? String == "none" { Links.window?.makeFirstResponder(nil) }
+            // `ui width N`: the column's width, for a look at it narrow and wide. (Fork)
+            if let width = request["width"] as? Double { browser.prefs.sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width))) }
             if #available(macOS 15.4, *), let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
             answer(["ok": true])
 

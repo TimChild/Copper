@@ -697,9 +697,14 @@ struct ContentView: View {
                 browser.picked = nil
                 return true
             }
-            guard browser.editing, browser.active?.isBlank == false else { return false }
-            browser.dismiss()
-            return true
+            if browser.editing {
+                guard browser.active?.isBlank == false else { return false }
+                browser.dismiss()
+                return true
+            }
+            // Last of all, a pane beside the page — while the keyboard is
+            // not in a page, where Escape is the page's. (Fork: Panes)
+            return Panes.escape(event, in: browser)
         }
 
         // Tab walks the row and comes round to the first again; ⇧Tab walks it
@@ -813,9 +818,10 @@ struct ContentView: View {
                 browser.select(index: number == 9 ? browser.tabs.count - 1 : number - 1)
                 return true
             }
-            // ⌘← and ⌘→, for hands that never learned the brackets.
-            if event.keyCode == 123 { browser.back(); return true }
-            if event.keyCode == 124 { browser.forward(); return true }
+            // ⌘← and ⌘→, for hands that never learned the brackets — unless
+            // the caret is in text, where they are line start and end. (Fork:
+            // LineKeys asks who has the keyboard.)
+            if LineKeys.isLineKey(event) { return LineKeys.take(event, in: browser) }
             return false
         }
         return true

@@ -856,6 +856,7 @@ final class Browser: NSObject, ObservableObject {
             watchForSleep()
             Tab.touched = { [weak self] tab in if let self { Split.shared.touched(tab, in: self) } }
             SpaceSwipe.watch(self)
+            MouseButtons.watch(self) // Fork: thumb buttons back/forward, wheel click on the column
             Heat.shared.start(for: self)
         }
 
@@ -1793,11 +1794,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
 
         // ⌘-click opens beside this tab and leaves you where you are; ⌘⇧-click
         // takes you with it. Middle-click does what ⌘-click does, for hands
-        // that learned it that way.
+        // that learned it that way. (Fork: WebKit's button numbers are a mask
+        // and the wheel button is 4, not AppKit's 2 — see MouseButtons.)
         if action.navigationType == .linkActivated,
            ["http", "https"].contains(scheme) {
             let flags = action.modifierFlags
-            if flags.contains(.command) || action.buttonNumber == 2 {
+            MouseButtons.noteLinkClick(action)
+            if flags.contains(.command) || MouseButtons.isMiddle(action) {
                 open(url, foreground: flags.contains(.shift))
                 decisionHandler(.cancel)
                 return
@@ -1836,8 +1839,14 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
         adopt(tab)
         tab.opener = from
-        activeID = tab.id
-        editing = false
+        // A target=_blank link ⌘-clicked or middle-clicked stays behind, the
+        // way the same click on any other link does (Fork: MouseButtons).
+        let flags = action.modifierFlags
+        let behind = MouseButtons.isMiddle(action) || (flags.contains(.command) && !flags.contains(.shift))
+        if !behind {
+            activeID = tab.id
+            editing = false
+        }
         // Returning the view is what makes it the target. WebKit loads the
         // request into it itself when the action carries one.
         if let url = action.request.url { tab.setAddressOptimistically(url) }

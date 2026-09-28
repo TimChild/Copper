@@ -8,7 +8,9 @@
     ./bench sleep ID                   put a tab to sleep now, or say what keeps it awake
     ./bench select ID                  bring a tab to the front — --test runs only
     ./bench resize W H [STEPS]         take the window to W×H in steps, like a drag — --test runs only
-    ./bench key ID TEXT                press keys on a tab as real key events — --test runs only
+    ./bench key ID TEXT [--app]        press keys on a tab as real key events — --test runs only;
+                                       ⌘ and ⇧ hold for the next key, ← → ⎋ are arrows/Escape; --app
+                                       sends through the app's own key monitor, as a hand would
     ./bench text ID                    the page's text
     ./bench eval ID JS                 run JavaScript, print what it returns
     ./bench click ID SELECTOR
@@ -35,7 +37,13 @@
               |identities|cards|fields HOST|usernames|counts|autofill card|identity ID
               |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
                                        Bitwarden probe controls and Copper feed status
-    ./bench spaces [new NAME|select N|next|prev|move N|remove N|profile NAME]
+    ./bench spaces [new NAME|select N|next|prev|move N|remove N [--keep]|profile NAME]
+    ./bench spaces [icon N EMOJI|sf:symbol|none|colour N NAME|reorder N M|edit [N]]
+    ./bench spaces [delete N|answer close|move|cancel]
+                                       the Delete Space sheet, and its buttons
+                                       spaces by index or name; --keep moves a deleted space's tabs
+                                       to its neighbour; colours are Graphite Copper Orange Yellow
+                                       Green Teal Blue Indigo Pink Red
     ./bench groups [new NAME|assign ID NAME|remove ID|suggest ID|dissolve NAME]
     ./bench groups [toggle NAME|inside PARENT NAME]
                                        folders: fold or open one (by its whole "A › B" name or
@@ -57,9 +65,13 @@
     ./bench passkeys list|count|forget --id ID|answer yes|no|ask
                                        Copper's own test-world passkeys (no private keys in list)
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
+    ./bench mouse back|forward|middle [X Y] [--shift]
+                                       a click of that mouse button at window point X Y (top-left
+                                       origin; the page's middle by default), through the app's routing
     ./bench bar TEXT [--go]          what ⌘K offers for TEXT; --go takes the first row
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
-                                       look light|dark|system, sidebar on|off, folded on|off, peek on|off
+                                       look light|dark|system, sidebar on|off, folded on|off, peek on|off,
+                                       focus none (the keyboard to the window itself), width N (the sidebar)
 
 Needs Settings › General › "Let a script drive Copper" switched on in the
 running app. IDs are the first characters of a tab's id, as `tabs` prints
@@ -137,6 +149,8 @@ def main(argv):
         if len(args) > 2: request["width"] = float(args[2])
     elif verb in ("split", "swipe"):
         request["arg"] = args[0] if args else ""
+    elif verb == "mouse":
+        request["arg"] = " ".join(args) if args else "back"
     elif verb == "bar":
         request["text"] = args[0] if args else ""
         request["go"] = "--go" in args
@@ -177,7 +191,8 @@ def main(argv):
     elif verb == "ui":
         if len(args) != 2: sys.exit("usage: bench ui KEY VALUE")
         key, value = args
-        request[key] = value if key == "look" else value in ("on", "true", "1", "yes")
+        if key == "width": request[key] = float(value)
+        else: request[key] = value if key in ("look", "focus") else value in ("on", "true", "1", "yes")
     elif verb in ("ext-add", "ext-press", "ext-remove", "ext-reload"):
         if len(args) != 1: sys.exit(f"usage: bench {verb} ID")
         request["id"] = args[0]
@@ -212,8 +227,11 @@ def main(argv):
         request["id"] = args[0]
         request["path"] = args[1] if len(args) > 1 else ""
     elif verb == "key":
-        if len(args) != 2: sys.exit("usage: bench key ID TEXT")
+        via_app = "--app" in args
+        args = [a for a in args if a != "--app"]
+        if len(args) != 2: sys.exit("usage: bench key ID TEXT [--app]")
         request["id"], request["text"] = args
+        if via_app: request["via"] = "app"
     elif verb == "resize":
         if len(args) not in (2, 3): sys.exit("usage: bench resize WIDTH HEIGHT [STEPS]")
         request["width"], request["height"] = float(args[0]), float(args[1])
@@ -241,8 +259,10 @@ def main(argv):
         for o in answer.get("offers", []):
             print(f"{o['kind']:9} {o['key']}  {o['title']}")
     elif verb == "spaces":
+        if "sheet" in answer: print(json.dumps(answer["sheet"], ensure_ascii=False))
         for s in answer.get("spaces", []):
-            print(f"{'●' if s['current'] else ' '} {s['index']}  {s['name']}  ({s['tabs']} tabs, {s['profile']})")
+            icon = f" {s['icon']}" if s.get("icon") else ""
+            print(f"{'●' if s['current'] else ' '} {s['index']}  {s['name']}{icon}  ({s['tabs']} tabs, {s['profile']}, {s.get('colour', '')})")
     elif verb == "sections":
         if "archived" in answer:
             print(f"archived {answer['archived']} tab(s)")

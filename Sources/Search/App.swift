@@ -813,9 +813,10 @@ struct ContentView: View {
                 browser.select(index: number == 9 ? browser.tabs.count - 1 : number - 1)
                 return true
             }
-            // ⌘← and ⌘→, for hands that never learned the brackets.
-            if event.keyCode == 123 { browser.back(); return true }
-            if event.keyCode == 124 { browser.forward(); return true }
+            // ⌘← and ⌘→, for hands that never learned the brackets — unless
+            // the caret is in text, where they are line start and end. (Fork:
+            // LineKeys asks who has the keyboard.)
+            if LineKeys.isLineKey(event) { return LineKeys.take(event, in: browser) }
             return false
         }
         return true

@@ -34,6 +34,11 @@ in [ROADMAP.md](ROADMAP.md).
 - **Smart grouping.** A second after a page lands, Copper weighs it against your groups: your rules first (`github.com → Code`), then Jev (TypeSafe System One — one typed choice, ~200 ms, with a confidence), then the router (LiteLLM, Sonnet by default) when Jev is unsure or a new group needs a name, then a plain same-site match with no keys at all. Ask mode puts a one-line chip under the tab; Automatic just does it. Only the tab's address and title and your group names leave the Mac.
 - **Settings › Intelligence**: paste a Jev key and a router key (eye/paste buttons, 0600 file beside the session), pick the router model, set Jev's confidence bar, add rules, and test both lanes with one click. `./bench ai`, `./bench groups`.
 
+### Fixed (Copper)
+
+- **⌘← and ⌘→ move the caret when you are typing.** In a page's text box, the omnibox, or the agent's composer they jump to the start and end of the line (⌘⇧ extends the selection), as in Safari; with nothing editable focused they still go back and forward. A key the page hands back with nowhere to go is kept quiet instead of beeping.
+- `./bench key ID TEXT [--app]` presses ⌘/⇧/←/→ and can send through the app's key monitor; `./bench probe` reports `firstResponder`.
+
 ### Added
 
 - ⌘S folds the sidebar away and the page takes the whole window; the left edge brings the tabs back out. Thanks [@kndpt](https://github.com/kndpt) ([#7](https://github.com/driceroland/Search/pull/7))

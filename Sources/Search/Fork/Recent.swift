@@ -82,7 +82,7 @@ final class Recent: ObservableObject {
         let valid = snapshot.filter { ids.contains($0) }
         if let active = browser.activeID, ids.contains(active) {
             order = [active] + valid.filter { $0 != active }
-                + browser.tabs.map(\.id).filter { !valid.contains($0) && $0 != active }
+                + browser.tabs.filter { !$0.isBlank }.map(\.id).filter { !valid.contains($0) && $0 != active }
         } else {
             order = valid
         }

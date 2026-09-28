@@ -527,11 +527,10 @@ final class Bench {
             }
             if let page = (request["page"] as? String).flatMap(SettingsPanel.Page.init(rawValue:)) {
                 browser.tuning = false
-                browser.settingsPage = .general
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                     browser.settingsPage = page
                     Store.settings.set(page.rawValue, forKey: "settings.page")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { browser.tuning = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { browser.tuning = true }
                 }
             }
             if let on = request["sidebar"] as? Bool { browser.prefs.sidebar = on }

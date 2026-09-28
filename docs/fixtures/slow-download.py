@@ -17,6 +17,9 @@ CHUNK = 64 * 1024
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # The first /fail request exercises the failure row; a retry of the same
+    # URL is allowed to finish so the bench can prove the complete loop.
+    failed_once = False
 
     def log_message(self, *_args):
         pass
@@ -56,7 +59,8 @@ class Handler(BaseHTTPRequestHandler):
         delay = CHUNK / (kbps * 1024.0)
         try:
             while sent < total:
-                if kind == "fail" and sent >= int(total * fail_at):
+                if kind == "fail" and not Handler.failed_once and sent >= int(total * fail_at):
+                    Handler.failed_once = True
                     self.connection.shutdown(1)
                     self.connection.close()
                     return

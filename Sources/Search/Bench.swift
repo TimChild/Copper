@@ -358,6 +358,7 @@ final class Bench {
                 "look": browser.prefs.look.rawValue,
                 "appearance": NSApp.appearance?.name.rawValue ?? "system",
                 "key": NSApp.keyWindow.map { "\(type(of: $0)) “\($0.title)”" } ?? "",
+                "announcement": browser.announcement ?? "",
             ]
             out["windows"] = NSApp.windows.map { window -> [String: Any] in
                 [

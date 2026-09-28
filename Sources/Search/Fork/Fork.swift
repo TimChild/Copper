@@ -287,7 +287,8 @@ enum Fork {
         case "window":
             // The whole window as the compositor shows it — sidebar, page,
             // panels — to a PNG. An app may always picture its own windows.
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.level == .normal && $0.sheetParent == nil })
+            guard let window = Links.window
+                    ?? NSApp.windows.first(where: { $0.isVisible && $0.level == .normal && $0.sheetParent == nil })
                     ?? NSApp.keyWindow,
                   let path = request["path"] as? String else { return ["error": "window needs a path"] }
             // A probe may be behind the user's normal Copper window. Bring
@@ -300,6 +301,12 @@ enum Fork {
             var ids: [CGWindowID] = [CGWindowID(window.windowNumber)]
             if let sheet = window.attachedSheet { ids.append(CGWindowID(sheet.windowNumber)) }
             for child in window.childWindows ?? [] where child.isVisible { ids.append(CGWindowID(child.windowNumber)) }
+            // SwiftUI popovers are sibling windows rather than child windows;
+            // include the visible one so a probe picture is the same thing a
+            // person sees, not just the page beneath its door.
+            for other in NSApp.windows where other !== window && other.isVisible && other.level == .normal {
+                ids.append(CGWindowID(other.windowNumber))
+            }
             let list = ids.reversed().map { NSNumber(value: $0) } as CFArray
             // Compositing several windows can come back empty without the
             // screen-recording grant; then the frontmost one alone.

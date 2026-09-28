@@ -42,7 +42,7 @@ its own fields; malformed entries are skipped rather than making the file unread
       "enabled": true,
       "api": "https://agents.example",
       "token": "fxb_…",
-      "name": "copper",
+      "name": "copper-exomac-fa",
       "linkId": "lnk_…",
       "announces": true,
       "label": "production"
@@ -52,7 +52,11 @@ its own fields; malformed entries are skipped rather than making the file unread
 ```
 
 `links` may be absent (it means an empty list). `id` is a UUID for new entries. `label` is an
-optional nickname used in announcements; when it is empty, the app host is used.
+optional nickname used in announcements; when it is empty, the app host is used. Link identity is
+separate from that nickname: a windowed Copper defaults to `copper`, while a headless Copper uses
+`copper-<device-slug>` (lowercase, punctuation collapsed to `-`, at most 40 characters). The
+service record also carries `placement` (`local` or `remote`) and `headless`; Copper displays the
+current `servedBy` object (`device`, `streamId`, `since`) and whether that device is this Mac.
 
 Existing installations may contain the legacy single-app object because an external installer may
 write it:
@@ -87,11 +91,17 @@ online ── revoke or revoked frame ──▶ revoked
 HTTP 401 ──────────────────────────▶ token rejected
 ```
 
-Switching on (or changing address/token) creates a link with `POST /v1/me/links`. Reconnects
-check the saved link with `GET /v1/me/links/:id` and never silently recreate a revoked link. A
-heartbeat is posted every 15 seconds. A generation counter prevents a stale stream from writing
-over a newer connection. Progress frames for `jev_run` and `jev_step` are scoped to their own
-request and carry the final trace before the reply; a cancel frame stops only that request.
+Switching on (or changing address/token) creates a link with `POST /v1/me/links`. The create body
+includes `placement` (`remote` for `--headless`, otherwise `local`) and `headless`; the frames
+query repeats those fields alongside `device` and `clientVersion`. Reconnects check the saved link
+with `GET /v1/me/links/:id` and never silently recreate a revoked link. A heartbeat is posted every
+15 seconds. A generation counter prevents a stale stream from writing over a newer connection.
+When the service returns 409 `LINK_NAME_TAKEN` or `LINK_DEVICE_MISMATCH`, or a superseded stream
+refreshes to a different `servedBy.device`, Copper clears the old id, chooses its device name (then
+`-2`, etc.), persists it in `agent.json`, and retries (at most three renames). It reports
+`Renamed to <name>: another Copper owns "<old>"` while reconnecting. Progress frames for
+`jev_run` and `jev_step` are scoped to their own request and carry the final trace before the reply;
+a cancel frame stops only that request.
 
 A request whose method starts with `copper/` is refused before it reaches the MCP control methods.
 This prevents a bot from calling `copper/link`, changing grants, or changing another connection.
@@ -126,10 +136,11 @@ copper link --app production calls
 `add URL [fxb_…] [--label NAME]` appends an entry, enabling it when both values are present, waits for its first
 status, and prints that status. `remove` forgets the selected app and best-effort deletes its
 server link. `--json status` returns `{"apps":[summary…]}` and also puts the legacy entry's
-summary fields at the top level (or the first app when there is no legacy entry), retaining the
-old keys: `enabled`, `api`, `name`, `linkId`, `tokenSet`, `announces`, `status`, `statusText`,
-`online`, `label`, `grants`, `recentCalls`, and `lastError`. Tokens are never printed, including
-with `--dry-run`.
+summary fields at the top level (or the first app when there is no legacy entry). In addition to the
+legacy keys (`enabled`, `api`, `name`, `linkId`, `tokenSet`, `announces`, `status`, `statusText`,
+`online`, `label`, `grants`, `recentCalls`, and `lastError`), status includes `placement`, `headless`,
+`device`, `servedBy` (or `null`), and `servingHere`. Human-readable status prints the placement and
+device too. Tokens are never printed, including with `--dry-run`.
 
 Exit status remains 0 for success, 1 when the app refuses a request, and 2 for usage errors or an
 unreachable Copper. `./bench agent link on|off|status` operates on the first configured app.
@@ -137,8 +148,10 @@ unreachable Copper. `./bench agent link on|off|status` operates on the first con
 ## Owner controls and wire
 
 The service routes `request` frames over `GET /v1/me/links/:id/frames`; Copper answers with
-`POST /v1/me/links/:id/frames` and `{frames:[…]}`. It also uses the service routes for grants,
-bots, calls and revoke. The same `MCP.shared.handle` serves local and linked `initialize`,
+`POST /v1/me/links/:id/frames` and `{frames:[…]}`. The create request is shaped as
+`{name,label,kind:"mcp",device,clientVersion,placement,headless}`; the frames query is
+`?device=…&clientVersion=…&placement=local|remote&headless=true|false`. It also uses the service
+routes for grants, bots, calls and revoke. The same `MCP.shared.handle` serves local and linked `initialize`,
 `tools/list`, and `tools/call` requests, so Jev tools appear consistently. `LinkWire.swift` owns
 SSE parsing and lenient frame readers and can be compiled without the app.
 

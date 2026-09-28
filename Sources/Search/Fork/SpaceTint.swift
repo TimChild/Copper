@@ -57,8 +57,19 @@ struct SpaceTint {
     /// The soft square a letter sits on for a site that has no icon yet.
     var chip: Color { dark ? mix(0.22, 0.36).opacity(0.5) : mix(0.30, 0.76).opacity(0.5) }
 
-    /// A space, reduced to a dot at the foot of the column.
+    /// A space's colour at full strength: the swatch in the picker, the
+    /// split's outline, and what the chips at the foot are thinned from.
     var dot: Color { mix(0.62, dark ? 0.86 : 0.70) }
+
+    /// A space's own mark — its letter or symbol — on a chip: the same hue,
+    /// dark enough to read on a light square and light enough on a dark one.
+    var mark: Color { mix(hue == nil ? 0 : 0.66, dark ? 0.92 : 0.40) }
+
+    /// The square behind a mark, for every space but the current one: the
+    /// dot, thinned until it is a colour rather than a button.
+    var chipFill: Color { dot.opacity(dark ? 0.30 : 0.22) }
+    /// The same square under the pointer.
+    var chipLift: Color { dot.opacity(dark ? 0.48 : 0.40) }
 
     /// Titles. The live one is nearly the app's ink; the rest step back
     /// without going grey, so the column stays one colour all the way down.

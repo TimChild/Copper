@@ -374,6 +374,7 @@ final class Bench {
             // (its button number and modifiers) — for the mouse-button work. (Fork)
             out["firstResponder"] = Links.window?.firstResponder.map { "\(type(of: $0))" } ?? ""
             out["lastLinkClick"] = MouseButtons.lastLinkClick
+            out["panes"] = ["agent": Agent.shared.open, "jev": JevTrace.shared.paneOpen, "split": Split.shared.on]
             // The column folded away, out for a look, and the lights with it (see Fold.swift).
             out["folded"] = browser.folded
             out["peeking"] = browser.peeking
@@ -390,10 +391,10 @@ final class Bench {
             let view = tab.web
             // Through the app (`--app`): the key goes in at NSApp.sendEvent, so
             // the app's own key monitor sees it first, as a real press would
-            // be seen; the view is only made first responder if nothing else
-            // in the window is holding the keyboard already. (Fork)
+            // be seen — and whoever has the keyboard keeps it (`bench select`
+            // puts it in the page; `bench ui focus none` on the window). (Fork)
             let viaApp = request["via"] as? String == "app"
-            if !viaApp || view.window?.firstResponder === view.window { view.window?.makeFirstResponder(view) }
+            if !viaApp { view.window?.makeFirstResponder(view) }
             let before = PageView.quieted
             let lineKeysBefore = LineKeys.quieted
             // What WebKit sends back through the app because the page didn't
@@ -489,6 +490,8 @@ final class Bench {
             // click on the column — for keys whose meaning depends on who has
             // it. (Fork)
             if request["focus"] as? String == "none" { Links.window?.makeFirstResponder(nil) }
+            // `ui width N`: the column's width, for a look at it narrow and wide. (Fork)
+            if let width = request["width"] as? Double { browser.prefs.sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width))) }
             if #available(macOS 15.4, *), let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
             answer(["ok": true])
 

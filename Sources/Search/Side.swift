@@ -51,6 +51,11 @@ struct SideBar: View {
         VStack(alignment: .leading, spacing: 0) {
             head
 
+            // Which space this column is — the label it never had. (Fork)
+            SpaceHeader(browser: browser)
+                .padding(.horizontal, SideBar.inset)
+                .padding(.bottom, 8)
+
             if browser.pinnedCount > 0 {
                 pinned
                     .padding(.horizontal, SideBar.inset)

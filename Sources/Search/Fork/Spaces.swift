@@ -11,13 +11,92 @@ import WebKit
 struct Space: Codable, Identifiable, Equatable {
     var id = UUID()
     var name: String
-    /// A hue, 0…1, or nil for the plain grey.
+    /// A hue, 0…1, or nil for the plain grey. The picker offers the named
+    /// palette below; a hue from an import or an older build stays as it is.
     var hue: Double?
     /// Which cookie jar its tabs use: nil for the one every space shares, or
     /// a name — spaces with the same name sign in together.
     var profile: String? = nil
+    /// What stands for the space in the column: an emoji, or an SF symbol
+    /// name behind `sf:`. Nil draws the name's first letter — or the emoji
+    /// the name starts with, as Arc's imported spaces nearly all do. New in
+    /// this shape; optional so yesterday's session.json still reads, and
+    /// unknown to older builds, which ignore it.
+    var icon: String? = nil
 
-    var tint: Color { hue.map { Color(hue: $0, saturation: 0.55, brightness: 0.75) } ?? Palette.muted }
+    var tint: Color { hue == nil ? Palette.muted : SpaceTint(hue: hue, dark: false).dot }
+
+    /// The SF symbol, when the icon is one.
+    var symbol: String? {
+        guard let icon, icon.hasPrefix("sf:") else { return nil }
+        return String(icon.dropFirst(3))
+    }
+
+    /// The emoji the space shows: its own, or the one its name begins with.
+    var emoji: String? {
+        if let icon, !icon.hasPrefix("sf:"), !icon.isEmpty { return icon }
+        guard let first = name.unicodeScalars.first, first.properties.isEmojiPresentation else { return nil }
+        return String(Character(first))
+    }
+
+    /// The name without the emoji the glyph already shows, so a header does
+    /// not read "🏠 🏠 Home".
+    var title: String {
+        guard icon == nil || icon?.isEmpty == true, let first = name.unicodeScalars.first,
+              first.properties.isEmojiPresentation else { return name }
+        let rest = name.dropFirst().trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty ? name : rest
+    }
+
+    /// The letter a space with neither emoji nor symbol wears.
+    var letter: String { String(title.prefix(1)).uppercased() }
+}
+
+/// The colours a space can be, by name. Nine hues and a grey, chosen so no
+/// two neighbours read as the same colour at the strength the column washes
+/// them in; the menu, the editor and the strip all speak these names rather
+/// than degrees.
+enum SpaceColour: String, CaseIterable, Identifiable {
+    case graphite, copper, orange, yellow, green, teal, blue, indigo, pink, red
+
+    var id: String { rawValue }
+    var name: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+
+    var hue: Double? {
+        switch self {
+        case .graphite: return nil
+        case .copper: return 0.07
+        case .orange: return 0.10
+        case .yellow: return 0.14
+        case .green: return 0.36
+        case .teal: return 0.48
+        case .blue: return 0.60
+        case .indigo: return 0.70
+        case .pink: return 0.90
+        case .red: return 0.99
+        }
+    }
+
+    /// The colour a hue is nearest to — an imported 0.33 is "Green".
+    static func nearest(_ hue: Double?) -> SpaceColour {
+        guard let hue else { return .graphite }
+        return allCases.filter { $0 != .graphite }.min { a, b in distance(a.hue!, hue) < distance(b.hue!, hue) } ?? .graphite
+    }
+
+    /// Around the wheel, so 0.99 and 0.02 are neighbours.
+    private static func distance(_ a: Double, _ b: Double) -> Double {
+        let d = abs(a - b)
+        return min(d, 1 - d)
+    }
+
+    /// The first real colour no space is wearing; when every one is taken,
+    /// the one worn by the fewest. Never grey — grey is a choice, not a default.
+    static func unused(among spaces: [Space]) -> SpaceColour {
+        let worn = spaces.map { nearest($0.hue) }
+        let colours = allCases.filter { $0 != .graphite }
+        if let free = colours.first(where: { !worn.contains($0) }) { return free }
+        return colours.min { a, b in worn.filter { $0 == a }.count < worn.filter { $0 == b }.count } ?? .copper
+    }
 }
 
 @MainActor
@@ -39,6 +118,27 @@ final class Spaces: ObservableObject {
     }
 
     var space: Space { all.first { $0.id == current } ?? all[0] }
+
+    // MARK: - keeping
+
+    /// The browser the rows belong to, from the restore at launch — so an
+    /// edit to a space (a name, a colour, an icon, the order) reaches the
+    /// session file without a tab having to change first. The browser's own
+    /// writer runs on tab changes and is unchanged.
+    private weak var browser: Browser?
+    private var keeping: DispatchWorkItem?
+
+    /// Write the session soon. A rename arrives a keystroke at a time, so
+    /// this waits for the typing to stop.
+    private func keep() {
+        keeping?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let browser else { return }
+            Session.write(now: false, shape(visible: browser.tabs, active: browser.activeID))
+        }
+        keeping = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+    }
 
     // MARK: - switching
 
@@ -71,28 +171,80 @@ final class Spaces: ObservableObject {
 
     // MARK: - editing
 
-    func add(named name: String = "", in browser: Browser) {
-        let space = Space(name: name.isEmpty ? "Space \(all.count + 1)" : name, hue: Double(all.count % 8) / 8)
+    /// A new space, in a colour no other space is wearing, made current.
+    @discardableResult
+    func add(named name: String = "", in browser: Browser) -> UUID {
+        let space = Space(name: name.isEmpty ? "Space \(all.count + 1)" : name, hue: SpaceColour.unused(among: all).hue)
         all.append(space)
         select(space.id, in: browser)
+        return space.id
+    }
+
+    func icon(_ id: UUID, _ icon: String?) {
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+        all[i].icon = icon?.isEmpty == true ? nil : icon
+        keep()
+    }
+
+    /// Reorder: the space to another place in the row of spaces.
+    func move(_ id: UUID, to index: Int) {
+        guard let from = all.firstIndex(where: { $0.id == id }) else { return }
+        let to = min(max(0, index), all.count - 1)
+        guard from != to else { return }
+        let space = all.remove(at: from)
+        all.insert(space, at: to)
+        keep()
+    }
+
+    /// One place left or right; the ends stay put.
+    func nudge(_ id: UUID, by: Int) {
+        guard let from = all.firstIndex(where: { $0.id == id }) else { return }
+        move(id, to: from + by)
+    }
+
+    /// How many tabs a space holds, on screen or parked.
+    func count(of id: UUID, in browser: Browser) -> Int {
+        id == current ? browser.tabs.count : (parked[id]?.tabs.count ?? 0)
+    }
+
+    /// The space a deleted one's tabs would go to: its neighbour to the
+    /// left, or to the right for the first.
+    func neighbour(of id: UUID) -> Space? {
+        guard all.count > 1, let i = all.firstIndex(where: { $0.id == id }) else { return nil }
+        return all[i == 0 ? 1 : i - 1]
     }
 
     func rename(_ id: UUID, to name: String) {
         guard let i = all.firstIndex(where: { $0.id == id }), !name.isEmpty else { return }
         all[i].name = name
+        keep()
     }
 
     func tint(_ id: UUID, hue: Double?) {
         guard let i = all.firstIndex(where: { $0.id == id }) else { return }
         all[i].hue = hue
+        keep()
     }
 
-    /// Its tabs close for good. The last space cannot be removed.
-    func remove(_ id: UUID, in browser: Browser) {
+    /// Its tabs close for good — or, given another space, move to the end of
+    /// that space's row instead. The last space cannot be removed.
+    func remove(_ id: UUID, in browser: Browser, movingTabsTo destination: UUID? = nil) {
         guard all.count > 1, let i = all.firstIndex(where: { $0.id == id }) else { return }
         if id == current { step(i == 0 ? 1 : -1, in: browser) }
-        parked.removeValue(forKey: id)?.tabs.forEach { $0.close() }
+        let row = parked.removeValue(forKey: id)?.tabs ?? []
+        if let destination, destination != id, all.contains(where: { $0.id == destination }) {
+            if destination == current {
+                browser.tabs.append(contentsOf: row)
+            } else {
+                var there = parked[destination] ?? ([], nil)
+                there.tabs.append(contentsOf: row)
+                parked[destination] = there
+            }
+        } else {
+            row.forEach { $0.close() }
+        }
         all.remove(at: i)
+        keep()
     }
 
     /// Move the active tab to another space; it lands at that row's end and
@@ -187,6 +339,7 @@ final class Spaces: ObservableObject {
     func profile(_ id: UUID, named name: String?) {
         guard let i = all.firstIndex(where: { $0.id == id }) else { return }
         all[i].profile = name?.isEmpty == true ? nil : name
+        keep()
     }
 
     var profiles: [String] { Array(Set(all.compactMap(\.profile))).sorted() }
@@ -234,6 +387,7 @@ final class Spaces: ObservableObject {
     /// Yesterday's rows. The visible one lands in `browser.tabs` (built,
     /// nothing fetched); the rest are parked the same way.
     func restore(_ saved: Session.Shape, into browser: Browser) {
+        self.browser = browser
         SessionGuard.beginRestore()
         defer { SessionGuard.finishRestore() }
         if let spaces = saved.spaces, !spaces.isEmpty {
@@ -281,184 +435,6 @@ extension Session.Entry {
         // its web view happens to be showing.
         guard let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true else { return nil }
         self.init(url: url.absoluteString, title: tab.title, pin: tab.pin)
-    }
-}
-
-// MARK: - the strip at the foot of the column
-
-struct SpaceStrip<Tools: View>: View {
-    @ObservedObject var browser: Browser
-    /// The column's own small doors — bookmarks, extensions. They used to sit
-    /// on a row of their own under this one, where a single glyph read as
-    /// something left behind; the foot is one line now, the way Arc's is.
-    @ViewBuilder var tools: () -> Tools
-    @ObservedObject var spaces = Spaces.shared
-    @Environment(\.colorScheme) private var scheme
-    @State private var renaming: UUID?
-    @State private var profiling: UUID?
-    @State private var draft = ""
-    @State private var hovering: UUID?
-
-    private var tint: SpaceTint { SpaceTint(hue: spaces.space.hue, dark: scheme == .dark) }
-
-    /// Arc's foot: the space you are in, named, on the left; every other
-    /// space as a dot in its own colour on the right; a plus at the end.
-    var body: some View {
-        HStack(spacing: 2) {
-            here
-            Spacer(minLength: 4)
-            ForEach(spaces.all.filter { $0.id != spaces.current }) { space in
-                dot(space)
-            }
-            plus
-            tools()
-        }
-        .padding(.horizontal, 6)
-        .padding(.top, 2)
-        .padding(.bottom, 7)
-        .animation(Motion.glide, value: spaces.current)
-    }
-
-    private var here: some View {
-        let space = spaces.space
-        return Button { spaces.select(space.id, in: browser) } label: {
-            HStack(spacing: 6) {
-                badge(space, size: 15)
-                Text(space.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .padding(.horizontal, 7)
-            .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.pill))
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(tint.ink)
-        .help(space.name)
-        // The name is the one thing in this row that must stay readable;
-        // the dots give up their air before it gives up a letter.
-        .layoutPriority(1)
-        .modifier(menus(for: space))
-    }
-
-    /// A space's emoji if its name starts with one — Arc's spaces nearly all
-    /// do — and its colour as a small rounded chip if it doesn't.
-    @ViewBuilder
-    private func badge(_ space: Space, size: CGFloat) -> some View {
-        if let first = space.name.unicodeScalars.first, first.properties.isEmojiPresentation {
-            Text(String(Character(first)))
-                .font(.system(size: size * 0.8))
-                .frame(width: size, height: size)
-        } else {
-            RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                .fill(SpaceTint(hue: space.hue, dark: scheme == .dark).dot)
-                .frame(width: size * 0.6, height: size * 0.6)
-                .frame(width: size, height: size)
-        }
-    }
-
-    private func dot(_ space: Space) -> some View {
-        Button { spaces.select(space.id, in: browser) } label: {
-            Circle()
-                .fill(SpaceTint(hue: space.hue, dark: scheme == .dark).dot)
-                .frame(width: 8, height: 8)
-                .opacity(hovering == space.id ? 1 : 0.65)
-                .frame(width: 14, height: 24)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { over in hovering = over ? space.id : (hovering == space.id ? nil : hovering) }
-        .help(space.name)
-        .modifier(menus(for: space))
-    }
-
-    private var plus: some View {
-        Button { spaces.add(in: browser) } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(tint.faint)
-                .frame(width: 18, height: 24)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("New Space")
-    }
-
-    /// The right-click menu and the two little name fields, on whichever
-    /// shape stands for the space — the named chip or the dot.
-    private func menus(for space: Space) -> some ViewModifier {
-        SpaceMenus(
-            menu: AnyView(menu(for: space)),
-            renaming: Binding(get: { renaming == space.id }, set: { if !$0 { renaming = nil } }),
-            profiling: Binding(get: { profiling == space.id }, set: { if !$0 { profiling = nil } }),
-            draft: $draft,
-            rename: { spaces.rename(space.id, to: draft); renaming = nil },
-            profile: { spaces.profile(space.id, named: draft); profiling = nil }
-        )
-    }
-
-    private struct SpaceMenus: ViewModifier {
-        let menu: AnyView
-        @Binding var renaming: Bool
-        @Binding var profiling: Bool
-        @Binding var draft: String
-        let rename: () -> Void
-        let profile: () -> Void
-
-        func body(content: Content) -> some View {
-            content
-                .contextMenu { menu }
-                .popover(isPresented: $renaming) {
-                    TextField("Name", text: $draft)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 160)
-                        .padding(8)
-                        .onSubmit(rename)
-                }
-                .popover(isPresented: $profiling) {
-                    TextField("Profile name", text: $draft)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 160)
-                        .padding(8)
-                        .onSubmit(profile)
-                }
-        }
-    }
-
-    @ViewBuilder
-    private func menu(for space: Space) -> some View {
-        Button("Rename…") { draft = space.name; renaming = space.id }
-        Menu("Colour") {
-            Button("Grey") { spaces.tint(space.id, hue: nil) }
-            ForEach(Array(stride(from: 0.0, to: 1.0, by: 0.125)), id: \.self) { hue in
-                Button { spaces.tint(space.id, hue: hue) } label: {
-                    Label { Text(String(format: "%.0f°", hue * 360)) } icon: {
-                        Image(systemName: "circle.fill").foregroundStyle(Color(hue: hue, saturation: 0.55, brightness: 0.75))
-                    }
-                }
-            }
-        }
-        Menu("Profile") {
-            Button { spaces.profile(space.id, named: nil) } label: {
-                Label("Shared", systemImage: space.profile == nil ? "checkmark" : "")
-            }
-            ForEach(spaces.profiles, id: \.self) { name in
-                Button { spaces.profile(space.id, named: name) } label: {
-                    Label(name, systemImage: space.profile == name ? "checkmark" : "")
-                }
-            }
-            Divider()
-            Button("New Profile…") { draft = ""; profiling = space.id }
-        }
-        if let tab = browser.active, space.id != spaces.current {
-            Button("Move Current Tab Here") { spaces.move(tab, to: space.id, in: browser) }
-        }
-        if spaces.all.count > 1 {
-            Divider()
-            Button("Remove Space", role: .destructive) { spaces.remove(space.id, in: browser) }
-        }
     }
 }
 
@@ -513,13 +489,24 @@ struct ForkCommands: Commands {
 
 extension Spaces {
     /// `./bench spaces` lists; `spaces new [NAME]`, `spaces select N|NAME`,
-    /// `spaces next`, `spaces prev`, `spaces move N|NAME` (the active tab).
+    /// `spaces next`, `spaces prev`, `spaces move N|NAME` (the active tab),
+    /// `spaces icon N|NAME EMOJI|sf:symbol|none`, `spaces colour N|NAME
+    /// Teal|…|graphite`, `spaces reorder N|NAME M`, `spaces remove N|NAME
+    /// [--keep]` (the tabs go to the neighbour instead of closing),
+    /// `spaces edit [N|NAME]` (the editor, on the header), `spaces delete
+    /// N|NAME` (the sheet) and `spaces answer close|move|cancel` (its
+    /// buttons), `spaces profile NAME`.
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         func find(_ key: String) -> UUID? {
             if let n = Int(key), all.indices.contains(n) { return all[n].id }
             return all.first { $0.name.lowercased() == key.lowercased() }?.id
         }
         let arg = request["arg"] as? String ?? ""
+        let words = arg.split(separator: " ").map(String.init)
+        // `icon Side Project sf:hammer`: the last word is the value, the rest
+        // the space's name (or index).
+        let value = words.last ?? ""
+        let key = words.dropLast().joined(separator: " ")
         switch request["op"] as? String ?? "" {
         case "new": add(named: arg, in: browser)
         case "next": step(1, in: browser)
@@ -529,13 +516,41 @@ extension Spaces {
             guard let id = find(arg) else { return ["error": "no space \(arg)"] }
             guard let tab = browser.active else { return ["error": "no active tab"] }
             move(tab, to: id, in: browser)
-        case "remove": guard let id = find(arg) else { return ["error": "no space \(arg)"] }; remove(id, in: browser)
+        case "remove":
+            let keep = words.contains("--keep")
+            guard let key = words.first(where: { $0 != "--keep" }), let id = find(key) else { return ["error": "no space \(arg)"] }
+            remove(id, in: browser, movingTabsTo: keep ? neighbour(of: id)?.id : nil)
+        case "icon":
+            guard words.count >= 2, let id = find(key) else { return ["error": "spaces icon N|NAME EMOJI|sf:symbol|none"] }
+            icon(id, value == "none" ? nil : value)
+        case "colour", "color":
+            guard words.count >= 2, let id = find(key) else { return ["error": "spaces colour N|NAME \(SpaceColour.allCases.map(\.name).joined(separator: "|"))"] }
+            guard let colour = SpaceColour(rawValue: value.lowercased()) ?? (value.lowercased() == "none" ? .graphite : nil) else {
+                return ["error": "no colour \(value)"]
+            }
+            tint(id, hue: colour.hue)
+        case "reorder":
+            guard words.count >= 2, let id = find(key), let to = Int(value) else { return ["error": "spaces reorder N|NAME M"] }
+            move(id, to: to)
+        case "edit":
+            let id = words.first.flatMap(find) ?? current
+            if id != current { select(id, in: browser) }
+            SpaceEditing.shared.open(id, atStrip: false)
+        case "delete":
+            // The sheet, as Delete Space… shows it; `answer` presses a button.
+            guard let id = find(arg) else { return ["error": "no space \(arg)"] }
+            SpaceDelete.ask(id, in: browser)
+            return ["sheet": SpaceDelete.describe]
+        case "answer":
+            guard SpaceDelete.answer(arg) else { return ["error": "no sheet up, or no \(arg) button on it"] }
+            return ["answered": arg, "did": SpaceDelete.last]
         case "profile": profile(current, named: arg)
         default: break
         }
         return ["spaces": all.enumerated().map { i, s in
             ["index": i, "name": s.name, "current": s.id == current, "profile": s.profile ?? "shared",
-             "tabs": s.id == current ? browser.tabs.count : (parked[s.id]?.tabs.count ?? 0)] as [String: Any]
+             "tabs": count(of: s.id, in: browser), "hue": s.hue ?? -1, "colour": SpaceColour.nearest(s.hue).name,
+             "icon": s.icon ?? ""] as [String: Any]
         }]
     }
 }

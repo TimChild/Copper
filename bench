@@ -9,7 +9,7 @@
     ./bench select ID                  bring a tab to the front — --test runs only
     ./bench resize W H [STEPS]         take the window to W×H in steps, like a drag — --test runs only
     ./bench key ID TEXT [--app]        press keys on a tab as real key events — --test runs only;
-                                       ⌘ and ⇧ hold for the next key, ← → ⎋ are arrows/Escape; --app
+                                       ⌘ ⇧ ⌥ hold for the next key, ← → ⎋ are arrows/Escape; --app
                                        sends through the app's own key monitor, as a hand would
     ./bench text ID                    the page's text
     ./bench eval ID JS                 run JavaScript, print what it returns

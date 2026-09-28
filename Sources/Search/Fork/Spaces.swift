@@ -461,9 +461,12 @@ struct ForkCommands: Commands {
             // three panes open there was no one move that put them all away.
             Button(trace.paneOpen ? "Close Jev Timeline" : "Jev Timeline") { trace.paneOpen.toggle() }
                 .keyboardShortcut("j", modifiers: [.command, .option])
+            // Never disabled: a menu item's enabled state is decided when the
+            // menu is built, and ⌘⌥E pressed with two panes open did nothing
+            // because the item still remembered a window with none. Closing
+            // nothing is harmless.
             Button("Close All Panes") { Panes.closeAll(in: browser) }
                 .keyboardShortcut("e", modifiers: [.command, .option])
-                .disabled(!agent.open && !trace.paneOpen && !split.on)
         }
         CommandMenu("Spaces") {
             Button("New Space") { spaces.add(in: browser) }

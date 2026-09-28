@@ -440,9 +440,11 @@ struct SpaceEditor: View {
     var body: some View {
         if let space {
             VStack(alignment: .leading, spacing: 12) {
-                name
+                // Named, so the popover says what it is before the field
+                // does — and the field reads as the name, not a search box.
+                section("Edit Space") { name }
                 section("Icon") { icons(space) }
-                section("Colour") { colours(space) }
+                section("Colour", trailing: SpaceColour.nearest(space.hue).name) { colours(space) }
                 section("Profile") { profile(space) }
                 Rectangle().fill(Palette.hairline).frame(height: 1).padding(.top, 2)
                 footer
@@ -471,9 +473,19 @@ struct SpaceEditor: View {
             .onSubmit { SpaceEditing.shared.close() }
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+    /// A caption over its content; `trailing` names the current choice at
+    /// the far end — the colour's name, so a swatch is never just a colour.
+    private func section<Content: View>(_ title: String, trailing: String? = nil, @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
+            HStack {
+                Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
+                if let trailing {
+                    Spacer(minLength: 6)
+                    Text(trailing).font(.system(size: 11)).foregroundStyle(Palette.muted)
+                        .transition(.opacity)
+                        .animation(Motion.quick, value: trailing)
+                }
+            }
             content()
         }
     }
@@ -585,6 +597,12 @@ struct SpaceEditor: View {
                         namingProfile = false
                     }
             }
+            // What a profile is, in one line: the cookie jar. A page that is
+            // already up keeps the jar it was built with.
+            Text("Its own sign-ins and cookies, shared with spaces of the same profile. Pages opened from now on use it.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

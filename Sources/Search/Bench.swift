@@ -411,12 +411,13 @@ final class Bench {
                 }
                 return event
             }
-            // ⌘ and ⇧ in the text hold for the key after them; ← → are the
-            // arrows, ⎋ is Escape. (Fork: for ⌘← and friends.)
+            // ⌘, ⇧ and ⌥ in the text hold for the key after them; ← → are
+            // the arrows, ⎋ is Escape. (Fork: for ⌘← and friends.)
             var holding: NSEvent.ModifierFlags = []
             for character in text {
                 if character == "\u{2318}" { holding.insert(.command); continue }
                 if character == "\u{21E7}" { holding.insert(.shift); continue }
+                if character == "\u{2325}" { holding.insert(.option); continue }
                 let arrow = character == "\u{2190}" ? UInt16(123) : character == "\u{2192}" ? UInt16(124) : character == "\u{238B}" ? UInt16(53) : nil
                 let chars = arrow.map { $0 == 123 ? "\u{F702}" : $0 == 124 ? "\u{F703}" : "\u{1B}" } ?? String(character)
                 let flags = holding

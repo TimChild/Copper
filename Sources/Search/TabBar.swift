@@ -306,6 +306,7 @@ private struct TabPill: View {
 
     @State private var hovering = false
     @State private var shake: CGFloat = 0
+    @Environment(\.colorScheme) private var scheme
 
     private var editing: Bool { browser.editingTab == tab.id }
     private var pinned: Bool { tab.pin != nil && !editing }
@@ -423,7 +424,7 @@ private struct TabPill: View {
                         .foregroundStyle(colour.opacity(0.7))
                 }
                 Text(tab.label)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 12.5, weight: live ? .semibold : .regular))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(colour)
@@ -496,6 +497,9 @@ private struct TabPill: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            // The same soft lift the sidebar's live row has, so the tab you
+            // are on stands off the strip rather than sitting in it.
+            .shadow(color: SpaceTint(hue: nil, dark: scheme == .dark).lift, radius: 5, y: 1.5)
             .matchedGeometryEffect(id: "live", in: pill)
         } else if hovering {
             RoundedRectangle(cornerRadius: 9, style: .continuous)

@@ -196,7 +196,7 @@ struct DownloadsPanel: View {
     @ObservedObject var downloads: Downloads
 
     private var session: [Downloads.Item] {
-        downloads.items.filter { if case .cancelled = $0.state { return false }; return true }
+        downloads.shown
     }
 
     private var older: [Keep] {

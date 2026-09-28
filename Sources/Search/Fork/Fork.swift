@@ -104,12 +104,12 @@ enum Fork {
             switch op {
             case "open": downloads.popoverOpen = true; downloads.seen()
             case "close": downloads.popoverOpen = false
-            case "cancel":
-                guard let item = downloads.items.first(where: { $0.id.uuidString.lowercased().hasPrefix(argument.lowercased()) }) else { return ["error": "no download \(argument)"] }
-                downloads.cancel(item)
-            case "retry":
-                guard let item = downloads.items.first(where: { $0.id.uuidString.lowercased().hasPrefix(argument.lowercased()) }) else { return ["error": "no download \(argument)"] }
-                downloads.retry(item, in: browser)
+            case "cancel", "retry":
+                // An id, or the start of one — never nothing, which would
+                // match the first row and act on a download nobody named.
+                let key = argument.lowercased()
+                guard !key.isEmpty, let item = downloads.items.first(where: { $0.id.uuidString.lowercased().hasPrefix(key) }) else { return ["error": "no download \(argument)"] }
+                if op == "cancel" { downloads.cancel(item) } else { downloads.retry(item, in: browser) }
             case "clear": downloads.clearFinished()
             case "start":
                 guard Store.testing, let raw = URL(string: argument), let tab = browser.active else {

@@ -42,6 +42,15 @@ final class Downloads: ObservableObject {
     private var pulseWork: DispatchWorkItem?
 
     var active: [Item] { items.filter { if case .running = $0.state { return true }; return false } }
+
+    /// What the lists show: what is still arriving first, then the rest as
+    /// they happened, newest on top. A cancelled download is not a thing to
+    /// look at afterwards.
+    var shown: [Item] {
+        let kept = items.filter { if case .cancelled = $0.state { return false }; return true }
+        return kept.filter { if case .running = $0.state { return true }; return false }
+            + kept.filter { if case .running = $0.state { return false }; return true }
+    }
     var doorShowing: Bool { !items.isEmpty }
 
     /// The aggregate ring is determinate only when every active download has a
@@ -139,11 +148,20 @@ final class Downloads: ObservableObject {
         }
     }
 
+    /// The failed row goes as its second attempt begins, so the list shows
+    /// one download trying again rather than a corpse beside a newcomer.
     func retry(_ item: Item, in browser: Browser) {
+        // Only something that stopped: retrying a download still arriving
+        // would start a second copy and lose track of the first.
+        switch item.state {
+        case .failed, .cancelled: break
+        default: return
+        }
         guard let web = browser.active?.web else { return }
         let oldID = item.id
-        let completion: @MainActor @Sendable (WKDownload) -> Void = { [weak browser] download in
+        let completion: @MainActor @Sendable (WKDownload) -> Void = { [weak browser, weak self] download in
             browser?.keep(download)
+            self?.items.removeAll { $0.id == oldID }
         }
         if let resume = item.resumeData, #available(macOS 11.3, *) {
             web.resumeDownload(fromResumeData: resume, completionHandler: completion)

@@ -122,9 +122,7 @@ struct DownloadsPopover: View {
     @ObservedObject var browser: Browser
     @ObservedObject var downloads: Downloads
 
-    private var session: [Downloads.Item] {
-        downloads.items.filter { if case .cancelled = $0.state { return false }; return true }
-    }
+    private var session: [Downloads.Item] { downloads.shown }
 
     private var older: [Keep] {
         let paths = Set(session.compactMap { $0.file?.path })
@@ -177,7 +175,7 @@ struct DownloadsPopover: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
         }
-        .frame(width: 320)
+        .frame(width: 340)
         .background(Palette.ground, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .onAppear { downloads.seen() }
     }
@@ -222,11 +220,14 @@ struct DownloadRow: View {
                     .foregroundStyle(exists || item != nil ? Palette.ink : Palette.faint)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                // Digits that hold still as they count, in the row's own type
+                // rather than a typewriter's; the tail gives way before the
+                // figures do.
                 Text(detail)
-                    .font(.system(size: 9.5, design: .monospaced))
+                    .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(Palette.muted)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.78)
+                    .truncationMode(.tail)
                 if let item, isRunning(item) {
                     DownloadProgress(item: item, reduceMotion: reduceMotion)
                 }
@@ -277,15 +278,20 @@ struct DownloadRow: View {
         if let item {
             switch item.state {
             case .running:
-                let done = byte(item.done)
                 let rate = speed(item.speed)
-                guard let total = item.total else { return "\(done) · \(rate) · Downloading" }
-                let left = item.speed > 1 ? duration(Double(max(0, total - item.done)) / item.speed) : "—"
-                return "\(done) of \(byte(total)) · \(rate) · \(left) left"
+                guard let total = item.total else { return "\(byte(item.done)) so far · \(rate)" }
+                // "4.2 of 18.6 MB": the unit once, at the end, when both
+                // figures share it — the way a person says it.
+                let whole = byte(total)
+                let part = byte(item.done)
+                let unit = whole.split(separator: " ").last.map(String.init) ?? ""
+                let done = !unit.isEmpty && part.hasSuffix(unit) ? String(part.dropLast(unit.count)).trimmingCharacters(in: .whitespaces) : part
+                let left = item.speed > 1 ? duration(Double(max(0, total - item.done)) / item.speed) + " left" : "starting"
+                return "\(done) of \(whole) · \(rate) · \(left)"
             case .finished:
                 return "\(byte(item.total ?? item.done)) · \(item.from.isEmpty ? "Downloaded" : item.from)"
             case .failed:
-                return "Failed — Retry"
+                return item.done > 0 ? "Failed at \(byte(item.done))" : "Failed"
             case .cancelled:
                 return "Cancelled"
             }
@@ -301,17 +307,17 @@ struct DownloadRow: View {
 
     private func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     private func isRunning(_ item: Downloads.Item) -> Bool { if case .running = item.state { return true }; return false }
-    private func byte(_ value: Int64) -> String { compact(DownloadFormat.bytes.string(fromByteCount: value)) }
+    private func byte(_ value: Int64) -> String { DownloadFormat.bytes.string(fromByteCount: value) }
     private func speed(_ value: Double) -> String {
-        value > 0 ? "\(compact(DownloadFormat.bytes.string(fromByteCount: Int64(value))))/s" : "—/s"
+        value > 0 ? "\(DownloadFormat.bytes.string(fromByteCount: Int64(value)))/s" : "—"
     }
+    /// "12 s", "2 min", "1 h 05 min" — round figures; nobody wants the seconds
+    /// of an hour-long download.
     private func duration(_ value: Double) -> String {
         let seconds = max(0, Int(value.rounded()))
-        if seconds < 60 { return "\(seconds)s" }
-        return "\(seconds / 60)m\(seconds % 60)s"
-    }
-    private func compact(_ value: String) -> String {
-        value.components(separatedBy: .whitespacesAndNewlines).joined()
+        if seconds < 60 { return "\(seconds) s" }
+        if seconds < 3600 { return "\((seconds + 30) / 60) min" }
+        return "\(seconds / 3600) h \(String(format: "%02d", (seconds % 3600) / 60)) min"
     }
 }
 

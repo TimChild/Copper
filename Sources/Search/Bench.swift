@@ -527,9 +527,12 @@ final class Bench {
             }
             if let page = (request["page"] as? String).flatMap(SettingsPanel.Page.init(rawValue:)) {
                 browser.tuning = false
-                browser.settingsPage = page
-                Store.settings.set(page.rawValue, forKey: "settings.page")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { browser.tuning = true }
+                browser.settingsPage = .general
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    browser.settingsPage = page
+                    Store.settings.set(page.rawValue, forKey: "settings.page")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { browser.tuning = true }
+                }
             }
             if let on = request["sidebar"] as? Bool { browser.prefs.sidebar = on }
             if let on = request["folded"] as? Bool { browser.folded = on }

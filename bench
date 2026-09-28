@@ -33,6 +33,7 @@
     ./bench ext-enable ID on|off       switch an extension on or off
     ./bench ext-remove ID
     ./bench updates status|check|stub URL|dry-run on|off|upgrade
+    ./bench downloads [open|close|cancel ID|retry ID|clear|start URL]
     ./bench bw status|server URL|login EMAIL PW [OTP]|unlock PW|lock|sync|candidates HOST|choose ID
               |identities|cards|fields HOST|usernames|counts|autofill card|identity ID
               |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
@@ -171,7 +172,7 @@ def main(argv):
             request["arg"] = args[1]
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw"):
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads"):
         request["op"] = args[0] if args else ("status" if verb in ("updates", "bw") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "flow":

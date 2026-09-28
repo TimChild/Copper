@@ -5,6 +5,7 @@ import SwiftUI
 /// of one and into the other.
 struct TabBar: View {
     @ObservedObject var browser: Browser
+    @ObservedObject private var downloads = Downloads.shared
 
     @Namespace private var pill
 
@@ -110,6 +111,10 @@ struct TabBar: View {
                         ExtensionSlot()
                         Helm(browser: browser)
                             .padding(.trailing, 8)
+                        if downloads.doorShowing {
+                            DownloadsDoor(browser: browser, size: 26, arrowEdge: .bottom)
+                                .transition(.scale(scale: 0.8).combined(with: .opacity))
+                        }
                         Door(icon: "bookmark", help: "Bookmarks") { browser.bookmarksOpen.toggle() }
                             .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .bottom) {
                                 BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
@@ -146,6 +151,7 @@ struct TabBar: View {
         // and the tabs appeared to jump aside.
         .animation(Motion.glide, value: browser.editingTab)
         .animation(Motion.settle, value: browser.tabs.map(\.id))
+        .animation(Motion.settle, value: downloads.doorShowing)
     }
 
     /// Pick a tab up and the others get out of its way as it passes them.

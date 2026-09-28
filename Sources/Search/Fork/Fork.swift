@@ -83,6 +83,47 @@ enum Fork {
         case "swipe": return SpaceSwipe.bench(request["arg"] as? String ?? "left", in: browser)
         case "mouse": return MouseButtons.bench(request, in: browser)
         case "heat": return Heat.shared.bench(request, in: browser)
+        case "downloads":
+            let op = request["op"] as? String ?? "list"
+            let argument = request["arg"] as? String ?? ""
+            func state(_ item: Downloads.Item) -> String {
+                switch item.state {
+                case .running: return "running"
+                case .finished: return "finished"
+                case .failed: return "failed"
+                case .cancelled: return "cancelled"
+                }
+            }
+            func describe(_ item: Downloads.Item) -> [String: Any] {
+                let fraction: Any = item.total.map { $0 > 0 ? Double(item.done) / Double($0) : 0 } ?? NSNull()
+                return ["id": item.id.uuidString, "name": item.name, "state": state(item),
+                        "done": item.done, "total": item.total ?? NSNull(), "fraction": fraction,
+                        "speed": item.speed, "file": item.file?.path ?? ""]
+            }
+            let downloads = Downloads.shared
+            switch op {
+            case "open": downloads.popoverOpen = true; downloads.seen()
+            case "close": downloads.popoverOpen = false
+            case "cancel", "retry":
+                // An id, or the start of one — never nothing, which would
+                // match the first row and act on a download nobody named.
+                let key = argument.lowercased()
+                guard !key.isEmpty, let item = downloads.items.first(where: { $0.id.uuidString.lowercased().hasPrefix(key) }) else { return ["error": "no download \(argument)"] }
+                if op == "cancel" { downloads.cancel(item) } else { downloads.retry(item, in: browser) }
+            case "clear": downloads.clearFinished()
+            case "start":
+                guard Store.testing, let raw = URL(string: argument), let tab = browser.active else {
+                    return ["error": "downloads start needs a URL in a probe world"]
+                }
+                tab.web.startDownload(using: URLRequest(url: raw)) { download in
+                    browser.keep(download)
+                }
+                return ["started": true]
+            case "list": break
+            default: return ["error": "unknown downloads operation \(op)"]
+            }
+            return ["items": downloads.items.map(describe), "unseen": downloads.unseen,
+                    "doorShowing": downloads.doorShowing, "popoverOpen": downloads.popoverOpen]
         case "bw":
             // Bitwarden without the Settings card, for a probe run: `bw status`,
             // `bw server URL`, `bw login EMAIL PASSWORD [OTP]`, `bw unlock PASSWORD`,
@@ -246,19 +287,29 @@ enum Fork {
         case "window":
             // The whole window as the compositor shows it — sidebar, page,
             // panels — to a PNG. An app may always picture its own windows.
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.level == .normal && $0.sheetParent == nil })
+            guard let window = Links.window
+                    ?? NSApp.windows.first(where: { $0.isVisible && $0.level == .normal && $0.sheetParent == nil })
                     ?? NSApp.keyWindow,
                   let path = request["path"] as? String else { return ["error": "window needs a path"] }
             // A probe may be behind the user's normal Copper window. Bring
             // only this isolated process forward before asking WindowServer
             // for its pixels; otherwise the PNG can be a stale surface.
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
+            let hasPopover = NSApp.windows.contains { $0 !== window && $0.isVisible && $0.level == .normal }
+            if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
+            // Making the main window key dismisses SwiftUI's popover. Leave
+            // the already-visible door popover alone for its evidence shot.
+            if !hasPopover { window.makeKeyAndOrderFront(nil) }
             // The window and whatever hangs off it — a sheet, a popover — in
             // one picture, bottom to top, so a test can see the sheet it opened.
             var ids: [CGWindowID] = [CGWindowID(window.windowNumber)]
             if let sheet = window.attachedSheet { ids.append(CGWindowID(sheet.windowNumber)) }
             for child in window.childWindows ?? [] where child.isVisible { ids.append(CGWindowID(child.windowNumber)) }
+            // SwiftUI popovers are sibling windows rather than child windows;
+            // include the visible one so a probe picture is the same thing a
+            // person sees, not just the page beneath its door.
+            for other in NSApp.windows where other !== window && other.isVisible && other.level == .normal {
+                ids.append(CGWindowID(other.windowNumber))
+            }
             let list = ids.reversed().map { NSNumber(value: $0) } as CFArray
             // Compositing several windows can come back empty without the
             // screen-recording grant; then the frontmost one alone.

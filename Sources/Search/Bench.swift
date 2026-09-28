@@ -231,7 +231,7 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
-        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "updates", "bw", "flow":
+        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow":
             answer(Fork.bench(verb, request, in: browser))
 
         case "tabs":
@@ -358,6 +358,7 @@ final class Bench {
                 "look": browser.prefs.look.rawValue,
                 "appearance": NSApp.appearance?.name.rawValue ?? "system",
                 "key": NSApp.keyWindow.map { "\(type(of: $0)) “\($0.title)”" } ?? "",
+                "announcement": browser.announcement ?? "",
             ]
             out["windows"] = NSApp.windows.map { window -> [String: Any] in
                 [
@@ -505,7 +506,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "ui", "flow", "passkeys",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "ui", "flow", "passkeys", "downloads",
             ]])
         }
     }

@@ -1,6 +1,6 @@
 import Foundation
 
-// What the owner watching a bot thread sees of a Jev run while it runs:
+// What the owner watching an agent thread sees of a Jev run while it runs:
 // the `progress` object of a link `progress` frame (LinkWire.progress), built
 // from the same JevTrace.Run the pane beside the page reads.
 //

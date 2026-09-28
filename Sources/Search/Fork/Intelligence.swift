@@ -92,7 +92,7 @@ final class Intelligence: ObservableObject {
 
     // MARK: - outside writers
 
-    /// intelligence.json, read again. The host daemon writes keys it was
+    /// intelligence.json, read again. An external daemon writes keys it was
     /// provisioned with into the file, then signals (SIGHUP) or calls
     /// `copper intelligence reload`, so nobody restarts the browser for a key.
     @discardableResult

@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-/// Watches JevTrace while one agent link request (a `jev_run` or `jev_step`
+/// Watches JevTrace while one agent-link request (a `jev_run` or `jev_step`
 /// tools/call) is being served, and hands `progress` frames to `post` — so
 /// the owner's thread shows the run live and can stop it.
 ///

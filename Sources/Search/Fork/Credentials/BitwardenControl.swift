@@ -1,6 +1,6 @@
 import Foundation
 
-// `copper bitwarden …` and the agents app's Mac page's Bitwarden panel land here,
+// `copper bitwarden …` and the headless Mac page's Bitwarden panel land here,
 // through the loopback server's `copper/bitwarden` method (MCP.swift) — never
 // through the agent link, which refuses every `copper/*` method.
 //
@@ -8,8 +8,8 @@ import Foundation
 // signed-in / locked / unlocked, the account email, the server, the last
 // sync, the agent-access policy and how many logins, identities and cards
 // the unlocked cache holds. Never a password, an API secret, a session key
-// or a vault value. What comes in for `login` is the sealed payload the
-// host daemon decrypted (server, email, master password, optional API key,
+// or a vault value. What comes in for `login` is the sealed payload an
+// external daemon decrypted (server, email, master password, optional API key,
 // optional two-step code, policy); the secrets go to `bw` through the child's
 // environment only (Bitwarden.run) and are gone when this returns.
 

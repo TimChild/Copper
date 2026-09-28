@@ -99,9 +99,9 @@ Settings › Passwords › Agent access and enable a per-item toggle (or the
 share-everything switch) before an agent can use one. The picker itself can
 still use every unlocked item; the agent allow-list only gates agent fills.
 
-## Signing in without a window: `copper bitwarden` and the agents app's Mac page
+## Signing in without a window: `copper bitwarden` and the headless Mac page
 
-A headless Copper (the bot Mac mini's LaunchAgent, docs/headless.md) has no
+A headless Copper (a headless Mac mini's LaunchAgent, docs/headless.md) has no
 Settings window to type into. The same backend is driven through the loopback
 agent server's `copper/bitwarden` method (127.0.0.1 + the bearer token in
 `agent.json`; the agent link refuses every `copper/*` method, so no bot can
@@ -116,8 +116,8 @@ copper bitwarden policy [--share folder|all] [--stay-unlocked on|off]
 
 `login -` reads `{server?, email, password, clientId?, clientSecret?, otp?,
 otpMethod?, share?, stayUnlocked?}` from stdin. Secrets are refused on argv, so
-they never show up in `ps`. The agents app's Mac page seals the same object in the
-owner's browser to the Mac's device key; the host daemon decrypts it in
+they never show up in `ps`. The headless Mac page seals the same object in the
+owner's browser to the Mac's device key; an external daemon decrypts it in
 memory and pipes it into `copper bitwarden login -`. The service only ever
 relays ciphertext.
 
@@ -151,7 +151,7 @@ session key or vault value. Exit codes: 0 `ok`, 1 `ok: false`, 2 usage or Copper
 unreachable.
 
 `bw` itself is found in this order: `SEARCH_BW_PATH` (the daemon points its
-LaunchAgent at the CLI it installed), `~/.local/bin/bw`, `/opt/homebrew/bin/bw`,
+LaunchAgent at the CLI it installed), `/opt/homebrew/bin/bw`,
 `/usr/local/bin/bw`, then `$PATH`.
 
 **What is stored where:**
@@ -185,7 +185,7 @@ on the broad switch, enables that account, or uses the Bitwarden convention:
   including when share-everything is enabled.
 
 The per-account toggles stay in Copper and are not editable through MCP. The
-broad switch can also be set by the owner from the shell or the agents app's Mac page
+broad switch can also be set by the owner from the shell or the headless Mac page
 (`copper bitwarden policy --share folder|all`, loopback only; see above). See [Agents](agents.md) for `browser_sign_in`, `copper signin`, and Jev's
 `SIGN_IN` control. Those operations fill in-process and return status only;
 they do not return a password, TOTP code, or Bitwarden session key. Private

@@ -1,210 +1,147 @@
-# Agent link — how Copper lends its tools to your bots
+# Agent links — let your agents use this browser
 
-*The implementation behind Settings › Agents › Agent link. For what it does and how to use it, read
-[agents.md › Agent link](agents.md#agent-link--your-bots-use-this-browser); for the server side and the
-wire contract, the agents service's own docs.*
-
-## The idea in one paragraph
-
-Copper's MCP server listens on `127.0.0.1:4123` and nowhere else — an agent running in the cloud
-cannot reach it, and it never should. So Copper turns the arrow around: it registers itself with
-the agents service as a **link**, opens one outbound HTTPS stream, and answers the requests the
-service relays to it. The service is the hub, this Mac is a spoke, each bot session is a client
-whose identity rides on every request. The owner grants the link per bot and can take it back
-from Copper, from the agents app's Connect page, or from the shell; every call is announced in the
-window and recorded on both sides. Nothing new listens on the Mac, and Copper's own loopback
-bearer never leaves it. (A WireGuard hub was considered and rejected: neither Fargate nor the
-AgentCore microVMs can hold a tunnel, and the ask is "let this bot use these tools, visibly and
-revocably", not raw network reach.)
+Copper can lend the tools in its open window to bots in one or more agents apps. Each app is an
+outbound connection: Copper registers the browser, holds an HTTPS event stream, and sends each
+request through the same MCP server used by the local CLI. Nothing new listens on the Mac and the
+loopback bearer never leaves it.
 
 ```text
-agent (Claude Code in AgentCore) ─tools/call copper__jev_run─▶ agents service (session MCP gateway)
-                                                                  │ LinkRequest row · SSE `request` frame
-                                                                  ▼
-Copper ── AgentLink.stream() ── LinkWire.events() ── MCP.shared.handle(jsonrpc) ── Tools.call ── the page
-   └──────────── POST /v1/me/links/:id/frames {reply} ────────────▶ gateway ──▶ agent
+bot ── tools/call ──▶ agents app ── request (SSE) ──▶ Copper
+Copper ── reply / progress / heartbeat ─────────────▶ agents app ──▶ bot
 ```
 
-## Files
+A bot sees no tools until you grant it. Calls are announced in the window as
+`@bot · app · tool` and appear under Recent calls. Revoke removes every grant immediately.
 
-| File | What it holds |
-|---|---|
-| `Sources/Search/Fork/MCP/Link.swift` | `AgentLink` — `@MainActor final class`, `shared`. Config, status machine, the connect loop, request serving, owner actions (grants, revoke, calls), the CLI/bench control surface. |
-| `Sources/Search/Fork/MCP/LinkWire.swift` | `LinkWire` — Foundation-only, no `@MainActor`: byte→line splitter, SSE event parser, frame decoding, lenient DTO readers (`Grant`, `Bot`, `Call`), reply/heartbeat encoders, backoff table, URL guards. Everything in here is a pure function so it can be compiled and tested alone. |
-| `MCP.swift` | `Config.agentLink: AgentLink.Config?` (persisted with the rest of `agent.json`); `handle(_:announce:)` so link calls are announced as `agents · @bot · tool`; `start(for:)` starts the link; the loopback method `copper/link` (the CLI's way in); `bench` op `link`. |
-| `Progress.swift` | `JevProgress.build(_ run: JevTrace.Run) -> [String: Any]` — the pure, capped `progress` object of a Jev call (below). |
-| `LinkProgress.swift` | `JevProgressReporter` — watches `JevTrace.shared.$run` while one `jev_run`/`jev_step` request is served, throttles, posts `progress` frames, stops the run on `cancel`. |
-| `SettingsFork.swift` | `LinkCard` + `GrantRow` on the Agents page. |
-| `CLI.swift` | `copper link status\|on\|off\|token\|api\|grants\|grant\|revoke\|calls` (`--json`). |
+## Settings
 
-No upstream file is touched; there is no PATCHES.md row.
+Open **Settings › Agents**. The **Your agents — let them use this browser** section has one card
+per configured app:
+
+- **Connect this browser** turns that app's connection on or off.
+- **App address** is the address shown at **Agents › Connect** in your agents app.
+- **Personal token** is the `fxb_…` token minted there; Copper stores it only in the 0600
+  `agent.json` file.
+- **Status**, grants, recent calls and **Revoke link** are per app.
+- **Remove this app** forgets the entry and best-effort revokes it on the service.
+
+**Add an agents app** creates an empty, disabled card. Paste an address and token, then switch it
+on. An address must be `https://`; `http://` is accepted only for loopback development.
 
 ## Configuration
 
-Lives inside the existing `agent.json` (`Store.file("agent.json")`, mode 0600, one writer) as an
-optional object:
+The file is `Store.file("agent.json")` (normally
+`~/Library/Application Support/Copper/agent.json`) and remains mode 0600. Copper only re-encodes
+its own fields; malformed entries are skipped rather than making the file unreadable:
 
 ```json
-"agentLink": { "enabled": true, "api": "https://agents.example",
-            "token": "fxb_…", "name": "copper", "linkId": "lnk_…", "announces": true }
+{
+  "links": [
+    {
+      "id": "8E0…",
+      "enabled": true,
+      "api": "https://agents.example",
+      "token": "fxb_…",
+      "name": "copper",
+      "linkId": "lnk_…",
+      "announces": true,
+      "label": "production"
+    }
+  ]
+}
 ```
 
-Decoding is lenient on both levels: an older `agent.json` without `agentLink` reads fine and keeps
-the MCP token; a malformed `agentLink` value loses only the link settings. No `agentLink` key is written
-until one is set. Caveat: an older Copper that re-saves the file drops the key.
+`links` may be absent (it means an empty list). `id` is a UUID for new entries. `label` is an
+optional nickname used in announcements; when it is empty, the app host is used.
 
-`api` must be `https://` (or `http://` on loopback, for a dev stack) or the token is never sent —
-`LinkWire.base` enforces it. The token is a **personal token**, minted at Agents › Connect
-in the agents app; it is the same credential the service's own CLI uses.
+Existing installations may contain the legacy single-app object because an external installer may
+write it:
 
-## Lifecycle
+```json
+"agentLink": {
+  "enabled": true,
+  "api": "https://agents.example",
+  "token": "fxb_…",
+  "name": "copper",
+  "linkId": "lnk_…",
+  "announces": true
+}
+```
+
+On read, that object becomes (or overwrites) the `links` entry whose id is `legacy`; its fields win
+because an installer may JSON-merge only that key and restart Copper. On write, a non-empty `links`
+array is written. If it contains `legacy`, Copper mirrors the entry back to the legacy key with
+exactly the fields shown above. The legacy key is never written for any other entry. An existing
+installation with only the legacy object comes up connected unchanged, while newer and older Copper
+versions can open one another's files.
+
+## Connection lifecycle
+
+Each card has its own stream and retry state:
 
 ```text
-off ──(enabled && token)──▶ connecting ──hello──▶ online(label)
-                              │  ▲                    │
-              error/EOF ──────┘  └── backoff 1,2,4,8,16,30 s ──┘
-online ──`revoked` frame or DELETE──▶ revoked (config.enabled = false)
-online ──`superseded` frame──▶ offline("another Copper took the link — switch off and on to take it back")
-any ──HTTP 401──▶ tokenRejected (no retries until the token changes)
+off ──(enabled, address, token)──▶ connecting ──hello──▶ online
+                                      ▲                       │
+                         error/EOF ──┘  backoff 1,2,4,8,16,30 s
+online ── revoke or revoked frame ──▶ revoked
+HTTP 401 ──────────────────────────▶ token rejected
 ```
 
-- **Turning it on** (or changing token/App URL) is the only time Copper `POST`s
-  `/v1/me/links` (`name: copper`, `label: "Copper on <Sharing name>"`, `device`, `clientVersion`).
-  That call is idempotent on the server *and un-revokes* a revoked link, which is what you want
-  when you flip the switch and exactly what you do not want on a reconnect after sleep — so a
-  reconnect only `GET`s `/v1/me/links/:id` and stops if the link is gone or revoked.
-- **The stream**: `GET /v1/me/links/:id/frames?device=&clientVersion=`, read with
-  `URLSession.bytes(for:)` one byte at a time through `LinkWire.Lines`. `AsyncBytes.lines` is not
-  used on purpose: it drops empty lines, and in SSE the empty line is what ends an event.
-- **Frames** (`event:` = type, `data:` = JSON; a bare `message` event with a `type` field is read
-  the same way): `hello` (link + grants), `request`, `grants` (live updates), `ping`,
-  `superseded`, `revoked`, `cancel` (below).
-- **Serving a request**: build `{"jsonrpc":"2.0","id":req.id,"method":…,"params":…}` and hand it
-  to `MCP.shared.handle(_:announce:)` — the same code path the loopback port uses, so
-  `initialize`, `tools/list` and `tools/call` behave identically and Jev tools appear only when
-  Jev mode is on. The result goes back as `POST …/frames {frames:[{type:"reply", requestId,
-  result}]}`; a JSON-RPC error goes back as `error:{code,message}`. Any `copper/*` method arriving
-  as a link request is refused, so a bot cannot reach the control surface and grant itself access.
-- **Heartbeat** `{type:"heartbeat"}` every 15 s while online; the server treats 45 s of silence as
-  offline.
-- **Generation counter**: every (re)connect bumps `generation`; a stale loop that wakes up after a
-  disconnect sees `current(g) == false` and exits, so toggling the switch quickly never leaves two
-  loops serving one link.
+Switching on (or changing address/token) creates a link with `POST /v1/me/links`. Reconnects
+check the saved link with `GET /v1/me/links/:id` and never silently recreate a revoked link. A
+heartbeat is posted every 15 seconds. A generation counter prevents a stale stream from writing
+over a newer connection. Progress frames for `jev_run` and `jev_step` are scoped to their own
+request and carry the final trace before the reply; a cancel frame stops only that request.
 
-## Live Jev progress, Stop, and `_meta.summary`
+A request whose method starts with `copper/` is refused before it reaches the MCP control methods.
+This prevents a bot from calling `copper/link`, changing grants, or changing another connection.
 
-While a `tools/call` of `jev_run` or `jev_step` is being served, `AgentLink.serve` keeps a
-`JevProgressReporter` beside it and posts **progress frames** up the same `POST …/frames`:
+## CLI
 
-```json
-{"type": "progress", "requestId": "lrq_…", "seq": 4, "at": "2026-09-26T17:35:56.109Z",
- "tool": "jev_run", "progress": { …JevProgress… }, "final": true}
+The CLI reaches the running Copper through the authenticated loopback `copper/link` method. The
+link itself can run without the local MCP listener, but a CLI invocation needs the listener and a
+window:
+
+```text
+copper [--json] link [--app SELECTOR] <command>
 ```
 
-- **Whose run.** JevTrace has one run at a time. The reporter's run is the first new run id seen
-  after the call started, or, for a `jev_step` that continues a live session with the same
-  goal, the run already live. A run the loopback starts meanwhile is never reported.
-- **Pacing.** At most one frame per 400 ms, except immediately when a cycle opens, when an
-  outcome lands, and when the run finishes. A frame waiting behind a slow post is replaced by
-  the newer one, so `seq` is monotonic from 0 per request but may skip. The last frame of a
-  call carries `final: true` and the finished trace (for a lone `jev_step`, the state at the
-  end of the step). It is always posted **before** the reply. Progress posts time out after
-  10 s, are best effort, and never fail the call.
-- **Size.** `progress` is `JevProgress` (contracts `links.ts`):
-  `{v:1, kind:'jev', goal≤300, status, note?≤300, startedAt, endedAt?, page:{url≤500,
-  title≤200}, cycles, recent:[last ≤12 {n, startedAt, endedAt?, phases:[{kind, title≤120,
-  detail?≤160, ms?}], outcome?:{operation≤40, label≤120, text?≤120, probability,
-  pageChanged?, stale}}]}`. Lengths are counted in UTF-16 units. `LinkWire.progress`
-  holds the whole frame at 16 KB or less (`LINK_PROGRESS_MAX_BYTES`) by dropping the oldest
-  `recent` cycles.
-- **No secrets.** SIGN_IN / AUTOFILL fill in-process and carry no `text`. `text` is only what
-  Jev wrote into an ordinary field, and it is masked as `•••` when the field's label reads like
-  a secret (password, one-time/verification/security code, card number, PIN, CVV …).
-- **Stop.** The server frame `{"type":"cancel","requestId":"lrq_…"}` (the owner's Stop →
-  `POST /v1/me/links/:id/requests/:rid/cancel`) is honoured only for a request this Copper is
-  serving right now (`serving: requestId → (tool, startedAt)`), and only for a
-  `jev_run`/`jev_step`. It calls `JevTrace.shared.stop()` for that request's run. A stop that
-  arrives before the run has begun is held until it begins. The loop ends before its next
-  action with status `stopped`, and the reply still follows. Any other cancel is ignored.
-- **`_meta.summary`.** Every `tools/call` result may carry `_meta: {summary}`, a single line of
-  200 characters at most that a tool leaves through the task-local `Tools.summary` box.
-  `jev_run` and `jev_step` set it, e.g. `done · 7 actions · 12.3 s · example.com`
-  (`step · …` for a step that did not end the run, `error · …`, `stopped · …`,
-  `budget · …`). The agents gateway copies it into its call audit. It is present on the
-  loopback server too.
+`SELECTOR` is an app address, host, nickname, or id (case-insensitive). It is optional when one
+app is configured. With several apps, operations other than an unqualified `status` require a
+selector; error messages list the available choices.
 
-## The owner's controls
+```text
+copper link status                         # every app
+copper link --app production on
+copper link add https://agents.example fxb_… --label production
+copper link --app agents.example remove
+copper link --app production token fxb_…
+copper link --app production api https://agents.example
+copper link --app production grants
+copper link --app production grant @bot
+copper link --app production revoke [@bot|BOT_ID]
+copper link --app production calls
+```
 
-All go straight to the agents API with the personal token (the loopback port is not involved):
+`add URL [fxb_…] [--label NAME]` appends an entry, enabling it when both values are present, waits for its first
+status, and prints that status. `remove` forgets the selected app and best-effort deletes its
+server link. `--json status` returns `{"apps":[summary…]}` and also puts the legacy entry's
+summary fields at the top level (or the first app when there is no legacy entry), retaining the
+old keys: `enabled`, `api`, `name`, `linkId`, `tokenSet`, `announces`, `status`, `statusText`,
+`online`, `label`, `grants`, `recentCalls`, and `lastError`. Tokens are never printed, including
+with `--dry-run`.
 
-| Action | Call |
-|---|---|
-| list grants | `GET /v1/me/links/:id/grants` (also pushed live as `grants` frames) |
-| pick a bot to grant | `GET /v1/bots` (reads `{items}`, a bare array, or `{bots}`) |
-| grant / pause | `PUT /v1/me/links/:id/grants/:botId {enabled}` |
-| remove | `DELETE /v1/me/links/:id/grants/:botId` |
-| recent calls | `GET /v1/me/links/:id/calls?limit=20` (falls back to this run's in-memory list) |
-| revoke the link | `DELETE /v1/me/links/:id`, then `enabled = false` locally |
+Exit status remains 0 for success, 1 when the app refuses a request, and 2 for usage errors or an
+unreachable Copper. `./bench agent link on|off|status` operates on the first configured app.
 
-The Settings card shows status (dot + `Status.text`), *Bots with access* (switch per bot, × to
-remove, *Grant a bot…*), *Recent calls* (`@bot · tool · 1.2 s · 3 min ago`, red on error), and
-*Revoke link*. Every relayed call also counts toward the Agents page's "N tool calls" line.
+## Owner controls and wire
 
-## CLI and bench
+The service routes `request` frames over `GET /v1/me/links/:id/frames`; Copper answers with
+`POST /v1/me/links/:id/frames` and `{frames:[…]}`. It also uses the service routes for grants,
+bots, calls and revoke. The same `MCP.shared.handle` serves local and linked `initialize`,
+`tools/list`, and `tools/call` requests, so Jev tools appear consistently. `LinkWire.swift` owns
+SSE parsing and lenient frame readers and can be compiled without the app.
 
-`copper link …` reaches the running app through the loopback server's `copper/link` JSON-RPC
-method (`params: {op, arg}`), so it needs *Let agents drive this window* on — the link itself does
-not. `./bench agent link on|off|status` mirrors it. `--json` prints `AgentLink.summary`.
-
-## Testing
-
-- **Pure parts** (`LinkWire`): compile the file alone with a small driver —
-  `swiftc -swift-version 5 -warnings-as-errors LinkWire.swift test.swift` — and exercise the line
-  splitter (CRLF, comments, multi-line `data:`, final event without a trailing newline), the six
-  frame types, reply/error/heartbeat encoding, the backoff table and the URL guard. For the
-  progress pieces, compile `Trace.swift` + `Progress.swift` + `LinkWire.swift` with a tiny `Tab`
-  stub (`@MainActor final class Tab { let id = UUID(); var address: URL?; var title = "" }`)
-  and check the caps, the last-12 window, the 16 KB fit, the secret mask and `cancel` parsing.
-- **Progress and Stop end to end, with no agents service at all**: a ~80-line Python stand-in
-  for the link routes (`POST /v1/me/links`, `GET …/:id`, the SSE `GET …/frames` that replays
-  lines appended to an outbox file, `POST …/frames` appending to an inbox file, plus a
-  two-page search fixture). Point a probe world's `agent.json` `agentLink.api` at
-  `http://127.0.0.1:<port>`, copy `intelligence.json` in for a Jev key, append a `request`
-  frame for `jev_run` on the fixture, then a `cancel` for it. The inbox shows the progress
-  frames, a `final: true` frame before the reply, `_meta.summary`, and `status: stopped` after
-  the cancel. A local Python
-  SSE server is enough to prove frames arrive as they are sent (not buffered until EOF).
-- **The whole client without touching your real browser**: launch the build in an isolated world —
-  `open -n --env SEARCH_PROBE=links build/Copper.app` — whose data lives in
-  `~/Library/Application Support/Copper (links)/`. Pre-write that folder's `agent.json` with
-  `agentLink: {enabled, api, token}` pointing at a local agents service api
-  (`bun run service/src/index.ts` with `SERVICE_KEY`, native Postgres; mint the `fxb_` token with
-  `POST /v1/me/tokens` using the service key + `x-user-id`). Grant a bot, then call the session
-  gateway yourself: `POST /v1/sessions/:thread/mcp` with the bundle's session token and
-  `tools/call copper__browser_tabs` — the probe's tabs come back, the Connect page and
-  `copper link calls` show the call. `tools/call` needs a `RUNNING` run on the thread. Kill only the
-  probe's PID afterwards; never `pkill Copper`.
-- Do not run mutating tools against the browser you use from a test. `browser_tabs`,
-  `jev_observe`, `browser_get_text` are safe reads.
-
-## Sizes
-
-A reply frame is a whole tool result. `browser_snapshot` with `interactive: true` on a busy
-page runs to several MiB; the agents service accepts up to 32 MiB on
-`POST /v1/me/links/:id/frames` (its ordinary JSON cap is 1 MiB), stores it once and relays it,
-and the bot runner reads Claude Code's output line-by-line without a length cap. If a
-bot's turn still dies right after a snapshot, check those two before suspecting Copper —
-Copper does not truncate results, and `URLSession` has no upload cap. A bot that only needs
-part of a page should be given `jev_observe` / `browser_find` or a `limit`, not a smaller
-snapshot from Copper's side.
-
-## Security notes
-
-- Two credentials, two directions, never crossed: the personal token goes only to the App URL;
-  the loopback bearer goes only to `127.0.0.1`.
-- A bot sees tools, not the link; grants live on the server, owner-side only; a bot cannot call
-  `copper/link`.
-- Revocation is immediate on the server (the stream closes, pending calls fail, tools disappear
-  from the next `tools/list`) and sticky on the client (no re-registration on reconnect).
-- The agent still acts as you, in your sessions. The switch and the per-bot toggles are there to
-  be used; turn the link off when you do not need it.
+The personal token goes only to the configured app address. Copper's own loopback token goes only
+to `127.0.0.1`. Keep the link off when it is not needed: linked agents act as you in the tabs and
+accounts already open in Copper.

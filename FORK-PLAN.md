@@ -158,7 +158,7 @@ Arc has almost none; Vivaldi/Zen have too much. Aim: **one JSON file + one Setti
 
 Two directions; do the server first, it is the one nothing else provides on WebKit.
 
-**Status (Felipe's lane):** server, Jev mode, CLI and client shipped (see COLLIN.md). **agent link shipped** — `Fork/MCP/Link.swift` + `LinkWire.swift`: Copper dials out to the agents service and serves these same tools to the owner's granted bots (Settings › Agents › Agent link, `copper link …`, `docs/agents.md`).
+**Status (Felipe's lane):** server, Jev mode, CLI and client shipped (see COLLIN.md). **agent links shipped** — `Fork/MCP/Link.swift` + `LinkWire.swift`: Copper dials out to configured agents apps and serves these same tools to granted bots (Settings › Agents, `copper link …`, `docs/agents.md`).
 
 #### C1. Search as an MCP **server** (agents drive the browser)
 Chrome DevTools MCP and Playwright MCP exist for Chromium; nothing for a WebKit browser with your real sessions/cookies. That is the differentiator: Claude Code / phi drive *your* logged-in browser.

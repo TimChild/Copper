@@ -212,42 +212,25 @@ Files: `Fork/Agent/Agent.swift` (the loop), `Fork/Agent/Servers.swift`
 (the client), `Fork/Agent/AgentPane.swift` (the pane). The pane rides in
 `SplitStage`; no upstream file changed.
 
-## Agent link — your bots use this browser
+## Your agents — let them use this browser
 
-Settings › Agents › **Connect this browser to an agents app**. The loopback server
-can't be reached from a bot running in the cloud, so this side dials out:
-Copper registers itself with the agents service as a *link*
-(`POST /v1/me/links`, name `copper`, label "Copper on <this Mac>"), holds one
-server-sent-events stream (`GET /v1/me/links/:id/frames`), and answers each
-`request` frame by handing its JSON-RPC message to the same server the
-loopback port uses, then posting the reply (`POST /v1/me/links/:id/frames`,
-`{frames:[{type:"reply", requestId, result|error}]}`, plus a heartbeat every
-15 s). Bots see the tools as `copper__<tool>` — `copper__jev_run`,
-`copper__browser_snapshot` and the rest, Jev tools only when Jev mode is on.
+Settings › Agents › **Your agents — let them use this browser** configures one card per agents app.
+Copper dials out to each configured `api`, holds its own `/v1/me/links/:id/frames` stream, and
+hands every request to the same MCP server that serves local clients. A bot sees tools only after
+you grant it. The announcement is `@bot · app · tool`; calls and grants are shown on the card.
 
-- **Credential**: a personal token (`fxb_…`, minted at Agents › Connect
-  in the agents app), kept in `agent.json` under `agentLink` (0600), sent only to the
-  **App** address (https, default `https://agents.example`).
-  Copper's loopback token never leaves the Mac.
-- **Grants**: a bot sees nothing until you grant it — from the card (*Grant a
-  bot…*, a switch per bot to pause it, × to remove), from the agents app's Connect
-  page, or `copper link grant @bot`. Grant changes arrive live over the stream.
-- **Calls**: each call is said in the bottom line as `agents · @bot · tool`
-  and listed under *Recent calls* (this run, last 20); the agents app keeps the full
-  record (`copper link calls`).
-- **Revoke**: *Revoke link* (or `copper link revoke`, or the agents app's Connect page)
-  and every bot loses the tools at once; Copper disconnects and switches the
-  card off. A revoke made while the Mac slept holds — a reconnect never
-  re-creates a link, only switching it on again does. A second Copper that
-  links with the same token takes the link over; the first stops and says so.
-- **Reconnects** with backoff (1 s → 30 s) while on; a rejected token stops
-  retrying until the token changes.
+Several apps can be online at once. `copper link --app SELECTOR …` selects by address, host,
+nickname or id; `status` without a selector reports every app. `add URL [fxb_…]` creates an entry
+and `remove` forgets it. The personal token is sent only to that app and is kept in 0600
+`agent.json`. The app address field starts empty; copy the address shown at Agents › Connect in
+your agents app. Existing files containing only the legacy single-app object are
+imported as the `legacy` entry and mirrored on write, so they continue without user action.
 
-It works whether or not *Let agents drive this window* is on (the link does
-not use the port); it needs a window, like every tool call. `copper link …`
-does go through the port. `./bench agent link on|off|status`. How it is built and
-tested: [agent-link.md](agent-link.md). On a Mac nobody sits at (the bot Mac mini), Copper runs
-as a background service with no window: [headless.md](headless.md).
+Revoke is sticky across reconnects; switching the card on again creates a link. Jev calls send
+capped progress frames and honor cancel. A linked request beginning with `copper/` is refused, so
+bots cannot reach loopback controls. The connection details, configuration format and testing notes
+are in [agent-link.md](agent-link.md). Headless Copper uses the same manager; see
+[headless.md](headless.md).
 
 ## What it is not
 

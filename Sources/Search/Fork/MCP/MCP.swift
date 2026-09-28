@@ -31,18 +31,20 @@ final class MCP: ObservableObject {
         /// Jev mode: the jev_run / jev_step / jev_observe tools, which drive
         /// the page with TypeSafe's Jev at ~200 ms a decision (Ultrafast.swift).
         var jev = false
-        /// The agent link (Link.swift): the owner's bots reach this
-        /// window through the agents service. Absent until first set, so an
-        /// older file reads the same and a newer Copper's file still opens.
-        var agentLink: AgentLink.Config?
+        /// Configured agent apps. Each entry has its own connection and retry state.
+        var links: [AgentLink.Config] = []
+        /// The legacy single-app key (an external installer may still write it).
+        /// It is never emitted unless the matching legacy entry exists in `links`.
+        var legacyLink: AgentLink.Config?
 
-        init(enabled: Bool = false, port: UInt16 = 4123, token: String = "", announces: Bool = true, jev: Bool = false, agentLink: AgentLink.Config? = nil) {
-            self.enabled = enabled
-            self.port = port
-            self.token = token
-            self.announces = announces
-            self.jev = jev
-            self.agentLink = agentLink
+        init(enabled: Bool = false, port: UInt16 = 4123, token: String = "", announces: Bool = true, jev: Bool = false, links: [AgentLink.Config] = [], legacyLink: AgentLink.Config? = nil) {
+            self.enabled = enabled; self.port = port; self.token = token; self.announces = announces; self.jev = jev
+            self.links = links; self.legacyLink = legacyLink
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case enabled, port, token, announces, jev, links
+            case legacyLink = "agentLink"
         }
 
         // Lenient on purpose: a field added later must not make an older
@@ -55,8 +57,32 @@ final class MCP: ObservableObject {
             token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
             announces = try c.decodeIfPresent(Bool.self, forKey: .announces) ?? true
             jev = try c.decodeIfPresent(Bool.self, forKey: .jev) ?? false
-            // A malformed link object costs the link, never the token.
-            agentLink = (try? c.decodeIfPresent(AgentLink.Config.self, forKey: .agentLink)) ?? nil
+            var decoded: [AgentLink.Config] = []
+            if var items = try? c.nestedUnkeyedContainer(forKey: .links) {
+                while !items.isAtEnd {
+                    if let entry = try? items.decode(AgentLink.Config.self),
+                       entry.id == "legacy" || UUID(uuidString: entry.id) != nil { decoded.append(entry) }
+                }
+            }
+            links = decoded
+            if var value = try? c.decode(AgentLink.Config.self, forKey: .legacyLink) {
+                value.id = "legacy"
+                legacyLink = value
+            } else { legacyLink = nil }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(enabled, forKey: .enabled); try c.encode(port, forKey: .port)
+            try c.encode(token, forKey: .token); try c.encode(announces, forKey: .announces); try c.encode(jev, forKey: .jev)
+            if !links.isEmpty { try c.encode(links, forKey: .links) }
+            if let legacy = links.first(where: { $0.id == "legacy" }) {
+                struct Legacy: Codable {
+                    let enabled: Bool; let api: String; let token: String; let name: String; let linkId: String?; let announces: Bool
+                }
+                try c.encode(Legacy(enabled: legacy.enabled, api: legacy.api, token: legacy.token,
+                                    name: legacy.name, linkId: legacy.linkId, announces: legacy.announces), forKey: .legacyLink)
+            }
         }
     }
 
@@ -108,13 +134,25 @@ final class MCP: ObservableObject {
     var endpoint: String { "http://127.0.0.1:\(port)\(MCP.path)" }
 
     private init() {
-        let saved = (try? Data(contentsOf: MCP.file)).flatMap { try? JSONDecoder().decode(Config.self, from: $0) }
-        if let saved, !saved.token.isEmpty {
-            config = saved
-        } else {
-            config = Config(token: MCP.freshToken(), agentLink: saved?.agentLink)
-            save()
+        let raw = try? Data(contentsOf: MCP.file)
+        let saved = raw.flatMap { try? JSONDecoder().decode(Config.self, from: $0) }
+        var loaded = saved ?? Config()
+        if let legacy = loaded.legacyLink {
+            if let index = loaded.links.firstIndex(where: { $0.id == "legacy" }) {
+                var merged = loaded.links[index]
+                merged.enabled = legacy.enabled
+                merged.api = legacy.api
+                merged.token = legacy.token
+                merged.name = legacy.name
+                merged.linkId = legacy.linkId
+                merged.announces = legacy.announces
+                loaded.links[index] = merged
+            } else {
+                loaded.links.insert(legacy, at: 0)
+            }
         }
+        if loaded.token.isEmpty { loaded.token = MCP.freshToken(); config = loaded; save() }
+        else { config = loaded }
     }
 
     static func freshToken() -> String {
@@ -198,11 +236,11 @@ final class MCP: ObservableObject {
         Headless.adoptDefaults(self)
         self.browser = browser
         apply()
-        // An external writer (the host daemon) nudges new keys in with SIGHUP.
+        // An external daemon nudges new keys in with SIGHUP.
         Intelligence.shared.watchForReload()
         Headless.start(for: browser)
-        // The agent link dials out once there is a window to drive.
-        AgentLink.shared.start()
+        // Agent links dial out once there is a window to drive.
+        AgentLinks.shared.start()
         // The agent in the window connects to your other servers now, so its
         // first question already has their tools. Same hook, no second one.
         Task { await Servers.shared.reload() }
@@ -301,11 +339,10 @@ final class MCP: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if let one = body as? [String: Any], one["method"] as? String == "copper/link" {
-                    // `copper link …`: the agent link's controls, for the
-                    // CLI on this Mac. Only here, behind the bearer and the
-                    // loopback — `handle` never sees it, so nothing arriving
-                    // through the link can reach it.
-                    let result = await AgentLink.shared.control(one["params"] as? [String: Any] ?? [:])
+                    // `copper link …`: controls for configured agent apps.
+                    // Only here, behind the bearer and loopback — `handle`
+                    // never sees it, so a linked app cannot reach controls.
+                    let result = await AgentLinks.shared.control(one["params"] as? [String: Any] ?? [:])
                     answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
                 } else if let one = body as? [String: Any], one["method"] as? String == "copper/intelligence" {
                     // `copper intelligence …`: readiness and keys, loopback
@@ -313,7 +350,7 @@ final class MCP: ObservableObject {
                     let result = Intelligence.shared.control(one["params"] as? [String: Any] ?? [:])
                     answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
                 } else if let one = body as? [String: Any], one["method"] as? String == "copper/bitwarden" {
-                    // `copper bitwarden …` and the host daemon's sealed
+                    // `copper bitwarden …` and an external daemon's sealed
                     // sign-in: loopback + bearer only, like the two above —
                     // the link refuses every copper/* method before `handle`.
                     // The answer is a status report; never a secret.
@@ -396,7 +433,7 @@ final class MCP: ObservableObject {
             }
             // A tool may leave a one-line summary (jev_run / jev_step do:
             // "done · 7 actions · 12.3 s · example.com"); it rides as
-            // `_meta.summary`, which the agents gateway copies into its audit.
+            // `_meta.summary`, which the app's gateway copies into its audit.
             let summary = Tools.SummaryBox()
             func result(_ content: [[String: Any]], isError: Bool) -> [String: Any] {
                 var out: [String: Any] = ["content": content, "isError": isError]
@@ -433,7 +470,7 @@ final class MCP: ObservableObject {
         case "off": config.enabled = false
         case "rotate": rotateToken()
         case "jev": config.jev = (request["arg"] as? String ?? "on") != "off"
-        case "link": return AgentLink.shared.bench(request["arg"] as? String ?? "")
+        case "link": return AgentLinks.shared.bench(request["arg"] as? String ?? "")
         case "setup-phi":
             do { return try Setup(endpoint: endpoint, token: config.token).phi().dictionary } catch let error { return ["error": (error as? Tools.Failure)?.text ?? error.localizedDescription] }
         case "setup-claude":

@@ -996,7 +996,7 @@ enum Ultrafast {
         ]
     }
 
-    /// The call's one line for `_meta.summary` (the call audit):
+    /// The call's one line for `_meta.summary` (the app's audit):
     /// "done · 7 actions · 12.3 s · example.com". ≤ 200 characters.
     @MainActor static func summary(_ status: String, actions: Int, ms: Int, tab: Tab) -> String {
         var host = tab.address?.host ?? ""

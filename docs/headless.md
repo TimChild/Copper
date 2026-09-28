@@ -1,8 +1,8 @@
 # Headless Copper — a browser for a Mac nobody sits at
 
-*`Copper --headless` (or `SEARCH_HEADLESS=1`): the same browser, run by a daemon — the bot Mac
+*`Copper --headless` (or `SEARCH_HEADLESS=1`): the same browser, run by a daemon on a headless Mac
 mini — with no Dock icon, no menu bar, no window on any display, and nothing that waits for a
-click. The loopback MCP server and the agent link run exactly as in the windowed app; they are
+click. The loopback MCP server and the agent link run exactly as in the windowed app — they are
 the only way in. Implementation: `Sources/Search/Fork/Headless.swift`. For the tools themselves
 read [agents.md](agents.md); for the link, [agent-link.md](agent-link.md).*
 
@@ -33,12 +33,11 @@ What changes when headless is on (and nothing here runs when it is off):
 | App Nap | macOS decides | held off — the process is a server |
 | SIGTERM | ends the process | a normal quit, so the session's last write is flushed |
 | Session restore | silent | silent (unchanged; tabs come back) |
-| `agentLink.announces` | `true` says each bot call in the bottom line | unchanged — `false` is silent, `true` draws into a window nobody sees |
+| `links[].announces` | `true` says each bot call in the bottom line | per-app setting; `false` is silent |
 
 **Agent switches.** Headless has no Settings, so two switches in `agent.json` default to **on**
 when the file does not mention them: `enabled` (the loopback server) and `jev` (Jev mode). An
-explicit `false` is respected. The host daemon only writes the `agentLink` object, so a fresh mini
-comes up serving the loopback on 4123 with Jev tools.
+explicit `false` is respected. An external installer may write the legacy single-app object (or the `links` array), so a fresh mini comes up serving the loopback on 4123 with Jev tools.
 
 ## The window
 
@@ -103,7 +102,7 @@ kill -HUP <copper pid>                                          # same as reload
   the status plus `applied: ["jevKey", …]` (names, never values). A non-http(s) `--router-url` is
   refused (exit 1).
 - `status` is `{jevReady, routerReady, routerURL, routerModel, jevModel}`.
-- **External writers** (the host daemon applying a provisioned `keys` payload) JSON-merge into
+- **External writers** (an external installer applying a provisioned `keys` payload) JSON-merge into
   `intelligence.json` and then send **SIGHUP**; Copper re-reads the file on the main queue and
   logs `intelligence.json reloaded on SIGHUP — jevReady …, routerReady …`. No restart. Copper
   rewrites the whole file on its next own save, so keys it does not know are not preserved.
@@ -130,7 +129,7 @@ copper health --json
 #   "window":"offscreen","windowsOnScreen":0},"mcp":"/mcp","name":"copper","port":4123,"running":true,"version":"…"},"jev":true}
 ```
 
-## launchd (the host daemon's recipe)
+## launchd (an external installer's recipe)
 
 a background installer writes `~/Library/LaunchAgents/com.example.copper.plist` (paths must
 be absolute — launchd does not expand `~`):
@@ -166,7 +165,7 @@ launchctl bootout gui/$(id -u)/com.example.copper          # stop (SIGTERM → c
   the WindowServer. On a mini with no one at it, turn on automatic login.
 - `KeepAlive {SuccessfulExit: false}`: a crash is restarted; a SIGTERM quit (exit 0) is not.
 - Data: Copper's default folder, `~/Library/Application Support/Copper/`. The daemon JSON-merges
-  `agentLink: {enabled, api, token, name: "copper", announces: false}` into `agent.json` (0600).
+  `links: [{id, enabled, api, token, name: "copper", announces: false}]` into `agent.json` (0600).
 - `ProcessType Background` puts the process under the system's background CPU/IO clamps; Copper
   is the process that drives WebKit and answers every tool call, so if Jev runs feel slow on a
   busy mini, `Standard` (or dropping the key) is the thing to try first.

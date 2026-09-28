@@ -542,40 +542,77 @@ enum CLI {
     /// window. The link itself runs without it.
     private static func runLink(_ input: [String], json: Bool, dryRun: Bool, launchRequested: Bool) -> Int {
         var args = input
+        var selector = ""
+        if args.first == "--app" {
+            args.removeFirst()
+            guard let value = args.first, !value.isEmpty else { error("link --app needs a selector"); return 2 }
+            selector = value
+            args.removeFirst()
+        } else if let index = args.firstIndex(of: "--app") {
+            guard args.indices.contains(index + 1), !args[index + 1].isEmpty else { error("link --app needs a selector"); return 2 }
+            selector = args[index + 1]
+            args.removeSubrange(index...(index + 1))
+        }
         let op = args.isEmpty ? "status" : args.removeFirst()
         if ["help", "-h", "--help"].contains(op) || args.contains(where: { ["-h", "--help"].contains($0) }) {
             print(linkUsage)
             return 0
         }
-        let arg: String
+        var arg = ""
+        var params: [String: Any] = ["op": op]
+        if !selector.isEmpty { params["app"] = selector }
         switch op {
         case "status", "on", "off", "grants", "calls":
             guard args.isEmpty else { error("link \(op) takes no arguments"); return 2 }
-            arg = ""
         case "token":
             guard args.count == 1, args[0].hasPrefix("fxb_") else { error("link token needs a personal token (fxb_…)"); return 2 }
-            arg = args[0]
+            arg = args[0]; params["arg"] = arg
         case "api":
-            guard args.count == 1, let url = URL(string: args[0]), url.scheme == "https" || url.host == "127.0.0.1" || url.host == "localhost" else {
-                error("link api needs an https URL")
-                return 2
-            }
-            arg = args[0]
+            guard args.count == 1 else { error("link api needs an https URL"); return 2 }
+            guard LinkWire.base(args[0]) != nil else { error("link api needs an https URL"); return 2 }
+            arg = args[0]; params["arg"] = arg
         case "grant":
             guard args.count == 1 else { error("link grant needs @bot or a bot id"); return 2 }
-            arg = args[0]
+            arg = args[0]; params["arg"] = arg
         case "revoke":
             guard args.count <= 1 else { error("link revoke takes at most one @bot or bot id"); return 2 }
-            arg = args.first ?? ""
+            arg = args.first ?? ""; params["arg"] = arg
+        case "add":
+            var addArgs = args
+            var label = ""
+            if let index = addArgs.firstIndex(of: "--label") {
+                guard addArgs.indices.contains(index + 1), !addArgs[index + 1].isEmpty else { error("link add --label needs NAME"); return 2 }
+                label = addArgs[index + 1]
+                addArgs.removeSubrange(index...(index + 1))
+            }
+            guard addArgs.count == 1 || addArgs.count == 2 else { error("link add needs URL, optional personal token, and optional --label NAME"); return 2 }
+            guard LinkWire.base(addArgs[0]) != nil else { error("link add needs URL and optional personal token"); return 2 }
+            params["arg"] = addArgs[0]
+            if addArgs.count == 2 {
+                guard addArgs[1].hasPrefix("fxb_") else { error("link add token must start with fxb_"); return 2 }
+                params["token"] = addArgs[1]
+            }
+            if !label.isEmpty { params["label"] = label }
+        case "remove":
+            guard args.isEmpty else { error("link remove takes no arguments; use --app SELECTOR"); return 2 }
         default:
             error("unknown link command: \(op) (see copper link --help)")
             return 2
         }
-        let request: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "copper/link", "params": ["op": op, "arg": arg]]
+        params["arg"] = params["arg"] ?? arg
+        let request: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "copper/link", "params": params]
         if dryRun {
-            // Never print the token, even in a dry run.
             var shown = request
-            if op == "token" { shown["params"] = ["op": op, "arg": "fxb_…"] }
+            if op == "token" {
+                var masked = params
+                masked["arg"] = "fxb_…"
+                shown["params"] = masked
+            }
+            if op == "add", params["token"] != nil {
+                var masked = params
+                masked["token"] = "fxb_…"
+                shown["params"] = masked
+            }
             return dryRunDecision(RequestSpec(request: shown), launchRequested: launchRequested)
         }
         guard var config = readConfig(), config.enabled, !config.token.isEmpty else {
@@ -587,12 +624,10 @@ enum CLI {
               let result = response["result"] as? [String: Any] else { return 2 }
         if let message = result["error"] as? String, !message.isEmpty {
             error(message)
+            if message.hasPrefix("choose an app") || message.hasPrefix("no agent app") { return 2 }
             return 1
         }
-        if json {
-            printJSON(result)
-            return 0
-        }
+        if json { printJSON(result); return 0 }
         switch op {
         case "grants":
             let grants = result["grants"] as? [[String: Any]] ?? []
@@ -603,6 +638,7 @@ enum CLI {
         case "revoke":
             if result["revoked"] as? Bool == true { print("link revoked — every bot lost these tools; Copper disconnected") }
             else { print("removed \(arg)") }
+        case "remove": print("removed app")
         case "calls":
             let calls = result["calls"] as? [[String: Any]] ?? []
             if calls.isEmpty { print("no calls yet") }
@@ -614,17 +650,24 @@ enum CLI {
                 if !ok { line += " · failed: \(call["error"] as? String ?? "error")" }
                 print(line)
             }
-        default:
-            let state = result["statusText"] as? String ?? (result["status"] as? String ?? "")
-            print("agent link: \(result["enabled"] as? Bool == true ? "on" : "off") · \(state)")
-            print("app: \(result["api"] as? String ?? "")")
-            print("token: \(result["tokenSet"] as? Bool == true ? "set" : "not set")")
-            if let id = result["linkId"] as? String, !id.isEmpty { print("link: \(id)") }
-            let grants = result["grants"] as? [[String: Any]] ?? []
-            print("bots with access: \(grants.count)")
-            if let trouble = result["lastError"] as? String, !trouble.isEmpty, result["status"] as? String == "online" { print("last error: \(trouble)") }
+        case "status":
+            if let apps = result["apps"] as? [[String: Any]], !apps.isEmpty {
+                for app in apps { printStatus(app) }
+            } else { printStatus(result) }
+        default: printStatus(result)
         }
         return 0
+    }
+
+    private static func printStatus(_ result: [String: Any]) {
+        let state = result["statusText"] as? String ?? (result["status"] as? String ?? "")
+        print("agent link: \(result["enabled"] as? Bool == true ? "on" : "off") · \(state)")
+        print("app: \(result["api"] as? String ?? "")")
+        print("token: \(result["tokenSet"] as? Bool == true ? "set" : "not set")")
+        if let id = result["linkId"] as? String, !id.isEmpty { print("link: \(id)") }
+        let grants = result["grants"] as? [[String: Any]] ?? []
+        print("bots with access: \(grants.count)")
+        if let trouble = result["lastError"] as? String, !trouble.isEmpty, result["status"] as? String == "online" { print("last error: \(trouble)") }
     }
 
     // MARK: - intelligence keys
@@ -806,25 +849,28 @@ enum CLI {
     }
 
     private static let linkUsage = """
-    Usage: copper [--json] link <command>
+    Usage: copper [--json] link [--app SELECTOR] <command>
 
-    The agent link: your bots use this browser's tools through the agents app,
-    each only after you grant it.
+    Link this browser to one or more agents apps. SELECTOR is an app address,
+    host, label or id; it is optional when exactly one app is configured.
 
-      status                     on/off, connection, bots with access (default)
-      on | off                   connect this browser to an agents app, or disconnect
-      token fxb_…                set the personal token (mint one at Agents › Connect in the agents app)
-      api URL                    set the agents app address
+      status                     every app (or the selected app; default)
+      on | off                   connect or disconnect the selected app
+      token fxb_…                set its personal token
+      api URL                    set its app address
+      add URL [fxb_…] [--label NAME]
+                                 add an app, optionally enabled with a token and nickname
+      remove                     forget the selected app and revoke if linked
       grants                     bots with access
       grant @bot|BOT_ID          give a bot access
       revoke @bot|BOT_ID         take one bot's access away
-      revoke                     revoke the whole link: every bot loses the tools, Copper disconnects
-      calls                      recent calls bots made (the agents app's record; this run's when unreachable)
+      revoke                     revoke the whole link
+      calls                      recent calls bots made
 
-    --json prints the result object (status, grants, calls). The CLI reaches
-    the link through the running app's agent server, so Settings › Agents ›
-    Let agents drive this window must be on; the link itself runs without it.
-    Exit 0 on success, 1 when the agents app refuses, 2 on usage or when Copper is unreachable.
+    --json status returns {apps:[…]} plus the first app's fields at the top
+    level (for older scripts). The CLI reaches the running app's loopback server; the link
+    itself needs only a window. Exit 0 on success, 1 when an app refuses, 2 on
+    usage errors or when Copper is unreachable.
     """
 
     private static func runProcess(_ executable: String, arguments: [String]) -> Int32 {
@@ -1118,8 +1164,8 @@ enum CLI {
       session list                              list session files and tab counts
       session restore [PATH] [--quit]           restore a session (default: previous)
       setup [phi|claude|cli|status]             install terminal-agent setup (default: status)
-      link [status|on|off|token|api|grants|grant|revoke|calls]
-                                                the agent link (copper link --help)
+      link [--app SELECTOR] [status|on|off|token|api|add|remove|grants|grant|revoke|calls]
+                                                link this browser to one or more agents apps (copper link --help)
       intelligence [status|set|reload]          Jev/router keys and readiness; never prints a key
                                                 (copper intelligence --help)
       bitwarden [status|login -|lock|logout|sync|policy]

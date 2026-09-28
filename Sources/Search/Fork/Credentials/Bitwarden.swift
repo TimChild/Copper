@@ -171,9 +171,9 @@ final class Bitwarden: ObservableObject {
 
     nonisolated static var installed: Bool { executableURL != nil }
 
-    /// Where `bw` is, first match wins: `SEARCH_BW_PATH` (the host daemon
-    /// points its LaunchAgent at the CLI it installed), the user-local
-    /// `~/.local/bin/bw`, then Homebrew's, then `$PATH`.
+    /// Where `bw` is, first match wins: `SEARCH_BW_PATH` (the daemon points
+    /// its LaunchAgent at the CLI it installed), a CLI an external installer
+    /// placed at `~/.local/bin/bw`, then Homebrew's, then `$PATH`.
     nonisolated static var executableURL: URL? {
         let files = FileManager.default
         if let raw = ProcessInfo.processInfo.environment["SEARCH_BW_PATH"]?

@@ -6,7 +6,7 @@ import SystemConfiguration
 // The MCP server in MCP.swift listens on 127.0.0.1 and nothing off this Mac
 // can reach it — which is right, and also why a bot running in the cloud
 // can't. So this side dials out instead. It registers the browser with the
-// agents service as a *link* (`POST /v1/me/links`), holds one
+// configured agents app as a *link* (`POST /v1/me/links`), holds one
 // server-sent-events stream open (`GET …/frames`), and answers each
 // `request` frame by handing the JSON-RPC message to the same
 // `MCP.shared.handle` the loopback server uses, then posting the reply back
@@ -22,39 +22,33 @@ import SystemConfiguration
 // Wire parsing lives in LinkWire.swift, which has no app in it.
 
 @MainActor
-final class AgentLink: ObservableObject {
-    static let shared = AgentLink()
-
+final class AgentLink: ObservableObject, Identifiable {
     typealias Grant = LinkWire.Grant
     typealias Bot = LinkWire.Bot
     typealias Call = LinkWire.Call
 
-    nonisolated static let defaultAPI = "https://agents.example"
-
-    /// Stored in agent.json under `agentLink`, beside the MCP server's own
-    /// settings (see `MCP.Config.agentLink`).
     struct Config: Codable, Equatable {
+        var id = UUID().uuidString
         var enabled = false
-        var api = AgentLink.defaultAPI
+        var api = ""
         var token = ""
         var name = "copper"
         var linkId: String?
-        /// Say each bot's tool call in the line at the bottom.
         var announces = true
+        var label = ""
 
-        init() {}
+        init(id: String = UUID().uuidString) { self.id = id }
 
-        // Lenient, like MCP.Config: an older file, or one a later version
-        // wrote, must still read — a missing key is its default.
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-            api = try c.decodeIfPresent(String.self, forKey: .api) ?? AgentLink.defaultAPI
+            api = try c.decodeIfPresent(String.self, forKey: .api) ?? ""
             token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
             name = try c.decodeIfPresent(String.self, forKey: .name) ?? "copper"
             linkId = try c.decodeIfPresent(String.self, forKey: .linkId)
             announces = try c.decodeIfPresent(Bool.self, forKey: .announces) ?? true
-            if api.trimmingCharacters(in: .whitespaces).isEmpty { api = AgentLink.defaultAPI }
+            label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
             if name.isEmpty { name = "copper" }
         }
     }
@@ -107,16 +101,19 @@ final class AgentLink: ObservableObject {
             case .unauthorized: return "Token rejected — mint a new one"
             case .revoked: return "The link was revoked"
             case .superseded: return "Another Copper took this link — switch off and on to take it back"
-            case .http(let status, let why): return why.isEmpty ? "the agents app answered \(status)" : "the agents app answered \(status): \(why)"
+            case .http(let status, let why): return why.isEmpty ? "The app answered \(status)" : "The app answered \(status): \(why)"
             case .transport(let why): return why
             }
         }
     }
 
+    let id: String
+    private var onChange: () -> Void
+
     @Published var config: Config {
         didSet {
             guard config != oldValue else { return }
-            MCP.shared.config.agentLink = config
+            onChange()
             react(from: oldValue)
         }
     }
@@ -143,9 +140,13 @@ final class AgentLink: ObservableObject {
     /// The live progress reporters of in-flight jev_run / jev_step calls.
     private var reporters: [String: JevProgressReporter] = [:]
 
-    private init() {
-        config = MCP.shared.config.agentLink ?? Config()
+    init(config: Config, onChange: @escaping () -> Void = {}) {
+        self.id = config.id
+        self.onChange = onChange
+        self.config = config
     }
+
+    func bind(onChange: @escaping () -> Void) { self.onChange = onChange }
 
     /// From `MCP.start(for:)`, once Copper has a window. Nothing connects
     /// before this — a CLI invocation of the binary never dials out.
@@ -156,6 +157,14 @@ final class AgentLink: ObservableObject {
     }
 
     var tokenReady: Bool { config.token.hasPrefix("fxb_") && config.token.count > 8 }
+
+    /// The name shown in announcements and status. A nickname wins; otherwise
+    /// the app host is the least surprising product-neutral label.
+    var appName: String {
+        let nickname = config.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !nickname.isEmpty { return nickname }
+        return URL(string: config.api)?.host ?? config.api
+    }
 
     /// "Copper on Felipe's MacBook Pro".
     static var label: String { "Copper on \(computerName)" }
@@ -321,7 +330,7 @@ final class AgentLink: ObservableObject {
             case .opened:
                 online = true
                 lastError = nil
-                status = .online(link?.label ?? AgentLink.label)
+                status = .online(link?.label ?? appName)
                 beat = Task { [weak self] in
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .seconds(15))
@@ -334,8 +343,12 @@ final class AgentLink: ObservableObject {
                 case .hello(let described, let items):
                     if let described { link = described }
                     grants = items
-                    status = .online(described?.label ?? link?.label ?? AgentLink.label)
+                    status = .online(described?.label ?? link?.label ?? appName)
                 case .request(let request):
+                    // A reconnect replays what the service still holds as
+                    // pending; a call this window is already running must
+                    // not start a second time.
+                    guard serving[request.id] == nil else { break }
                     Task { [weak self] in await self?.serve(request, linkId: id, generation: g) }
                 case .grants(let items):
                     grants = items
@@ -378,7 +391,7 @@ final class AgentLink: ObservableObject {
                 reporter = made
             }
             let who = request.caller.botHandle.isEmpty ? "bot" : request.caller.botHandle
-            rpc = await MCP.shared.handle(request.message, announce: config.announces ? .prefix("agents · @\(who)") : .quiet)
+            rpc = await MCP.shared.handle(request.message, announce: config.announces ? .prefix("@\(who) · \(appName)") : .quiet)
             // The last progress frame goes before the reply.
             await reporter?.finish()
             reporters[request.id] = nil
@@ -490,7 +503,7 @@ final class AgentLink: ObservableObject {
     }
 
     /// The service's record of calls, newest first — what the owner sees in
-    /// the agents app, including calls made while this window was not watching.
+    /// the app, including calls made while this window was not watching.
     func fetchCalls(limit: Int = 20) async throws -> [Call] {
         let id = try linkID()
         return LinkWire.calls(try await guarded {
@@ -587,7 +600,7 @@ final class AgentLink: ObservableObject {
         if let url = error as? URLError {
             switch url.code {
             case .notConnectedToInternet, .networkConnectionLost: return "Offline"
-            case .timedOut: return "the agents app stopped answering"
+            case .timedOut: return "The app stopped answering"
             case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed: return "Can't reach \(URL(string: config.api)?.host ?? "the app")"
             default: return url.localizedDescription
             }
@@ -603,6 +616,7 @@ final class AgentLink: ObservableObject {
             "enabled": config.enabled, "api": config.api, "name": config.name, "linkId": config.linkId ?? "",
             "tokenSet": !config.token.isEmpty, "announces": config.announces,
             "status": status.key, "statusText": status.text, "online": status.isOnline,
+            "id": id, "app": appName, "nickname": config.label,
             "label": link?.label ?? "", "grants": grants.map(\.json),
             "recentCalls": recentCalls.count, "lastError": lastError ?? "",
         ]
@@ -647,7 +661,7 @@ final class AgentLink: ObservableObject {
                 return ["grants": try await refreshGrants().map(\.json)]
             case "grant":
                 let bot = try await resolve(arg, among: .bots)
-                guard let grant = try await setGrant(bot, enabled: true) else { return ["error": "the agents app did not return the grant"] }
+                guard let grant = try await setGrant(bot, enabled: true) else { return ["error": "the app did not return the grant"] }
                 return ["grant": grant.json]
             case "revoke":
                 if arg.isEmpty {
@@ -680,13 +694,13 @@ final class AgentLink: ObservableObject {
         }
         let all = try await listBots()
         if let bot = all.first(where: { $0.id == raw || $0.handle.lowercased() == wanted }) { return bot.id }
-        if !raw.hasPrefix("@") { return raw } // an id the list did not show; let the service decide
+        if !raw.hasPrefix("@") { return raw } // an id the list did not show; let the app decide
         throw Failure.setup("no bot \(raw)")
     }
 
     /// After switching on: wait a few seconds for the first answer, so the
     /// CLI can say online or why not.
-    private func settled() async -> [String: Any] {
+    func settled() async -> [String: Any] {
         for _ in 0..<40 {
             if status != .connecting { break }
             try? await Task.sleep(for: .milliseconds(200))

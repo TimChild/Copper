@@ -262,7 +262,7 @@ struct AgentsPage: View {
     @ObservedObject var brain = Intelligence.shared
     @ObservedObject var chat = Agent.shared
     @ObservedObject var servers = Servers.shared
-    @ObservedObject var link = AgentLink.shared
+    @ObservedObject var links = AgentLinks.shared
     @State private var copied: String?
     @State private var setupStatus = Setup.Status()
     @State private var setupResult: [String: String] = [:]
@@ -327,8 +327,15 @@ struct AgentsPage: View {
                 }
             }
 
-            Caption("Agent link — let your bots use this browser")
-            LinkCard(link: link)
+            Caption("Your agents — let them use this browser")
+            ForEach(links.all) { link in
+                LinkCard(link: link)
+            }
+            Card {
+                Line("Add an agents app", "Paste its address and a personal token") {
+                    Pill("Add…", filled: true) { links.addEmpty() }
+                }
+            }
 
             Caption("The agent in the window — ⌘E")
             Card {
@@ -523,13 +530,14 @@ struct AgentsPage: View {
 }
 
 
-// MARK: - Agent link
+// MARK: - agents
 
 /// The agent link (Fork/MCP/Link.swift): on or off, where, the token, and
 /// — once linked — who may use it and what they did.
 struct LinkCard: View {
     @ObservedObject var link: AgentLink
     @State private var confirmRevoke = false
+    @State private var confirmRemove = false
 
     private var linked: Bool { link.config.enabled && link.config.linkId != nil }
 
@@ -556,12 +564,12 @@ struct LinkCard: View {
 
     var body: some View {
         Card {
-            Line("Connect this browser to an agents app", "Your bots get these same tools, through the agents app. Each bot only after you grant it, and you see every call here.") {
+            Line("Connect this browser", "An agents app gets these same tools, through its own service. Each bot only after you grant it, and you see every call here.") {
                 Switch(on: $link.config.enabled)
             }
             Rule()
-            Line("App", "The agents app this browser dials") {
-                TextField(AgentLink.defaultAPI, text: $link.config.api)
+            Line("App address", "Shown at Agents › Connect in your agents app") {
+                TextField("https://…", text: $link.config.api)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, design: .monospaced))
                     .frame(width: 220)
@@ -569,7 +577,16 @@ struct LinkCard: View {
                     .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
             Rule()
-            Line("Personal token", "Mint one at Agents › Connect in the agents app; it stays in a file only you can read") {
+            Line("App name", "Optional nickname used in announcements") {
+                TextField("optional", text: $link.config.label)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .frame(width: 140)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            Rule()
+            Line("Personal token", "Mint one at Agents › Connect; it stays in a file only you can read") {
                 KeyField(text: $link.config.token, placeholder: "fxb_…", ready: link.tokenReady)
             }
             Rule()
@@ -623,12 +640,22 @@ struct LinkCard: View {
                 Line("Revoke link", "Every bot loses these tools now; Copper disconnects.") {
                     Pill("Revoke link", tint: Color.red.opacity(0.85)) { confirmRevoke = true }
                 }
-                .confirmationDialog("Revoke the agent link?", isPresented: $confirmRevoke) {
+                .confirmationDialog("Revoke this link?", isPresented: $confirmRevoke) {
                     Button("Revoke link", role: .destructive) { Task { try? await link.revokeLink() } }
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("Every bot loses these tools now; Copper disconnects.")
                 }
+            }
+            Rule()
+            Line("Remove this app", "Forget this app and its connection") {
+                Pill("Remove", tint: Color.red.opacity(0.7)) { confirmRemove = true }
+            }
+            .confirmationDialog("Remove this app?", isPresented: $confirmRemove) {
+                Button("Remove", role: .destructive) { Task { await AgentLinks.shared.remove(link) } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Copper will forget this app and revoke it when possible.")
             }
         }
         .task(id: link.config.linkId.map { "\($0)\(link.config.enabled)" }) { await load() }

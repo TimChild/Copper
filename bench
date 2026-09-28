@@ -72,7 +72,7 @@
     ./bench bar TEXT [--go]          what ⌘K offers for TEXT; --go takes the first row
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, folded on|off, peek on|off,
-                                       tabswitch row|recent, focus none (the keyboard to the window itself), width N (the sidebar)
+                                       tabswitch row|recent, page general|tabs (which Settings page), focus none (the keyboard to the window itself), width N (the sidebar)
 
 Needs Settings › General › "Let a script drive Copper" switched on in the
 running app. IDs are the first characters of a tab's id, as `tabs` prints
@@ -193,7 +193,7 @@ def main(argv):
         if len(args) != 2: sys.exit("usage: bench ui KEY VALUE")
         key, value = args
         if key == "width": request[key] = float(value)
-        elif key in ("look", "focus", "tabswitch"): request[key] = value
+        elif key in ("look", "focus", "tabswitch", "page"): request[key] = value
         else: request[key] = value in ("on", "true", "1", "yes")
     elif verb in ("ext-add", "ext-press", "ext-remove", "ext-reload"):
         if len(args) != 1: sys.exit(f"usage: bench {verb} ID")

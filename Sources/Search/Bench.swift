@@ -348,6 +348,8 @@ final class Bench {
             // app, and every window the app owns.
             var out: [String: Any] = [
                 "settings": browser.tuning,
+                "settingsPage": browser.settingsPage.rawValue,
+                "active": browser.activeID.flatMap { id in browser.tabs.first { $0.id == id }.map(Bench.short) } ?? "",
                 "welcome": browser.welcoming,
                 "passwords": browser.managing,
                 "history": browser.recalling,
@@ -522,6 +524,12 @@ final class Bench {
             if let look = (request["look"] as? String).flatMap(Look.init) { browser.prefs.look = look }
             if let switching = (request["tabswitch"] as? String).flatMap(TabSwitching.init) {
                 browser.prefs.tabSwitching = switching
+            }
+            if let page = (request["page"] as? String).flatMap(SettingsPanel.Page.init(rawValue:)) {
+                browser.tuning = false
+                browser.settingsPage = page
+                Store.settings.set(page.rawValue, forKey: "settings.page")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { browser.tuning = true }
             }
             if let on = request["sidebar"] as? Bool { browser.prefs.sidebar = on }
             if let on = request["folded"] as? Bool { browser.folded = on }

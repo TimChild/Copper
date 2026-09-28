@@ -8,6 +8,11 @@ browser's files locally and never changes them.
 - open tabs, windows and Arc spaces (as sleeping Copper tabs)
 - pinned tabs and tab groups
 - bookmarks and history
+
+History import reads every visible URL with a visit from the selected Chromium
+profile; it is not capped at the old 3,000-row preview limit. Copper keeps up to
+20,000 distinct places locally and merges a repeated import idempotently (the
+larger visit count and newest title/date win).
 - passwords, cookies, and Google Password Manager passkeys, after one macOS
   approval for the browser's Safe Storage key
 - Chrome Web Store extensions that Copper can reinstall

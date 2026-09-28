@@ -49,6 +49,10 @@ enum CommandBar {
             .init(id: "passkeys", name: "Passkeys", glyph: "person.badge.key") { $0.tuning = true },
             .init(id: "settings", name: "Settings", glyph: "gearshape") { $0.tuning = true },
             .init(id: "flow", name: "Flow: move in from Chrome or Arc", glyph: "arrow.right.doc.on.clipboard") { _ in Flow.shared.open = true },
+            .init(id: "history-import", name: "Bring in Arc History", glyph: "clock.arrow.circlepath") { browser in
+                Store.settings.set(true, forKey: "history.nudged")
+                Flow.shared.importHistory(preferred: "Arc", in: browser)
+            },
             .init(id: "update-check", name: "Check for Copper updates", glyph: "arrow.triangle.2.circlepath") { _ in Updates.shared.check(force: true) },
             .init(id: "clear-history", name: "Clear History", glyph: "trash") { $0.clearHistory() },
             .init(id: "split", name: Split.shared.on ? "Close Split View" : "Split View", glyph: "rectangle.split.2x1") { Split.shared.toggle(in: $0) },
@@ -94,104 +98,187 @@ enum CommandBar {
         let needle = typed.trimmingCharacters(in: .whitespaces).lowercased()
         guard !needle.isEmpty else { return dressed(open + resting(browser)) }
         let commandNeedle = needle.hasPrefix("/") ? String(needle.dropFirst()) : needle
-        func hit(_ texts: String...) -> Bool { texts.contains { $0.lowercased().contains(needle) } }
-        func commandHit(_ texts: String...) -> Bool { texts.contains { $0.lowercased().contains(commandNeedle) } }
+        var ranked: [(row: Suggestion, score: Double)] = []
 
-        // Each kind gets a few rows and no more. Without the caps one
-        // popular word fills the card with the same kind of answer — eight
-        // tabs, say — and the bar stops being able to surprise you with the
-        // bookmark or the command you had forgotten about.
-        var elsewhere: [Suggestion] = []
-        for tab in Spaces.shared.parkedTabs where !tab.isBlank {
-            guard let url = tab.address, hit(tab.title, Address.pretty(url)) else { continue }
-            var row = Suggestion(key: tab.title.isEmpty ? Address.pretty(url) : tab.title, title: Address.pretty(url), url: url, kind: .open)
-            row.tab = tab.id
-            // Which space it is in is the one thing about this row you
-            // cannot work out from the rest of it, so it goes in the quiet
-            // text beside the title, where it is readable on every row — the
-            // hint on the right only shows on the row Return would take.
-            row.detail = shortDetail(row)
-            row.badge = "· " + short(Spaces.shared.name(of: tab))
-            elsewhere.append(row)
-            if elsewhere.count == 2 { break }
+        func add(_ row: Suggestion, base: Double, against query: String = needle) {
+            guard let match = matchScore(row, typed: query) else { return }
+            ranked.append((row, base + match))
+        }
+
+        // Open pages are the strongest answer. The current space is already
+        // sorted by recent use; kept pages in other spaces get a small lift so
+        // a favourite or Saved row beats an otherwise identical parked page.
+        let currentTabs = Dictionary(uniqueKeysWithValues: open.compactMap { row in
+            row.tab.flatMap { id in browser.tabs.first(where: { $0.id == id }).map { (id, $0) } }
+        })
+        for var row in open.prefix(3) {
+            if let tab = row.tab.flatMap({ currentTabs[$0] }) {
+                decorate(&row, tab: tab, current: true)
+                add(row, base: 1_000 + keptBoost(tab) + 20)
+            } else {
+                add(row, base: 1_000 + 20)
+            }
+        }
+
+        let parked = Spaces.shared.parkedTabs
+            .filter { !$0.isBlank && $0.address != nil }
+            .sorted {
+                let left = keptBoost($0)
+                let right = keptBoost($1)
+                return left == right ? $0.touched > $1.touched : left > right
+            }
+        var parkedCount = 0
+        for tab in parked {
+            guard parkedCount < 5, let url = tab.address else { continue }
+            var row = Suggestion(
+                key: tab.title.isEmpty ? Address.pretty(url) : tab.title,
+                title: Address.pretty(url), url: url, kind: .open, tab: tab.id
+            )
+            decorate(&row, tab: tab, current: false)
+            guard matchScore(row, typed: needle) != nil else { continue }
+            add(row, base: 1_000 + keptBoost(tab))
+            parkedCount += 1
         }
 
         var marks: [Suggestion] = []
-        for (title, url) in bookmarks(browser.bookmarks.roots) where hit(title, url.absoluteString) {
-            marks.append(Suggestion(key: title.isEmpty ? Address.pretty(url) : title, title: Address.pretty(url), url: url, kind: .bookmark))
-            if marks.count == 2 { break }
+        for (title, url) in bookmarks(browser.bookmarks.roots) {
+            let row = Suggestion(key: title.isEmpty ? Address.pretty(url) : title,
+                                 title: Address.pretty(url), url: url, kind: .bookmark)
+            guard matchScore(row, typed: needle) != nil else { continue }
+            marks.append(row)
+            if marks.count == 3 { break }
         }
+        marks.forEach { add($0, base: 700) }
 
-        // Where you have actually been. Upstream's ⌘L list, borrowed.
-        let been = browser.history.suggestions(for: typed, limit: 3).map { row in
-            Suggestion(key: row.title.isEmpty ? row.key : row.title, title: row.key, url: row.url, kind: row.kind)
+        // History has already combined match position, visit count and
+        // recency. Keep its six best rows, then let the same score compete
+        // with open pages, bookmarks and commands instead of appending a
+        // history block at the bottom.
+        let been = browser.history.suggestions(for: typed, limit: 6).map { row in
+            Suggestion(key: row.title.isEmpty ? row.key : row.title,
+                       title: row.key, url: row.url, kind: row.kind)
+        }
+        for (index, row) in been.enumerated() {
+            add(row, base: 500 + Double(been.count - index))
         }
 
         var doing: [Suggestion] = []
-        for command in commands(browser) where commandHit(command.name) {
-            var row = Suggestion(key: command.name, title: "", url: URL(string: "copper://command/\(command.id)")!, kind: .command)
+        for command in commands(browser) where commandMatch(command.name, typed: commandNeedle) {
+            var row = Suggestion(key: command.name, title: "",
+                                 url: URL(string: "copper://command/\(command.id)")!, kind: .command)
             row.glyph = command.glyph
             doing.append(row)
             if doing.count == 2 { break }
         }
+        doing.forEach { add($0, base: 200, against: commandNeedle) }
 
-        var list = Array(open.prefix(3)) + elsewhere + marks + been + doing
-        // The way out, always — and last, so it is never the row that gets
-        // cut: words that match nothing are still a question someone can
-        // answer.
+        var list: [Suggestion] = []
+        var seen = Set<String>()
+        for candidate in ranked.sorted(by: { $0.score == $1.score ? $0.row.key < $1.row.key : $0.score > $1.score }) {
+            let url = canonical(candidate.row.url)
+            guard seen.insert(url).inserted else { continue }
+            list.append(candidate.row)
+            if list.count == limit - 1 { break }
+        }
+        // Search is deliberately last. A Google answer should not displace a
+        // page Copper already knows, but it is always available as the exit.
         if let asked = Google.url(for: typed) {
-            list = Array(list.prefix(limit - 1))
             list.append(Suggestion(key: typed, title: Google.name, url: asked, kind: .search))
         }
-        return dressed(list)
+        return dressed(Array(list.prefix(limit)))
+    }
+
+    @MainActor private static func keptBoost(_ tab: Tab) -> Double {
+        (tab.pin != nil || Sections.shared.isSaved(tab)) ? 2 : 0
+    }
+
+    @MainActor private static func decorate(_ row: inout Suggestion, tab: Tab, current: Bool) {
+        row.detail = shortDetail(row)
+        let space = short(Spaces.shared.name(of: tab))
+        if tab.pin != nil {
+            row.badge = current ? "· \(space) ✦" : "· \(space) ✦"
+        } else if Sections.shared.isSaved(tab) {
+            row.badge = current ? "· saved" : "· \(space) · saved"
+        } else if !current {
+            row.badge = "· \(space)"
+        }
+    }
+
+    private static func canonical(_ url: URL) -> String {
+        var text = Address.pretty(url).lowercased()
+        if text.hasSuffix("/") { text.removeLast() }
+        return text
+    }
+
+    /// Match addresses by their whole prefix first, then by host labels. A
+    /// host-segment match keeps `linear` useful for linear.app and `exo`
+    /// useful for cloud-ems.dev.exowatt.com without making every path word a
+    /// candidate.
+    private static func matchScore(_ row: Suggestion, typed: String) -> Double? {
+        let needle = strip(typed)
+        guard !needle.isEmpty else { return nil }
+        let address = strip(Address.pretty(row.url))
+        let key = strip(row.key)
+        let title = row.title.lowercased()
+        if address.hasPrefix(needle) { return 100 }
+        if key.hasPrefix(needle) { return 96 }
+        let host = address.split(separator: "/").first.map(String.init) ?? address
+        if host.split(separator: ".").contains(where: { $0.hasPrefix(needle) }) { return 82 }
+        if title.hasPrefix(needle) { return 72 }
+        if host.contains(needle) { return 62 }
+        if key.contains(needle) || title.contains(needle) { return 45 }
+        if address.contains(needle) { return 38 }
+        return nil
+    }
+
+    private static func commandMatch(_ text: String, typed: String) -> Bool {
+        let needle = strip(typed)
+        guard !needle.isEmpty else { return false }
+        return text.lowercased().contains(needle)
+    }
+
+    private static func strip(_ text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespaces).lowercased()
+        for scheme in ["https://", "http://"] where value.hasPrefix(scheme) {
+            value = String(value.dropFirst(scheme.count))
+        }
+        if value.hasPrefix("www.") { value = String(value.dropFirst(4)) }
+        return value
     }
 
     /// The empty field: what is open, and a few doors.
     @MainActor private static func resting(_ browser: Browser) -> [Suggestion] {
         let wanted = ["new-tab", "split", "new-space", "history"]
         let all = commands(browser)
-        return wanted.compactMap { id in
+        var rows = wanted.compactMap { id -> Suggestion? in
             guard let command = all.first(where: { $0.id == id }) else { return nil }
             var row = Suggestion(key: command.name, title: "", url: URL(string: "copper://command/\(command.id)")!, kind: .command)
             row.glyph = command.glyph
             return row
         }
+        if browser.history.visitCount < 500,
+           Flow.hasHistorySource(),
+           !Store.settings.bool(forKey: "history.nudged"),
+           let command = all.first(where: { $0.id == "history-import" }) {
+            var nudge = Suggestion(
+                key: "Bring in your Arc history so addresses complete →", title: "",
+                url: URL(string: "copper://command/\(command.id)")!, kind: .command
+            )
+            nudge.glyph = command.glyph
+            rows.insert(nudge, at: 0)
+        }
+        return rows
     }
 
-    /// One row per place, each carrying what Return would do with it.
-    ///
-    /// The same site reaches this list by several roads — a tab that is open
-    /// on it, a bookmark, the front door history credits on every visit — and
-    /// three rows for one site is the fastest way to make a short list feel
-    /// long. A page that is already open wins; after that one row per host,
-    /// except where the path differs and the title says so.
+
+    /// One row per URL, carrying what Return would do with it. A bookmark,
+    /// page and history entry for the same address collapse to the strongest
+    /// row before this point; different paths on one host remain useful rows.
     private static func dressed(_ list: [Suggestion]) -> [Suggestion] {
         var seen: Set<String> = []
-        var hosts: Set<String> = []
         var out: [Suggestion] = []
         for row in list {
-            if row.kind == .command || row.kind == .search {
-                guard seen.insert(row.url.absoluteString).inserted else { continue }
-            } else {
-                // A trailing slash is not a page of its own, and leaving it
-                // on is why "gemini.google.com" and "gemini.google.com/"
-                // used to come back as two answers to one question.
-                var where_ = Address.pretty(row.url).lowercased()
-                if where_.hasSuffix("/") { where_ = String(where_.dropLast()) }
-                guard seen.insert(where_).inserted else { continue }
-                let host = (row.url.host() ?? where_).lowercased()
-                if row.kind == .open {
-                    // Two tabs on one site are two pages, and their titles
-                    // say which is which. Only pages you have open get that
-                    // licence.
-                    hosts.insert(host)
-                } else {
-                    // A bookmark, a visit, and the front-door credit history
-                    // gives every visit are three roads to one site — and,
-                    // until this, three rows saying the same thing.
-                    guard hosts.insert(host).inserted else { continue }
-                }
-            }
+            guard seen.insert(canonical(row.url)).inserted else { continue }
             var row = row
             if row.detail.isEmpty { row.detail = shortDetail(row) }
             row.hint = hint(for: row)

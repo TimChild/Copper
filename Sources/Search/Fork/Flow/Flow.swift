@@ -74,11 +74,54 @@ final class Flow: ObservableObject {
         case done(Report)
     }
 
+    enum HistoryImportState: Equatable {
+        case idle
+        case reading(String, Int)
+        case done(String, Int, Date)
+        case failed(String)
+
+        var detail: String? {
+            switch self {
+            case .idle: return nil
+            case .reading(let source, let count): return "Reading \(source)… \(count.formatted()) places"
+            case .done(let source, let count, let date):
+                let ago = Int(max(0, Date().timeIntervalSince(date)))
+                let when = ago < 60 ? "just now" : "\(ago / 60)m ago"
+                return "Brought in \(count.formatted()) places from \(source) · \(when)"
+            case .failed(let message): return message
+            }
+        }
+    }
+
+    /// A source may be read for history without opening the full Flow sheet.
+    /// This is also what the quiet first-launch nudge checks.
+    static func hasHistorySource(_ name: String? = nil) -> Bool {
+        let wanted = name.map { $0.lowercased() }
+        return Chromium.known.contains { source in
+            guard wanted == nil || wanted == source.name.lowercased() else { return false }
+            return historyFiles(in: source.root).isEmpty == false
+        }
+    }
+
+    private static func historyFiles(in root: URL) -> [URL] {
+        guard FileManager.default.fileExists(atPath: root.path),
+              let walk = FileManager.default.enumerator(
+                at: root, includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+              ) else { return [] }
+        var found: [URL] = []
+        for case let url as URL in walk where url.lastPathComponent == "History" {
+            found.append(url)
+        }
+        return found
+    }
+
     @Published var open = false
     @Published private(set) var sources: [FlowSource] = []
     @Published var choice = FlowModel.Choice()
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var selected: FlowSource?
+    @Published private(set) var historyImport: HistoryImportState = .idle
 
     private var lastHaul = FlowModel.Haul()
     private var createdSpaces: [UUID] = []
@@ -305,6 +348,82 @@ final class Flow: ObservableObject {
         phase = .idle
     }
 
+    /// Import just the address history, without opening the larger Flow sheet.
+    /// The SQLite copy/read is off the main actor; only the small merge touches
+    /// History, which is main-actor isolated.
+    func importHistory(preferred name: String = "Arc", in browser: Browser) {
+        if case .reading = historyImport { return }
+        let source = historySource(named: name, rootOverride: nil)
+            ?? (name.caseInsensitiveCompare("Arc") == .orderedSame ? historySource(named: "Chrome", rootOverride: nil) : nil)
+        guard let source else {
+            browser.announce("No readable \(name) history found")
+            return
+        }
+        historyImport = .reading(source.name, 0)
+        let sourceName = source.name
+        Task { [weak self, weak browser] in
+            let places = await Task.detached(priority: .userInitiated) {
+                FlowChromium.places(in: source)
+            }.value
+            guard let self, let browser else { return }
+            self.mergeHistory(places, source: sourceName, into: browser)
+        }
+    }
+
+    /// Synchronous history import for `bench`, where one request must return
+    /// one complete JSON object. It is intentionally available only in a test
+    /// world when the caller supplies an isolated root.
+    @discardableResult
+    func importHistoryNow(named name: String, limit: Int = Int.max, rootOverride: URL?, in browser: Browser) -> [String: Any] {
+        guard Store.testing || rootOverride == nil else { return ["error": "history import only works in a test run"] }
+        guard let source = historySource(named: name, rootOverride: rootOverride) else {
+            return ["error": "no readable \(name) history found"]
+        }
+        let started = DispatchTime.now().uptimeNanoseconds
+        let places = FlowChromium.places(in: source, limit: limit)
+        historyImport = .reading(source.name, places.count)
+        mergeHistory(places, source: source.name, into: browser)
+        let seconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
+        return ["source": source.name, "places": places.count, "visits": browser.history.visitCount,
+                "seconds": seconds, "historyFile": Store.file("history.json").path]
+    }
+
+    private func historySource(named name: String, rootOverride: URL?) -> FlowSource? {
+        guard let source = Chromium.known.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { return nil }
+        if let rootOverride {
+            let profiles = Self.historyProfiles(in: rootOverride)
+            guard !profiles.isEmpty else { return nil }
+            return FlowSource(source: source, profiles: profiles, isArc: source.name == "Arc", locked: false, rootOverride: rootOverride)
+        }
+        refreshSources(autoScan: false)
+        guard let found = sources.first(where: { $0.id == source.name }), !found.locked else { return nil }
+        return found
+    }
+
+    private static func historyProfiles(in root: URL) -> [String] {
+        if FileManager.default.fileExists(atPath: root.appendingPathComponent("History").path) { return [""] }
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return entries.compactMap { entry in
+            guard (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+                  FileManager.default.fileExists(atPath: entry.appendingPathComponent("History").path)
+            else { return nil }
+            return entry.lastPathComponent
+        }.sorted()
+    }
+
+    private func mergeHistory(_ places: [Chromium.Place], source: String, into browser: Browser) {
+        historyImport = .reading(source, places.count)
+        for (index, place) in places.enumerated() {
+            browser.history.take(place.url, title: place.title, count: place.count, last: place.last)
+            if index.isMultiple(of: 1000) && index > 0 { historyImport = .reading(source, index) }
+        }
+        browser.history.settle()
+        historyImport = .done(source, places.count, Date())
+        browser.announce(places.isEmpty ? "No places from \(source)" : "Brought in \(places.count.formatted()) places from \(source)")
+    }
+
     func close() { open = false }
 
     /// Lets a person hand over the one protected folder without changing it.
@@ -357,6 +476,12 @@ final class Flow: ObservableObject {
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         let op = request["op"] as? String ?? "sources"
         switch op {
+        case "import":
+            guard Store.testing else { return ["error": "history import only works in a test run"] }
+            guard let source = request["source"] as? String else { return ["error": "history import needs arc or chrome"] }
+            let limit = (request["limit"] as? Int) ?? Int.max
+            let root = (request["root"] as? String).map { URL(fileURLWithPath: $0).standardizedFileURL }
+            return importHistoryNow(named: source, limit: limit, rootOverride: root, in: browser)
         case "sources":
             refreshSources(autoScan: false)
             return ["sources": sources.map { ["name": $0.name, "profiles": $0.profiles, "profileCount": $0.profileCount, "isArc": $0.isArc, "glyph": $0.glyph, "locked": $0.locked, "root": $0.root.path] }]

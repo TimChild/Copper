@@ -52,9 +52,14 @@ enum CommandBar {
             .init(id: "clear-history", name: "Clear History", glyph: "trash") { $0.clearHistory() },
             .init(id: "split", name: Split.shared.on ? "Close Split View" : "Split View", glyph: "rectangle.split.2x1") { Split.shared.toggle(in: $0) },
             .init(id: "agent", name: Agent.shared.open ? "Close Agent" : "Agent", glyph: "sparkles") { _ in Agent.shared.toggle() },
-            .init(id: "jev-trace", name: "Jev Trace", glyph: "waveform.path") { _ in JevTrace.shared.paneOpen.toggle() },
+            .init(id: "jev-trace", name: JevTrace.shared.paneOpen ? "Close Jev Timeline" : "Jev Timeline", glyph: "waveform.path") { _ in JevTrace.shared.paneOpen.toggle() },
+            .init(id: "close-panes", name: "Close All Panes", glyph: "xmark.square") { Panes.closeAll(in: $0) },
             .init(id: "ask-page", name: "Ask About This Page", glyph: "text.bubble") { Agent.shared.askOnPage(in: $0) },
-            .init(id: "new-space", name: "New Space", glyph: "square.on.square") { Spaces.shared.add(in: $0) },
+            .init(id: "new-space", name: "New Space", glyph: "square.on.square") { b in
+                let id = Spaces.shared.add(in: b)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id, atStrip: false) }
+            },
+            .init(id: "edit-space", name: "Edit Space", glyph: "slider.horizontal.3") { _ in SpaceEditing.shared.open(Spaces.shared.current, atStrip: false) },
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },
             .init(id: "prev-space", name: "Previous Space", glyph: "chevron.left") { Spaces.shared.step(-1, in: $0) },
         ]
@@ -64,8 +69,13 @@ enum CommandBar {
         if Updates.shared.available {
             list.insert(.init(id: "update", name: "Update Copper to \(Updates.shared.latest?.version ?? "")", glyph: "arrow.down.circle") { _ in Updates.shared.upgrade() }, at: 0)
         }
+        if Spaces.shared.all.count > 1 {
+            list.append(.init(id: "delete-space", name: "Delete Space…", glyph: "trash") { SpaceDelete.ask(Spaces.shared.current, in: $0) })
+        }
         for space in Spaces.shared.all where space.id != Spaces.shared.current {
-            list.append(.init(id: "space-\(space.id)", name: "Switch to \(space.name)", glyph: "circle.grid.2x2") {
+            // The space's own symbol when it has one; an emoji has no place
+            // in a symbol slot, so those spaces keep the generic mark.
+            list.append(.init(id: "space-\(space.id)", name: "Switch to \(space.title)", glyph: space.symbol ?? "circle.grid.2x2") {
                 Spaces.shared.select(space.id, in: $0)
             })
         }

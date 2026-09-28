@@ -59,6 +59,9 @@
     ./bench passkeys list|count|forget --id ID|answer yes|no|ask
                                        Copper's own test-world passkeys (no private keys in list)
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
+    ./bench mouse back|forward|middle [X Y] [--shift]
+                                       a click of that mouse button at window point X Y (top-left
+                                       origin; the page's middle by default), through the app's routing
     ./bench bar TEXT [--go]          what ⌘K offers for TEXT; --go takes the first row
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, folded on|off, peek on|off
@@ -139,6 +142,8 @@ def main(argv):
         if len(args) > 2: request["width"] = float(args[2])
     elif verb in ("split", "swipe"):
         request["arg"] = args[0] if args else ""
+    elif verb == "mouse":
+        request["arg"] = " ".join(args) if args else "back"
     elif verb == "bar":
         request["text"] = args[0] if args else ""
         request["go"] = "--go" in args

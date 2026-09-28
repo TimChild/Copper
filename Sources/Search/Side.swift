@@ -468,6 +468,9 @@ private struct PinSquare: View {
         })
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab) }) }
+        .onReceive(NotificationCenter.default.publisher(for: MouseButtons.middleClickedSidebar)) { _ in
+            if hovering { browser.close(tab) } // Fork: wheel click closes, see SideRow
+        }
         .help(tab.label)
         .animation(Motion.quick, value: hovering)
         .transition(.scale(scale: 0.8).combined(with: .opacity))
@@ -567,6 +570,11 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
         })
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
+        // The wheel button over a row closes it, as in Arc and Chrome. SwiftUI
+        // never sees that button; the app's monitor does (Fork: MouseButtons).
+        .onReceive(NotificationCenter.default.publisher(for: MouseButtons.middleClickedSidebar)) { _ in
+            if hovering, !editing { close() }
+        }
         .animation(Motion.quick, value: hovering)
         .animation(Motion.glide, value: editing)
         .onChange(of: browser.refusals) { _, _ in

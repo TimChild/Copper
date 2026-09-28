@@ -231,7 +231,7 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
-        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "heat", "updates", "bw", "flow":
+        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "updates", "bw", "flow":
             answer(Fork.bench(verb, request, in: browser))
 
         case "tabs":
@@ -370,8 +370,10 @@ final class Bench {
             }
             if let window = Links.window { out["lights"] = Bench.lights(of: window) }
             out["keysQuieted"] = PageView.quieted
-            // Who has the keyboard — for the ⌘←/⌘→ work. (Fork)
+            // Who has the keyboard, and the last link click WebKit reported
+            // (its button number and modifiers) — for the mouse-button work. (Fork)
             out["firstResponder"] = Links.window?.firstResponder.map { "\(type(of: $0))" } ?? ""
+            out["lastLinkClick"] = MouseButtons.lastLinkClick
             // The column folded away, out for a look, and the lights with it (see Fold.swift).
             out["folded"] = browser.folded
             out["peeking"] = browser.peeking

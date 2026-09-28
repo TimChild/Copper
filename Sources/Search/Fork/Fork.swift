@@ -81,6 +81,7 @@ enum Fork {
             else { browser.editing = false; browser.typed = "" }
             return ["offers": rows]
         case "swipe": return SpaceSwipe.bench(request["arg"] as? String ?? "left", in: browser)
+        case "mouse": return MouseButtons.bench(request, in: browser)
         case "heat": return Heat.shared.bench(request, in: browser)
         case "bw":
             // Bitwarden without the Settings card, for a probe run: `bw status`,

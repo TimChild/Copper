@@ -20,12 +20,12 @@ struct DownloadsDoor: View {
     }
     private var icon: String {
         if active { return "arrow.down" }
-        if failed { return "exclamationmark" }
         if downloads.pulsing { return "checkmark" }
+        if failed { return "exclamationmark" }
         return "arrow.down.circle"
     }
     private var tint: Color {
-        failed && !active ? Color.orange.opacity(0.9) : Palette.muted
+        failed && !active && !downloads.pulsing ? Color.orange.opacity(0.9) : Palette.muted
     }
     private var help: String {
         let count = downloads.active.count
@@ -126,6 +126,11 @@ struct DownloadsPopover: View {
         downloads.items.filter { if case .cancelled = $0.state { return false }; return true }
     }
 
+    private var older: [Keep] {
+        let paths = Set(session.compactMap { $0.file?.path })
+        return browser.loot.kept.filter { !paths.contains($0.path) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if session.isEmpty && browser.loot.kept.isEmpty {
@@ -140,8 +145,8 @@ struct DownloadsPopover: View {
                     if item.id != rows.last?.id { Rectangle().fill(Palette.hairline).frame(height: 1).padding(.leading, 48) }
                 }
                 if rows.count < 8 {
-                    ForEach(Array(browser.loot.kept.prefix(8 - rows.count))) { keep in
-                        if rows.count > 0 || keep.id != browser.loot.kept.first?.id {
+                    ForEach(Array(older.prefix(8 - rows.count))) { keep in
+                        if rows.count > 0 || keep.id != older.first?.id {
                             Rectangle().fill(Palette.hairline).frame(height: 1).padding(.leading, 48)
                         }
                         DownloadRow(keep: keep, browser: browser, downloads: downloads)
@@ -218,10 +223,10 @@ struct DownloadRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(detail)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 9.5, design: .monospaced))
                     .foregroundStyle(Palette.muted)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .minimumScaleFactor(0.78)
                 if let item, isRunning(item) {
                     DownloadProgress(item: item, reduceMotion: reduceMotion)
                 }
@@ -296,12 +301,17 @@ struct DownloadRow: View {
 
     private func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     private func isRunning(_ item: Downloads.Item) -> Bool { if case .running = item.state { return true }; return false }
-    private func byte(_ value: Int64) -> String { DownloadFormat.bytes.string(fromByteCount: value) }
-    private func speed(_ value: Double) -> String { value > 0 ? "\(DownloadFormat.bytes.string(fromByteCount: Int64(value)))/s" : "—/s" }
+    private func byte(_ value: Int64) -> String { compact(DownloadFormat.bytes.string(fromByteCount: value)) }
+    private func speed(_ value: Double) -> String {
+        value > 0 ? "\(compact(DownloadFormat.bytes.string(fromByteCount: Int64(value))))/s" : "—/s"
+    }
     private func duration(_ value: Double) -> String {
         let seconds = max(0, Int(value.rounded()))
-        if seconds < 60 { return "\(seconds) s" }
-        return "\(seconds / 60)m \(seconds % 60)s"
+        if seconds < 60 { return "\(seconds)s" }
+        return "\(seconds / 60)m\(seconds % 60)s"
+    }
+    private func compact(_ value: String) -> String {
+        value.components(separatedBy: .whitespacesAndNewlines).joined()
     }
 }
 

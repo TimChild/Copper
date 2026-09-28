@@ -294,8 +294,11 @@ enum Fork {
             // A probe may be behind the user's normal Copper window. Bring
             // only this isolated process forward before asking WindowServer
             // for its pixels; otherwise the PNG can be a stale surface.
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
+            let hasPopover = NSApp.windows.contains { $0 !== window && $0.isVisible && $0.level == .normal }
+            if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
+            // Making the main window key dismisses SwiftUI's popover. Leave
+            // the already-visible door popover alone for its evidence shot.
+            if !hasPopover { window.makeKeyAndOrderFront(nil) }
             // The window and whatever hangs off it — a sheet, a popover — in
             // one picture, bottom to top, so a test can see the sheet it opened.
             var ids: [CGWindowID] = [CGWindowID(window.windowNumber)]

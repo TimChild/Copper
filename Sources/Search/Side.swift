@@ -18,6 +18,7 @@ struct SideBar: View {
     @ObservedObject private var sections = Sections.shared
 
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var still
 
     @Namespace private var pill
 
@@ -32,6 +33,9 @@ struct SideBar: View {
     @State private var pinDragging: Tab.ID?
     @State private var pinFrom = 0
     @State private var pinTravel: CGSize = .zero
+    /// A loose row picked up out of either block: while it is in the hand
+    /// the column does not scroll out from under it.
+    @State private var rowHeld = false
 
     private static let row: CGFloat = 28
     private static let gap: CGFloat = 2
@@ -275,8 +279,26 @@ struct SideBar: View {
                     proxy.scrollTo("tab-\(id.uuidString)", anchor: .bottom)
                 }
             }
+            .onAppear { show(browser.activeID, in: proxy, gliding: false) }
+            .onChange(of: browser.activeID) { _, id in show(id, in: proxy) }
         }
         .frame(maxHeight: .infinity)
+    }
+
+    /// Wherever the live row is, the column keeps it in sight: ⌘1–9, ⌃Tab,
+    /// a link that opens a tab, a space switch, the restore at launch. Only
+    /// as far as it takes to bring the row in, and not while a row or a
+    /// favourite is in the hand. A block that does not hold the row is
+    /// asked too, and does nothing.
+    private func show(_ id: Tab.ID?, in proxy: ScrollViewProxy, gliding: Bool = true) {
+        guard let id, pinDragging == nil, !rowHeld else { return }
+        // A turn of the run loop later, so a row that has only just arrived
+        // has been laid out before it is looked for.
+        DispatchQueue.main.async {
+            withAnimation(gliding && !still ? Motion.glide : nil) {
+                proxy.scrollTo("tab-\(id.uuidString)", anchor: nil)
+            }
+        }
     }
 
     /// Everything else, newest first. Sits under the New Tab row, the way
@@ -284,13 +306,17 @@ struct SideBar: View {
     private var today: some View {
         let list = looseRows.filter { !sections.isSaved($0.tab) }
         let wanted = CGFloat(list.count + GroupedRows.extraRows(in: list.map(\.tab))) * (SideBar.row + SideBar.gap)
-        return ScrollView(.vertical, showsIndicators: false) {
-            rows(list)
-                .padding(.horizontal, SideBar.inset)
+        return ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                rows(list)
+                    .padding(.horizontal, SideBar.inset)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(wanted, SideBar.todayMax))
+            .mask(SideBar.fade)
+            .onAppear { show(browser.activeID, in: proxy, gliding: false) }
+            .onChange(of: browser.activeID) { _, id in show(id, in: proxy) }
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(height: min(wanted, SideBar.todayMax))
-        .mask(SideBar.fade)
     }
 
     /// One block's rows, drawn by the groups' view so each run wears its
@@ -309,7 +335,8 @@ struct SideBar: View {
                 let wanted = way < 0
                 guard sections.isSaved(tab) != wanted else { return }
                 withAnimation(Motion.settle) { sections.set(tab, saved: wanted, in: browser) }
-            }
+            },
+            holding: { rowHeld = $0 }
         )
     }
 
@@ -459,8 +486,15 @@ private struct PinSquare: View {
         .frame(width: width, height: height)
         .background {
             if live {
+                // The live row's paper, ring and lift, without its bar: a
+                // square in a grid of squares is found by its edge alone.
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(tint.pill)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            .strokeBorder(tint.rim, lineWidth: 1)
+                    }
+                    .shadow(color: tint.lift, radius: 5, y: 1.5)
                     .matchedGeometryEffect(id: "live", in: pill)
             } else {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -508,6 +542,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
             } else {
                 if !tab.isBlank {
                     RowMark(icon: tab.icon, letter: tab.monogram, tint: tint, size: 16)
+                        .opacity(live ? 1 : 0.9)
                 }
                 if tab.bench {
                     // A script's tab, not yours.
@@ -521,7 +556,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                         .foregroundStyle(colour.opacity(0.7))
                 }
                 Text(tab.label)
-                    .font(.system(size: 13))
+                    .font(.system(size: 13, weight: live ? .semibold : .regular))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(colour)
@@ -598,6 +633,10 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
         .transition(.scale(scale: 0.94, anchor: .leading).combined(with: .opacity))
     }
 
+    /// The live row is found three ways at once, so no one of them has to
+    /// shout: paper that lifts off the column on a soft shadow inside a
+    /// one-point ring, a short bar of the space's colour at its left edge,
+    /// and a title set a weight heavier than the rest.
     @ViewBuilder
     private var ground: some View {
         if live {
@@ -611,6 +650,19 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(tint.rim, lineWidth: 1)
+            }
+            // In the column's own margin rather than on the paper, where it
+            // would crowd the site's mark; it still rides with the pill.
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(tint.bar)
+                    .frame(width: 3, height: 16)
+                    .offset(x: -4.5)
+            }
+            .shadow(color: tint.lift, radius: 5, y: 1.5)
             .matchedGeometryEffect(id: "live", in: pill)
         } else if hovering {
             RoundedRectangle(cornerRadius: 9, style: .continuous)

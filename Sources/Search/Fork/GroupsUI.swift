@@ -25,6 +25,9 @@ struct GroupedRows: View {
     /// A row let go a clear step past the block's top (-1) or bottom (+1):
     /// the sidebar reads that as crossing the seam between Saved and Today.
     var crossed: ((Tab, Int) -> Void)? = nil
+    /// Told when a row is picked up and put down, so the column knows not
+    /// to scroll out from under the hand.
+    var holding: ((Bool) -> Void)? = nil
 
     @State private var dragging: Tab.ID?
     @State private var from = 0
@@ -117,6 +120,7 @@ struct GroupedRows: View {
                 if dragging != tab.id {
                     dragging = tab.id
                     from = index
+                    holding?(true)
                 }
                 travel = value.translation.height
                 let moved = Int((travel / step).rounded())
@@ -135,6 +139,7 @@ struct GroupedRows: View {
                     dragging = nil
                     travel = 0
                 }
+                holding?(false)
                 if wanted < -1 { crossed?(tab, -1) }
                 else if wanted > loose.count { crossed?(tab, 1) }
                 else { groups.settle(tab, in: browser) }

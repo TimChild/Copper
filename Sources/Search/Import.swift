@@ -219,7 +219,7 @@ enum Chromium {
 
     /// The other browser's history — what it takes to finish an address on
     /// the first day. Same file rules as the passwords: a copy, read once.
-    static func places(in source: Source, limit: Int = 3000) -> [Place] {
+    static func places(in source: Source, limit: Int = Int.max) -> [Place] {
         var out: [Place] = []
         for file in source.files {
             let history = file.deletingLastPathComponent().appendingPathComponent("History")
@@ -254,8 +254,7 @@ enum Chromium {
 
         var out: [Place] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            guard let raw = sqlite3_column_text(statement, 0), let url = URL(string: String(cString: raw)),
-                  url.scheme == "http" || url.scheme == "https"
+            guard let raw = sqlite3_column_text(statement, 0), let url = URL(string: String(cString: raw))
             else { continue }
             let title = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
             let count = Int(sqlite3_column_int(statement, 2))

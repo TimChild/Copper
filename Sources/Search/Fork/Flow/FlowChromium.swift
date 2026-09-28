@@ -29,7 +29,7 @@ enum FlowChromium {
         return out
     }
 
-    static func places(in source: FlowSource, limit: Int = 3000) -> [Chromium.Place] {
+    static func places(in source: FlowSource, limit: Int = Int.max) -> [Chromium.Place] {
         guard source.rootOverride != nil else { return Chromium.places(in: source.readerSource, limit: limit) }
         var out: [Chromium.Place] = []
         for profile in source.profiles {
@@ -86,8 +86,7 @@ enum FlowChromium {
         var out: [Chromium.Place] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let raw = sqlite3_column_text(statement, 0),
-                  let url = URL(string: String(cString: raw)),
-                  url.scheme == "http" || url.scheme == "https"
+                  let url = URL(string: String(cString: raw))
             else { continue }
             let title = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
             let count = Int(sqlite3_column_int(statement, 2))

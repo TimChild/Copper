@@ -205,6 +205,8 @@ struct SettingsPanel: View {
             }
             Rule()
             FlowSettingsLine(browser: browser)
+            Rule()
+            HistorySettingsLine(browser: browser)
         }
     }
 

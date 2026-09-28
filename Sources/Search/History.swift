@@ -60,6 +60,11 @@ final class History: ObservableObject {
 
     init() { load() }
 
+    /// How many distinct places are kept, including places brought in from
+    /// another browser. The address field uses this to decide whether a first
+    /// launch still needs its quiet import nudge.
+    var visitCount: Int { visits.count }
+
     // MARK: - writing
 
     func record(_ url: URL, title: String) {
@@ -107,9 +112,11 @@ final class History: ObservableObject {
         let key = Address.pretty(url).lowercased()
         guard !key.isEmpty else { return }
         if var seen = visits[key] {
-            seen.count += count
+            // Chromium's visit_count is already a total. Taking it twice must
+            // not turn a second import into a second lifetime of visits.
+            seen.count = max(seen.count, count)
             if last > seen.last { seen.last = last }
-            if seen.title.isEmpty { seen.title = title }
+            if !title.isEmpty && (seen.title.isEmpty || last >= seen.last) { seen.title = title }
             visits[key] = seen
         } else {
             visits[key] = Visit(url: url.absoluteString, key: key, title: title, count: count, last: last)
@@ -222,11 +229,23 @@ final class History: ObservableObject {
     /// What the field should draw greyed out after the caret: the rest of the
     /// best match, or nothing if it doesn't carry on from what was typed.
     func completion(for typed: String, among options: [Suggestion]) -> String? {
-        let lower = typed.lowercased()
+        let lower = strip(typed)
         guard !lower.isEmpty, lower.count >= 2 else { return nil }
-        guard let hit = options.first(where: { $0.key.hasPrefix(lower) }) else { return nil }
-        let rest = String(hit.key.dropFirst(lower.count))
-        return rest.isEmpty ? nil : rest
+        for hit in options {
+            let key = strip(hit.key)
+            if key.hasPrefix(lower) {
+                let rest = String(key.dropFirst(lower.count))
+                if !rest.isEmpty { return rest }
+            }
+            // Open tabs and bookmarks often use their title as the row key.
+            // Their address is still the useful completion.
+            let address = strip(Address.pretty(hit.url))
+            if address.hasPrefix(lower) {
+                let rest = String(address.dropFirst(lower.count))
+                if !rest.isEmpty { return rest }
+            }
+        }
+        return nil
     }
 
     /// Frecency, plus the same preference for a front door over a room inside
@@ -240,8 +259,9 @@ final class History: ObservableObject {
     private func rank(_ key: String, against needle: String) -> Double? {
         if key.hasPrefix(needle) { return 6 }
         let host = key.split(separator: "/").first.map(String.init) ?? key
-        // "hub" finding github.com, once the "git" has been skipped.
-        if let dot = host.range(of: "."), host[dot.upperBound...].hasPrefix(needle) { return 3 }
+        // A label of a host is a useful answer too: "linear" finds
+        // linear.app and "exo" finds cloud-ems.dev.exowatt.com.
+        if host.split(separator: ".").contains(where: { $0.hasPrefix(needle) }) { return 4 }
         // Only from two letters up. A single letter matching anywhere inside
         // a name turns "x" into example.com and netflix.com, which is not what
         // anybody meant by it.
@@ -294,7 +314,7 @@ final class History: ObservableObject {
             // been visited least and longest ago.
             let list = self.visits.values
                 .sorted { self.frecency($0, now: now) > self.frecency($1, now: now) }
-                .prefix(2_000)
+                .prefix(20_000)
                 .map { $0 }
             DispatchQueue.global(qos: .utility).async {
                 guard let data = try? JSONEncoder().encode(list) else { return }

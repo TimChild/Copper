@@ -48,6 +48,7 @@ enum Fork {
     @MainActor static func bench(_ verb: String, _ request: [String: Any], in browser: Browser) -> [String: Any] {
         switch verb {
         case "flow": return Flow.shared.bench(request, in: browser)
+        case "history": return Flow.shared.bench(request, in: browser)
         case "spaces": return Spaces.shared.bench(request, in: browser)
         case "groups": return Groups.shared.bench(request, in: browser)
         case "sections": return Sections.shared.bench(request, in: browser)
@@ -74,12 +75,15 @@ enum Fork {
             return ["side": Split.shared.side.map { String($0.uuidString.prefix(8)).lowercased() } ?? "", "active": browser.activeID.map { String($0.uuidString.prefix(8)).lowercased() } ?? ""]
         case "bar":
             // What ⌘K would offer for this text, without the keyboard.
+            let started = DispatchTime.now().uptimeNanoseconds
             browser.summon()
             browser.typed = request["text"] as? String ?? ""
-            let rows = browser.offers.map { ["key": $0.key, "title": $0.title, "kind": "\($0.kind)", "url": $0.url.absoluteString] }
+            let rows = browser.offers.map { ["key": $0.key, "title": $0.title, "kind": "\($0.kind)", "url": $0.url.absoluteString, "badge": $0.badge, "detail": $0.detail] }
+            let completion = browser.ending ?? ""
             if request["go"] as? Bool == true, !browser.offers.isEmpty { browser.picked = 0; browser.submit() }
             else { browser.editing = false; browser.typed = "" }
-            return ["offers": rows]
+            let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            return ["offers": rows, "completion": completion, "milliseconds": milliseconds]
         case "swipe": return SpaceSwipe.bench(request["arg"] as? String ?? "left", in: browser)
         case "mouse": return MouseButtons.bench(request, in: browser)
         case "heat": return Heat.shared.bench(request, in: browser)

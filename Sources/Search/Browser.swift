@@ -1571,7 +1571,7 @@ final class Browser: NSObject, ObservableObject {
     private func guess() {
         guard !summoning else {
             offers = CommandBar.offers(for: typed, open: openPages(matching: typed), in: self)
-            ending = nil
+            ending = history.completion(for: typed, among: offers)
             // The most recent page is already chosen, so ⌘K then Return is the
             // whole gesture.
             picked = offers.isEmpty ? nil : 0
@@ -1616,7 +1616,11 @@ final class Browser: NSObject, ObservableObject {
                 let address = tab.address.map { Address.pretty($0) } ?? ""
                 return tab.label.lowercased().contains(needle) || address.contains(needle)
             }
-            .sorted { $0.touched > $1.touched }
+            .sorted {
+                let leftKept = $0.pin != nil || Sections.shared.isSaved($0)
+                let rightKept = $1.pin != nil || Sections.shared.isSaved($1)
+                return leftKept == rightKept ? $0.touched > $1.touched : leftKept
+            }
             .prefix(needle.isEmpty ? 6 : 3)
             .compactMap { tab in
                 guard let url = tab.address else { return nil }

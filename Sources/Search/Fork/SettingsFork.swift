@@ -762,3 +762,34 @@ struct FlowSettingsLine: View {
         }
     }
 }
+
+/// A small, direct doorway for the part of Flow the address field can use on
+/// its own. The read is off-main; this line only reports its quiet progress.
+struct HistorySettingsLine: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject private var flow = Flow.shared
+
+    var body: some View {
+        Line("Arc history", detail) {
+            if case .reading = flow.historyImport {
+                Text("Reading…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+            } else {
+                Pill("Bring in", filled: true) {
+                    flow.importHistory(preferred: "Arc", in: browser)
+                }
+            }
+        }
+    }
+
+    private var detail: String {
+        let count = browser.history.visitCount
+        // A fresh probe can retain Flow's last status while its history file
+        // has been deliberately cleared; the row should describe what is
+        // actually available to complete from, not that stale status.
+        if count == 0 { return "Typed addresses complete from Arc or Chrome history" }
+        if let detail = flow.historyImport.detail { return detail }
+        return "\(count.formatted()) places kept — typed addresses complete from them"
+    }
+}

@@ -13,6 +13,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added (Copper)
 
+- **Control-Tab can be most recent.** Settings › Tabs chooses between the next tab in the row and the tabs used most recently; hold Control for the quiet switcher strip, or tap for a quick back-and-forth.
 - **Let ⌘K remember the whole browser.** Arc/Chrome history imports are uncapped (with a one-time Settings/command nudge), kept tabs from every space are scored with favourites/Saved badges, and address completion matches host segments as well as titles. Repeated imports merge without double-counting visits.
 
 - **You can always see which tab you are on.** The live row in the sidebar is paper on a slightly deeper column — at least 1.25:1 against the ground in every space colour, light and dark — with a soft shadow, a one-point ring, a short bar of the space's colour beside it and a semibold title; the live favourite gets the same ring and shadow. Picking a tab by keyboard, a link or a space switch scrolls the sidebar to bring its row into view (without the glide under Reduce Motion). In the tab strip the live tab lifts off on the same shadow and its title is semibold.

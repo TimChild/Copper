@@ -24,6 +24,8 @@ final class Bench {
     private var awake: NSObjectProtocol?
 
     private weak var browser: Browser?
+    /// Modifier state kept between `key` requests when --hold is used.
+    private var heldControl = false
     private var listener: Int32 = -1
     private var accepting: DispatchSourceRead?
     private var clients: [Int32: Client] = [:]
@@ -41,7 +43,7 @@ final class Bench {
         let codes: [Character: UInt16] = [
             "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
             "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "o": 31, "u": 32,
-            "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46,
+            "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46, "\t": 48,
         ]
         return codes[Character(character.lowercased())] ?? 49
     }
@@ -346,6 +348,8 @@ final class Bench {
             // app, and every window the app owns.
             var out: [String: Any] = [
                 "settings": browser.tuning,
+                "settingsPage": browser.settingsPage.rawValue,
+                "active": browser.activeID.flatMap { id in browser.tabs.first { $0.id == id }.map(Bench.short) } ?? "",
                 "welcome": browser.welcoming,
                 "passwords": browser.managing,
                 "history": browser.recalling,
@@ -381,6 +385,11 @@ final class Bench {
             out["folded"] = browser.folded
             out["peeking"] = browser.peeking
             out["lightsHidden"] = Fold.titlebar?.isHidden ?? false
+            out["recent"] = Recent.shared.order.compactMap { id in
+                browser.tabs.first { $0.id == id }.map { Bench.short($0) }
+            }
+            out["walking"] = Recent.shared.walking
+            out["stripShowing"] = Recent.shared.showing
             answer(out)
 
         case "key":
@@ -413,28 +422,57 @@ final class Bench {
                 }
                 return event
             }
-            // ⌘, ⇧ and ⌥ in the text hold for the key after them; ← → are
-            // the arrows, ⎋ is Escape. (Fork: for ⌘← and friends.)
-            var holding: NSEvent.ModifierFlags = []
-            for character in text {
-                if character == "\u{2318}" { holding.insert(.command); continue }
-                if character == "\u{21E7}" { holding.insert(.shift); continue }
-                if character == "\u{2325}" { holding.insert(.option); continue }
-                let arrow = character == "\u{2190}" ? UInt16(123) : character == "\u{2192}" ? UInt16(124) : character == "\u{238B}" ? UInt16(53) : nil
-                let chars = arrow.map { $0 == 123 ? "\u{F702}" : $0 == 124 ? "\u{F703}" : "\u{1B}" } ?? String(character)
-                let flags = holding
-                holding = []
-                for type in [NSEvent.EventType.keyDown, .keyUp] {
-                    guard let event = NSEvent.keyEvent(
-                        with: type, location: .zero, modifierFlags: flags,
+            // ⌘, ⇧, ⌥ and ⌃ in the text hold for the key after them; ⇥ is
+            // Tab, ← → are arrows, and ⎋ is Escape. Control is also a real
+            // modifier event so the app can commit an MRU walk on release.
+            func sendFlags(_ flags: NSEvent.ModifierFlags) {
+                guard viaApp,
+                      let event = NSEvent.keyEvent(
+                        with: .flagsChanged, location: .zero, modifierFlags: flags,
                         timestamp: ProcessInfo.processInfo.systemUptime,
                         windowNumber: view.window?.windowNumber ?? 0, context: nil,
-                        characters: chars, charactersIgnoringModifiers: chars,
-                        isARepeat: false, keyCode: arrow ?? Bench.keyCode(for: character)
-                    ) else { continue }
-                    if type == .keyDown { pressed.append(event); seen.append(0) }
-                    if viaApp { NSApp.sendEvent(event) }
-                    else if type == .keyDown { view.keyDown(with: event) } else { view.keyUp(with: event) }
+                        characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 59
+                      )
+                else { return }
+                NSApp.sendEvent(event)
+            }
+            if text == "⌃release" {
+                sendFlags([])
+                heldControl = false
+            } else {
+                let hold = request["hold"] as? Bool ?? false
+                var holding: NSEvent.ModifierFlags = heldControl ? [.control] : []
+                for character in text {
+                    if character == "\u{2318}" { holding.insert(.command); continue }
+                    if character == "\u{21E7}" { holding.insert(.shift); continue }
+                    if character == "\u{2325}" { holding.insert(.option); continue }
+                    if character == "\u{2303}" { holding.insert(.control); continue }
+                    let arrow = character == "\u{2190}" ? UInt16(123) : character == "\u{2192}" ? UInt16(124) : character == "\u{238B}" ? UInt16(53) : nil
+                    let tab = character == "\u{21E5}"
+                    let chars = tab ? "\t" : arrow.map { $0 == 123 ? "\u{F702}" : $0 == 124 ? "\u{F703}" : "\u{1B}" } ?? String(character)
+                    let flags = holding
+                    if flags.contains(.control), !heldControl {
+                        sendFlags(.control)
+                        heldControl = true
+                    }
+                    holding = heldControl ? [.control] : []
+                    for type in [NSEvent.EventType.keyDown, .keyUp] {
+                        guard let event = NSEvent.keyEvent(
+                            with: type, location: .zero, modifierFlags: flags,
+                            timestamp: ProcessInfo.processInfo.systemUptime,
+                            windowNumber: view.window?.windowNumber ?? 0, context: nil,
+                            characters: chars, charactersIgnoringModifiers: chars,
+                            isARepeat: false, keyCode: tab ? 48 : arrow ?? Bench.keyCode(for: character)
+                        ) else { continue }
+                        if type == .keyDown { pressed.append(event); seen.append(0) }
+                        if viaApp { NSApp.sendEvent(event) }
+                        else if type == .keyDown { view.keyDown(with: event) } else { view.keyUp(with: event) }
+                    }
+                    if !hold, heldControl {
+                        sendFlags([])
+                        heldControl = false
+                    }
+                    holding = []
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -486,6 +524,17 @@ final class Bench {
             if let on = request["bookmarks"] as? Bool { browser.bookmarking = on }
             if let on = request["hidden"] as? Bool { browser.reviewing = on }
             if let look = (request["look"] as? String).flatMap(Look.init) { browser.prefs.look = look }
+            if let switching = (request["tabswitch"] as? String).flatMap(TabSwitching.init) {
+                browser.prefs.tabSwitching = switching
+            }
+            if let page = (request["page"] as? String).flatMap(SettingsPanel.Page.init(rawValue:)) {
+                browser.tuning = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    browser.settingsPage = page
+                    Store.settings.set(page.rawValue, forKey: "settings.page")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { browser.tuning = true }
+                }
+            }
             if let on = request["sidebar"] as? Bool { browser.prefs.sidebar = on }
             if let on = request["folded"] as? Bool { browser.folded = on }
             if let on = request["peek"] as? Bool { browser.peeking = on }

@@ -1211,6 +1211,7 @@ final class Browser: NSObject, ObservableObject {
         let here = atEnd ? nil : tabs.firstIndex { $0.id == activeID }
         tabs.insert(tab, at: here.map { $0 + 1 } ?? tabs.count)
         tab.go(to: url)
+        Recent.shared.prune(tabs)
         if foreground {
             leaving()
             activeID = tab.id
@@ -1244,6 +1245,7 @@ final class Browser: NSObject, ObservableObject {
         prepare(tab)
         tabs.append(tab)
         tab.go(to: url)
+        Recent.shared.prune(tabs)
         return tab
     }
 

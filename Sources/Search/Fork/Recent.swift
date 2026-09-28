@@ -26,18 +26,22 @@ final class Recent: ObservableObject {
     /// tabs that remain. Closing a tab during a walk also removes it from the
     /// frozen snapshot, so the next press skips it.
     func prune(_ tabs: [Tab]) {
-        let ids = Set(tabs.map(\.id))
+        let eligible = tabs.filter { !$0.isBlank }
+        let ids = Set(eligible.map(\.id))
         order.removeAll { !ids.contains($0) }
         snapshot.removeAll { !ids.contains($0) }
         if let landing, !ids.contains(landing) { self.landing = nil }
-        if !walking, order.isEmpty { order = tabs.map(\.id) }
+        if !walking {
+            order.append(contentsOf: eligible.map(\.id).filter { !order.contains($0) })
+        }
     }
 
     /// Start a walk from the tab currently showing. The row supplies any IDs
     /// not yet seen, which also makes a fresh session immediately useful.
     func begin(in browser: Browser) {
-        guard !walking, browser.tabs.count > 1, let active = browser.activeID else { return }
-        let ids = browser.tabs.map(\.id)
+        guard !walking, browser.tabs.count > 1, let active = browser.activeID,
+              browser.tabs.first(where: { $0.id == active })?.isBlank == false else { return }
+        let ids = browser.tabs.filter { !$0.isBlank }.map(\.id)
         var base = order.filter { ids.contains($0) }
         base.append(contentsOf: ids.filter { !base.contains($0) })
         if !base.contains(active) { base.insert(active, at: 0) }
@@ -74,7 +78,7 @@ final class Recent: ObservableObject {
     func end(in browser: Browser) {
         guard walking else { return }
         reveal?.cancel()
-        let ids = Set(browser.tabs.map(\.id))
+        let ids = Set(browser.tabs.filter { !$0.isBlank }.map(\.id))
         let valid = snapshot.filter { ids.contains($0) }
         if let active = browser.activeID, ids.contains(active) {
             order = [active] + valid.filter { $0 != active }
@@ -92,7 +96,7 @@ final class Recent: ObservableObject {
     /// from the active tab followed by that space's row order.
     func rebuild(from tabs: [Tab]) {
         reveal?.cancel()
-        let ids = tabs.map(\.id)
+        let ids = tabs.filter { !$0.isBlank }.map(\.id)
         let front = landing.flatMap { ids.contains($0) ? $0 : nil } ?? ids.first
         if let front {
             order = [front] + ids.filter { $0 != front }

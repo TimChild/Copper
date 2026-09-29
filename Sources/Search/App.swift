@@ -789,6 +789,9 @@ struct ContentView: View {
             if browser.editing, !browser.offers.isEmpty {
                 browser.stepSummon()
             } else {
+                // A page with its own ⌘K keeps it; the app acts only when the
+                // page hands the key back unused. (Fork: PageFirst.)
+                if PageFirst.lend(event) { return false }
                 browser.summon()
             }
         case "s" where shifted:

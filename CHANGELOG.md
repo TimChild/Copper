@@ -42,6 +42,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed (Copper)
 
+- **⌘K goes to the page first.** A web app with its own ⌘K palette — Tuesday, Linear, Slack, Notion, GitHub — now gets the key, as in Safari: the browser's search opened over it and the app's never did. A page that does not use ⌘K hands it back and the tab search opens as before. `./bench key … --app` reports `pageFirstOffered`/`pageFirstReturned`.
 - **⌘← and ⌘→ move the caret when you are typing.** In a page's text box, the omnibox, or the agent's composer they jump to the start and end of the line (⌘⇧ extends the selection), as in Safari; with nothing editable focused they still go back and forward. A key the page hands back with nowhere to go is kept quiet instead of beeping.
 - **Middle-click opens a link in a new tab behind the current one**; ⇧+middle-click brings it forward. WebKit numbers mouse buttons differently from AppKit and the check matched the right button instead of the wheel, so the page navigated in place. A ⌘- or middle-clicked `target=_blank` link now stays behind too.
 - **Mouse buttons 4 and 5 go back and forward** — in whichever pane of a split the pointer is over, and on the active tab over the sidebar. Middle-click on a sidebar row or favourite closes that tab.

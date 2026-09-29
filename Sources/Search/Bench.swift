@@ -408,6 +408,7 @@ final class Bench {
             if !viaApp { view.window?.makeFirstResponder(view) }
             let before = PageView.quieted
             let lineKeysBefore = LineKeys.quieted
+            let pageFirstBefore = (PageFirst.offered, PageFirst.returned)
             // What WebKit sends back through the app because the page didn't
             // use it: a key press seen here again after it was handed over.
             var pressed: [NSEvent] = []
@@ -480,6 +481,8 @@ final class Bench {
                 let responder = view.window?.firstResponder.map { "\(type(of: $0))" } ?? ""
                 answer(["typed": text, "sentBackUnused": resent, "quieted": PageView.quieted - before, "via": viaApp ? "app" : "view",
                         "lineKeysQuieted": LineKeys.quieted - lineKeysBefore,
+                        "pageFirstOffered": PageFirst.offered - pageFirstBefore.0,
+                        "pageFirstReturned": PageFirst.returned - pageFirstBefore.1,
                         "firstResponder": responder, "url": tab.address?.absoluteString ?? ""])
             }
 

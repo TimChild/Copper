@@ -640,8 +640,9 @@ enum Ultrafast {
     /// The router writes the value. Exactly one key, `text`, a non-empty
     /// string; anything else and nothing is typed.
     static func fieldText(_ context: String, keys: Intelligence.Keys) async throws -> (text: String, latencyMs: Double) {
-        guard !keys.routerKey.trimmingCharacters(in: .whitespaces).isEmpty, URL(string: keys.routerURL) != nil else {
-            throw Failure(text: "TYPE_TEXT needs the router (Settings › Intelligence › Router) to write the value; nothing typed.")
+        let ready = await MainActor.run { Intelligence.shared.modelReady }
+        guard ready else {
+            throw Failure(text: "TYPE_TEXT needs a model (Settings › Intelligence › Model access) to write the value; nothing typed.")
         }
         let reply = try await Router.ask(system: textValue, user: context, keys: keys, timeout: 25, maxTokens: 600, model: keys.textModel)
         guard let value = reply.json["text"] as? String, !value.trimmingCharacters(in: .whitespaces).isEmpty, value.count <= 2000 else {
@@ -1025,7 +1026,7 @@ enum Ultrafast {
             guard let tab = browser.active else { throw Failure(text: "no active tab") }
             if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
             let keys = Intelligence.shared.keys
-            guard Intelligence.shared.routerReady else { throw Failure(text: "jev_extract needs the router (Settings › Intelligence › Router) to read for you") }
+            guard Intelligence.shared.modelReady else { throw Failure(text: "jev_extract needs a model (Settings › Intelligence › Model access) to read for you") }
             let obs = try await observe(tab)
             var text = obs.text
             if (args["full"] as? Bool) ?? false,

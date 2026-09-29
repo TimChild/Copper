@@ -76,8 +76,8 @@ final class Agent: ObservableObject {
         try? data.write(to: Agent.file, options: .atomic)
     }
 
-    var modelName: String { config.model.trimmingCharacters(in: .whitespaces).isEmpty ? Intelligence.shared.keys.routerModel : config.model }
-    var ready: Bool { Intelligence.shared.routerReady }
+    var modelName: String { Intelligence.shared.modelName }
+    var ready: Bool { Intelligence.shared.modelReady }
 
     // MARK: - opening
 
@@ -126,7 +126,7 @@ final class Agent: ObservableObject {
         guard !busy else { return }
         guard ready else {
             items.append(Item(kind: .user, text: text))
-            items.append(Item(kind: .note, text: "No router key — Settings › Intelligence. The agent talks to the model through the router.", ok: false))
+            items.append(Item(kind: .note, text: "Not set up yet — sign in with your Claude account or add an API key in Settings › Intelligence.", ok: false))
             return
         }
         items.append(Item(kind: .user, text: text))
@@ -182,6 +182,7 @@ final class Agent: ObservableObject {
             if !content.isEmpty { assistant["content"] = content }
             let calls = (reply["tool_calls"] as? [[String: Any]]) ?? []
             if !calls.isEmpty { assistant["tool_calls"] = calls }
+            if let blocks = reply["_blocks"] { assistant["_blocks"] = blocks }
             messages.append(assistant)
             if !content.isEmpty { items.append(Item(kind: .assistant, text: content)) }
             guard !calls.isEmpty else { status = ""; return }
@@ -261,6 +262,22 @@ final class Agent: ObservableObject {
     """
 
     static func complete(messages: [[String: Any]], tools: [[String: Any]], keys: Intelligence.Keys, model: String) async throws -> [String: Any] {
+        if keys.lane == .claude {
+            let token = try await ClaudeAccount.shared.token()
+            do {
+                let payload = try await Claude.complete(token: token, model: model, system: Agent.system,
+                                                        messages: Claude.messages(fromChat: messages),
+                                                        tools: Claude.tools(fromChat: tools), maxTokens: 8192, timeout: 180)
+                return Claude.chatMessage(from: payload)
+            } catch let failure as Claude.Failure where failure.status == 401 {
+                let refreshed = try await ClaudeAccount.shared.refreshNow()
+                let payload = try await Claude.complete(token: refreshed, model: model, system: Agent.system,
+                                                        messages: Claude.messages(fromChat: messages),
+                                                        tools: Claude.tools(fromChat: tools), maxTokens: 8192, timeout: 180)
+                return Claude.chatMessage(from: payload)
+            }
+        }
+
         guard let base = URL(string: keys.routerURL) else { throw Servers.Failure(text: "Bad router address") }
         var request = URLRequest(url: base.appendingPathComponent("v1/chat/completions"), timeoutInterval: 120)
         request.httpMethod = "POST"
@@ -329,7 +346,8 @@ final class Agent: ObservableObject {
         default: break
         }
         let rows = items.map { ["kind": "\($0.kind)", "tool": $0.tool, "text": $0.text, "ok": $0.ok] as [String: Any] }
-        return ["open": open, "busy": busy, "status": status, "model": modelName, "items": rows,
+        return ["open": open, "busy": busy, "status": status, "model": modelName,
+                "lane": Intelligence.shared.lane.rawValue, "tier": Intelligence.shared.tier.rawValue, "items": rows,
                 "servers": Servers.shared.all.map { ["name": $0.name, "state": $0.state, "tools": $0.tools.count] as [String: Any] }]
     }
 }

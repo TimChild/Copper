@@ -31,9 +31,10 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper link add URL [fxb_…]` / `remove` | Add an app or forget the selected app. |
 | `copper link --app SELECTOR grants\|grant @bot\|revoke [@bot]` | Inspect or change grants. |
 | `copper link --app SELECTOR calls` | Recent calls through that app. |
-| `copper intelligence [status]` | Jev/router readiness as JSON: `{jevReady, routerReady, routerURL, routerModel, jevModel}` — never a key. |
-| `copper intelligence set [--jev K] [--router-key K] [--router-url U] [--router-model M] [--text-model M]` | Write keys/settings into `intelligence.json` (0600) through the running app; a value of `-` is read from stdin. |
+| `copper intelligence [status]` | Model readiness as JSON: `{jevReady, routerReady, routerURL, routerModel, jevModel, lane, tier, model, modelReady, claudeReady, claudeAccount}` — never a key. |
+| `copper intelligence set [--lane key|claude] [--model haiku|sonnet|opus] [--haiku-model M] [--sonnet-model M] [--opus-model M] [--jev K] [--router-key K] [--router-url U] [--router-model M] [--text-model M]` | Write model settings and keys into `intelligence.json` (0600) through the running app; a value of `-` is read from stdin. |
 | `copper intelligence reload` | Re-read `intelligence.json` (same as `kill -HUP` on the app). |
+| `copper claude status|signin|paste -|signout|cancel` | Sign in with a Claude account through OAuth in a Copper tab, paste a callback code from stdin, or report/sign out/cancel; output never contains a token. |
 | `copper bitwarden [status]` | The Bitwarden vault as JSON: `{ok, cli, cliVersion, state, email, server, lastSync, agentAccess, stayUnlocked, counts}` — never a password, key or session. |
 | `copper bitwarden login -` | Sign in + unlock from ONE JSON object on stdin (`server, email, password, clientId, clientSecret, otp, otpMethod, share, stayUnlocked`); secrets are refused on argv. |
 | `copper bitwarden lock` / `logout` / `sync` | Drop the session / sign out and wipe the CLI state / pull the vault now. |
@@ -84,7 +85,7 @@ The CLI does not launch Copper by default. When it is down, commands print `copp
 
 `copper bitwarden …` also goes through the local server; it exits 0 on `ok: true`, 1 on `ok: false` (with a one-line `error`), 2 on usage or when Copper is unreachable. Never put the master password or API secret on the command line — pipe them into `copper bitwarden login -`, and never echo them into a transcript.
 
-`copper intelligence …` also goes through the local server. Its output is always JSON and never contains a key; pass keys with `-` (stdin) rather than on the command line where you can, and never echo them into a transcript. `copper health --json` reports `headless: true` when Copper runs as a background service (`Copper --headless`, docs/headless.md) — then there is no window to look at, dialogs are auto-declined, and the port may be set by `SEARCH_MCP_PORT` (the CLI honours it too).
+`copper intelligence …` also goes through the local server. Its output is always JSON and never contains a key; pass keys with `-` (stdin) rather than on the command line where you can, and never echo them into a transcript. `copper claude signin` opens claude.ai in the running window; `copper claude paste -` reads the callback code from stdin when the tab cannot return. `copper health --json` reports `headless: true` when Copper runs as a background service (`Copper --headless`, docs/headless.md) — then there is no window to look at, dialogs are auto-declined, and the port may be set by `SEARCH_MCP_PORT` (the CLI honours it too).
 
 Jev's DONE is a claim, not proof: read the page again with `copper observe` or
 `snapshot` before reporting that an action succeeded.

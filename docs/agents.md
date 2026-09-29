@@ -151,16 +151,14 @@ TypeSafe System One request asks for the operation and, speculatively, a
 target for every operation that has candidates — only the head the chosen
 operation names is consumed; freshness (the marker, or for a click the form
 state plus the target's own guard) and occlusion are checked again before the
-input goes in as real events. `TYPE_TEXT` asks the router (Settings ›
-Intelligence) for the value and types only what came back as `{"text": …}`.
+input goes in as real events. `TYPE_TEXT` asks the model (Settings › Intelligence) for the value and types only what came back as `{"text": …}`.
 Model output never becomes a selector, a coordinate or JavaScript.
 
 Needs a TypeSafe key (shared with Intelligence — the Agents page has the
-field too) and, for anything that types or extracts, the router key. **Text
-model** on the Agents page names the small model used for typing and
-`jev_extract`; empty means the router model. Small and fast is the point:
-Sonnet spends ~2.5 s writing a search string, a mercury-class model well under
-a second. DONE is the model's
+field too) and, for anything that types or extracts, the model (Settings ›
+Intelligence). The picker names the model used for typing and
+`jev_extract`; small and fast is the point: Sonnet spends ~2.5 s writing a
+search string, a mercury-class model well under a second. DONE is the model's
 claim; the tool says so and the agent is told to check.
 
 **Copy prompt** on the Agents page gives you one paragraph to paste into the
@@ -172,9 +170,9 @@ do. There is one for the Playwright-shaped tools and one for Jev mode.
 
 The other direction: Copper as an MCP **client**. ⌘E opens a pane beside
 the page with a chat; ⌘⇧E (or ⌘K › *Ask About This Page*) opens it with the
-page in front of the question. The model is whatever the router serves
-(Settings › Intelligence; the Agents page has a *Model* field for this pane
-alone — it needs tool calling). Nothing is configured out of the box.
+page in front of the question. The pane's header menu picks Haiku, Sonnet or
+Opus, through whichever lane Settings › Intelligence uses. Nothing is
+configured out of the box.
 
 What it has in hand:
 

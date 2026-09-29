@@ -83,30 +83,40 @@ headless before SwiftUI builds a window; `MCP.start(for:)` finishes it once the 
 | `SEARCH_MCP_PORT` | listen on this port instead of `agent.json`'s, without writing it back. Works in any mode; the CLI and `--mcp-stdio` honour it too (the CLI's older `COPPER_AGENT_PORT` still wins when both are set) |
 | `SEARCH_HEADLESS_DEBUG` | extra parking/occlusion lines in the log |
 
-## Keys: `copper intelligence`
+## Intelligence: `copper intelligence`
 
-The Jev (TypeSafe) and router (LiteLLM) keys live in `intelligence.json` beside `agent.json`
-(mode 0600). Three ways to change them without Settings, none of which ever prints a key:
+The Jev (TypeSafe) and API-key lane settings live in `intelligence.json` beside `agent.json`
+(mode 0600). The command never prints a key:
 
 ```sh
 copper intelligence status
-# {"jevModel":"jev-latest","jevReady":true,"routerModel":"sonnet","routerReady":true,"routerURL":"https://llm.dev.exowatt.com"}
-copper intelligence set --jev ts-… --router-key sk-… --router-url https://llm.dev.exowatt.com --router-model sonnet --text-model haiku
+# {"jevReady":true,"routerReady":true,"routerURL":"https://llm.dev.exowatt.com","routerModel":"sonnet","jevModel":"jev-latest","lane":"key","tier":"sonnet","model":"sonnet","modelReady":true,"claudeReady":false,"claudeAccount":""}
+copper intelligence set --lane key --model sonnet --jev ts-… --router-key sk-… --router-url https://llm.dev.exowatt.com --router-model sonnet --text-model haiku
 echo "$ROUTER_KEY" | copper intelligence set --router-key -     # `-` reads the value from stdin (keeps it out of `ps`)
+copper intelligence set --haiku-model haiku --sonnet-model sonnet --opus-model opus
 copper intelligence reload                                      # re-read intelligence.json
 kill -HUP <copper pid>                                          # same as reload
 ```
 
-- `set` goes through the loopback server's `copper/intelligence` method and writes through
-  `Intelligence.shared.keys` — the file is saved 0600 exactly as Settings saves it. The answer is
-  the status plus `applied: ["jevKey", …]` (names, never values). A non-http(s) `--router-url` is
-  refused (exit 1).
-- `status` is `{jevReady, routerReady, routerURL, routerModel, jevModel}`.
-- **External writers** (an external installer applying a provisioned `keys` payload) JSON-merge into
-  `intelligence.json` and then send **SIGHUP**; Copper re-reads the file on the main queue and
-  logs `intelligence.json reloaded on SIGHUP — jevReady …, routerReady …`. No restart. Copper
-  rewrites the whole file on its next own save, so keys it does not know are not preserved.
-- Like `copper link`, it needs the loopback server (on by default in headless).
+`set` accepts `--lane key|claude`, `--model haiku|sonnet|opus`, `--haiku-model NAME`,
+`--sonnet-model NAME`, and `--opus-model NAME`, as well as the existing `--jev`,
+`--router-key`, `--router-url`, `--router-model` and `--text-model`. A model name of `-`
+is read from stdin. The result is the status plus `applied: ["lane", …]` (names, never
+values). A non-http(s) `--router-url` is refused (exit 1).
+
+`status` contains the old keys plus `lane`, `tier`, `model`, `modelReady`, `claudeReady`
+and `claudeAccount`. Like `copper link`, it needs the loopback server (on by default in
+headless). External writers can JSON-merge into `intelligence.json` and send **SIGHUP**;
+Copper re-reads the file on the main queue and logs the reload without logging keys.
+
+### Claude account
+
+A headless Mac cannot click through claude.ai. Sign in once in a window, or run
+`copper claude paste -` with the callback code on stdin. `copper claude signin` opens a tab
+only when a running Copper window is available. `copper claude status`, `signout` and `cancel`
+are also available. Alternatively keep the API-key lane with `copper intelligence set --lane key`.
+The Claude account credentials live in `claude.json` (0600); status and CLI output never
+contain a token.
 
 Loopback method, for scripts that speak JSON-RPC directly (bearer from `agent.json`; loopback
 only — never reachable through the agent link):

@@ -59,12 +59,23 @@ enum Fork {
             if request["op"] as? String == "servers" { Task { await Servers.shared.reload() }; return ["reloading": true] }
             return MCP.shared.bench(request)
         case "ai":
-            // `ai` reports; `ai mode off|ask|auto`; `ai last` is the grouper's last note.
+            // `ai` reports; `ai mode off|ask|auto`; `ai lane key|claude`; `ai tier haiku|sonnet|opus`;
+            // `ai last` is the grouper's last note.
             let arg = request["arg"] as? String ?? ""
-            if request["op"] as? String == "mode", let mode = Intelligence.GroupingMode(rawValue: arg) { Intelligence.shared.keys.grouping = mode }
+            let op = request["op"] as? String ?? ""
+            if op == "mode", let mode = Intelligence.GroupingMode(rawValue: arg) {
+                Intelligence.shared.keys.grouping = mode
+            } else if op == "lane", let lane = Intelligence.Lane(rawValue: arg.lowercased()) {
+                Intelligence.shared.keys.lane = lane
+            } else if op == "tier", let tier = Intelligence.Tier(rawValue: arg.lowercased()) {
+                Intelligence.shared.keys.tier = tier
+            }
             let k = Intelligence.shared.keys
             return ["jev": Intelligence.shared.jevReady, "router": Intelligence.shared.routerReady, "routerModel": k.routerModel,
-                    "routerURL": k.routerURL, "mode": k.grouping.rawValue, "threshold": k.threshold, "last": Grouper.shared.lastNote]
+                    "routerURL": k.routerURL, "lane": k.lane.rawValue, "tier": k.tier.rawValue,
+                    "model": Intelligence.shared.modelName, "modelReady": Intelligence.shared.modelReady,
+                    "claudeReady": Intelligence.shared.claudeReady, "mode": k.grouping.rawValue,
+                    "threshold": k.threshold, "last": Grouper.shared.lastNote]
         case "split":
             // `split` toggles; `split ID` opens beside the active tab; `split off` closes.
             let arg = request["arg"] as? String ?? ""

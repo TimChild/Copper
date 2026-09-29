@@ -349,6 +349,10 @@ final class MCP: ObservableObject {
                     // only for the same reason as copper/link. Never echoes a key.
                     let result = Intelligence.shared.control(one["params"] as? [String: Any] ?? [:])
                     answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
+                } else if let one = body as? [String: Any], one["method"] as? String == "copper/claude" {
+                    // `copper claude …`: loopback + bearer only, never via the agent link.
+                    let result = ClaudeAccount.shared.control(one["params"] as? [String: Any] ?? [:], in: self.browser)
+                    answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
                 } else if let one = body as? [String: Any], one["method"] as? String == "copper/bitwarden" {
                     // `copper bitwarden …` and an external daemon's sealed
                     // sign-in: loopback + bearer only, like the two above —

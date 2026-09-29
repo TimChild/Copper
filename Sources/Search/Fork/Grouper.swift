@@ -163,7 +163,7 @@ final class Grouper: ObservableObject {
         }
 
         // 3. The router: unsure, or nothing fits and a name is needed.
-        if Intelligence.shared.routerReady {
+        if Intelligence.shared.modelReady {
             let system = """
             You organise browser tabs into groups. Answer with one JSON object and nothing else:
             {"action": "existing" | "new" | "none", "group": "<key of an existing group, or a short new name (1-3 words)>", "reason": "<one short sentence>"}

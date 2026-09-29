@@ -10,46 +10,43 @@ import SwiftUI
 struct IntelligencePage: View {
     @ObservedObject var browser: Browser
     @ObservedObject var brain = Intelligence.shared
+    @ObservedObject var account = ClaudeAccount.shared
     @ObservedObject var groups = Groups.shared
     @ObservedObject var grouper = Grouper.shared
 
     @State private var testing = false
     @State private var verdict: String?
+    @State private var pasted = ""
     @State private var newPattern = ""
     @State private var newGroup = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Caption("Keys")
+            Caption("Model access")
+            Card {
+                Line("Use", "Sign in with your Claude account (Pro, Max, Team or Enterprise), or paste a key for an OpenAI-compatible gateway such as LiteLLM.") {
+                    Segmented(options: Intelligence.Lane.allCases.map { ($0, $0.title) }, selection: $brain.keys.lane)
+                }
+                Rule()
+                laneRows
+                Rule()
+                Line("Model", "\(brain.tier.title) — \(brain.tier.blurb). Also in the agent pane's header.") {
+                    Segmented(options: Intelligence.Tier.allCases.map { ($0, $0.title) }, selection: $brain.keys.tier)
+                }
+                Rule()
+                Line("Model names", brain.keys.lane == .claude ? "What Haiku, Sonnet and Opus are called at Anthropic" : "What Haiku, Sonnet and Opus are called on your gateway") {
+                    modelNames
+                }
+                Rule()
+                Line("Check", verdict ?? "One question each way, so you know before a tab does") {
+                    if testing { Ring(size: 12) } else { Pill("Test") { test() } }
+                }
+            }
+
+            Caption("Jev — the fast lane")
             Card {
                 Line("Jev", "TypeSafe's System One: answers a typed question — which of these, how likely — in a fifth of a second, with a confidence. The fast lane.") {
                     KeyField(text: $brain.keys.jevKey, placeholder: "ts-…", ready: brain.jevReady)
-                }
-                Rule()
-                Line("Router", "An OpenAI-compatible gateway (LiteLLM). Used when Jev is unsure, and whenever something has to be named.") {
-                    KeyField(text: $brain.keys.routerKey, placeholder: "sk-…", ready: brain.routerReady)
-                }
-                Rule()
-                Line("Router address", "Where the gateway lives") {
-                    TextField("https://…", text: $brain.keys.routerURL)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
-                        .frame(width: 220)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                }
-                Rule()
-                Line("Router model", "The model name the gateway routes on — sonnet, luna, auto…") {
-                    TextField("sonnet", text: $brain.keys.routerModel)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
-                        .frame(width: 120)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                }
-                Rule()
-                Line("Check the keys", verdict ?? "One question each way, so you know before a tab does") {
-                    if testing { Ring(size: 12) } else { Pill("Test") { test() } }
                 }
             }
 
@@ -59,7 +56,7 @@ struct IntelligencePage: View {
                     Segmented(options: Intelligence.GroupingMode.allCases.map { ($0, $0.title) }, selection: $brain.keys.grouping)
                 }
                 Rule()
-                Line("Take Jev's word from", String(format: "%.0f%% confidence. Below it the router is asked, or nothing happens.", brain.keys.threshold * 100)) {
+                Line("Take Jev's word from", String(format: "%.0f%% confidence. Below it a model is asked, or nothing happens.", brain.keys.threshold * 100)) {
                     Slider(value: $brain.keys.threshold, in: 0.3...0.95, step: 0.05).frame(width: 140)
                 }
                 Rule()
@@ -107,10 +104,128 @@ struct IntelligencePage: View {
                 .padding(.horizontal, 14).padding(.vertical, 9)
             }
 
-            Text("Keys are kept in intelligence.json beside your session, readable by you alone. Only a tab's address and title, and the names and sites of your groups, are sent — never page contents.")
+            Text("Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone. For grouping, only a tab's address and title and the names and sites of your groups are sent — never page contents.")
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    @ViewBuilder
+    private var laneRows: some View {
+        if brain.keys.lane == .claude {
+            Line("Claude account", accountDetail) {
+                accountControl
+            }
+        } else {
+            Line("API key", "For an OpenAI-compatible gateway — LiteLLM, or anything that speaks /v1/chat/completions") {
+                KeyField(text: $brain.keys.routerKey, placeholder: "sk-…", ready: brain.routerReady)
+            }
+            Rule()
+            Line("Gateway address", "Where the gateway lives") {
+                TextField("https://…", text: $brain.keys.routerURL)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(width: 220)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+        }
+    }
+
+    private var accountDetail: String {
+        if account.signedIn {
+            var detail = "Signed in as \(account.who)"
+            if let organization = account.credential?.organization, !organization.isEmpty {
+                detail += " · \(organization)"
+            }
+            return detail
+        }
+        switch account.phase {
+        case .idle:
+            return "One click. Copper opens claude.ai in a tab; sign in there and come back."
+        case .waiting:
+            return "Finish in the tab that opened. If it did not come back on its own, paste what claude.ai shows here."
+        case .exchanging:
+            return "Finishing…"
+        case .failed(let text):
+            return text
+        }
+    }
+
+    @ViewBuilder
+    private var accountControl: some View {
+        if account.signedIn {
+            Pill("Sign out") { account.signOut() }
+        } else {
+            switch account.phase {
+            case .idle:
+                Pill("Sign in", filled: true) { account.signIn(in: browser) }
+            case .waiting:
+                HStack(spacing: 6) {
+                    Ring(size: 12)
+                    TextField("code or the address it sent you to", text: $pasted)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .frame(width: 190)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .onSubmit(completePasted)
+                    Pill("Cancel") { account.cancel() }
+                }
+            case .exchanging:
+                Ring(size: 12)
+            case .failed:
+                Pill("Try again", filled: true) { account.signIn(in: browser) }
+            }
+        }
+    }
+
+    /// Three short rows, not three fields side by side: the card is not
+    /// wide enough for that beside a title, and a name is easier to read
+    /// next to the size it stands for.
+    private var modelNames: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            ForEach(Intelligence.Tier.allCases) { tier in
+                HStack(spacing: 6) {
+                    Text(tier.title).font(.system(size: 11)).foregroundStyle(Palette.muted)
+                        .lineLimit(1).fixedSize()
+                    TextField(defaultModel(for: tier), text: modelBinding(tier))
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .frame(width: 150)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private func defaultModel(for tier: Intelligence.Tier) -> String {
+        let defaults = brain.keys.lane == .claude ? Intelligence.Keys.defaultClaudeModels : Intelligence.Keys.defaultRouterModels
+        return defaults[tier.rawValue] ?? tier.rawValue
+    }
+
+    private func modelBinding(_ tier: Intelligence.Tier) -> Binding<String> {
+        Binding(
+            get: {
+                let map = brain.keys.lane == .claude ? brain.keys.claudeModels : brain.keys.routerModels
+                return map[tier.rawValue] ?? defaultModel(for: tier)
+            },
+            set: { value in
+                if brain.keys.lane == .claude {
+                    brain.keys.claudeModels[tier.rawValue] = value
+                } else {
+                    brain.keys.routerModels[tier.rawValue] = value
+                }
+            }
+        )
+    }
+
+    private func completePasted() {
+        let value = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        pasted = ""
+        account.complete(pasted: value)
     }
 
     private func addRule() {
@@ -134,12 +249,16 @@ struct IntelligencePage: View {
                     lines.append(String(format: "Jev ✓ %.0f ms", a.latencyMs))
                 } catch { lines.append("Jev ✗ \(error.localizedDescription)") }
             } else { lines.append("Jev — no key") }
-            if brain.routerReady {
+            let lane = brain.keys.lane
+            let label = lane == .claude ? "Claude" : "Gateway"
+            if brain.modelReady {
                 do {
                     let r = try await Router.ask(system: "Reply with JSON only.", user: "{\"ping\": true} → reply {\"pong\": true}", keys: keys, timeout: 15, maxTokens: 20)
-                    lines.append(String(format: "Router ✓ %@ %.0f ms", r.model, r.latencyMs))
-                } catch { lines.append("Router ✗ \(error.localizedDescription)") }
-            } else { lines.append("Router — no key") }
+                    lines.append(String(format: "%@ ✓ %@ %.0f ms", label, r.model, r.latencyMs))
+                } catch { lines.append("\(label) ✗ \(error.localizedDescription)") }
+            } else {
+                lines.append(lane == .claude ? "Claude — not signed in" : "Gateway — no key")
+            }
             verdict = lines.joined(separator: " · ")
             testing = false
         }
@@ -309,10 +428,10 @@ struct AgentsPage: View {
                         KeyField(text: $brain.keys.jevKey, placeholder: "ts-…", ready: brain.jevReady)
                     }
                     Rule()
-                    Line("Text model", brain.routerReady ? "Writes what gets typed and answers jev_extract, through the router. Small and fast is the point — empty means the router model (\(brain.keys.routerModel))." : "TYPE_TEXT and jev_extract need the router — add a key under Settings › Intelligence") {
+                    Line("Text model", brain.modelReady ? "Writes what gets typed and answers jev_extract. Small and fast is the point — empty means the model you picked (\(brain.modelName))." : "TYPE_TEXT and jev_extract need a model — Settings › Intelligence › Model access") {
                         HStack(spacing: 8) {
-                            Circle().fill(brain.routerReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8)).frame(width: 8, height: 8)
-                            TextField(brain.keys.routerModel, text: $brain.keys.textModel)
+                            Circle().fill(brain.modelReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8)).frame(width: 8, height: 8)
+                            TextField(brain.modelName, text: $brain.keys.textModel)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 12, design: .monospaced))
                                 .frame(width: 120)
@@ -339,15 +458,6 @@ struct AgentsPage: View {
 
             Caption("The agent in the window — ⌘E")
             Card {
-                Line("Model", brain.routerReady ? "Through the router. Empty means the router model (\(brain.keys.routerModel)); it needs tool calling." : "Needs the router key — Settings › Intelligence") {
-                    TextField(brain.keys.routerModel, text: $chat.config.model)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
-                        .frame(width: 120)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                }
-                Rule()
                 Line("Page in front of every question", "The current tab's address, title and the first 3000 characters of its text. Off, it still has the tools to look.") {
                     Switch(on: $chat.config.pageContext)
                 }
@@ -791,5 +901,14 @@ struct HistorySettingsLine: View {
         if count == 0 { return "Typed addresses complete from Arc or Chrome history" }
         if let detail = flow.historyImport.detail { return detail }
         return "\(count.formatted()) places kept — typed addresses complete from them"
+    }
+}
+
+extension Browser {
+    /// Settings, opened on one page.
+    func openSettings(_ page: SettingsPanel.Page) {
+        settingsPage = page
+        Store.settings.set(page.rawValue, forKey: "settings.page")
+        tuning = true
     }
 }

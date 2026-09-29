@@ -17,6 +17,39 @@ import Foundation
 final class Intelligence: ObservableObject {
     static let shared = Intelligence()
 
+    /// where the model comes from.
+    enum Lane: String, Codable, CaseIterable, Identifiable {
+        case key
+        case claude
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .key: return "API key"
+            case .claude: return "Claude account"
+            }
+        }
+    }
+
+    /// the three sizes, shared by every model caller.
+    enum Tier: String, Codable, CaseIterable, Identifiable {
+        case haiku, sonnet, opus
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .haiku: return "Haiku"
+            case .sonnet: return "Sonnet"
+            case .opus: return "Opus"
+            }
+        }
+        var blurb: String {
+            switch self {
+            case .haiku: return "Quick"
+            case .sonnet: return "The balance"
+            case .opus: return "Thinks hardest"
+            }
+        }
+    }
+
     struct Keys: Codable, Equatable {
         var jevKey = ""
         var jevModel = "jev-latest"
@@ -24,6 +57,18 @@ final class Intelligence: ObservableObject {
         var routerKey = ""
         var routerURL = "https://llm.dev.exowatt.com"
         var routerModel = "sonnet"
+        var lane: Lane = .key
+        var tier: Tier = .sonnet
+        /// tier.rawValue → model id at Anthropic (Claude account lane).
+        var claudeModels: [String: String] = Keys.defaultClaudeModels
+        /// tier.rawValue → model name on the gateway (API key lane).
+        var routerModels: [String: String] = Keys.defaultRouterModels
+        static let defaultClaudeModels = [
+            "haiku": "claude-haiku-4-5",
+            "sonnet": "claude-sonnet-5",
+            "opus": "claude-opus-5-5",
+        ]
+        static let defaultRouterModels = ["haiku": "haiku", "sonnet": "sonnet", "opus": "opus"]
         /// The small model Jev mode asks to write field values (TYPE_TEXT).
         /// Empty means the router model; a small fast one is the point.
         var textModel = ""
@@ -45,6 +90,22 @@ final class Intelligence: ObservableObject {
             routerKey = try c.decodeIfPresent(String.self, forKey: .routerKey) ?? fresh.routerKey
             routerURL = try c.decodeIfPresent(String.self, forKey: .routerURL) ?? fresh.routerURL
             routerModel = try c.decodeIfPresent(String.self, forKey: .routerModel) ?? fresh.routerModel
+            lane = try c.decodeIfPresent(Lane.self, forKey: .lane) ?? fresh.lane
+            tier = try c.decodeIfPresent(Tier.self, forKey: .tier) ?? fresh.tier
+            var decodedClaude = Keys.defaultClaudeModels
+            if let saved = try c.decodeIfPresent([String: String].self, forKey: .claudeModels) {
+                decodedClaude.merge(saved) { _, value in value }
+            }
+            claudeModels = decodedClaude
+            var decodedRouter = Keys.defaultRouterModels
+            let hadRouterModels = c.contains(.routerModels)
+            if let saved = try c.decodeIfPresent([String: String].self, forKey: .routerModels) {
+                decodedRouter.merge(saved) { _, value in value }
+            } else if !hadRouterModels,
+                      ![Tier.haiku.rawValue, Tier.sonnet.rawValue, Tier.opus.rawValue].contains(routerModel) {
+                decodedRouter[Tier.sonnet.rawValue] = routerModel
+            }
+            routerModels = decodedRouter
             textModel = try c.decodeIfPresent(String.self, forKey: .textModel) ?? fresh.textModel
             grouping = try c.decodeIfPresent(GroupingMode.self, forKey: .grouping) ?? fresh.grouping
             threshold = try c.decodeIfPresent(Double.self, forKey: .threshold) ?? fresh.threshold
@@ -70,14 +131,54 @@ final class Intelligence: ObservableObject {
     private var loading = false
     private var hangup: DispatchSourceSignal?
 
-    /// What Jev mode types with: the text model when one is named, else the router's.
-    var textModelName: String { keys.textModel.trimmingCharacters(in: .whitespaces).isEmpty ? keys.routerModel : keys.textModel }
+    /// the lane and tier selected for every model caller.
+    var lane: Lane { keys.lane }
+    var tier: Tier { keys.tier }
+
+    /// what Jev mode types with: the text model when one is named, else the chosen model.
+    var textModelName: String { keys.textModel.trimmingCharacters(in: .whitespaces).isEmpty ? model() : keys.textModel }
 
     /// Whether Jev can be asked at all.
     var jevReady: Bool { !keys.jevKey.trimmingCharacters(in: .whitespaces).isEmpty }
     /// Whether the router can be asked at all.
     var routerReady: Bool { !keys.routerKey.trimmingCharacters(in: .whitespaces).isEmpty && URL(string: keys.routerURL) != nil }
-    var configured: Bool { jevReady || routerReady }
+    /// Whether the active model lane can be asked at all.
+    var claudeReady: Bool { ClaudeAccount.shared.signedIn }
+    var modelReady: Bool { lane == .key ? routerReady : claudeReady }
+    var configured: Bool { jevReady || modelReady }
+
+    /// resolve a tier name or pass through a full model name.
+    func model(_ named: String? = nil, tier: Tier? = nil) -> String {
+        let raw = named ?? ""
+        let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !candidate.isEmpty {
+            if let namedTier = Tier(rawValue: candidate.lowercased()) {
+                return model(for: namedTier)
+            }
+            return raw
+        }
+        return model(for: tier ?? self.tier)
+    }
+
+    private func model(for tier: Tier) -> String {
+        let map = lane == .claude ? keys.claudeModels : keys.routerModels
+        let defaults = lane == .claude ? Keys.defaultClaudeModels : Keys.defaultRouterModels
+        return map[tier.rawValue] ?? defaults[tier.rawValue] ?? tier.rawValue
+    }
+
+    var modelName: String { model() }
+
+    /// one short line for menus and headers.
+    var accessLine: String {
+        guard modelReady else { return "Not set up" }
+        switch lane {
+        case .key:
+            let host = URL(string: keys.routerURL)?.host ?? keys.routerURL
+            return "API key · \(host)"
+        case .claude:
+            return "Claude account · \(ClaudeAccount.shared.email)"
+        }
+    }
 
     private static var file: URL { Store.file("intelligence.json") }
 
@@ -124,10 +225,13 @@ final class Intelligence: ObservableObject {
         hangup = source
     }
 
-    /// Readiness and the non-secret settings. Never a key.
+    /// readiness and the non-secret settings. Never a key.
     var status: [String: Any] {
         ["jevReady": jevReady, "routerReady": routerReady, "routerURL": keys.routerURL,
-         "routerModel": keys.routerModel, "jevModel": keys.jevModel]
+         "routerModel": keys.routerModel, "jevModel": keys.jevModel,
+         "lane": lane.rawValue, "tier": tier.rawValue, "model": modelName,
+         "modelReady": modelReady, "claudeReady": claudeReady,
+         "claudeAccount": ClaudeAccount.shared.email]
     }
 
     /// The loopback server's `copper/intelligence` method (`copper
@@ -146,13 +250,33 @@ final class Intelligence: ObservableObject {
         case "set":
             var next = keys
             var applied: [String] = []
+            var problem: String?
             func take(_ name: String, _ apply: (String) -> Void) {
-                guard let value = params[name] as? String else { return }
+                guard problem == nil, let raw = params[name] else { return }
+                guard let value = raw as? String else {
+                    problem = "\(name) must be a string"
+                    return
+                }
                 apply(value.trimmingCharacters(in: .whitespacesAndNewlines))
                 applied.append(name)
             }
-            if let raw = params["routerURL"] as? String {
-                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let raw = params["lane"] {
+                guard let text = raw as? String, let value = Lane(rawValue: text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else {
+                    return ["error": "lane must be key or claude"]
+                }
+                next.lane = value
+                applied.append("lane")
+            }
+            if let raw = params["tier"] {
+                guard let text = raw as? String, let value = Tier(rawValue: text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else {
+                    return ["error": "tier must be haiku, sonnet or opus"]
+                }
+                next.tier = value
+                applied.append("tier")
+            }
+            if let raw = params["routerURL"] {
+                guard let text = raw as? String else { return ["error": "routerURL must be a string"] }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let url = URL(string: trimmed), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
                     return ["error": "routerURL must be an http(s) URL"]
                 }
@@ -160,9 +284,25 @@ final class Intelligence: ObservableObject {
             take("jevKey") { next.jevKey = $0 }
             take("routerKey") { next.routerKey = $0 }
             take("routerURL") { next.routerURL = $0 }
-            take("routerModel") { next.routerModel = $0 }
             take("textModel") { next.textModel = $0 }
-            guard !applied.isEmpty else { return ["error": "set needs at least one of jevKey, routerKey, routerURL, routerModel, textModel"] }
+            take("routerModel") {
+                next.routerModel = $0
+                next.routerModels[next.tier.rawValue] = $0
+            }
+            let modelFields: [(String, Tier)] = [("haikuModel", .haiku), ("sonnetModel", .sonnet), ("opusModel", .opus)]
+            for (name, modelTier) in modelFields {
+                take(name) { value in
+                    if next.lane == .claude {
+                        next.claudeModels[modelTier.rawValue] = value
+                    } else {
+                        next.routerModels[modelTier.rawValue] = value
+                    }
+                }
+            }
+            if let problem { return ["error": problem] }
+            guard !applied.isEmpty else {
+                return ["error": "set needs at least one of lane, tier, jevKey, routerKey, routerURL, routerModel, haikuModel, sonnetModel, opusModel, textModel"]
+            }
             keys = next
             var out = status
             out["applied"] = applied
@@ -282,6 +422,17 @@ enum Router {
     }
 
     static func ask(system: String, user: String, keys: Intelligence.Keys, timeout: TimeInterval = 20, maxTokens: Int = 400, model override: String? = nil) async throws -> Reply {
+        if keys.lane == .claude {
+            let token = try await ClaudeAccount.shared.token()
+            let model = await MainActor.run { Intelligence.shared.model(override) }
+            do {
+                return try await Claude.ask(token: token, model: model, system: system, user: user, timeout: timeout, maxTokens: maxTokens)
+            } catch let failure as Claude.Failure where failure.status == 401 {
+                let refreshed = try await ClaudeAccount.shared.refreshNow()
+                return try await Claude.ask(token: refreshed, model: model, system: system, user: user, timeout: timeout, maxTokens: maxTokens)
+            }
+        }
+
         guard !keys.routerKey.isEmpty else { throw Failure(detail: "No router key — Settings › Intelligence") }
         guard let base = URL(string: keys.routerURL) else { throw Failure(detail: "Bad router address: \(keys.routerURL)") }
         let url = base.appendingPathComponent("v1/chat/completions")
@@ -290,9 +441,9 @@ enum Router {
         request.setValue("Bearer \(keys.routerKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
-        let chosen = (override ?? "").trimmingCharacters(in: .whitespaces)
+        let chosen = await MainActor.run { Intelligence.shared.model(override) }
         let body: [String: Any] = [
-            "model": chosen.isEmpty ? keys.routerModel : chosen,
+            "model": chosen,
             "temperature": 0,
             "max_tokens": maxTokens,
             "messages": [
@@ -320,7 +471,7 @@ enum Router {
         else if let parts = message["content"] as? [[String: Any]] {
             text = parts.compactMap { $0["text"] as? String }.joined()
         }
-        let model = (payload["model"] as? String) ?? (chosen.isEmpty ? keys.routerModel : chosen)
+        let model = (payload["model"] as? String) ?? chosen
         return Reply(json: Router.json(in: text), text: text, latencyMs: latency, model: model)
     }
 

@@ -70,6 +70,9 @@ enum CLI {
         if command == "intelligence" {
             return runIntelligence(Array(args.dropFirst()), dryRun: dryRun, launchRequested: launchRequested)
         }
+        if command == "claude" {
+            return runClaude(Array(args.dropFirst()), dryRun: dryRun, launchRequested: launchRequested)
+        }
         if command == "bitwarden" {
             return runBitwarden(Array(args.dropFirst()), dryRun: dryRun, launchRequested: launchRequested)
         }
@@ -692,7 +695,9 @@ enum CLI {
             guard args.isEmpty else { error("intelligence \(op) takes no arguments"); return 2 }
         case "set":
             let flags = ["--jev": "jevKey", "--router-key": "routerKey", "--router-url": "routerURL",
-                         "--router-model": "routerModel", "--text-model": "textModel"]
+                         "--router-model": "routerModel", "--text-model": "textModel",
+                         "--lane": "lane", "--model": "tier", "--haiku-model": "haikuModel",
+                         "--sonnet-model": "sonnetModel", "--opus-model": "opusModel"]
             var i = 0
             while i < args.count {
                 guard let name = flags[args[i]] else { error("unknown intelligence set option: \(args[i])"); return 2 }
@@ -707,7 +712,7 @@ enum CLI {
                 i += 1
             }
             guard params.count > 1 else {
-                error("intelligence set needs at least one of --jev, --router-key, --router-url, --router-model, --text-model")
+                error("intelligence set needs at least one of --lane, --model, --haiku-model, --sonnet-model, --opus-model, --jev, --router-key, --router-url, --router-model, --text-model")
                 return 2
             }
         default:
@@ -741,13 +746,90 @@ enum CLI {
     The models Copper asks (Settings › Intelligence): Jev (TypeSafe) and the
     router (a LiteLLM gateway). Output is JSON and never contains a key.
 
-      status                     {jevReady, routerReady, routerURL, routerModel, jevModel} (default)
-      set [--jev KEY] [--router-key KEY] [--router-url URL] [--router-model M] [--text-model M]
+      status                     {jevReady, routerReady, routerURL, routerModel, jevModel,
+                                 lane, tier, model, modelReady, claudeReady, claudeAccount} (default)
+      set [--lane key|claude] [--model haiku|sonnet|opus]
+          [--haiku-model M] [--sonnet-model M] [--opus-model M]
+          [--jev KEY] [--router-key KEY] [--router-url URL] [--router-model M] [--text-model M]
                                  write into intelligence.json (0600) through the running app;
                                  a value of - is read from stdin, keeping keys out of `ps`
       reload                     re-read intelligence.json (same as sending the app SIGHUP)
 
     Exit 0 on success, 1 when the app refuses a value, 2 on usage or when Copper is unreachable.
+    """
+
+    // MARK: - Claude account
+
+    /// `copper claude status|signin|paste|signout|cancel`: the Claude account
+    /// controls in the running app, through the loopback server's
+    /// `copper/claude` method. Output is status JSON and never a token.
+    private static func runClaude(_ input: [String], dryRun: Bool, launchRequested: Bool) -> Int {
+        var args = input
+        let op = args.isEmpty ? "status" : args.removeFirst()
+        if ["help", "-h", "--help"].contains(op) || args.contains(where: { ["-h", "--help"].contains($0) }) {
+            print(claudeUsage)
+            return 0
+        }
+        var params: [String: Any] = ["op": op]
+        switch op {
+        case "status", "signin", "signout", "cancel":
+            guard args.isEmpty else { error("claude \(op) takes no arguments"); return 2 }
+        case "paste":
+            guard args.count == 1 else {
+                error("claude paste needs CODE or - (stdin is preferred)")
+                return 2
+            }
+            var code = args[0]
+            if code == "-" {
+                let data = FileHandle.standardInput.readDataToEndOfFile()
+                code = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !code.isEmpty else { error("claude paste -: nothing on stdin"); return 2 }
+            }
+            params["code"] = code
+        default:
+            error("unknown claude command: \(op) (see copper claude --help)")
+            return 2
+        }
+        let request: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "copper/claude", "params": params]
+        if dryRun {
+            var shown = params
+            if shown["code"] != nil { shown["code"] = "…" }
+            return dryRunDecision(RequestSpec(request: ["jsonrpc": "2.0", "id": 1, "method": "copper/claude", "params": shown]), launchRequested: launchRequested)
+        }
+        guard var config = readConfig(), config.enabled, !config.token.isEmpty else {
+            error(notRunningMessage + " `copper claude` reaches the app through that server.")
+            return 2
+        }
+        guard ensureRunning(&config, launchRequested: launchRequested) else { return 2 }
+        guard let response = post(request, config: config, timeout: 30),
+              let result = response["result"] as? [String: Any] else { return 2 }
+        if let message = result["error"] as? String, !message.isEmpty {
+            error(message)
+            return 1
+        }
+        printJSON(result)
+        return 0
+    }
+
+    private static let claudeUsage = """
+    Usage: copper claude <command>
+
+    Sign in with a Claude account instead of an API key. `signin` opens claude.ai
+    in the running Copper window; finish the OAuth sign-in there and the callback
+    returns to Copper. If the tab cannot return, copy the callback code and use
+    `paste -` (stdin is preferred; a literal code is also accepted).
+
+      status                     account status, email and expiry (default)
+      signin                     open claude.ai and start OAuth with PKCE
+      paste -|CODE               finish sign-in from stdin or a literal callback code
+      signout                    forget claude.json and the account
+      cancel                     cancel a waiting sign-in
+
+    Tokens live in claude.json beside intelligence.json with mode 0600. Output
+    never contains a token. Use a Claude Pro, Max, Team or Enterprise account.
+
+    Exit 0 on success, 1 when the app refuses an operation, 2 on usage or when
+    Copper is unreachable.
     """
 
     // MARK: - Bitwarden
@@ -1170,8 +1252,11 @@ enum CLI {
       setup [phi|claude|cli|status]             install terminal-agent setup (default: status)
       link [--app SELECTOR] [status|on|off|token|api|add|remove|grants|grant|revoke|calls]
                                                 link this browser to one or more agents apps (copper link --help)
-      intelligence [status|set|reload]          Jev/router keys and readiness; never prints a key
+      intelligence [status|set|reload]          model access, keys and readiness; never prints a key
                                                 (copper intelligence --help)
+      claude [status|signin|paste -|signout|cancel]
+                                                Claude account sign-in and status; never prints a token
+                                                (copper claude --help)
       bitwarden [status|login -|lock|logout|sync|policy]
                                                 the Bitwarden vault; JSON only, login reads stdin
                                                 (copper bitwarden --help)

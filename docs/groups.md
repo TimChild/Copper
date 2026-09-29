@@ -33,10 +33,10 @@ one before had nothing:
    a `choice` among the groups present (each described by its name, hosts
    and titles) plus `none`, and a `noul` "worth grouping at all". Taken when
    its confidence clears the bar (default 60%). ~200 ms.
-3. **The router** (a LiteLLM gateway; `sonnet` by default, `luna`, `auto`…).
-   Asked when Jev was unsure, or when nothing fits and a *new* group needs a
-   *name* — which a closed choice can't produce. JSON in, JSON out, read
-   leniently.
+3. **The model lane** (the API-key gateway or Claude account selected in
+   [Intelligence](intelligence.md); Sonnet by default). Asked when Jev was unsure, or when
+   nothing fits and a *new* group needs a *name* — which a closed choice can't produce.
+   JSON in, JSON out, read leniently.
 4. **Same site.** No keys at all: a tab from a host a group already holds
    joins it.
 
@@ -50,12 +50,13 @@ open groups and tabs, are sent. Never page contents.
 ## Keys
 
 Settings › Intelligence. Paste a **Jev key** (`Authorization: Bearer`,
-`https://api.typesafe.ai/v1/systemone`) and/or a **router key** (any
-OpenAI-compatible `/v1/chat/completions`; address and model name are
-fields). Eye to reveal, clipboard to paste, **Test** to fire one question
-each way. Keys are in `intelligence.json` beside the session, 0600 — not the
-keychain, because an ad-hoc-signed rebuild changes the code hash and the
-keychain would prompt every build.
+`https://api.typesafe.ai/v1/systemone`) and choose the model lane in
+[Intelligence](intelligence.md). The API-key lane also has a **router key** (any
+OpenAI-compatible `/v1/chat/completions`; address and model names are fields).
+Eye to reveal, clipboard to paste, **Test** to fire one question each way. Keys
+are in `intelligence.json` beside the session, 0600 — not the keychain, because
+an ad-hoc-signed rebuild changes the code hash and the keychain would prompt
+every build.
 
 ## From the bench
 
@@ -66,7 +67,9 @@ keychain would prompt every build.
 ./bench groups remove TAB
 ./bench groups suggest TAB           ask the judges now
 ./bench groups dissolve NAME
-./bench ai                           which lanes have keys, mode, last decision
+./bench ai                           active lane, tier, model, mode, last decision
+./bench ai lane key|claude
+./bench ai tier haiku|sonnet|opus
 ./bench ai mode off|ask|auto
 ```
 
@@ -75,5 +78,5 @@ keychain would prompt every build.
 `Fork/Groups.swift` (model, persistence, membership, bench),
 `Fork/GroupsUI.swift` (rows, headers, chip, menus, ⌃G),
 `Fork/Grouper.swift` (the judges), `Fork/Intelligence.swift` (keys, Jev and
-router clients), `Fork/SettingsFork.swift` (the Settings pages). Hooks in
+model-lane clients), `Fork/SettingsFork.swift` (the Settings pages). Hooks in
 `PATCHES.md` › `groups-hooks`.

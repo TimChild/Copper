@@ -10,6 +10,8 @@ import SwiftUI
 struct AgentPane: View {
     @ObservedObject var browser: Browser
     @ObservedObject var agent = Agent.shared
+    @ObservedObject var brain = Intelligence.shared
+    @ObservedObject private var account = ClaudeAccount.shared
     @ObservedObject var servers = Servers.shared
     @FocusState private var focused: Bool
     @State private var copiedJev = false
@@ -34,7 +36,40 @@ struct AgentPane: View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink)
             Text("Agent").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.ink)
-            Text(agent.modelName).font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+            Menu {
+                ForEach(Intelligence.Tier.allCases) { tier in
+                    Button {
+                        brain.keys.tier = tier
+                    } label: {
+                        HStack {
+                            Text("\(tier.title) — \(tier.blurb)")
+                            if tier == brain.tier {
+                                Spacer()
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Text(brain.accessLine)
+                Button("Model access…") { browser.openSettings(.intelligence) }
+            } label: {
+                HStack(spacing: 3) {
+                    Text(brain.tier.title)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Palette.muted)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7, weight: .semibold))
+                        .foregroundStyle(Palette.faint)
+                }
+            }
+            // The label draws its own small chevron; the button style's
+            // indicator would sit in front of the word (SpaceHeader does the same).
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Model — \(brain.accessLine)")
             if servers.readyTools > 0 {
                 Text("+\(servers.readyTools) tools").font(.system(size: 11)).foregroundStyle(Palette.muted)
                     .help(servers.all.filter(\.ready).map { "\($0.name): \($0.tools.count)" }.joined(separator: "\n"))
@@ -99,18 +134,27 @@ struct AgentPane: View {
 
     private var empty: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(agent.ready ? "Ask about this page, or tell it what to do here. It has the same hands as an agent on the MCP — and your other servers, from mcp.json."
-                             : "Needs a router key first: Settings › Intelligence › Router. That is the model the agent talks to.")
-                .font(.system(size: 12)).foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            if agent.ready, let tab = browser.active, !tab.isBlank {
-                ForEach(["Summarise this page", "What can I do here?", "Find the main links on this page and list them"], id: \.self) { s in
-                    Button { agent.ask(s, in: browser) } label: {
-                        Text(s).font(.system(size: 11.5)).foregroundStyle(Palette.ink)
-                            .padding(.horizontal, 10).padding(.vertical, 5)
-                            .background(Palette.wash, in: Capsule())
+            if agent.ready {
+                Text("Ask about this page, or tell it what to do here. It has the same hands as an agent on the MCP — and your other servers, from mcp.json.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let tab = browser.active, !tab.isBlank {
+                    ForEach(["Summarise this page", "What can I do here?", "Find the main links on this page and list them"], id: \.self) { s in
+                        Button { agent.ask(s, in: browser) } label: {
+                            Text(s).font(.system(size: 11.5)).foregroundStyle(Palette.ink)
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(Palette.wash, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                }
+            } else {
+                Text("Not set up yet. Sign in with your Claude account, or add an API key for a gateway.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Pill("Sign in with Claude", filled: true) { account.signIn(in: browser) }
+                    Pill("Use an API key") { browser.openSettings(.intelligence) }
                 }
             }
         }
@@ -162,7 +206,7 @@ struct AgentPane: View {
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField(agent.ready ? "Ask, or say what to do…" : "Add a router key in Settings › Intelligence", text: $agent.draft, axis: .vertical)
+            TextField(agent.ready ? "Ask, or say what to do…" : "Sign in with Claude or add a key — Settings › Intelligence", text: $agent.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
                 .lineLimit(1...6)

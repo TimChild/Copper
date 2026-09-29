@@ -22,6 +22,8 @@ enum FlowModel {
         /// The group (Chrome tab group / Arc folder) this tab sits in, by the
         /// id in the owning `Window.groups` / `Space.groups`.
         var group: UUID? = nil
+        /// Arc: both halves of a split view carry the same token.
+        var split: UUID? = nil
         /// When the other browser last had it in front, Unix seconds. Feeds
         /// Copper's Today ordering and the archive sweep.
         var seen: Double? = nil
@@ -36,6 +38,11 @@ enum FlowModel {
         var name: String
         /// 0…1 on the same wheel as `Space.hue` / `TabGroup.hue`, or nil.
         var hue: Double? = nil
+        /// Shut in the column. Arc: shut unless one of its windows has it open.
+        var collapsed = false
+        /// How many of its parent's tabs come before it — where an empty
+        /// folder stands. Nil is at the foot.
+        var slot: Int? = nil
     }
 
     /// One Copper space to be. Chrome: one per window (named after its

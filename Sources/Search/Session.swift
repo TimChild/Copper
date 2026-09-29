@@ -14,6 +14,7 @@ enum Session {
         var group: UUID? = nil // Fork: tab groups
         var saved: Bool? = nil // Fork: sections — nil means saved, so upstream's files restore whole
         var seen: Double? = nil // Fork: sections — when it was last looked at, Unix seconds
+        var split: UUID? = nil // Fork: split view — both halves of a kept split carry the same token
     }
 
     struct Shape: Codable {

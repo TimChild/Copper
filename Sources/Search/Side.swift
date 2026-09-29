@@ -259,7 +259,7 @@ struct SideBar: View {
     private var saved: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                rows(looseRows.filter { sections.isSaved($0.tab) })
+                rows(looseRows.filter { sections.isSaved($0.tab) }, homeless: true)
                     .padding(.horizontal, SideBar.inset)
                     .padding(.bottom, 2)
             }
@@ -324,13 +324,14 @@ struct SideBar: View {
     /// header and the drag knows about groups; `only` keeps it to this block.
     /// A row pulled a clear step out of its block crosses the seam: up out of
     /// Today saves it, down out of Saved lets it go.
-    private func rows(_ list: [(index: Int, tab: Tab)]) -> some View {
+    private func rows(_ list: [(index: Int, tab: Tab)], homeless: Bool = false) -> some View {
         GroupedRows(
             browser: browser,
             prefs: prefs,
             pill: pill,
             tint: tint,
             only: Set(list.map(\.tab.id)),
+            homeless: homeless,
             offset: list.first?.index ?? 0,
             crossed: { tab, way in
                 let wanted = way < 0

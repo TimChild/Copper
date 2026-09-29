@@ -12,7 +12,10 @@ groups (groups.json + a group id on each entry); groups are flat, so a nested
 folder's name carries its parents. Arc's per-space pinned tabs are Copper's
 Saved section; whatever was left open is Today, newest first, each row
 carrying when Arc last had it in front so the archive sweep knows its age.
-Arc documents and easels are skipped. Quit Copper first: it writes the
+Folders keep Arc's order (a folder's tabs either side of the folders inside
+it), come in open or shut as Arc's window has them, and empty ones come too.
+A split view's first two panes come back as a kept split. Arc documents and
+easels are skipped. Quit Copper first: it writes the
 session on quit and would overwrite this.
 """
 
@@ -23,6 +26,16 @@ import sys
 import uuid
 
 ARC = os.path.expanduser("~/Library/Application Support/Arc/StorableSidebar.json")
+WINDOWS = os.path.expanduser("~/Library/Application Support/Arc/StorableWindows.json")
+
+
+def expanded():
+    """The folders Arc has open, in any window. Arc keeps this per window,
+    not on the folder, so a folder open anywhere comes in open."""
+    try:
+        return {i for w in json.load(open(WINDOWS)).get("windows", []) for i in w.get("expandedItems", []) if isinstance(i, str)}
+    except (OSError, ValueError):
+        return set()
 
 
 def hue(theme):
@@ -58,14 +71,19 @@ def main(argv):
     arc_spaces = [s for s in container["spaces"] if isinstance(s, dict)]
 
     groups = []
+    opened = expanded()
+    space_id = None  # the Copper space the walk is in, for empty folders
+    pinned_walk = False
 
-    def tabs(parent_id, folder=None):
-        """Every tab under a container: (title, url, group id, last active).
-        Folders become groups, nested names joined; splits are flattened."""
-        # A group is one contiguous run in Copper, so a folder's own tabs go
-        # out before its subfolders; Arc interleaves them.
+    def tabs(parent_id, folder=None, split=None):
+        """Every tab under a container: (title, url, group id, last active,
+        split token). Folders become groups, nested names joined, in Arc's
+        order — Copper draws a folder's tabs either side of the ones inside
+        it under one header. A split view's first two panes share a token."""
         children = [items[c] for c in items.get(parent_id, {}).get("childrenIds", []) if c in items]
-        for node in sorted(children, key=lambda n: "list" in n.get("data", {})):
+        panes = 0
+        down = 0  # tabs yielded so far under this container: an empty folder's slot
+        for node in children:
             cid = node["id"]
             data = node.get("data", {})
             if "tab" in data:
@@ -74,16 +92,31 @@ def main(argv):
                     # Arc counts from 2001; everyone else counts from 1970.
                     when = data["tab"].get("timeLastActiveAt")
                     when = when + 978307200 if when else None
-                    yield node.get("title") or data["tab"].get("savedTitle") or "", url, folder, when
+                    token = split if split and panes < 2 else None
+                    panes += 1
+                    down += 1
+                    yield node.get("title") or data["tab"].get("savedTitle") or "", url, folder, when, token
             elif "list" in data:
                 name = node.get("title") or "Folder"
                 if folder:
                     name = next(g["name"] for g in groups if g["id"] == folder) + " › " + name
                 gid = str(uuid.uuid4()).upper()
-                groups.append({"id": gid, "name": name, "collapsed": True})
-                yield from tabs(cid, gid)
+                group = {"id": gid, "name": name, "collapsed": cid not in opened}
+                groups.append(group)
+                slot, held = down, 0
+                for row in tabs(cid, gid):
+                    down += 1
+                    held += 1
+                    yield row
+                # Only a folder empty in Arc's Saved list needs telling where
+                # it stands; one with tabs is wherever they are, and would
+                # otherwise come back as a ghost once emptied.
+                if not held and pinned_walk and space_id:
+                    group["space"], group["slot"] = space_id, slot
             elif "splitView" in data:
-                yield from tabs(cid, folder)
+                for row in tabs(cid, folder, str(uuid.uuid4()).upper()):
+                    down += 1
+                    yield row
 
     # Favourites — the grid at the top of every space of the default profile.
     tops = container["topAppsContainerIDs"]
@@ -91,10 +124,12 @@ def main(argv):
     for profile, tid in zip(tops[::2], tops[1::2]):
         if profile == {"default": True}:
             favourites = list(tabs(tid))
+    groups.clear()  # favourites have no folders in Copper's grid
 
     spaces, entries = [], []
     for s in arc_spaces:
         sid = str(uuid.uuid4()).upper()
+        space_id = sid
         space = {"id": sid, "name": s["title"]}
         h = hue(s.get("customInfo", {}).get("windowTheme", {}))
         if h is not None:
@@ -107,18 +142,23 @@ def main(argv):
         # Arc's favourites grid is Copper's pin grid; Arc's per-space pinned
         # tabs have titles, so they are loose tabs here, followed by what was
         # left open.
-        for title, url, _, _ in favourites:
+        for title, url, *_ in favourites:
             host = url.split("/")[2].replace("www.", "")
             entries.append({"url": url, "title": title, "pin": host[:1].upper() or "•", "space": sid})
         # Saved first, then Today newest-first — except that a folder is one
         # run in Copper, so grouped rows keep their own order after the rest.
-        today = sorted(tabs(unpinned), key=lambda t: (t[2] or "", -(t[3] or 0)))
-        row = [(t, True) for t in tabs(pinned)] + [(t, False) for t in today]
-        for i, ((title, url, gid, when), kept) in enumerate(row):
+        # Arc's own order, as its Today list shows it.
+        today = list(tabs(unpinned))
+        pinned_walk = True
+        saved = list(tabs(pinned))
+        pinned_walk = False
+        row = [(t, True) for t in saved] + [(t, False) for t in today]
+        for i, ((title, url, gid, when, split), kept) in enumerate(row):
             entries.append({"url": url, "title": title, "space": sid, "saved": kept,
                             **({"seen": when} if when else {}),
                             **({"active": True} if i == 0 else {}),
-                            **({"group": gid} if gid else {})})
+                            **({"group": gid} if gid else {}),
+                            **({"split": split} if split else {})})
 
     current = next((sp["id"] for sp in spaces if sp["name"] == "Exowatt"), spaces[0]["id"])
     shape = {"tabs": entries, "active": 0, "spaces": spaces, "space": current}
@@ -129,15 +169,16 @@ def main(argv):
         s = sum(1 for e in entries if e["space"] == sp["id"] and e.get("saved"))
         t = sum(1 for e in entries if e["space"] == sp["id"] and e.get("saved") is False)
         g = {e["group"] for e in entries if e["space"] == sp["id"] and "group" in e}
-        print(f"{sp['name']:22} {n:4} tabs ({p} favourites, {s} saved, {t} today, {len(g)} folders)  hue={sp.get('hue')}")
+        e = sum(1 for gr in groups if gr.get("space") == sp["id"] and gr["id"] not in g)
+        k = len({e["split"] for e in entries if e["space"] == sp["id"] and "split" in e})
+        print(f"{sp['name']:22} {n:4} tabs ({p} favourites, {s} saved, {t} today, {len(g)} folders + {e} empty, {k} splits)  hue={sp.get('hue')}")
     if dry:
         return
     os.makedirs(os.path.dirname(out), exist_ok=True)
     json.dump(shape, open(out, "w"))
-    used = {e["group"] for e in entries if "group" in e}
     groups_out = os.path.join(os.path.dirname(out), "groups.json")
-    json.dump({"groups": [g for g in groups if g["id"] in used], "rules": []}, open(groups_out, "w"))
-    print(f"wrote {out} and groups.json ({len(used)} folders)")
+    json.dump({"groups": groups, "rules": []}, open(groups_out, "w"))
+    print(f"wrote {out} and groups.json ({len(groups)} folders)")
 
 
 if __name__ == "__main__":

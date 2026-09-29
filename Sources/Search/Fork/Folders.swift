@@ -78,7 +78,7 @@ struct FolderTree {
     private var inside: [UUID: [TabGroup]] = [:]
     private(set) var nodes: [TabGroup] = []
 
-    init(tabs: [Tab], groups: Groups = Groups.shared) {
+    init(tabs: [Tab], homeless: [TabGroup] = [], groups: Groups = Groups.shared) {
         var here: [TabGroup] = []
         var seen: Set<UUID> = []
         for tab in tabs {
@@ -90,10 +90,13 @@ struct FolderTree {
         // its name; one with tabs elsewhere is another space's folder and
         // has no business in this block.
         let held = Set(groups.membership.values)
+        let roots = here + homeless
         let empties = groups.all.filter { group in
-            !held.contains(group.id) && here.contains { Folders.below(group.name, $0.name) }
+            !held.contains(group.id) && !homeless.contains(group)
+                && (group.space == nil || group.space == Spaces.shared.current)
+                && roots.contains { Folders.below(group.name, $0.name) }
         }
-        nodes = here + empties
+        nodes = here + homeless + empties
 
         for node in nodes {
             let ancestors = nodes.filter { Folders.below(node.name, $0.name) }
@@ -130,36 +133,94 @@ struct FolderTree {
 
     func children(of group: TabGroup) -> [TabGroup] { inside[group.id] ?? [] }
 
-    /// Folders inside this one that hold nothing yet, deepest last. They
-    /// have no run of tabs to hang a header off, so the plan puts them
-    /// directly under their parent's.
-    private func emptyChildren(of group: TabGroup, at depth: Int, index: Int) -> [FolderRow] {
-        var out: [FolderRow] = []
-        for child in children(of: group) where (own[child.id] ?? 0) == 0 {
-            out.append(.head(child, count: weight(of: child), at: index, depth: depth + 1, label: label(of: child)))
-            if !child.collapsed { out += emptyChildren(of: child, at: depth + 1, index: index) }
-        }
-        return out
+    /// Folders inside this one with nothing in them, anywhere below. They
+    /// have no run of tabs to hang a header off, so the plan puts each where
+    /// its `slot` says, or at the foot of its parent.
+    fileprivate func emptyChildren(of group: TabGroup) -> [TabGroup] {
+        children(of: group).filter { weight(of: $0) == 0 }
     }
 
-    /// The whole block, top to bottom.
-    static func plan(_ tabs: [Tab], groups: Groups = Groups.shared) -> [FolderRow] {
-        let tree = FolderTree(tabs: tabs, groups: groups)
+    fileprivate func ancestors(of group: TabGroup) -> [TabGroup] { above[group.id] ?? [] }
+
+    /// The whole block, top to bottom. `homeless` are the space's folders
+    /// that hold nothing and sit inside nothing — Arc keeps an empty folder
+    /// where you made it, so it goes back where its `slot` says.
+    static func plan(_ tabs: [Tab], homeless: [TabGroup] = [], groups: Groups = Groups.shared) -> [FolderRow] {
+        let tree = FolderTree(tabs: tabs, homeless: homeless, groups: groups)
         var out: [FolderRow] = []
-        var previous: UUID?
+        // The folders whose headers are up, outermost first. Arc lets a
+        // folder's tabs sit either side of a folder inside it; a run that
+        // comes back to a folder still open here carries on under its
+        // header rather than drawing it a second time.
+        var open: [TabGroup] = []
+        // Tabs so far under each open folder, and in the whole block: what
+        // an empty folder's `slot` is counted against.
+        var under: [UUID: Int] = [:]
+        var before = 0
+        var placed: Set<UUID> = []
+
+        func head(_ group: TabGroup, at index: Int) {
+            placed.insert(group.id)
+            guard !tree.hidden(group) else { return }
+            out.append(.head(group, count: tree.weight(of: group), at: index,
+                             depth: tree.depth(of: group), label: tree.label(of: group)))
+        }
+        /// An empty folder, and the empty ones inside it.
+        func empty(_ group: TabGroup, at index: Int) {
+            head(group, at: index)
+            for child in tree.emptyChildren(of: group) { empty(child, at: index) }
+        }
+        /// The empty folders inside `group` whose turn has come: `slot` of
+        /// its tabs are down already — or, closing it, every one left, at
+        /// its foot.
+        func due(_ group: TabGroup, at index: Int, closing: Bool) {
+            for child in tree.emptyChildren(of: group) where !placed.contains(child.id)
+                && (closing || (child.slot ?? .max) <= under[group.id, default: 0]) {
+                empty(child, at: index)
+            }
+        }
+        func shut(down to: Int, at index: Int) {
+            while open.count > to { due(open.removeLast(), at: index, closing: true) }
+        }
+        func homes(at index: Int, closing: Bool) {
+            for group in homeless where tree.depth(of: group) == 0 && !placed.contains(group.id)
+                && (closing || (group.slot ?? .max) <= before) {
+                empty(group, at: index)
+            }
+        }
+
         for (index, tab) in tabs.enumerated() {
             let group = groups.group(of: tab)
-            if let group, group.id != previous, !tree.hidden(group) {
-                let depth = tree.depth(of: group)
-                out.append(.head(group, count: tree.weight(of: group), at: index,
-                                 depth: depth, label: tree.label(of: group)))
-                if !group.collapsed { out += tree.emptyChildren(of: group, at: depth, index: index) }
+            var keep = 0
+            if let group {
+                if let at = open.firstIndex(where: { $0.id == group.id }) {
+                    keep = at + 1
+                } else {
+                    keep = open.count
+                    while keep > 0, !Folders.below(group.name, open[keep - 1].name) { keep -= 1 }
+                }
             }
-            previous = group?.id
+            shut(down: keep, at: index)
+            if open.isEmpty { homes(at: index, closing: false) }
+            for folder in open { due(folder, at: index, closing: false) }
+            if let group, open.last?.id != group.id {
+                // A folder whose own parent holds no tabs of its own has had
+                // no header drawn for that parent yet; draw it on the way in.
+                for folder in tree.ancestors(of: group) + [group] where !open.contains(where: { $0.id == folder.id }) {
+                    if let last = open.last { due(last, at: index, closing: false) }
+                    open.append(folder)
+                    head(folder, at: index)
+                    due(folder, at: index, closing: false)
+                }
+            }
+            for folder in open { under[folder.id, default: 0] += 1 }
+            before += 1
             if let group, group.collapsed || tree.hidden(group) { continue }
             out.append(.tab(tab, index: index, group: group,
                             depth: group.map { tree.depth(of: $0) + 1 } ?? 0))
         }
+        shut(down: 0, at: tabs.count)
+        homes(at: tabs.count, closing: true)
         return out
     }
 }

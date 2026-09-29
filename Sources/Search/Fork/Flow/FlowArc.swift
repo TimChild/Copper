@@ -160,6 +160,7 @@ enum FlowArc {
         let title: String
         let group: UUID?
         let seen: Double?
+        var split: UUID? = nil
     }
 
     /// Arc keeps this file one level above `Arc/User Data`.
@@ -238,15 +239,22 @@ enum FlowArc {
             return value
         }
 
-        func isList(_ item: [String: Any]) -> Bool {
-            guard let data = item["data"] as? [String: Any] else { return false }
-            return data["list"] != nil
-        }
+        // The folders Arc has open, in any window. Arc keeps this per window
+        // rather than on the folder; everything else comes in shut.
+        var pinnedWalk = false
+        let opened: Set<String> = {
+            let windows = file.deletingLastPathComponent().appendingPathComponent("StorableWindows.json")
+            guard let data = try? Data(contentsOf: windows),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let list = root["windows"] as? [[String: Any]]
+            else { return [] }
+            return Set(list.flatMap { $0["expandedItems"] as? [Any] ?? [] }.compactMap { $0 as? String })
+        }()
 
-        // Keep ordinary nodes before list nodes. This makes a folder's own
-        // tabs one run before its child folders, even when Arc interleaves
-        // those nodes in `childrenIds`.
-        func tabs(in parentID: String, folder: UUID?, groups: inout [FlowModel.Group]) -> [RawTab] {
+        // Arc's order, folders and all: Copper draws a folder's tabs either
+        // side of the folders inside it under one header (FolderTree.plan).
+        // A split view's first two panes share a token; the pane holds two.
+        func tabs(in parentID: String, folder: UUID?, split: UUID? = nil, groups: inout [FlowModel.Group]) -> [RawTab] {
             guard let parent = items[parentID],
                   let childIDs = parent["childrenIds"] as? [Any]
             else { return [] }
@@ -256,15 +264,9 @@ enum FlowArc {
                 guard let childID = child as? String, let item = items[childID] else { continue }
                 children.append(item)
             }
-            let ordered = children.enumerated().sorted { left, right in
-                let leftList = isList(left.element)
-                let rightList = isList(right.element)
-                if leftList != rightList { return !leftList && rightList }
-                return left.offset < right.offset
-            }.map(\.element)
-
             var result: [RawTab] = []
-            for node in ordered {
+            var panes = 0
+            for node in children {
                 guard let id = node["id"] as? String,
                       let data = node["data"] as? [String: Any]
                 else { continue }
@@ -281,18 +283,28 @@ enum FlowArc {
                     let seen = number(tab["timeLastActiveAt"]).flatMap { value in
                         value == 0 ? nil : value + arcEpoch
                     }
-                    result.append(RawTab(url: url, title: title, group: folder, seen: seen))
+                    result.append(RawTab(url: url, title: title, group: folder, seen: seen,
+                                         split: panes < 2 ? split : nil))
+                    panes += 1
                 } else if data["list"] != nil {
                     var name = nonEmpty(node["title"] as? String) ?? "Folder"
                     if let folder,
                        let parentGroup = groups.first(where: { $0.id == folder }) {
                         name = parentGroup.name + " › " + name
                     }
-                    let group = FlowModel.Group(name: name)
+                    var group = FlowModel.Group(name: name)
+                    group.collapsed = !opened.contains(id)
+                    let slot = result.count
                     groups.append(group)
-                    result += tabs(in: id, folder: group.id, groups: &groups)
+                    let held = tabs(in: id, folder: group.id, groups: &groups)
+                    // Only an empty folder in the Saved list needs a place of
+                    // its own; one with tabs stands wherever they do.
+                    if held.isEmpty, pinnedWalk, let at = groups.firstIndex(where: { $0.id == group.id }) {
+                        groups[at].slot = slot
+                    }
+                    result += held
                 } else if data["splitView"] != nil {
-                    result += tabs(in: id, folder: folder, groups: &groups)
+                    result += tabs(in: id, folder: folder, split: UUID(), groups: &groups)
                 }
             }
             return result
@@ -417,17 +429,11 @@ enum FlowArc {
                 return tab
             }
 
+            pinnedWalk = true
             let pinned = pinnedID.map { tabs(in: $0, folder: nil, groups: &groups) } ?? []
-            let unpinned = unpinnedID.map { tabs(in: $0, folder: nil, groups: &groups) } ?? []
-            let today = unpinned.enumerated().sorted { left, right in
-                let leftGroup = left.element.group?.uuidString ?? ""
-                let rightGroup = right.element.group?.uuidString ?? ""
-                if leftGroup != rightGroup { return leftGroup < rightGroup }
-                let leftSeen = left.element.seen ?? 0
-                let rightSeen = right.element.seen ?? 0
-                if leftSeen != rightSeen { return leftSeen > rightSeen }
-                return left.offset < right.offset
-            }.map(\.element)
+            pinnedWalk = false
+            // Arc's own order, as its Today list shows it.
+            let today = unpinnedID.map { tabs(in: $0, folder: nil, groups: &groups) } ?? []
 
             var rows: [(RawTab, Bool)] = pinned.map { ($0, true) }
             rows.append(contentsOf: today.map { ($0, false) })
@@ -436,14 +442,15 @@ enum FlowArc {
                 tab.saved = saved
                 tab.group = raw.group
                 tab.seen = raw.seen
+                tab.split = raw.split
                 imported.append(tab)
             }
 
             // Keep one deterministic active tab so the adopter can select a
             // page immediately, including spaces containing only favourites.
             if !imported.isEmpty { imported[0].active = true }
-            let used = Set(imported.compactMap { $0.group })
-            incoming.groups = groups.filter { used.contains($0.id) }
+            // Empty folders too: Arc keeps them, so the column does.
+            incoming.groups = groups
             incoming.tabs = imported
             output.append(incoming)
         }

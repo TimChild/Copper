@@ -19,6 +19,8 @@ struct GroupedRows: View {
     /// The sidebar draws the loose list as two blocks (Saved, Today); each
     /// hands in the ids it owns and this draws only those.
     var only: Set<Tab.ID>? = nil
+    /// The Saved block also draws the space's empty top-level folders.
+    var homeless = false
     /// Where this block starts in the whole loose list, so a drag inside it
     /// moves the tab to the right place in the row and not to the row's top.
     var offset = 0
@@ -43,7 +45,9 @@ struct GroupedRows: View {
     /// What the column draws, top to bottom: a header at the start of each
     /// run, then the run's rows — none of them, nor any folder inside it,
     /// while the folder is shut. Worked out by `FolderTree`.
-    private var rows: [FolderRow] { FolderTree.plan(loose) }
+    private var rows: [FolderRow] {
+        FolderTree.plan(loose, homeless: homeless ? groups.homeless(in: Spaces.shared.current) : [])
+    }
 
     /// Rows the column shows beyond one per tab: a header for each folder,
     /// less the rows a folded one hides. For sizing a block before it is

@@ -15,10 +15,58 @@ final class Split: ObservableObject {
 
     var on: Bool { side != nil }
 
+    /// Which tabs are kept side by side, both ways round. Arc's split views
+    /// are sidebar items: you leave one by picking another tab and come back
+    /// to it by picking either half. A pair is made by opening a split and
+    /// ends when the split is closed; it rides in the session (`Entry.split`).
+    @Published private(set) var pairs: [Tab.ID: Tab.ID] = [:]
+
+    private func pair(_ a: Tab.ID, _ b: Tab.ID) {
+        unpair(a); unpair(b)
+        pairs[a] = b
+        pairs[b] = a
+    }
+
+    private func unpair(_ id: Tab.ID?) {
+        guard let id, let other = pairs.removeValue(forKey: id) else { return }
+        pairs[other] = nil
+    }
+
+    /// The same token on both halves of a pair, for the session — nil when
+    /// the tab has no partner among `alive`.
+    func token(for id: Tab.ID, alive: Set<Tab.ID>) -> UUID? {
+        guard let other = pairs[id], alive.contains(other) else { return nil }
+        return min(id.uuidString, other.uuidString) == id.uuidString ? id : other
+    }
+
+    /// Restoring: tabs that came back carrying the same token are a pair.
+    /// Only the first two of a token count; the pane holds two.
+    func restore(_ tokens: [UUID: [Tab.ID]]) {
+        pairs = [:]
+        side = nil
+        swapped = false
+        keep(tokens)
+    }
+
+    /// Pairs from an import, on top of the ones already kept.
+    func keep(_ tokens: [UUID: [Tab.ID]]) {
+        for ids in tokens.values where ids.count >= 2 { pair(ids[0], ids[1]) }
+    }
+
+    /// After a restore or a space switch: if the tab in front was kept in a
+    /// split, open it again.
+    func resume(in browser: Browser) {
+        guard side == nil, let active = browser.activeID, let other = pairs[active],
+              let tab = browser.tabs.first(where: { $0.id == other }) else { return }
+        side = other
+        swapped = false
+        if !tab.wake() { tab.revive() }
+    }
+
     /// ⌘⇧D. Splits with the tab to the right of the active one (or the
     /// left, at the end of the row); a second press closes the split.
     func toggle(in browser: Browser) {
-        if side != nil { side = nil; return }
+        if side != nil { unpair(side); side = nil; swapped = false; return }
         guard let here = browser.tabs.firstIndex(where: { $0.id == browser.activeID }), browser.tabs.count > 1 else {
             browser.announce("Nothing to split with — open another tab")
             return
@@ -29,18 +77,20 @@ final class Split: ObservableObject {
 
     func open(with tab: Tab, in browser: Browser) {
         guard tab.id != browser.activeID else { return }
+        if let active = browser.activeID { pair(active, tab.id) }
         side = tab.id
         if !tab.wake() { tab.revive() }
         tab.touch()
     }
 
-    func close() { side = nil; swapped = false }
+    func close() { unpair(side); side = nil; swapped = false }
 
     /// The cross on a pane's own toolbar. The tab goes, the split goes with
     /// it, and the other pane's page is what you are left looking at — which
     /// is the only outcome that doesn't need explaining.
     func dismiss(_ tab: Tab, in browser: Browser) {
         let other = tab.id == side ? browser.active : browser.tabs.first { $0.id == side }
+        unpair(tab.id)
         side = nil
         swapped = false
         browser.close(tab)
@@ -80,9 +130,21 @@ final class Split: ObservableObject {
     func arriving(_ tab: Tab, in browser: Browser) {
         guard tab.id == side, let was = browser.activeID, was != tab.id,
               browser.tabs.contains(where: { $0.id == was })
-        else { return }
+        else { return partner(of: tab, in: browser) }
         side = was
         swapped.toggle()
+    }
+
+    /// Picking a tab that is not in the side pane: its own partner comes up
+    /// beside it, or, with none, it is shown on its own — the split it left
+    /// is still there for when either half is picked again.
+    private func partner(of tab: Tab, in browser: Browser) {
+        guard !pairs.isEmpty else { return }
+        let other = pairs[tab.id].flatMap { id in browser.tabs.first { $0.id == id } }
+        guard other?.id != side else { return }
+        swapped = false
+        side = other?.id
+        if let other, !other.wake() { other.revive() }
     }
 
     /// The side pane sits right unless a swap put the old active there.
@@ -100,7 +162,15 @@ final class Split: ObservableObject {
     func reconcile(_ browser: Browser, was: Tab.ID? = nil) {
         guard let side else { return }
         guard browser.tabs.contains(where: { $0.id == side }) else { self.side = nil; return }
-        guard side == browser.activeID else { return }
+        guard side == browser.activeID else {
+            // A tab made active without `select` (a close, a new tab): the
+            // pane beside it is its partner's or nobody's.
+            if !pairs.isEmpty, let active = browser.activeID, pairs[active] != side {
+                self.side = pairs[active].flatMap { id in browser.tabs.contains { $0.id == id } ? id : nil }
+                swapped = false
+            }
+            return
+        }
         if let was, was != side, browser.tabs.contains(where: { $0.id == was }) {
             self.side = was
             swapped.toggle()

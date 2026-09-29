@@ -15,6 +15,14 @@ struct TabGroup: Codable, Identifiable, Equatable {
     /// A hue, 0…1, or nil for the plain grey — the same wheel as a Space.
     var hue: Double?
     var collapsed = false
+    /// The space a folder belongs to while it holds nothing. A folder with
+    /// tabs is wherever its tabs are; an empty one Arc brought over needs
+    /// telling where to stand. Nil for everything else.
+    var space: UUID? = nil
+    /// Where an empty folder stands: after this many of its parent's tabs
+    /// (or, at the top, of its block's). Nil is at the foot. A folder with
+    /// tabs is wherever they are, and this means nothing to it.
+    var slot: Int? = nil
 
     var tint: Color { hue.map { Color(hue: $0, saturation: 0.55, brightness: 0.75) } ?? Palette.muted }
 }
@@ -104,6 +112,16 @@ final class Groups: ObservableObject {
         (browser.tabs + Spaces.shared.parkedTabs).filter { membership[$0.id] == id }
     }
 
+    /// The space's empty folders that sit inside no other folder: nothing
+    /// holds them up in the column, so the Saved block draws them last.
+    func homeless(in space: UUID) -> [TabGroup] {
+        let held = Set(membership.values)
+        return all.filter { group in
+            group.space == space && !held.contains(group.id)
+                && !all.contains { Folders.below(group.name, $0.name) }
+        }
+    }
+
     /// The groups with at least one tab in this row, in the order their
     /// first tab appears.
     func present(in tabs: [Tab]) -> [TabGroup] {
@@ -124,6 +142,15 @@ final class Groups: ObservableObject {
         if let existing = group(named: name) { return existing }
         let clean = name.trimmingCharacters(in: .whitespaces)
         let group = TabGroup(name: clean.isEmpty ? "Group \(all.count + 1)" : clean, hue: hue ?? Double(all.count % 8) / 8)
+        all.append(group)
+        save()
+        return group
+    }
+
+    /// A new folder even when one already has the name — an import's, whose
+    /// folders are told apart by the space they stand in.
+    func adding(named name: String, hue: Double?) -> TabGroup {
+        let group = TabGroup(name: name.trimmingCharacters(in: .whitespaces), hue: hue)
         all.append(group)
         save()
         return group
@@ -156,9 +183,14 @@ final class Groups: ObservableObject {
         let clean = name.trimmingCharacters(in: .whitespaces)
         guard !clean.isEmpty, let i = all.firstIndex(where: { $0.id == id }) else { return }
         let was = all[i].name
+        let home = all[i].space
         all[i].name = clean
-        if all.filter({ $0.name == was }).isEmpty {
-            for j in all.indices where Folders.below(all[j].name, was) {
+        // Another space's folder of the same name is no rival: its children
+        // are told apart by their space. (An unmarked folder claims them all,
+        // as it always has.)
+        func mine(_ g: TabGroup) -> Bool { home == nil || g.space == nil || g.space == home }
+        if all.filter({ $0.name == was && mine($0) }).isEmpty {
+            for j in all.indices where Folders.below(all[j].name, was) && mine(all[j]) {
                 all[j].name = clean + Folders.mark + String(all[j].name.dropFirst(was.count + Folders.mark.count))
             }
         }
@@ -171,7 +203,10 @@ final class Groups: ObservableObject {
     func createInside(_ parent: TabGroup, named name: String) -> TabGroup? {
         let clean = name.trimmingCharacters(in: .whitespaces)
         guard !clean.isEmpty else { return nil }
-        let made = create(named: Folders.inside(parent, named: clean), hue: parent.hue)
+        // Its own folder, in the parent's space: the same path may well be
+        // another space's folder already, and `create` would hand that back.
+        let made = adding(named: Folders.inside(parent, named: clean), hue: parent.hue)
+        if let i = all.firstIndex(where: { $0.id == made.id }) { all[i].space = parent.space ?? Spaces.shared.current; save() }
         // A folder inside a plain one is plain too: both wear the space's
         // colour, and `create` would otherwise deal it one off the wheel.
         if parent.hue == nil { tint(made.id, hue: nil) }
@@ -185,6 +220,16 @@ final class Groups: ObservableObject {
     func tint(_ id: UUID, hue: Double?) {
         guard let i = all.firstIndex(where: { $0.id == id }) else { return }
         all[i].hue = hue
+        save()
+    }
+
+    /// An imported folder's state: open or shut, and the space and place it
+    /// stands in while it holds nothing.
+    func imported(_ id: UUID, collapsed: Bool, space: UUID?, slot: Int?) {
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+        all[i].collapsed = collapsed
+        all[i].space = space
+        all[i].slot = slot
         save()
     }
 
@@ -271,6 +316,23 @@ final class Groups: ObservableObject {
         case "inside":
             guard words.count == 2, let parent = group(matching: words[0]) else { return ["error": "inside PARENT NAME"] }
             createInside(parent, named: words[1])
+        case "plan":
+            // `groups plan` draws the Saved block as text, one line a row,
+            // two spaces a step in — what the column shows, shut folders
+            // and all. `groups plan today` draws the other block.
+            let today = arg == "today"
+            let loose = browser.tabs.filter { $0.pin == nil && Sections.shared.isSaved($0) != today }
+            let rows = FolderTree.plan(loose, homeless: today ? [] : homeless(in: Spaces.shared.current), groups: self)
+            let lines: [String] = rows.map { row in
+                switch row {
+                case .head(let g, let count, _, let depth, let label):
+                    return String(repeating: "  ", count: depth) + (g.collapsed ? "▸ " : "▾ ") + label + (g.collapsed ? " (\(count))" : "")
+                case .tab(let tab, _, _, let depth):
+                    return String(repeating: "  ", count: depth) + "· " + tab.title
+                }
+            }
+            return ["plan": lines, "split": Split.shared.side.map { String($0.uuidString.prefix(8)).lowercased() } ?? "",
+                    "pairs": Split.shared.pairs.count / 2]
         default: break
         }
         let rows: [[String: Any]] = all.map { g in

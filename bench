@@ -47,7 +47,7 @@
                                        to its neighbour; colours are Graphite Copper Orange Yellow
                                        Green Teal Blue Indigo Pink Red
     ./bench groups [new NAME|assign ID NAME|remove ID|suggest ID|dissolve NAME]
-    ./bench groups [toggle NAME|inside PARENT NAME]
+    ./bench groups [toggle NAME|inside PARENT NAME|plan [today]]
                                        folders: fold or open one (by its whole "A › B" name or
                                        its last part), or make one inside another
     ./bench sections [save ID|unsave ID|archive [HOURS]|window 12h|24h|48h|never]

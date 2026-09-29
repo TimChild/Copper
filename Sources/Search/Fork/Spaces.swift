@@ -296,16 +296,19 @@ final class Spaces: ObservableObject {
 
             var groups: [UUID: TabGroup] = [:]
             for incomingGroup in incoming.groups {
-                var groupName = incomingGroup.name
-                if Groups.shared.group(named: groupName) != nil {
-                    groupName += " (\(sourceIsArc ? "Arc" : "Chrome"))"
-                }
-                let group = Groups.shared.create(named: groupName, hue: incomingGroup.hue)
+                // Always a folder of its own, under its own name: the nesting
+                // lives in the names and the tree is read per space, so two
+                // spaces' `Misc` stay apart without a suffix — and a suffix
+                // on `Misc` would cut `Misc › BuildrFi` loose from it.
+                let group = Groups.shared.adding(named: incomingGroup.name, hue: incomingGroup.hue)
+                Groups.shared.imported(group.id, collapsed: incomingGroup.collapsed,
+                                       space: incomingGroup.slot == nil ? nil : space.id, slot: incomingGroup.slot)
                 groups[incomingGroup.id] = group
                 groupCount += 1
             }
             var tabs: [Tab] = []
             var active: Tab.ID?
+            var splits: [UUID: [Tab.ID]] = [:]
             for incomingTab in incoming.tabs {
                 let tab = building(for: space.id) { Tab() }
                 browser.prepare(tab)
@@ -316,9 +319,11 @@ final class Spaces: ObservableObject {
                     Groups.shared.restore(tab, group: group.id)
                 }
                 if incomingTab.active { active = tab.id }
+                if let token = incomingTab.split { splits[token, default: []].append(tab.id) }
                 tabs.append(tab)
                 tabCount += 1
             }
+            Split.shared.keep(splits)
             parked[space.id] = (tabs, active ?? tabs.first?.id)
         }
         objectWillChange.send()
@@ -368,6 +373,7 @@ final class Spaces: ObservableObject {
     func shape(visible: [Tab], active: Tab.ID?) -> Session.Shape {
         var entries: [Session.Entry] = []
         var activeIndex = 0
+        let alive = Set((visible + parked.values.flatMap(\.tabs)).map(\.id))
         func put(_ tabs: [Tab], _ id: UUID, _ activeID: Tab.ID?, visible: Bool) {
             for tab in tabs {
                 guard var entry = Session.Entry(tab) else { continue }
@@ -376,6 +382,7 @@ final class Spaces: ObservableObject {
                 entry.saved = tab.pin == nil ? Sections.shared.isSaved(tab) : nil
                 entry.seen = Sections.shared.lastSeen(tab).timeIntervalSince1970
                 entry.active = tab.id == activeID ? true : nil
+                entry.split = Split.shared.token(for: tab.id, alive: alive)
                 if visible, entry.active == true { activeIndex = entries.count }
                 entries.append(entry)
             }
@@ -396,6 +403,7 @@ final class Spaces: ObservableObject {
             current = saved.space.flatMap { c in spaces.first { $0.id == c }?.id } ?? spaces[0].id
         }
         var rows: [UUID: (tabs: [Tab], active: Tab.ID?)] = [:]
+        var splits: [UUID: [Tab.ID]] = [:]
         Sections.shared.clear()
         for (i, entry) in saved.tabs.enumerated() {
             guard let url = URL(string: entry.url) else { continue }
@@ -408,12 +416,14 @@ final class Spaces: ObservableObject {
             // something you kept, so the whole column comes back as Saved.
             Sections.shared.restore(tab, saved: entry.saved ?? true, seen: entry.seen)
             Groups.shared.restore(tab, group: entry.group)
+            if let token = entry.split { splits[token, default: []].append(tab.id) }
             var row = rows[id] ?? ([], nil)
             row.tabs.append(tab)
             // Upstream's file has no `active` flag — its `active` index does.
             if entry.active == true || (entry.space == nil && i == saved.active) { row.active = tab.id }
             rows[id] = row
         }
+        Split.shared.restore(splits)
         let mine = rows.removeValue(forKey: current) ?? ([], nil)
         parked = rows
         browser.tabs = mine.tabs
@@ -425,6 +435,7 @@ final class Spaces: ObservableObject {
         Recent.shared.rebuild(from: browser.tabs)
         Sections.shared.note(active.id)
         _ = active.wake()
+        Split.shared.resume(in: browser)
     }
 }
 

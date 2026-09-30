@@ -42,6 +42,9 @@
     ./bench spaces [new NAME|select N|next|prev|move N|remove N [--keep]|profile NAME]
     ./bench spaces [icon N EMOJI|sf:symbol|none|colour N NAME|reorder N M|edit [N]]
     ./bench spaces [delete N|answer close|move|cancel]
+    ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|clear]
+                                       a space's own theme, as the Edit Space popover sets it
+    ./bench spaces picture N PATH      the Edit Space popover as a PNG, drawn off screen
                                        the Delete Space sheet, and its buttons
                                        spaces by index or name; --keep moves a deleted space's tabs
                                        to its neighbour; colours are Graphite Copper Orange Yellow
@@ -285,9 +288,11 @@ def main(argv):
             print(f"latency: {answer['milliseconds']:.2f} ms")
     elif verb == "spaces":
         if "sheet" in answer: print(json.dumps(answer["sheet"], ensure_ascii=False))
+        if "path" in answer: print(answer["path"])
         for s in answer.get("spaces", []):
             icon = f" {s['icon']}" if s.get("icon") else ""
             print(f"{'●' if s['current'] else ' '} {s['index']}  {s['name']}{icon}  ({s['tabs']} tabs, {s['profile']}, {s.get('colour', '')})")
+            if s.get("theme") and s["theme"] != "hue": print(f"      theme {s['theme']}")
     elif verb == "sections":
         if "archived" in answer:
             print(f"archived {answer['archived']} tab(s)")

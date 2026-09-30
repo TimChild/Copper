@@ -532,7 +532,8 @@ extension Spaces {
     /// [--keep]` (the tabs go to the neighbour instead of closing),
     /// `spaces edit [N|NAME]` (the editor, on the header), `spaces delete
     /// N|NAME` (the sheet) and `spaces answer close|move|cancel` (its
-    /// buttons), `spaces profile NAME`.
+    /// buttons), `spaces profile NAME`, `spaces theme N|NAME colors|intensity|
+    /// grain|image|clear …` (see `benchTheme`).
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         func find(_ key: String) -> UUID? {
             if let n = Int(key), all.indices.contains(n) { return all[n].id }
@@ -582,12 +583,72 @@ extension Spaces {
             guard SpaceDelete.answer(arg) else { return ["error": "no sheet up, or no \(arg) button on it"] }
             return ["answered": arg, "did": SpaceDelete.last]
         case "profile": profile(current, named: arg)
+        case "theme":
+            if let error = benchTheme(words, find: find) { return ["error": error] }
+        case "picture":
+            // `picture N PATH`: the Edit Space popover as a PNG, drawn off
+            // screen, since a popover will not stay up behind other apps.
+            guard words.count >= 2, let id = find(key) else { return ["error": "spaces picture N|NAME PATH"] }
+            guard let png = SpaceEditing.picture(of: id, in: browser)?.representation(using: .png, properties: [:]) else {
+                return ["error": "no picture"]
+            }
+            do { try png.write(to: URL(fileURLWithPath: value)) } catch { return ["error": "\(error)"] }
+            return ["path": value]
         default: break
         }
         return ["spaces": all.enumerated().map { i, s in
             ["index": i, "name": s.name, "current": s.id == current, "profile": s.profile ?? "shared",
              "tabs": count(of: s.id, in: browser), "hue": s.hue ?? -1, "colour": SpaceColour.nearest(s.hue).name,
-             "icon": s.icon ?? ""] as [String: Any]
+             "icon": s.icon ?? "", "theme": s.theme.map(Spaces.describe) ?? "hue"] as [String: Any]
         }]
+    }
+
+    /// A theme in one line, for the bench's list.
+    private static func describe(_ theme: SpaceTheme) -> String {
+        var line = theme.colors.map(\.hex).joined(separator: ",")
+            + String(format: " intensity %.2f grain %.2f", theme.intensity, theme.grain)
+        if let image = theme.image { line += " image \(image)" }
+        return line
+    }
+
+    /// `spaces theme N|NAME colors #hex[,#hex,#hex] | intensity X | grain X
+    /// | image PATH|none | clear`: what the theme editor does, by the same
+    /// doors — `theme(_:_:)` for every change, `SpaceTheme.adopt` for a
+    /// picture — so a picture can be tried without an open panel. A space
+    /// on a plain hue starts from that hue's theme, as the editor does.
+    /// Nil when it worked, or what was wrong.
+    private func benchTheme(_ words: [String], find: (String) -> UUID?) -> String? {
+        let usage = "spaces theme N|NAME colors #hex[,#hex..]|intensity X|grain X|image PATH|none|clear"
+        let verbs: Set = ["colors", "colours", "intensity", "grain", "image", "clear"]
+        guard let at = words.firstIndex(where: { verbs.contains($0) }), at > 0,
+              let id = find(words[..<at].joined(separator: " ")),
+              let space = all.first(where: { $0.id == id }) else { return usage }
+        // The value is the rest of the line, spaces and all — a path in
+        // Desktop Pictures has them.
+        let value = words[(at + 1)...].joined(separator: " ")
+        var look = space.look
+        switch words[at] {
+        case "clear":
+            theme(id, nil)
+            return nil
+        case "colors", "colours":
+            let stops = value.split(separator: ",").compactMap { SpaceTheme.Stop(hex: String($0)) }
+            guard (1...3).contains(stops.count) else { return "one to three colours, as #rrggbb,#rrggbb" }
+            look.colors = stops
+        case "intensity", "grain":
+            guard let x = Double(value) else { return usage }
+            if words[at] == "intensity" { look.intensity = min(1, max(0.2, x)) } else { look.grain = min(1, max(0, x)) }
+        default:
+            if value == "none" {
+                look.image = nil
+            } else {
+                let url = URL(fileURLWithPath: (value as NSString).expandingTildeInPath)
+                guard FileManager.default.fileExists(atPath: url.path) else { return "no file at \(url.path)" }
+                guard let name = SpaceTheme.adopt(image: url) else { return "could not copy \(url.path) in" }
+                look.image = name
+            }
+        }
+        theme(id, look)
+        return nil
     }
 }

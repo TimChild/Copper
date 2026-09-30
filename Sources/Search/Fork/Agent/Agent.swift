@@ -186,6 +186,9 @@ final class Agent: ObservableObject {
             messages.append(assistant)
             if !content.isEmpty { items.append(Item(kind: .assistant, text: content)) }
             guard !calls.isEmpty else { status = ""; return }
+            // What the model said before reaching for a tool is its reason;
+            // the pane beside the page shows it over the calls that follow.
+            if !content.isEmpty { pendingThought = content }
 
             var pictures: [Data] = []
             for call in calls {
@@ -240,6 +243,9 @@ final class Agent: ObservableObject {
             }
         }
         if MCP.shared.config.announces { browser.announce("Agent · \(name)") }
+        if let refusal = Drive.shared.refusal { Drive.shared.refused(call: name, args: args, by: .pane); return (refusal, true) }
+        let ticket = Drive.shared.began(call: name, args: args, by: .pane, tab: browser.active)
+        if let thought = pendingThought { Drive.shared.thought(thought); pendingThought = nil }
         do {
             let content = try await Tools.call(name, args, in: browser)
             var texts: [String] = []
@@ -249,11 +255,18 @@ final class Agent: ObservableObject {
                 case .image(let data, _): pictures.append(data); texts.append("[screenshot attached]")
                 }
             }
+            if let ticket { Drive.shared.ended(ticket, error: nil, tab: browser.active) }
             return (texts.joined(separator: "\n"), false)
         } catch {
-            return ((error as? Tools.Failure)?.text ?? error.localizedDescription, true)
+            let text = (error as? Tools.Failure)?.text ?? error.localizedDescription
+            if let ticket { Drive.shared.ended(ticket, error: text, tab: browser.active) }
+            return (text, true)
         }
     }
+
+    /// The model's words from the turn that is now calling tools, until the
+    /// first call has a run to put them in.
+    private var pendingThought: String?
 
     // MARK: - the wire
 

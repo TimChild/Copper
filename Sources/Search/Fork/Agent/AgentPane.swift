@@ -96,7 +96,7 @@ struct AgentPane: View {
 
     /// Whether another pane is open beside this one — read off the two other
     /// objects so the header redraws as they change.
-    @ObservedObject private var trace = JevTrace.shared
+    @ObservedObject private var trace = Drive.shared
     @ObservedObject private var split = Split.shared
     private var several: Bool { (trace.paneOpen ? 1 : 0) + (split.on ? 1 : 0) > 0 }
 

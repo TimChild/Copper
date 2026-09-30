@@ -46,20 +46,32 @@ enum Tools {
         }
     }
 
+    /// What every tool tells the agent about `reason`: the user is watching.
+    static let reasonNote = "The user watches every call in a pane beside the page: pass `reason` (one short sentence: what you are doing and why) on each call, and `element` for anything you click or type into. If a call answers \"Stopped by the user\", stop and say so — do not retry."
+
     static func instructions(jev: Bool) -> String {
         guard jev else {
-            return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. First action: call browser_snapshot with interactive: true on the current tab, then act with its refs. Call browser_tabs only when another tab is named. Take a screenshot when layout matters. Nothing is sandboxed — act as the user would. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values."
+            return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. First action: call browser_snapshot with interactive: true on the current tab, then act with its refs. Call browser_tabs only when another tab is named. Take a screenshot when layout matters. Nothing is sandboxed — act as the user would. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(reasonNote)"
         }
-        return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. ANY task: the FIRST call is jev_run with the whole goal, every concrete place/date/name/filter and stop condition; no browser_tabs or snapshot first. Add url only for a named page that is not current. jev_observe = fast indexed read; jev_extract = JSON values; jev_step = one decision. BLOCKED → browser_snapshot/click/type for that part, then jev_run again. DONE is Jev's claim — verify with jev_observe/jev_extract. Screenshot when layout matters; nothing is sandboxed — act as the user. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values."
+        return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. ANY task: the FIRST call is jev_run with the whole goal, every concrete place/date/name/filter and stop condition; no browser_tabs or snapshot first. Add url only for a named page that is not current. jev_observe = fast indexed read; jev_extract = JSON values; jev_step = one decision. BLOCKED → browser_snapshot/click/type for that part, then jev_run again. DONE is Jev's claim — verify with jev_observe/jev_extract. Screenshot when layout matters; nothing is sandboxed — act as the user. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(reasonNote)"
     }
 
     // MARK: - the catalogue
 
+    /// Every tool takes `reason`: one sentence the user reads in the pane
+    /// beside the page while the agent works. Optional, never acted on.
+    static let reasonProperty: [String: Any] = [
+        "type": "string",
+        "description": "One short sentence on what you are doing and why — shown to the user watching the browser",
+    ]
+
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any] = [:], required: [String] = []) -> [String: Any] {
-        [
+        var all = properties
+        if all["reason"] == nil { all["reason"] = reasonProperty }
+        return [
             "name": name,
             "description": description,
-            "inputSchema": ["type": "object", "properties": properties, "required": required] as [String: Any],
+            "inputSchema": ["type": "object", "properties": all, "required": required] as [String: Any],
         ]
     }
 
@@ -233,6 +245,11 @@ enum Tools {
             let button = (args["button"] as? String) ?? "left"
             let double = (args["doubleClick"] as? Bool) ?? false
             let mods = Input.modifiers(from: args["modifiers"] as? [String] ?? [])
+            // cosmetic only: the target outlined and named, the pointer
+            // brought to it, the press marked — what the user sees of the call.
+            trail(web, rect, label: args["element"] as? String, operation: "CLICK")
+            await Trail.glide(web, x: rect.midX / web.pageZoom, y: rect.midY / web.pageZoom)
+            Trail.click(web, x: rect.midX / web.pageZoom, y: rect.midY / web.pageZoom)
             if Input.canPost(to: web) {
                 Input.click(web, at: rect.center, button: button, count: double ? 2 : 1, modifiers: mods)
             } else {
@@ -243,6 +260,8 @@ enum Tools {
         case "browser_hover":
             let target = try locator(args)
             let rect = try await Page.prepare(web, target)
+            trail(web, rect, label: args["element"] as? String, operation: "HOVER")
+            await Trail.glide(web, x: rect.midX / web.pageZoom, y: rect.midY / web.pageZoom)
             if Input.canPost(to: web) { Input.move(web, to: rect.center) }
             else { _ = try await Page.js(web, "window.__copper.hover(\(Page.quote(target.script)))") }
             return [.text("Hovering \(args["element"] as? String ?? target.script)")]
@@ -252,6 +271,9 @@ enum Tools {
             let submit = (args["submit"] as? Bool) ?? false
             let slowly = (args["slowly"] as? Bool) ?? false
             let rect = try await Page.prepare(web, target)
+            trail(web, rect, label: args["element"] as? String, operation: "TYPE_TEXT")
+            await Trail.glide(web, x: rect.midX / web.pageZoom, y: rect.midY / web.pageZoom)
+            Trail.click(web, x: rect.midX / web.pageZoom, y: rect.midY / web.pageZoom)
             if Input.canPost(to: web) {
                 Input.click(web, at: rect.center, button: "left", count: 1, modifiers: [])
                 try await Task.sleep(nanoseconds: 60_000_000)
@@ -261,12 +283,18 @@ enum Tools {
                 } else {
                     _ = try await Page.js(web, "window.__copper.setValue(\(Page.quote(target.script)), \(Page.quote(text)))")
                 }
-                if submit { Input.key(web, "Enter", modifiers: []) }
             } else {
                 _ = try await Page.js(web, "window.__copper.setValue(\(Page.quote(target.script)), \(Page.quote(text)))")
-                if submit { _ = try await Page.js(web, "window.__copper.submit(\(Page.quote(target.script)))") }
             }
-            if submit { try await settle(tab, budget: 3) }
+            // cosmetic only: what was written, beside the field — masked when
+            // the field sounds like a secret, the same fence the link progress uses.
+            Trail.typed(web, x: rect.midX / web.pageZoom, y: rect.midY / web.pageZoom,
+                        text: JevProgress.looksSecret(((args["element"] as? String) ?? "") + " " + target.script) ? "•••" : text)
+            if submit {
+                if Input.canPost(to: web) { Input.key(web, "Enter", modifiers: []) }
+                else { _ = try await Page.js(web, "window.__copper.submit(\(Page.quote(target.script)))") }
+                try await settle(tab, budget: 3)
+            }
             return [.text("Typed into \(args["element"] as? String ?? target.script)\(submit ? " and submitted" : ""). \(pageLine(tab))")]
         case "browser_fill_form":
             guard let fields = args["fields"] as? [[String: Any]] else { throw Failure(text: "fields required") }
@@ -298,6 +326,10 @@ enum Tools {
             guard let a = args["startRef"] as? String, let b = args["endRef"] as? String else { throw Failure(text: "startRef and endRef") }
             let from = try await Page.prepare(web, Locator(ref: a))
             let to = try await Page.prepare(web, Locator(ref: b))
+            trail(web, from, label: args["startElement"] as? String, operation: "DRAG")
+            Trail.click(web, x: from.midX / web.pageZoom, y: from.midY / web.pageZoom)
+            await Trail.glide(web, x: to.midX / web.pageZoom, y: to.midY / web.pageZoom)
+            Trail.click(web, x: to.midX / web.pageZoom, y: to.midY / web.pageZoom)
             if Input.canPost(to: web) {
                 Input.drag(web, from: from.center, to: to.center)
             } else {
@@ -349,6 +381,7 @@ enum Tools {
             }
             let y = dy ?? (web.bounds.height * 0.85)
             let within = (args["ref"] as? String).map { "ref:" + $0 } ?? ""
+            Trail.scroll(web, delta: y)
             _ = try await Page.js(web, "window.__copper.scroll(\(Page.quote(within)), \(dx), \(y))")
             try await Task.sleep(nanoseconds: 120_000_000)
             return [.text("Scrolled by \(Int(dx)),\(Int(y)). \(pageLine(tab))")]
@@ -461,6 +494,16 @@ enum Tools {
         if let ref = args["ref"] as? String, !ref.isEmpty { return Locator(ref: ref) }
         if let css = args["selector"] as? String, !css.isEmpty { return Locator(css: css) }
         throw Failure(text: "ref (from browser_snapshot) or selector required")
+    }
+
+    /// The trail's outline over the element a tool is about to act on. The
+    /// rect from `Page.prepare` is in view points; the trail draws in the
+    /// page's CSS pixels, so the zoom comes back out.
+    @MainActor
+    static func trail(_ web: WKWebView, _ rect: CGRect, label: String?, operation: String) {
+        let z = max(web.pageZoom, 0.01)
+        Trail.target(web, rect: ["x": rect.minX / z, "y": rect.minY / z, "w": rect.width / z, "h": rect.height / z],
+                     label: label, operation: operation)
     }
 
     @MainActor

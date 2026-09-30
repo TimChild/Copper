@@ -192,3 +192,35 @@ enum MouseButtons {
                 "url": browser.active?.address?.absoluteString ?? ""]
     }
 }
+
+/// Where every favourite and row of the column is, for the wheel button:
+/// each hands up its own bounds, the scroll hands up the part of the column
+/// the rows can be seen in, and the column's one listener asks which is
+/// under the click. Anchors rather than frames, so nothing is measured until
+/// a click comes — no reader per row, and no redraw when a row moves.
+struct SideTargets: PreferenceKey, Equatable {
+    var pins: [Tab.ID: Anchor<CGRect>] = [:]
+    var rows: [Tab.ID: Anchor<CGRect>] = [:]
+    /// The scroll the rows live in. A row scrolled off the top still has a
+    /// frame, and it is under the favourites.
+    var window: Anchor<CGRect>?
+
+    static let defaultValue = SideTargets()
+
+    static func reduce(value: inout SideTargets, nextValue: () -> SideTargets) {
+        let next = nextValue()
+        value.pins.merge(next.pins) { $1 }
+        value.rows.merge(next.rows) { $1 }
+        value.window = next.window ?? value.window
+    }
+
+    /// The tab under a point in SwiftUI's global space (as the sidebar
+    /// notification carries it), read in the listener's own geometry.
+    func hit(_ point: CGPoint, in geo: GeometryProxy) -> Tab.ID? {
+        let origin = geo.frame(in: .global).origin
+        let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        if let pin = pins.first(where: { geo[$0.value].contains(local) }) { return pin.key }
+        if let window, !geo[window].contains(local) { return nil }
+        return rows.first { geo[$0.value].contains(local) }?.key
+    }
+}

@@ -907,6 +907,13 @@ struct HistorySettingsLine: View {
 extension Browser {
     /// Settings, opened on one page.
     func openSettings(_ page: SettingsPanel.Page) {
+        // Extensions has a page of its own over the window: every "Manage
+        // Extensions…" — the pill's puzzle piece, the list's foot, the top
+        // row's list — lands there rather than on Settings' short list.
+        if page == .extensions, #available(macOS 15.4, *) {
+            ExtensionManager.shared.open(in: self)
+            return
+        }
         settingsPage = page
         Store.settings.set(page.rawValue, forKey: "settings.page")
         tuning = true

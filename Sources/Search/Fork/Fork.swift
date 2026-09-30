@@ -50,6 +50,7 @@ enum Fork {
         case "flow": return Flow.shared.bench(request, in: browser)
         case "history": return Flow.shared.bench(request, in: browser)
         case "spaces": return Spaces.shared.bench(request, in: browser)
+        case "ext-manager": return ExtensionManager.shared.bench(request, in: browser)
         case "groups": return Groups.shared.bench(request, in: browser)
         case "sections": return Sections.shared.bench(request, in: browser)
         case "passkeys": return PasskeysBench.handle(request)

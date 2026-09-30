@@ -33,6 +33,17 @@
     ./bench ext-answer yes|no|ask      test run: answer extensions' questions without asking; lists what was asked
     ./bench ext-enable ID on|off       switch an extension on or off
     ./bench ext-remove ID
+    ./bench ext-manager [open [ID]|close|toggle|manage|expand ID|none|search TEXT]
+                                       the Extensions page over the window (the foot's puzzle door,
+                                       the pill's puzzle piece, every Manage Extensions…); ID opens
+                                       that one's details; manage goes the way the puzzle piece does;
+                                       `window PATH` takes it as it is on screen
+    ./bench ext-manager picture PATH [light|dark]
+                                       the page drawn off screen, every row laid out whole
+    ./bench ext-manager site ID PATTERN on|off
+                                       allow or take back one site it asked for (kept across launches)
+    ./bench ext-manager remove ID | answer remove|cancel
+                                       the Remove sheet, and its buttons
     ./bench updates status|check|stub URL|dry-run on|off|upgrade
     ./bench downloads [open|close|cancel ID|retry ID|clear|start URL]
     ./bench bw status|server URL|login EMAIL PW [OTP]|unlock PW|lock|sync|candidates HOST|choose ID
@@ -184,7 +195,7 @@ def main(argv):
             request["arg"] = args[1]
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads"):
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "ext-manager"):
         request["op"] = args[0] if args else ("status" if verb in ("updates", "bw") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "history":

@@ -54,8 +54,11 @@ private struct Visit: Codable {
 @MainActor
 final class History: ObservableObject {
     private var visits: [String: Visit] = [:] {
-        didSet { objectWillChange.send() }
+        didSet { objectWillChange.send(); flat = nil } // Fork (new-tab-launcher): see `places`
     }
+    /// Fork (new-tab-launcher): `places`, built once per change to history
+    /// rather than once per keystroke.
+    private var flat: [Place]?
     private var saving = false
 
     init() { load() }
@@ -184,6 +187,30 @@ final class History: ObservableObject {
     }
 
     // MARK: - reading
+
+    /// Fork (new-tab-launcher): one place you have been, as plain values, so
+    /// ⌘T can rank the whole of history on another thread while you type.
+    /// The lowercased title is worked out here, once, instead of once per
+    /// place per keystroke.
+    struct Place: Sendable {
+        let key: String
+        let title: String
+        let lowered: String
+        let url: String
+        let count: Int
+        let last: Date
+    }
+
+    /// Fork (new-tab-launcher): every place, flat. Rebuilt lazily after
+    /// history changes — which is a page visit, never a keystroke.
+    var places: [Place] {
+        if let flat { return flat }
+        let built = visits.values.map {
+            Place(key: $0.key, title: $0.title, lowered: $0.title.lowercased(), url: $0.url, count: $0.count, last: $0.last)
+        }
+        flat = built
+        return built
+    }
 
     /// Best matches first. A place you have been always beats a place the app
     /// merely knows the name of, and among places you have been, one you go to

@@ -358,7 +358,7 @@ struct SideBar: View {
     /// right under the rows you keep.
     private var newTab: some View {
         Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.hover, ink: tint.muted) {
-            browser.newTab()
+            browser.launch() // Fork: the ⌘T card, as Arc's New Tab row opens it
         }
     }
 

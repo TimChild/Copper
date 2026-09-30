@@ -31,6 +31,14 @@ struct CommandPalette: View {
     @State private var place = WindowRuler.Place()
     /// The site marks, arriving a moment after the rows they belong to.
     @ObservedObject private var marks = Marks.ticker
+    /// ⌘T's groups and their headings (Fork/Launcher).
+    @ObservedObject private var launcher = Launcher.shared
+
+    /// Fixed so the card's height can be worked out before it is drawn: a
+    /// scroll view left to size itself takes all the room it is offered,
+    /// and a card with three rows would stand as tall as the window.
+    private static let rowHeight: CGFloat = 40
+    private static let headingHeight: CGFloat = 28
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -105,7 +113,7 @@ struct CommandPalette: View {
                 browser: browser,
                 literal: true,
                 size: 17.5,
-                placeholder: "Search or enter an address"
+                placeholder: browser.launching ? "Search or Enter URL…" : "Search or enter an address"
             )
             .frame(height: 24)
         }
@@ -113,16 +121,63 @@ struct CommandPalette: View {
         .frame(height: 56)
     }
 
+    @ViewBuilder
     private var rows: some View {
-        VStack(spacing: 1) {
-            ForEach(Array(browser.offers.enumerated()), id: \.offset) { index, offer in
-                Row(offer: offer, picked: browser.picked == index, tint: tint, stamp: marks.landed)
-                    .contentShape(Rectangle())
-                    .onTapGesture { browser.take(offer) }
+        if browser.launching {
+            grouped
+        } else {
+            VStack(spacing: 1) {
+                ForEach(Array(browser.offers.enumerated()), id: \.offset) { index, offer in
+                    Row(offer: offer, picked: browser.picked == index, tint: tint, stamp: marks.landed)
+                        .contentShape(Rectangle())
+                        .onTapGesture { browser.take(offer) }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+        }
+    }
+
+    /// ⌘T's rows, in their groups, each group under a small heading. Taller
+    /// than the window allows, the list scrolls, and follows the arrow keys.
+    private var grouped: some View {
+        ScrollViewReader { reader in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(browser.offers.enumerated()), id: \.offset) { index, offer in
+                        if let heading = launcher.headings[index] {
+                            Text(heading)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Palette.muted)
+                                .padding(.horizontal, 12)
+                                .frame(height: CommandPalette.headingHeight, alignment: .bottomLeading)
+                                .padding(.bottom, 2)
+                        }
+                        Row(offer: offer, picked: browser.picked == index, tint: tint, stamp: marks.landed,
+                            aside: browser.picked == index ? Launcher.aside(for: offer, in: browser) : "")
+                            .contentShape(Rectangle())
+                            .onTapGesture { browser.take(offer) }
+                            .id(index)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+            }
+            .frame(height: groupedHeight)
+            .onChange(of: browser.picked) { _, picked in
+                guard let picked else { return }
+                withAnimation(Motion.quick) { reader.scrollTo(picked) }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
+    }
+
+    /// As tall as the rows, and no taller than the window below the card.
+    private var groupedHeight: CGFloat {
+        let rows = CGFloat(browser.offers.count)
+        let headings = CGFloat(launcher.headings.keys.filter { $0 < browser.offers.count }.count)
+        let natural = rows * (CommandPalette.rowHeight + 1) + headings * (CommandPalette.headingHeight + 3) + 16
+        let room = place.height > 0 ? place.height * (1 - CommandPalette.drop) - 56 - 40 : 480
+        return min(natural, max(room, 200))
     }
 
     /// The space's own colour, so the selected row belongs to where you are.
@@ -135,6 +190,9 @@ struct CommandPalette: View {
         /// Changes when a site mark lands, which is the only thing that can
         /// make a row draw differently without the row itself changing.
         let stamp: Int
+        /// ⌘T: the other ways to take this row — "⇧↩ Background" — said
+        /// only on the row Return would take.
+        var aside: String = ""
 
         @State private var hovering = false
 
@@ -186,6 +244,13 @@ struct CommandPalette: View {
                 // saying the same thing six times — but laid out on every
                 // row, so selecting one changes what the row looks like and
                 // never what it is shaped like.
+                if !aside.isEmpty {
+                    Text(aside)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted.opacity(0.85))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
                 if !offer.hint.isEmpty {
                     Text(offer.hint)
                         .font(.system(size: 12, weight: .medium))
@@ -196,7 +261,7 @@ struct CommandPalette: View {
                 }
             }
             .padding(.horizontal, 12)
-            .frame(height: 40)
+            .frame(height: CommandPalette.rowHeight)
             .background {
                 if picked {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)

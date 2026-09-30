@@ -738,10 +738,16 @@ struct Door: View {
 /// The address, at the top of the column where Arc keeps it: the site's host
 /// on a soft field, and the doors for downloads and extensions at its end.
 /// A click is ⌘L — the omnibox, with the whole address to change.
+///
+/// The extensions come out only under the pointer, as Arc's do: the pinned
+/// ones, then the puzzle piece last, which goes to Settings › Extensions.
+/// The host gives them its room and truncates, rather than sitting under
+/// them. Downloads, while there are any, stay put ahead of them.
 struct SideAddress: View {
     @ObservedObject var browser: Browser
     let tint: SpaceTint
     @ObservedObject private var downloads = Downloads.shared
+    @ObservedObject private var bench = SideAddressHover.shared
     @State private var hovering = false
 
     var body: some View {
@@ -763,17 +769,20 @@ struct SideAddress: View {
                 DownloadsDoor(browser: browser, size: 24, arrowEdge: .bottom)
                     .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
-            ExtensionSlot(edge: .bottom)
+            ExtensionSlot(edge: .bottom, reveal: hovering || bench.forced, ink: tint.ink, glow: tint.hover) {
+                browser.openSettings(.extensions)
+            }
         }
         .padding(.leading, 12)
         .padding(.trailing, 5)
         .frame(height: 36)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(hovering ? tint.hover : tint.square)
+                .fill(hovering || bench.forced ? tint.hover : tint.square)
         )
         .onHover { hovering = $0 }
         .animation(Motion.quick, value: hovering)
+        .animation(Motion.quick, value: bench.forced)
         .animation(Motion.settle, value: downloads.doorShowing)
     }
 
@@ -800,6 +809,7 @@ struct SideAddress: View {
             Text("Search or Enter URL…")
                 .font(.system(size: 14.5))
                 .foregroundStyle(tint.faint)
+                .lineLimit(1)
         }
     }
 
@@ -808,4 +818,12 @@ struct SideAddress: View {
         guard let host = url.host(), !host.isEmpty else { return url.absoluteString }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
+}
+
+/// The pointer over the address pill, as the bench fakes it: `ui
+/// addressHover on` for a picture of what comes out under it. (Fork)
+@MainActor
+final class SideAddressHover: ObservableObject {
+    static let shared = SideAddressHover()
+    @Published var forced = false
 }

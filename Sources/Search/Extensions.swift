@@ -736,6 +736,9 @@ final class Extensions: NSObject, ObservableObject {
 
     /// The list behind the puzzle button.
     @Published var menuOpen = false
+    /// A popup is up. (Fork) The address pill only shows its buttons under
+    /// the pointer, and has to keep them while one hangs from them.
+    @Published var popupShowing = false
     /// Where a popup hangs when its extension isn't pinned: the puzzle button.
     static let menuAnchor = "__menu"
 
@@ -1014,10 +1017,21 @@ struct ExtensionSlot: View {
     /// The side the list opens toward: down from the top row, out to the
     /// right from the sidebar.
     var edge: Edge = .bottom
+    /// Fork: the sidebar's address pill shows the buttons only while the
+    /// pointer is over it, the way Arc does. Nil is always shown, as in
+    /// the top row.
+    var reveal: Bool? = nil
+    /// Fork: a tinted column's ink and hover, as `Door` takes them.
+    var ink: Color? = nil
+    var glow: Color? = nil
+    /// Fork: where the puzzle button goes instead of opening the list —
+    /// the pill sends it to Settings › Extensions, and keeps the list on a
+    /// right-click.
+    var manage: (() -> Void)? = nil
 
     var body: some View {
         if #available(macOS 15.4, *) {
-            ExtensionButtons(extensions: .shared, edge: edge)
+            ExtensionButtons(extensions: .shared, edge: edge, reveal: reveal, ink: ink, glow: glow, manage: manage)
         }
     }
 }
@@ -1026,21 +1040,72 @@ struct ExtensionSlot: View {
 private struct ExtensionButtons: View {
     @ObservedObject var extensions: Extensions
     let edge: Edge
+    var reveal: Bool? = nil
+    var ink: Color? = nil
+    var glow: Color? = nil
+    var manage: (() -> Void)? = nil
+
+    /// What is on screen, which trails what is wanted by a moment on the
+    /// way out: a row pressed in the list closes the list a beat before its
+    /// popup opens, and the puzzle button it hangs from has to still be
+    /// there when it does.
+    @State private var shown = false
+    /// Bumped by every change, so a late hide from an earlier one lets go.
+    @State private var turn = 0
+
+    /// Under the pointer, or holding up a popover of its own.
+    private var wanted: Bool {
+        guard let reveal else { return true }
+        return reveal || extensions.menuOpen || extensions.popupShowing
+    }
 
     var body: some View {
         if !extensions.installed.isEmpty {
-            HStack(spacing: 2) {
-                ForEach(extensions.buttons.filter(\.pinned)) { button in
-                    ActionButton(button: button) { extensions.press(button.id) }
-                        .background(Anchor(id: button.id))
-                        .contextMenu { ExtensionActions(id: button.id, name: button.name, extensions: extensions) }
+            Group {
+                if reveal == nil || shown {
+                    buttons
+                        .transition(.opacity.combined(with: .offset(x: 6)))
                 }
-                Door(icon: "puzzlepiece.extension", on: extensions.menuOpen, help: "Extensions") {
-                    extensions.menuOpen.toggle()
+            }
+            .onAppear { shown = wanted }
+            .onChange(of: wanted) { _, now in
+                turn += 1
+                if now {
+                    withAnimation(Motion.quick) { shown = true }
+                } else {
+                    let mine = turn
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        if turn == mine { withAnimation(Motion.quick) { shown = false } }
+                    }
                 }
-                .background(Anchor(id: Extensions.menuAnchor))
-                .popover(isPresented: $extensions.menuOpen, arrowEdge: edge) {
-                    ExtensionMenu(extensions: extensions)
+            }
+        }
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 2) {
+            ForEach(extensions.buttons.filter(\.pinned)) { button in
+                ActionButton(button: button, ink: ink, glow: glow) { extensions.press(button.id) }
+                    .background(Anchor(id: button.id))
+                    .contextMenu { ExtensionActions(id: button.id, name: button.name, extensions: extensions) }
+            }
+            // Rightmost, whichever way it opens.
+            Door(icon: "puzzlepiece.extension", on: extensions.menuOpen,
+                 help: manage == nil ? "Extensions" : "Manage extensions",
+                 ink: ink, glow: glow) {
+                if let manage { manage() } else { extensions.menuOpen.toggle() }
+            }
+            .background(Anchor(id: Extensions.menuAnchor))
+            .popover(isPresented: $extensions.menuOpen, arrowEdge: edge) {
+                ExtensionMenu(extensions: extensions)
+            }
+            .contextMenu {
+                if manage != nil {
+                    SwiftUI.Button("Show Extensions List") { extensions.menuOpen = true }
+                    SwiftUI.Button("Manage Extensions…") { manage?() }
+                    Divider()
+                    SwiftUI.Button("Chrome Web Store…") { extensions.browser?.open(Browser.webStore, foreground: true) }
+                    SwiftUI.Button("Load Unpacked…") { extensions.installFolder() }
                 }
             }
         }
@@ -1048,16 +1113,18 @@ private struct ExtensionButtons: View {
 
     private struct ActionButton: View {
         let button: Extensions.Button
+        var ink: Color? = nil
+        var glow: Color? = nil
         let press: () -> Void
         @State private var hovering = false
 
         var body: some View {
             SwiftUI.Button(action: press) {
-                ExtensionIcon(button: button, size: 15)
+                ExtensionIcon(button: button, size: 15, ink: ink)
                     .frame(width: 26, height: 26)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(hovering ? Palette.hover : .clear)
+                            .fill(hovering ? (glow ?? Palette.hover) : .clear)
                     )
                     .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
@@ -1086,6 +1153,8 @@ private struct ExtensionButtons: View {
 private struct ExtensionIcon: View {
     let button: Extensions.Button
     let size: CGFloat
+    /// Fork: the letter of one with no icon, in a tinted column's ink.
+    var ink: Color? = nil
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -1097,9 +1166,9 @@ private struct ExtensionIcon: View {
                     // pass for the button the list opens from.
                     Text(button.name.first.map { String($0).uppercased() } ?? "?")
                         .font(.system(size: size * 0.62, weight: .semibold))
-                        .foregroundStyle(Palette.muted)
+                        .foregroundStyle(ink?.opacity(0.72) ?? Palette.muted)
                         .frame(width: size, height: size)
-                        .background(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).fill(Palette.wash))
+                        .background(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).fill(ink?.opacity(0.1) ?? Palette.wash))
                 }
             }
             .frame(width: size + 4, height: size + 4)
@@ -1200,8 +1269,9 @@ private struct ExtensionMenu: View {
                 }
                 Foot("gearshape", "Manage Extensions…") {
                     extensions.menuOpen = false
-                    Store.settings.set("extensions", forKey: "settings.page")
-                    extensions.browser?.tuning = true
+                    // Fork: through `openSettings`, which also moves the
+                    // panel's own page — the key alone left it on the last one.
+                    extensions.browser?.openSettings(.extensions)
                 }
             }
             .padding(6)

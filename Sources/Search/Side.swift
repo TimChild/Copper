@@ -59,13 +59,19 @@ struct SideBar: View {
                 .padding(.horizontal, SideBar.inset)
                 .padding(.bottom, 10)
 
-            if browser.pinnedCount > 0 {
-                pinned
-                    .padding(.horizontal, SideBar.inset)
-                    .padding(.bottom, 8)
-            }
+            // Fork (space-slide): the favourites, the space's name and its
+            // rows are the part of the column that travels when the space
+            // changes; the lights, the address and the strip stay put.
+            VStack(alignment: .leading, spacing: 0) {
+                if browser.pinnedCount > 0 {
+                    pinned
+                        .padding(.horizontal, SideBar.inset)
+                        .padding(.bottom, 8)
+                }
 
-            column
+                column
+            }
+            .modifier(SpaceSlideBand())
 
             SpaceStrip(browser: browser) { foot }
         }
@@ -77,10 +83,28 @@ struct SideBar: View {
                 if landing { tint.hover }
             }
         }
+        // Fork (space-slide): the old column, over the new one while it goes.
+        .overlay(alignment: .topLeading) { SpaceSlideCurtain() }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SpaceSlide.shared.column = $0 }
+        .onDisappear { SpaceSlide.shared.column = .zero }
         .overlay(alignment: .trailing) {
             Rectangle().fill(tint.hairline.opacity(0.6)).frame(width: 1)
         }
         .overlay(alignment: .trailing) { edge }
+        // Fork: the wheel button closes the favourite or row under it — one
+        // listener for the column, reading where every row is from the
+        // frames they hand up, rather than one per row (see SideTargets).
+        .overlayPreferenceValue(SideTargets.self) { targets in
+            GeometryReader { geo in
+                Color.clear.onReceive(NotificationCenter.default.publisher(for: MouseButtons.middleClickedSidebar)) { note in
+                    guard let point = MouseButtons.point(of: note),
+                          let id = targets.hit(point, in: geo), browser.editingTab != id,
+                          let tab = browser.tabs.first(where: { $0.id == id }) else { return }
+                    browser.close(tab)
+                }
+            }
+            .allowsHitTesting(false)
+        }
         .onDrop(of: [.url, .text], isTargeted: $landing) { providers in
             browser.take(providers)
         }
@@ -277,6 +301,9 @@ struct SideBar: View {
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: .infinity)
             .mask(SideBar.fade)
+            // Fork: the rows are only under the pointer inside the scroll —
+            // one scrolled off the top still has a frame, under the favourites.
+            .transformAnchorPreference(key: SideTargets.self, value: .bounds) { $0.window = $1 }
             // A row saved from far down Today lands at the end of the kept
             // rows, which may be well above. Go and show it — once it has
             // finished moving, and without an animation of its own: a scroll
@@ -300,9 +327,10 @@ struct SideBar: View {
     private func show(_ id: Tab.ID?, in proxy: ScrollViewProxy, gliding: Bool = true) {
         guard let id, pinDragging == nil, !rowHeld else { return }
         // A turn of the run loop later, so a row that has only just arrived
-        // has been laid out before it is looked for.
+        // has been laid out before it is looked for. A column sliding in
+        // (Fork: SpaceSlide) is already where it should be, not gliding to it.
         DispatchQueue.main.async {
-            withAnimation(gliding && !still ? Motion.glide : nil) {
+            withAnimation(gliding && !still && !SpaceSlide.shared.moving ? Motion.glide : nil) {
                 proxy.scrollTo("tab-\(id.uuidString)", anchor: nil)
             }
         }
@@ -494,12 +522,7 @@ private struct PinSquare: View {
         })
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab) }) }
-        .background(GeometryReader { geo in // Fork: wheel click closes, see SideRow
-            Color.clear.onReceive(NotificationCenter.default.publisher(for: MouseButtons.middleClickedSidebar)) { note in
-                guard let point = MouseButtons.point(of: note), geo.frame(in: .global).contains(point) else { return }
-                browser.close(tab)
-            }
-        })
+        .anchorPreference(key: SideTargets.self, value: .bounds) { SideTargets(pins: [tab.id: $0]) } // Fork: wheel click closes, see SideBar
         .help(tab.label)
         .animation(Motion.quick, value: hovering)
         .transition(.scale(scale: 0.8).combined(with: .opacity))
@@ -603,13 +626,9 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
         // The wheel button over a row closes it, as in Arc and Chrome. SwiftUI
         // never sees that button; the app's monitor does and says where
         // (Fork: MouseButtons). The row's own frame decides, not its hover
-        // state, which a synthetic pointer never sets.
-        .background(GeometryReader { geo in
-            Color.clear.onReceive(NotificationCenter.default.publisher(for: MouseButtons.middleClickedSidebar)) { note in
-                guard !editing, let point = MouseButtons.point(of: note), geo.frame(in: .global).contains(point) else { return }
-                close()
-            }
-        })
+        // state, which a synthetic pointer never sets — handed up to the
+        // column, which has the one listener (Fork: SideTargets).
+        .anchorPreference(key: SideTargets.self, value: .bounds) { SideTargets(rows: [tab.id: $0]) }
         .animation(Motion.quick, value: hovering)
         .animation(Motion.glide, value: editing)
         .onChange(of: browser.refusals) { _, _ in

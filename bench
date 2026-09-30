@@ -61,6 +61,8 @@
                            |tone X|motion STYLE|none|speed X|clear]
                                        a space's own theme, as the Space page sets it
     ./bench spaces picture N PATH [light|dark]
+    ./bench spaces slide [at X|off]    the last space switch's slide timings (ms from the click,
+                                       frames, missed frames); `at X` holds the next slide at X
                                        the Space page as a PNG, drawn off screen, laid out whole
                                        spaces by index or name; --keep moves a deleted space's tabs
                                        to its neighbour; colours are Graphite Copper Orange Yellow
@@ -337,6 +339,7 @@ def main(argv):
         if answer.get("milliseconds") is not None:
             print(f"latency: {answer['milliseconds']:.2f} ms")
     elif verb == "spaces":
+        if "slide" in answer: print(json.dumps(answer["slide"], ensure_ascii=False))
         if "sheet" in answer: print(json.dumps(answer["sheet"], ensure_ascii=False))
         if "path" in answer: print(answer["path"])
         if "page" in answer: print(f"page: {answer['page'] or 'closed'}" + (f"  (current: {answer['current']})" if answer.get("current") else ""))

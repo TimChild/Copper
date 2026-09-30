@@ -129,6 +129,9 @@ struct ExtensionsPage: View {
                             extensions.objectWillChange.send()
                         }
                     }
+                    // Fork: the puzzle piece in the address comes here, so
+                    // pinning an extension out beside it is done here too.
+                    Quick(item.pinned == true ? "Unpin" : "Pin") { extensions.setPinned(item.id, item.pinned != true) }
                     if item.source != nil || !item.fromStore {
                         Quick("Reload") { extensions.reload(item.id) }
                     }
@@ -153,6 +156,7 @@ struct ExtensionsPage: View {
 
         private func detail(_ context: WKWebExtensionContext?) -> String {
             var parts = ["Version \(item.version)", item.fromStore ? "Chrome Web Store" : folder]
+            if item.pinned == true { parts.append("pinned") } // Fork
             if item.enabled, context == nil { parts.append("couldn't start") }
             if context?.overrideNewTabPageURL != nil, Store.settings.object(forKey: "extensions.newtab.\(item.id)") as? Bool == true {
                 parts.append("shows in new tabs")

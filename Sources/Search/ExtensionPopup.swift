@@ -27,7 +27,10 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
     /// last focused one.
     private var page: PopupPage?
     private var measuring: Timer?
-    private(set) var extensionID: String?
+    private(set) var extensionID: String? {
+        // Fork: said aloud, for the address pill that holds the button up.
+        didSet { if (extensionID != nil) != Extensions.shared.popupShowing { Extensions.shared.popupShowing = extensionID != nil } }
+    }
 
     /// The popup's web view, while one is up — for the bench.
     var view: WKWebView? { web }

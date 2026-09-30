@@ -19,7 +19,7 @@ enum Folders {
     static let mark = " › "
     /// One step in. A tab in a top-level folder is one step; its folder's
     /// header is none; a folder inside it is one, and its tabs are two.
-    static let step: CGFloat = 16
+    static let step: CGFloat = 20
 
     /// `Misc › BuildrFi › Notes` → `Notes`.
     static func leaf(_ name: String) -> String {

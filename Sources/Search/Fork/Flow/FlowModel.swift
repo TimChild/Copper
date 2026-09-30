@@ -51,6 +51,9 @@ enum FlowModel {
         var id = UUID()
         var name: String
         var hue: Double? = nil
+        /// Arc: the space's look and its emoji.
+        var theme: SpaceTheme? = nil
+        var icon: String? = nil
         var groups: [Group] = []
         var tabs: [Tab] = []
         /// The Chromium profile folder (e.g. "Default", "Profile 1") whose

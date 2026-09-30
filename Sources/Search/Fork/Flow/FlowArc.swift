@@ -422,6 +422,9 @@ enum FlowArc {
             var incoming = FlowModel.Space(name: title)
             incoming.hue = orderedTheme.flatMap(hue)
             incoming.profile = profileName(space["profile"])
+            let custom = space["customInfo"] as? [String: Any]
+            incoming.theme = SpaceTheme.arc(custom?["windowTheme"] as? [String: Any])
+            incoming.icon = SpaceTheme.arcIcon(custom?["iconType"] as? [String: Any])
 
             var imported: [FlowModel.Tab] = favourites.map { favourite in
                 var tab = FlowModel.Tab(url: favourite.url, title: favourite.title)
@@ -441,7 +444,10 @@ enum FlowArc {
                 var tab = FlowModel.Tab(url: raw.url, title: raw.title)
                 tab.saved = saved
                 tab.group = raw.group
-                tab.seen = raw.seen
+                // A row Arc still has open counts as seen now: Arc's archive
+                // has had its say, and an old stamp would have Copper's sweep
+                // close every one on the first launch.
+                tab.seen = saved ? raw.seen : Date().timeIntervalSince1970
                 tab.split = raw.split
                 imported.append(tab)
             }

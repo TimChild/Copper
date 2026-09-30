@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import SwiftUI
 
 // The space, as the column shows it — and the ways to manage it.
@@ -30,16 +31,23 @@ struct SpaceGlyph: View {
     let dark: Bool
     /// The letter or symbol's colour; the space's own mark colour by default.
     var ink: Color?
+    /// Arc's way: the icon on its own, filling its square, and a small dot
+    /// for a space that has no icon — never a letter.
+    var bare = false
 
     var body: some View {
-        let tint = SpaceTint(hue: space.hue, dark: dark)
+        let tint = SpaceTint(space: space, dark: dark)
         Group {
             if let emoji = space.emoji {
-                Text(emoji).font(.system(size: size * 0.6))
+                Text(emoji).font(.system(size: size * (bare ? 0.9 : 0.6)))
             } else if let symbol = space.symbol {
                 Image(systemName: symbol)
-                    .font(.system(size: size * 0.48, weight: .semibold))
+                    .font(.system(size: size * (bare ? 0.78 : 0.48), weight: .semibold))
                     .foregroundStyle(ink ?? tint.mark)
+            } else if bare {
+                Circle()
+                    .fill(ink ?? tint.mark)
+                    .frame(width: size * 0.42, height: size * 0.42)
             } else {
                 Text(space.letter)
                     .font(.system(size: size * 0.5, weight: .semibold))
@@ -79,16 +87,17 @@ struct SpaceHeader: View {
 
     var body: some View {
         let space = spaces.space
-        let tint = SpaceTint(hue: space.hue, dark: scheme == .dark)
+        let tint = SpaceTint(space: space, dark: scheme == .dark)
         Menu {
             SpaceMenu(browser: browser, space: space, fromStrip: false)
         } label: {
-            HStack(spacing: 7) {
-                SpaceGlyph(space: space, size: 18, dark: scheme == .dark)
-                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(tint.chip))
+            // Arc's: the space's icon where a row's mark goes and its name in
+            // the theme's own colour, first thing under the favourites.
+            HStack(spacing: 10) {
+                SpaceGlyph(space: space, size: 16, dark: scheme == .dark, ink: tint.muted, bare: true)
                 Text(space.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(tint.ink)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(tint.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
@@ -99,16 +108,18 @@ struct SpaceHeader: View {
                         .foregroundStyle(tint.faint)
                         .transition(.opacity)
                 }
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(over ? tint.muted : tint.faint)
-                    .frame(width: 14)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(tint.muted)
+                    .frame(width: 16)
+                    .opacity(over ? 1 : 0)
             }
-            .padding(.horizontal, 6)
-            .frame(height: 28)
+            .padding(.leading, SideBar.rowInset)
+            .padding(.trailing, 8)
+            .frame(height: SideBar.row)
             .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(over ? tint.hover : .clear))
-            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(over ? tint.hover : .clear))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -153,22 +164,26 @@ struct SpaceStrip<Tools: View>: View {
 
     private var step: CGFloat { SpaceChip.size + SpaceChip.gap }
 
-    private var tint: SpaceTint { SpaceTint(hue: spaces.space.hue, dark: scheme == .dark) }
+    private var tint: SpaceTint { SpaceTint(space: spaces.space, dark: scheme == .dark) }
 
     /// Every space as a chip, the current one lifted; a plus; the doors.
     /// When the chips outgrow the room, the row of them scrolls sideways
     /// with the current one kept in view — no chip ever shrinks to a dot
     /// and no name is ever cut to a letter.
+    /// Arc's foot: the library door at the left, every space's icon in the
+    /// middle — the current one in colour, the rest quiet — and a plus at
+    /// the right.
     var body: some View {
-        HStack(spacing: 4) {
-            chips
-            plus
-            Spacer(minLength: 2)
+        HStack(spacing: 0) {
             tools()
+            Spacer(minLength: 4)
+            chips
+            Spacer(minLength: 4)
+            plus
         }
-        .padding(.horizontal, 6)
-        .padding(.top, 2)
-        .padding(.bottom, 7)
+        .padding(.horizontal, 8)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
         .overlayPreferenceValue(ChipFrames.self) { frames in label(frames) }
         .animation(Motion.glide, value: spaces.current)
     }
@@ -219,7 +234,7 @@ struct SpaceStrip<Tools: View>: View {
     private func chip(_ space: Space, index: Int) -> some View {
         let held = dragging == space.id
         return SpaceChip(space: space, current: space.id == spaces.current, dark: scheme == .dark,
-                         over: hovering == space.id)
+                         over: hovering == space.id, ink: tint.ink)
             .id(space.id)
             .anchorPreference(key: ChipFrames.self, value: .bounds) { [space.id: $0] }
             .offset(x: held ? travel - CGFloat(index - from) * step : 0)
@@ -303,9 +318,9 @@ struct SpaceStrip<Tools: View>: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { editing.open(id, atStrip: true) }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(tint.faint)
-                .frame(width: 18, height: 24)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(tint.muted)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -335,18 +350,23 @@ struct SpaceChip: View {
     let current: Bool
     let dark: Bool
     let over: Bool
+    /// The column's ink, for the dot a space without an icon wears.
+    var ink: Color? = nil
 
-    static let size: CGFloat = 22
-    static let gap: CGFloat = 3
+    static let size: CGFloat = 28
+    static let gap: CGFloat = 5
 
+    /// Arc's: the current space's icon in full colour, every other one
+    /// greyed and thinned until the pointer lands on it.
     var body: some View {
-        let tint = SpaceTint(hue: space.hue, dark: dark)
-        SpaceGlyph(space: space, size: SpaceChip.size, dark: dark)
+        SpaceGlyph(space: space, size: 17, dark: dark, ink: ink, bare: true)
+            .saturation(current || over ? 1 : 0)
+            .opacity(current ? 1 : (over ? 0.8 : 0.42))
+            .frame(width: SpaceChip.size, height: SpaceChip.size)
             .background(
-                RoundedRectangle(cornerRadius: 6.5, style: .continuous)
-                    .fill(current ? tint.pill : (over ? tint.chipLift : tint.chipFill))
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(over && !current ? Color.black.opacity(dark ? 0 : 0.05) : .clear)
             )
-            .shadow(color: .black.opacity(current ? (dark ? 0.3 : 0.08) : 0), radius: 3, y: 1)
             .animation(Motion.quick, value: over)
             .animation(Motion.quick, value: current)
     }
@@ -435,7 +455,7 @@ struct SpaceEditor: View {
     ]
 
     private var space: Space? { spaces.all.first { $0.id == id } }
-    private var tint: SpaceTint { SpaceTint(hue: space?.hue, dark: scheme == .dark) }
+    private var tint: SpaceTint { space.map { SpaceTint(space: $0, dark: scheme == .dark) } ?? SpaceTint(hue: nil, dark: scheme == .dark) }
 
     var body: some View {
         if let space {
@@ -444,7 +464,8 @@ struct SpaceEditor: View {
                 // does — and the field reads as the name, not a search box.
                 section("Edit Space") { name }
                 section("Icon") { icons(space) }
-                section("Colour", trailing: SpaceColour.nearest(space.hue).name) { colours(space) }
+                section("Colour", trailing: space.theme == nil ? SpaceColour.nearest(space.hue).name : "Custom") { colours(space) }
+                section("Theme") { ThemeEditor(id: id) }
                 section("Profile") { profile(space) }
                 Rectangle().fill(Palette.hairline).frame(height: 1).padding(.top, 2)
                 footer
@@ -545,7 +566,7 @@ struct SpaceEditor: View {
     private func colours(_ space: Space) -> some View {
         HStack(spacing: 6) {
             ForEach(SpaceColour.allCases) { colour in
-                let chosen = SpaceColour.nearest(space.hue) == colour
+                let chosen = space.theme == nil && SpaceColour.nearest(space.hue) == colour
                 Button { spaces.tint(id, hue: colour.hue) } label: {
                     ZStack {
                         Circle().fill(SpaceTint(hue: colour.hue, dark: scheme == .dark).dot)
@@ -702,5 +723,91 @@ enum SpaceDelete {
                 decide(alert.runModal())
             }
         }
+    }
+}
+
+/// A space's own theme, past the named colours: one colour or a gradient of
+/// up to three, how strongly the column wears it, a grain, and a picture
+/// under it all. Every change lands at once, so the column behind the
+/// popover is the preview.
+struct ThemeEditor: View {
+    let id: UUID
+    @ObservedObject private var spaces = Spaces.shared
+    @Environment(\.colorScheme) private var scheme
+
+    private var space: Space? { spaces.all.first { $0.id == id } }
+    private var look: SpaceTheme { space?.look ?? .plain }
+
+    private func set(_ change: (inout SpaceTheme) -> Void) {
+        var theme = look
+        change(&theme)
+        spaces.theme(id, theme)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // The theme itself, drawn: what the column will be.
+            ThemeBackdrop(theme: look, dark: scheme == .dark)
+                .frame(height: 30)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
+
+            HStack(spacing: 6) {
+                ForEach(Array(look.colors.enumerated()), id: \.offset) { index, stop in
+                    ColorPicker("", selection: Binding(
+                        get: { stop.color },
+                        set: { new in
+                            guard let picked = SpaceTheme.Stop(new) else { return }
+                            set { if $0.colors.indices.contains(index) { $0.colors[index] = picked } }
+                        }
+                    ), supportsOpacity: false)
+                    .labelsHidden()
+                    .frame(width: 30)
+                }
+                if look.colors.count < 3 {
+                    Button {
+                        set { $0.colors.append(($0.colors.last ?? .white).mixed(.white, 0.35)) }
+                    } label: { Image(systemName: "plus").font(.system(size: 10, weight: .semibold)) }
+                    .buttonStyle(.plain)
+                    .help("Add a colour — a gradient")
+                }
+                if look.colors.count > 1 {
+                    Button { set { $0.colors.removeLast() } } label: {
+                        Image(systemName: "minus").font(.system(size: 10, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("One colour fewer")
+                }
+                Spacer(minLength: 4)
+                Button(look.image == nil ? "Image…" : "Change Image…") { choose() }
+                    .controlSize(.small)
+                if look.image != nil {
+                    Button { set { $0.image = nil } } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Palette.muted)
+                        .help("No image")
+                }
+            }
+
+            slider("Intensity", value: look.intensity, range: 0.2...1) { v in set { $0.intensity = v } }
+            slider("Grain", value: look.grain, range: 0...1) { v in set { $0.grain = v } }
+        }
+    }
+
+    private func slider(_ title: String, value: Double, range: ClosedRange<Double>, _ change: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(title).font(.system(size: 11)).foregroundStyle(Palette.muted).frame(width: 58, alignment: .leading)
+            Slider(value: Binding(get: { value }, set: change), in: range).controlSize(.small)
+        }
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "A picture for the space's column"
+        guard panel.runModal() == .OK, let url = panel.url, let name = SpaceTheme.adopt(image: url) else { return }
+        set { $0.image = name }
     }
 }

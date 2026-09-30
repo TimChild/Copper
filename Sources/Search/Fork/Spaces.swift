@@ -23,6 +23,13 @@ struct Space: Codable, Identifiable, Equatable {
     /// this shape; optional so yesterday's session.json still reads, and
     /// unknown to older builds, which ignore it.
     var icon: String? = nil
+    /// Its look: a colour, a gradient or a picture (see `SpaceTheme`). Nil
+    /// is the hue alone, as every space had before themes; optional so
+    /// older session files read.
+    var theme: SpaceTheme? = nil
+
+    /// What the column is washed in: the theme, or the hue made into one.
+    var look: SpaceTheme { theme ?? hue.map(SpaceTheme.hue) ?? .plain }
 
     var tint: Color { hue == nil ? Palette.muted : SpaceTint(hue: hue, dark: false).dot }
 
@@ -221,9 +228,20 @@ final class Spaces: ObservableObject {
         keep()
     }
 
+    /// A named colour: the hue alone, and any theme it had goes.
     func tint(_ id: UUID, hue: Double?) {
         guard let i = all.firstIndex(where: { $0.id == id }) else { return }
         all[i].hue = hue
+        all[i].theme = nil
+        keep()
+    }
+
+    /// A theme of its own — colour, gradient or picture. The hue follows it,
+    /// so the dot, the picker and the split's outline stay in step.
+    func theme(_ id: UUID, _ theme: SpaceTheme?) {
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+        all[i].theme = theme
+        if let hue = theme?.hue { all[i].hue = hue }
         keep()
     }
 
@@ -290,7 +308,9 @@ final class Spaces: ObservableObject {
                 }
             }
             names.insert(name.lowercased())
-            let space = Space(name: name, hue: incoming.hue, profile: incoming.profile)
+            var space = Space(name: name, hue: incoming.theme?.hue ?? incoming.hue, profile: incoming.profile)
+            space.theme = incoming.theme
+            space.icon = incoming.icon
             all.append(space)
             made.append(space.id)
 

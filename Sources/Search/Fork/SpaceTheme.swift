@@ -80,14 +80,47 @@ struct SpaceTheme: Codable, Hashable {
     /// A picture under the colour: a file name in `themes/`.
     var image: String? = nil
 
-    init(colors: [Stop], intensity: Double = 0.8, grain: Double = 0, image: String? = nil) {
+    /// A living backdrop instead of a still one: a three.js scene drawn in
+    /// the theme's colours (see `AnimatedBackdrop`). Nil is still.
+    struct Motion: Codable, Hashable {
+        /// Which scene: one of `AnimatedBackdrop.styles`.
+        var style: String
+        /// How fast it moves, 0…2; 1 is the scene's own pace.
+        var speed: Double = 1
+
+        init(style: String, speed: Double = 1) {
+            self.style = style
+            self.speed = speed
+        }
+
+        private enum CodingKeys: String, CodingKey { case style, speed }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            style = (try? c.decodeIfPresent(String.self, forKey: .style)) ?? "ribbons"
+            speed = min(2, max(0, (try? c.decodeIfPresent(Double.self, forKey: .speed)) ?? 1))
+        }
+    }
+    var motion: Motion? = nil
+    /// How soft the picture or the scene is drawn, 0…1 — a frosted column.
+    var blur: Double = 0
+    /// Dark to bright, -1…1: 0 is the theme as it is, below it is tinted
+    /// towards black and above it towards white. The ink follows, so the
+    /// titles turn light once the column is dark enough.
+    var tone: Double = 0
+
+    init(colors: [Stop], intensity: Double = 0.8, grain: Double = 0, image: String? = nil,
+         motion: Motion? = nil, blur: Double = 0, tone: Double = 0) {
         self.colors = colors
         self.intensity = intensity
         self.grain = grain
         self.image = image
+        self.motion = motion
+        self.blur = blur
+        self.tone = tone
     }
 
-    private enum CodingKeys: String, CodingKey { case colors, intensity, grain, image }
+    private enum CodingKeys: String, CodingKey { case colors, intensity, grain, image, motion, blur, tone }
 
     // Read by hand, not synthesized: a synthesized decoder wants every
     // non-optional key there, defaults or no, so a theme written before a
@@ -101,6 +134,9 @@ struct SpaceTheme: Codable, Hashable {
         intensity = min(1, max(0, (try? c.decodeIfPresent(Double.self, forKey: .intensity)) ?? 0.8))
         grain = min(1, max(0, (try? c.decodeIfPresent(Double.self, forKey: .grain)) ?? 0))
         image = try? c.decodeIfPresent(String.self, forKey: .image)
+        motion = try? c.decodeIfPresent(Motion.self, forKey: .motion)
+        blur = min(1, max(0, (try? c.decodeIfPresent(Double.self, forKey: .blur)) ?? 0))
+        tone = min(1, max(-1, (try? c.decodeIfPresent(Double.self, forKey: .tone)) ?? 0))
     }
 
     /// A space that only ever had a hue: that hue, at the strength that

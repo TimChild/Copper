@@ -6,6 +6,7 @@ was left open.
     ./arc-import              write ~/Library/Application Support/Copper/session.json
     ./arc-import --world W    write into the test world "Copper (W)" instead
     ./arc-import --dry        print what would be written
+    ./arc-import --sidebar F  read another copy of Arc's StorableSidebar.json
 
 Arc's favourites become the pin grid. Arc folders become Copper's tab
 groups (groups.json + a group id on each entry); groups are flat, so a nested
@@ -20,6 +21,7 @@ session on quit and would overwrite this.
 """
 
 import colorsys
+import time
 import json
 import os
 import sys
@@ -59,14 +61,47 @@ def hue(theme):
     return round(found[0], 3) if found else None
 
 
+def theme(window_theme):
+    """Arc's look for a space, as Copper's SpaceTheme: the colour or the
+    gradient's colours, the intensity and the grain (Fork/SpaceTheme.swift)."""
+    try:
+        colour = window_theme["background"]["single"]["_0"]["style"]["color"]["_0"]
+    except (KeyError, TypeError):
+        return None
+
+    def stop(raw):
+        if not isinstance(raw, dict) or raw.get("alpha", 1) <= 0.05:
+            return None
+        return {k[0]: min(1, max(0, raw[k])) for k in ("red", "green", "blue")}
+
+    if "blendedSingleColor" in colour:
+        body = colour["blendedSingleColor"]["_0"]
+        stops = [stop(body.get("color"))]
+    elif "blendedGradient" in colour:
+        body = colour["blendedGradient"]["_0"]
+        stops = [stop(c) for c in body.get("baseColors", []) + body.get("overlayColors", [])]
+    else:
+        return None
+    stops = [s for s in stops if s][:3]
+    if not stops:
+        return None
+    modifiers = body.get("modifiers", {})
+    return {"colors": stops, "intensity": modifiers.get("intensityFactor", 0.8), "grain": modifiers.get("noiseFactor", 0)}
+
+
 def main(argv):
     dry = "--dry" in argv
     world = argv[argv.index("--world") + 1] if "--world" in argv else None
     name = f"Copper ({world})" if world else "Copper"
     out = os.path.expanduser(f"~/Library/Application Support/{name}/session.json")
 
-    sidebar = json.load(open(ARC))["sidebar"]["containers"]
-    container = next(c for c in sidebar if isinstance(c, dict) and "spaces" in c)
+    source = argv[argv.index("--sidebar") + 1] if "--sidebar" in argv else ARC
+    sidebar = json.load(open(source))["sidebar"]["containers"]
+    # Arc can keep more than one container of spaces — a fresh window's
+    # single untitled space beside the real ones. The real ones are the
+    # container with the most spaces.
+    container = max((c for c in sidebar if isinstance(c, dict) and "spaces" in c),
+                    key=lambda c: sum(1 for s in c["spaces"] if isinstance(s, dict)))
     items = {i["id"]: i for i in container["items"] if isinstance(i, dict)}
     arc_spaces = [s for s in container["spaces"] if isinstance(s, dict)]
 
@@ -126,14 +161,21 @@ def main(argv):
             favourites = list(tabs(tid))
     groups.clear()  # favourites have no folders in Copper's grid
 
+    moved = time.time()
     spaces, entries = [], []
     for s in arc_spaces:
         sid = str(uuid.uuid4()).upper()
         space_id = sid
-        space = {"id": sid, "name": s["title"]}
+        space = {"id": sid, "name": s.get("title") or "Space %d" % (len(spaces) + 1)}
         h = hue(s.get("customInfo", {}).get("windowTheme", {}))
         if h is not None:
             space["hue"] = h
+        look = theme(s.get("customInfo", {}).get("windowTheme"))
+        if look:
+            space["theme"] = look
+        emoji = (s.get("customInfo", {}).get("iconType") or {}).get("emoji_v2")
+        if emoji:
+            space["icon"] = emoji
         spaces.append(space)
 
         ids = s["containerIDs"]
@@ -155,7 +197,11 @@ def main(argv):
         row = [(t, True) for t in saved] + [(t, False) for t in today]
         for i, ((title, url, gid, when, split), kept) in enumerate(row):
             entries.append({"url": url, "title": title, "space": sid, "saved": kept,
-                            **({"seen": when} if when else {}),
+                            # A row Arc still has open is one you have just
+                            # looked at: Arc's own archive has had its say,
+                            # and an old stamp would have Copper's sweep close
+                            # every one of them on the first launch.
+                            **({"seen": when if kept else moved} if when or not kept else {}),
                             **({"active": True} if i == 0 else {}),
                             **({"group": gid} if gid else {}),
                             **({"split": split} if split else {})})

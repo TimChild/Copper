@@ -35,8 +35,8 @@ struct GroupedRows: View {
     @State private var from = 0
     @State private var travel: CGFloat = 0
 
-    static let row: CGFloat = 28
-    static let gap: CGFloat = 2
+    static let row: CGFloat = 37
+    static let gap: CGFloat = 4
 
     private var loose: [Tab] {
         browser.tabs.filter { $0.pin == nil && (only?.contains($0.id) ?? true) }
@@ -87,7 +87,7 @@ struct GroupedRows: View {
                                     .fill(folderTint(group).opacity(0.2))
                                     .frame(width: 1)
                                     .padding(.vertical, 3)
-                                    .offset(x: CGFloat(depth - 1) * Folders.step + 13.5)
+                                    .offset(x: CGFloat(depth - 1) * Folders.step + SideBar.rowInset + 7.5)
                             }
                         }
                         if let asked = grouper.suggestion, asked.tab == tab.id {
@@ -182,7 +182,7 @@ struct GroupHead: View {
     /// ground's own hue would leave it a smudge among real favicons.
     private var colour: Color {
         guard let hue = group.hue ?? tint.hue else { return Palette.muted }
-        return Color(hue: hue, saturation: tint.dark ? 0.52 : 0.74, brightness: tint.dark ? 0.82 : 0.54)
+        return Color(hue: hue, saturation: tint.dark ? 0.52 : 0.82, brightness: tint.dark ? 0.82 : 0.66)
     }
 
     /// What the folder is made of: paper, not paint. Arc's folder is a pale
@@ -197,11 +197,21 @@ struct GroupHead: View {
     /// the chevron that says which way a click will go.
     private var mark: some View {
         ZStack {
+            // Arc's pair: shut, a solid folder in the space's colour; open,
+            // a paper one in an outline of it, showing it holds something.
             ZStack {
-                Image(systemName: "folder.fill").foregroundStyle(paper)
-                Image(systemName: "folder").foregroundStyle(colour)
+                if group.collapsed {
+                    Image(systemName: "folder.fill").foregroundStyle(colour)
+                } else {
+                    Image(systemName: "folder.fill").foregroundStyle(paper)
+                    Image(systemName: "folder").foregroundStyle(colour)
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 7, weight: .heavy))
+                        .foregroundStyle(colour)
+                        .offset(y: 1.5)
+                }
             }
-            .font(.system(size: 13))
+            .font(.system(size: 15))
             .opacity(hovering ? 0 : 1)
 
             Image(systemName: "chevron.right")
@@ -216,14 +226,16 @@ struct GroupHead: View {
     var body: some View {
         HStack(spacing: 0) {
             mark
-                .padding(.trailing, 8)
+                .padding(.trailing, 10)
             Text(label ?? group.name)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 15, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle(tint.ink)
             Spacer(minLength: 2)
-            if group.collapsed, count > 0 {
+            // Arc shows no count; a shut folder says how much it holds only
+            // when the pointer asks.
+            if group.collapsed, count > 0, hovering {
                 Text("\(count)")
                     .font(.system(size: 11))
                     .foregroundStyle(tint.faint)
@@ -231,14 +243,14 @@ struct GroupHead: View {
                     .transition(.opacity)
             }
         }
-        .padding(.leading, 6)
+        .padding(.leading, SideBar.rowInset)
         .frame(height: GroupedRows.row)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(hovering ? tint.hover : .clear)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture { withAnimation(Motion.settle) { groups.toggleCollapsed(group.id) } }
         .onHover { hovering = $0 }
         .contextMenu { menu }

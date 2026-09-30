@@ -426,14 +426,78 @@ enum Fork {
             let list = ids.reversed().map { NSNumber(value: $0) } as CFArray
             // Compositing several windows can come back empty without the
             // screen-recording grant; then the frontmost one alone.
-            guard let image = CGImage(windowListFromArrayScreenBounds: .null, windowArray: list, imageOption: [.boundsIgnoreFraming, .bestResolution])
+            // Without the grant the composite can also come back as a 2×1
+            // placeholder, or as the main window with the popover missing;
+            // so with more than one window each is pictured on its own —
+            // which an app may always do — and they are laid together here.
+            let composite = ids.count > 1 ? nil
+                : CGImage(windowListFromArrayScreenBounds: .null, windowArray: list, imageOption: [.boundsIgnoreFraming, .bestResolution])
+            guard let image = (composite.flatMap { $0.width > 8 ? $0 : nil })
+                    ?? Fork.layered(ids)
                     ?? CGWindowListCreateImage(.null, .optionIncludingWindow, ids.last ?? 0, [.boundsIgnoreFraming, .bestResolution])
             else { return ["error": "no image", "windows": ids.map { Int($0) }] }
             let rep = NSBitmapImageRep(cgImage: image)
             guard let png = rep.representation(using: .png, properties: [:]) else { return ["error": "no png"] }
             do { try png.write(to: URL(fileURLWithPath: path)) } catch { return ["error": "\(error)"] }
-            return ["path": path, "size": [image.width, image.height]]
+            return ["path": path, "size": [image.width, image.height], "windows": ids.map { Int($0) }]
         default: return ["error": "unknown verb \(verb)"]
         }
+    }
+}
+
+extension Fork {
+    /// The windows `ids` (bottom first), each pictured alone and laid where
+    /// it sits on screen — the composite WindowServer will only hand over
+    /// with the screen-recording grant, made from pictures it hands over
+    /// without one. Nil when none of them could be pictured.
+    static func layered(_ ids: [CGWindowID]) -> CGImage? {
+        let info = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+        var layers: [(CGImage, CGRect)] = []
+        var seen = Set<CGWindowID>()
+        for id in ids where seen.insert(id).inserted {
+            guard !layers.isEmpty || id == ids.first,
+                  let row = info.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }),
+                  let raw = row[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: raw), bounds.width > 4, bounds.height > 4,
+                  let picture = CGWindowListCreateImage(.null, .optionIncludingWindow, id, [.boundsIgnoreFraming, .bestResolution])
+                    .flatMap({ $0.width > 8 ? $0 : nil }) ?? drawn(id)
+            else { continue }
+            layers.append((picture, bounds))
+        }
+        guard let first = layers.first else { return nil }
+        let union = layers.dropFirst().reduce(first.1) { $0.union($1.1) }
+        let scale = CGFloat(first.0.width) / first.1.width
+        guard let context = CGContext(data: nil, width: Int(union.width * scale), height: Int(union.height * scale),
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        // Window bounds count down from the top of the screen; the context
+        // counts up from the bottom.
+        for (picture, bounds) in layers {
+            let x = (bounds.minX - union.minX) * scale
+            let y = (union.maxY - bounds.maxY) * scale
+            context.draw(picture, in: CGRect(x: x, y: y, width: bounds.width * scale, height: bounds.height * scale))
+        }
+        return context.makeImage()
+    }
+
+    /// A window WindowServer will not picture — a popover, without the
+    /// grant — drawn by its own views instead, on the window's background.
+    /// The frosted material comes out flat, which is fine for a check.
+    private static func drawn(_ id: CGWindowID) -> CGImage? {
+        guard let window = NSApp.windows.first(where: { CGWindowID($0.windowNumber) == id }),
+              let view = window.contentView?.superview ?? window.contentView,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let drawn = rep.cgImage,
+              let context = CGContext(data: nil, width: drawn.width, height: drawn.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        let whole = CGRect(x: 0, y: 0, width: drawn.width, height: drawn.height)
+        let ground = window.appearance?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            || NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        context.setFillColor(ground ? CGColor(gray: 0.17, alpha: 1) : CGColor(gray: 0.97, alpha: 1))
+        context.fill(whole.insetBy(dx: 14, dy: 14))
+        context.draw(drawn, in: whole)
+        return context.makeImage()
     }
 }

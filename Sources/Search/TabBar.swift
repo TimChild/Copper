@@ -245,17 +245,22 @@ struct TabBar: View {
 /// far end of the row, in the sidebar.
 struct Helm: View {
     @ObservedObject var browser: Browser
+    /// Fork: the sidebar's own, larger doors in the column's ink.
+    var size: CGFloat = 26
+    var glyph: CGFloat = 11
+    var ink: Color? = nil
+    var glow: Color? = nil
 
     var body: some View {
         if let tab = browser.active {
-            Wheel(browser: browser, tab: tab)
+            Wheel(browser: browser, tab: tab, size: size, glyph: glyph, ink: ink, glow: glow)
         } else {
             // Nowhere to go and nothing to reload: the doors stay in place,
             // greyed, so the row doesn't shift when a tab arrives.
             HStack(spacing: 2) {
-                Door(icon: "chevron.left") {}
-                Door(icon: "chevron.right") {}
-                Door(icon: "arrow.clockwise") {}
+                Door(icon: "arrow.left", size: size, ink: ink, glyph: glyph) {}
+                Door(icon: "arrow.right", size: size, ink: ink, glyph: glyph) {}
+                Door(icon: "arrow.clockwise", size: size, ink: ink, glyph: glyph) {}
             }
             .opacity(0.3)
             .allowsHitTesting(false)
@@ -265,21 +270,28 @@ struct Helm: View {
     private struct Wheel: View {
         let browser: Browser
         @ObservedObject var tab: Tab
+        var size: CGFloat = 26
+        var glyph: CGFloat = 11
+        var ink: Color? = nil
+        var glow: Color? = nil
 
         var body: some View {
             let back = !tab.isBlank && tab.canGoBack
             let forward = !tab.isBlank && tab.canGoForward
+            // Fork: arrows rather than chevrons in the sidebar, as Arc draws them.
+            let arrows = ink != nil
             HStack(spacing: 2) {
-                Door(icon: "chevron.left", help: "Back   ⌘[") { browser.back() }
+                Door(icon: arrows ? "arrow.left" : "chevron.left", help: "Back   ⌘[", size: size, ink: ink, glow: glow, glyph: glyph) { browser.back() }
                     .disabled(!back)
                     .opacity(back ? 1 : 0.3)
-                Door(icon: "chevron.right", help: "Forward   ⌘]") { browser.forward() }
+                Door(icon: arrows ? "arrow.right" : "chevron.right", help: "Forward   ⌘]", size: size, ink: ink, glow: glow, glyph: glyph) { browser.forward() }
                     .disabled(!forward)
                     .opacity(forward ? 1 : 0.3)
                 // Reload, or stop while it is still coming.
                 Door(
                     icon: tab.loading ? "xmark" : "arrow.clockwise",
-                    help: tab.loading ? "Stop   ⌘." : "Reload   ⌘R"
+                    help: tab.loading ? "Stop   ⌘." : "Reload   ⌘R",
+                    size: size, ink: ink, glow: glow, glyph: glyph
                 ) {
                     if tab.loading { tab.stop() } else { browser.reload() }
                 }

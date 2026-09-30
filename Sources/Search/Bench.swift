@@ -548,6 +548,8 @@ final class Bench {
             // `ui width N`: the column's width, for a look at it narrow and wide. (Fork)
             if let width = request["width"] as? Double { browser.prefs.sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width))) }
             if #available(macOS 15.4, *), let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
+            // `ui addressHover on`: the address pill as under the pointer. (Fork)
+            if let on = request["addressHover"] as? Bool { SideAddressHover.shared.forced = on }
             answer(["ok": true])
 
         case "extensions", "ext-add", "ext-folder", "ext-press", "ext-remove", "ext-reload", "ext-page", "ext-popup", "ext-menu", "ext-pin", "ext-shot", "ext-answer", "ext-enable":

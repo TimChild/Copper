@@ -200,9 +200,13 @@ enum FlowArc {
         guard let document = object as? [String: Any],
               let sidebar = document["sidebar"] as? [String: Any],
               let containers = sidebar["containers"] as? [Any],
+              // Arc can keep more than one container of spaces — a fresh
+              // window's one untitled space beside the real ones. The real
+              // ones are the container with the most spaces.
               let container = containers
                 .compactMap({ $0 as? [String: Any] })
-                .first(where: { $0["spaces"] != nil }),
+                .filter({ $0["spaces"] != nil })
+                .max(by: { Self.spaceCount($0) < Self.spaceCount($1) }),
               let rawSpaces = container["spaces"] as? [Any]
         else {
             throw FlowModel.Trouble.unreadable("Arc sidebar")
@@ -422,6 +426,9 @@ enum FlowArc {
             var incoming = FlowModel.Space(name: title)
             incoming.hue = orderedTheme.flatMap(hue)
             incoming.profile = profileName(space["profile"])
+            let custom = space["customInfo"] as? [String: Any]
+            incoming.theme = SpaceTheme.arc(custom?["windowTheme"] as? [String: Any])
+            incoming.icon = SpaceTheme.arcIcon(custom?["iconType"] as? [String: Any])
 
             var imported: [FlowModel.Tab] = favourites.map { favourite in
                 var tab = FlowModel.Tab(url: favourite.url, title: favourite.title)
@@ -441,7 +448,10 @@ enum FlowArc {
                 var tab = FlowModel.Tab(url: raw.url, title: raw.title)
                 tab.saved = saved
                 tab.group = raw.group
-                tab.seen = raw.seen
+                // A row Arc still has open counts as seen now: Arc's archive
+                // has had its say, and an old stamp would have Copper's sweep
+                // close every one on the first launch.
+                tab.seen = saved ? raw.seen : Date().timeIntervalSince1970
                 tab.split = raw.split
                 imported.append(tab)
             }
@@ -467,13 +477,21 @@ enum FlowArc {
               let containers = orderedValue(sidebar, key: "containers"),
               case .array(let values) = containers
         else { return [] }
+        // The same container `read` picked: the one with the most spaces.
+        var best: [OrderedJSON] = []
+        var most = -1
         for value in values {
             guard let spaces = orderedValue(value, key: "spaces"),
                   case .array(let spaces) = spaces
             else { continue }
-            return spaces
+            let count = spaces.filter { if case .object = $0 { return true } else { return false } }.count
+            if count > most { most = count; best = spaces }
         }
-        return []
+        return best
+    }
+
+    private static func spaceCount(_ container: [String: Any]) -> Int {
+        (container["spaces"] as? [Any] ?? []).filter { $0 is [String: Any] }.count
     }
 
     private static func containerID(in value: Any?, after marker: String) -> String? {

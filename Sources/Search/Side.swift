@@ -2,11 +2,12 @@ import SwiftUI
 
 /// The tabs, down the left instead of across the top.
 ///
-/// The column is one surface washed in the current space's hue (`SpaceTint`),
-/// laid out the way Arc lays its own out: the traffic lights' band, the
-/// favourites as a grid of soft squares, the rows that came back from
-/// yesterday, a hairline and a "New Tab" row, then whatever was opened today.
-/// The space strip and one small door close it off at the foot.
+/// The column is one surface washed in the current space's theme
+/// (`SpaceTint`, `SpaceTheme`), laid out the way Arc lays its own out: the
+/// lights with the sidebar door and back / forward / reload, the address,
+/// the favourites as a grid of soft squares, the space's name, the rows you
+/// keep, a hairline, "New Tab", then whatever was opened today — all one
+/// scroll, nothing pinned to the foot but the spaces themselves.
 ///
 /// Nothing in here has a border. Separation is spacing, a single hairline,
 /// and the fact that the live row is a pill in a stronger tint of the same
@@ -38,45 +39,44 @@ struct SideBar: View {
     /// the column does not scroll out from under it.
     @State private var rowHeld = false
 
-    private static let row: CGFloat = 28
-    private static let gap: CGFloat = 2
+    /// Arc's measures: a row every forty points, a mark eighteen in from the
+    /// window's edge and ten clear of its title.
+    static let row: CGFloat = GroupedRows.row
+    static let gap: CGFloat = GroupedRows.gap
     /// The column's own edges. A row's mark lands at `inset + rowInset` from
-    /// the window's edge — twelve, which is where Arc puts its own.
-    private static let inset: CGFloat = 6
-    private static let rowInset: CGFloat = 6
-    private static let square: CGFloat = 34
-    private static let pinGap: CGFloat = 6
-    /// Today's block never takes more than this much of the column; past it
-    /// the block scrolls on its own and the rows above keep their room.
-    private static let todayMax: CGFloat = 260
+    /// the window's edge.
+    static let inset: CGFloat = 8
+    static let rowInset: CGFloat = 10
+    private static let pinGap: CGFloat = 8
 
-    private var tint: SpaceTint { SpaceTint(hue: spaces.space.hue, dark: scheme == .dark) }
+    private var tint: SpaceTint { SpaceTint(space: spaces.space, dark: scheme == .dark) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             head
 
-            // Which space this column is — the label it never had. (Fork)
-            SpaceHeader(browser: browser)
+            SideAddress(browser: browser, tint: tint)
                 .padding(.horizontal, SideBar.inset)
-                .padding(.bottom, 8)
+                .padding(.bottom, 10)
 
             if browser.pinnedCount > 0 {
                 pinned
                     .padding(.horizontal, SideBar.inset)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 8)
             }
 
-            saved
-            divider
-            newTab
-            today
+            column
 
             SpaceStrip(browser: browser) { foot }
         }
         .frame(width: prefs.sideWidth)
         .frame(maxHeight: .infinity)
-        .background(landing ? tint.hover : tint.ground)
+        .background {
+            ZStack {
+                tint.backdrop
+                if landing { tint.hover }
+            }
+        }
         .overlay(alignment: .trailing) {
             Rectangle().fill(tint.hairline.opacity(0.6)).frame(width: 1)
         }
@@ -106,23 +106,23 @@ struct SideBar: View {
     /// and reload sit right of the lights — the same three doors as the top
     /// bar, moved beside the lights since there's no far end of a row to put
     /// them at in this mode.
+    /// Arc's row: the lights, the door that folds the column away beside
+    /// them, and back / forward / reload at the far end, in the column's ink.
     private var head: some View {
         ZStack(alignment: .leading) {
+            DragStrip()
             HStack(spacing: 0) {
-                DragStrip()
-                    .frame(width: 10 + Metrics.sideLights)
-                Color.clear
-                    .frame(width: Metrics.helm)
+                Color.clear.frame(width: 4 + Metrics.sideLights)
                     .allowsHitTesting(false)
-                DragStrip()
-            }
-            HStack(spacing: 0) {
-                Color.clear.frame(width: 10 + Metrics.sideLights)
-                Helm(browser: browser)
-                Spacer(minLength: 0)
+                Door(icon: "sidebar.left", help: "Hide Sidebar   ⌘S", size: 28, ink: tint.ink, glow: tint.hover, glyph: 15) {
+                    browser.toggleFold()
+                }
+                Color.clear.frame(maxWidth: .infinity).allowsHitTesting(false)
+                Helm(browser: browser, size: 30, glyph: 15, ink: tint.ink, glow: tint.hover)
+                    .padding(.trailing, 6)
             }
         }
-        .frame(height: Metrics.strip)
+        .frame(height: 46)
     }
 
     // MARK: - the favourites
@@ -142,7 +142,7 @@ struct SideBar: View {
     /// row of tiny icons, and an eighteenth favourite should wrap onto a new
     /// row rather than squeeze the seventeen above it.
     private func pinColumns(_ count: Int) -> Int {
-        prefs.sideWidth >= 292 ? 4 : 3
+        prefs.sideWidth >= 400 ? 4 : 3
     }
 
     /// However many columns the count calls for, they split the column's own
@@ -157,7 +157,7 @@ struct SideBar: View {
     /// columns' worth of room the cell stops growing taller and the mark
     /// inside it stays where the eye expects it.
     private var pinHeight: CGFloat {
-        min(46, max(26, pinWidth * 0.62))
+        min(48, max(34, pinWidth * 0.52))
     }
 
     /// The grid itself: fixed-size cells, left-aligned, so a half-empty last
@@ -254,26 +254,33 @@ struct SideBar: View {
 
     // MARK: - the rows
 
-    /// The tabs you keep — Arc's pinned section, and the folders with them.
-    /// This is the long block, and the only one that scrolls without limit.
-    private var saved: some View {
-        ScrollViewReader { proxy in
+    /// Everything below the favourites, in one scroll, the way Arc has it:
+    /// the space's name, the rows you keep and their folders, a hairline
+    /// once there is anything open today, "New Tab", and today's rows right
+    /// under it — never parked at the foot of the window.
+    private var column: some View {
+        let kept = looseRows.filter { sections.isSaved($0.tab) }
+        let today = looseRows.filter { !sections.isSaved($0.tab) }
+        return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                rows(looseRows.filter { sections.isSaved($0.tab) }, homeless: true)
-                    .padding(.horizontal, SideBar.inset)
-                    .padding(.bottom, 2)
+                VStack(alignment: .leading, spacing: SideBar.gap) {
+                    SpaceHeader(browser: browser)
+                    rows(kept, homeless: true)
+                    if !today.isEmpty { divider }
+                    newTab
+                    rows(today)
+                }
+                .padding(.horizontal, SideBar.inset)
+                .padding(.top, 2)
+                .padding(.bottom, 12)
             }
             .scrollBounceBehavior(.basedOnSize)
-            // The block's own height and soft edges belong inside the reader:
-            // a scrollTo from outside one leaves the favourites' lazy grid
-            // above it blank until something else forces a redraw.
             .frame(maxHeight: .infinity)
             .mask(SideBar.fade)
-            // A row saved from far down Today lands at the bottom of a block
-            // that may be scrolled well above it. Go and show it.
-            // — once the row has finished moving there, and without an
-            // animation of its own: a scroll that overlaps the move's leaves
-            // the grid above blank until the next redraw.
+            // A row saved from far down Today lands at the end of the kept
+            // rows, which may be well above. Go and show it — once it has
+            // finished moving, and without an animation of its own: a scroll
+            // that overlaps the move's leaves the grid above blank.
             .onChange(of: sections.reveal) { _, id in
                 guard let id else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -289,8 +296,7 @@ struct SideBar: View {
     /// Wherever the live row is, the column keeps it in sight: ⌘1–9, ⌃Tab,
     /// a link that opens a tab, a space switch, the restore at launch. Only
     /// as far as it takes to bring the row in, and not while a row or a
-    /// favourite is in the hand. A block that does not hold the row is
-    /// asked too, and does nothing.
+    /// favourite is in the hand.
     private func show(_ id: Tab.ID?, in proxy: ScrollViewProxy, gliding: Bool = true) {
         guard let id, pinDragging == nil, !rowHeld else { return }
         // A turn of the run loop later, so a row that has only just arrived
@@ -299,24 +305,6 @@ struct SideBar: View {
             withAnimation(gliding && !still ? Motion.glide : nil) {
                 proxy.scrollTo("tab-\(id.uuidString)", anchor: nil)
             }
-        }
-    }
-
-    /// Everything else, newest first. Sits under the New Tab row, the way
-    /// Arc's today does, and takes only as much of the column as it needs.
-    private var today: some View {
-        let list = looseRows.filter { !sections.isSaved($0.tab) }
-        let wanted = CGFloat(list.count + GroupedRows.extraRows(in: list.map(\.tab))) * (SideBar.row + SideBar.gap)
-        return ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                rows(list)
-                    .padding(.horizontal, SideBar.inset)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(wanted, SideBar.todayMax))
-            .mask(SideBar.fade)
-            .onAppear { show(browser.activeID, in: proxy, gliding: false) }
-            .onChange(of: browser.activeID) { _, id in show(id, in: proxy) }
         }
     }
 
@@ -345,17 +333,14 @@ struct SideBar: View {
     /// A long column runs out under a soft edge rather than a hard one — the
     /// top and bottom few points of either block fade into the ground, so a
     /// row half-scrolled off doesn't look sliced.
-    private static var fade: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0),
-                .init(color: .black, location: 0.025),
-                .init(color: .black, location: 0.975),
-                .init(color: .clear, location: 1)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+    /// A few points at each end, whatever the column's height — a
+    /// proportional fade would eat the space's name on a tall window.
+    private static var fade: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 6)
+            Rectangle()
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 14)
+        }
     }
 
     /// The quiet line between what you keep and what you opened today. Half
@@ -365,20 +350,16 @@ struct SideBar: View {
         Rectangle()
             .fill(tint.hairline)
             .frame(height: 1)
-            .padding(.horizontal, SideBar.inset + SideBar.rowInset)
-            .padding(.top, 5)
-            .padding(.bottom, 3)
+            .padding(.horizontal, SideBar.rowInset)
+            .padding(.vertical, 6)
     }
 
+    /// Arc's New Tab: a plus and the words, as quiet as the rows around it,
+    /// right under the rows you keep.
     private var newTab: some View {
-        // Arc's is the one filled row in the column — the seam you can find
-        // from across the room. The favourites' square and its hover, the
-        // pill's ink: nothing but the live row wears the paper.
-        Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.hover, ink: tint.ink, fill: tint.square) {
+        Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.hover, ink: tint.muted) {
             browser.newTab()
         }
-        .padding(.horizontal, SideBar.inset)
-        .padding(.bottom, 2)
     }
 
     // MARK: - the edge and the foot
@@ -411,20 +392,14 @@ struct SideBar: View {
             .animation(Motion.quick, value: onEdge)
     }
 
-    /// One small door at the bottom: the settings.
+    /// The door at the foot's left, where Arc keeps its library: bookmarks.
     private var foot: some View {
-        HStack(spacing: 0) {
-            ExtensionSlot(edge: .trailing)
-            if downloads.doorShowing {
-                DownloadsDoor(browser: browser, size: 22, arrowEdge: .trailing)
-                    .transition(.scale(scale: 0.8).combined(with: .opacity))
-            }
-            Door(icon: "bookmark", help: "Bookmarks", size: 22) { browser.bookmarksOpen.toggle() }
-                .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .trailing) {
-                    BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
-                }
+        Door(icon: "books.vertical", help: "Bookmarks", size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
+            browser.bookmarksOpen.toggle()
         }
-        .animation(Motion.settle, value: downloads.doorShowing)
+        .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .top) {
+            BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
+        }
     }
 
 }
@@ -478,7 +453,7 @@ private struct PinSquare: View {
 
     @State private var hovering = false
 
-    private var radius: CGFloat { min(width, height) * 0.26 }
+    private var radius: CGFloat { min(12, min(width, height) * 0.28) }
     /// A mark big enough to recognise at a glance, and no bigger than the
     /// cell can hold with air around it.
     private var mark: CGFloat { max(14, min(20, height * 0.46)) }
@@ -543,10 +518,10 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
     private var editing: Bool { browser.editingTab == tab.id }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             if editing {
                 TabAddressField(browser: browser)
-                    .frame(height: 16)
+                    .frame(height: 18)
             } else {
                 if !tab.isBlank {
                     RowMark(icon: tab.icon, letter: tab.monogram, tint: tint, size: 16)
@@ -564,7 +539,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                         .foregroundStyle(colour.opacity(0.7))
                 }
                 Text(tab.label)
-                    .font(.system(size: 13, weight: live ? .semibold : .regular))
+                    .font(.system(size: 15, weight: live ? .semibold : .regular))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(colour)
@@ -609,13 +584,13 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
             .animation(Motion.quick, value: tab.loading)
             .animation(Motion.quick, value: tab.noisy)
         }
-        .padding(.leading, 6)
-        .padding(.trailing, editing ? 8 : 6)
-        .frame(height: 28)
+        .padding(.leading, SideBar.rowInset)
+        .padding(.trailing, editing ? 10 : 8)
+        .frame(height: SideBar.row)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background { ground }
         .modifier(Shake(travel: shake))
-        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .modifier(OneClick(double: false) {
             if live { browser.beginTabEdit(tab) } else { browser.select(tab) }
         })
@@ -641,10 +616,9 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
         .transition(.scale(scale: 0.94, anchor: .leading).combined(with: .opacity))
     }
 
-    /// The live row is found three ways at once, so no one of them has to
-    /// shout: paper that lifts off the column on a soft shadow inside a
-    /// one-point ring, a short bar of the space's colour at its left edge,
-    /// and a title set a weight heavier than the rest.
+    /// The live row is Arc's: paper half-way to white, lifting off the
+    /// column on a soft shadow inside a one-point ring, its title a weight
+    /// heavier than the rest.
     @ViewBuilder
     private var ground: some View {
         if live {
@@ -657,23 +631,15 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                         .animation(.easeOut(duration: 0.15), value: tab.reading)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(tint.rim, lineWidth: 1)
             }
-            // In the column's own margin rather than on the paper, where it
-            // would crowd the site's mark; it still rides with the pill.
-            .overlay(alignment: .leading) {
-                Capsule()
-                    .fill(tint.bar)
-                    .frame(width: 3, height: 16)
-                    .offset(x: -4.5)
-            }
-            .shadow(color: tint.lift, radius: 5, y: 1.5)
+            .shadow(color: tint.lift, radius: 4, y: 1)
             .matchedGeometryEffect(id: "live", in: pill)
         } else if hovering {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(tint.hover)
         }
     }
@@ -684,8 +650,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
     /// muted resting state makes the whole list read as disabled, which is
     /// the one thing a list of twenty-five things you keep must not do.
     private var colour: Color {
-        if live || hovering { return tint.ink }
-        return tint.ink.opacity(0.85)
+        tint.ink
     }
 }
 
@@ -709,12 +674,12 @@ struct Quiet: View {
 
     var body: some View {
         Button(action: act) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 14, weight: .regular))
                     .frame(width: 16)
                 Text(title)
-                    .font(.system(size: 13))
+                    .font(.system(size: 15))
                 Spacer(minLength: 0)
             }
             .foregroundStyle(hovering ? (ink ?? Palette.faint).opacity(1) : (ink ?? Palette.faint).opacity(0.82))
@@ -722,10 +687,10 @@ struct Quiet: View {
             .frame(height: height)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(hovering ? (glow ?? Palette.hover) : (fill ?? .clear))
             )
-            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -740,6 +705,11 @@ struct Door: View {
     var help = ""
     /// The door's square. Smaller where it shares a row with something else.
     var size: CGFloat = 26
+    /// Fork: a tinted column hands its own ink, hover and glyph size in, so
+    /// the doors on it are the column's colour rather than the app's grey.
+    var ink: Color? = nil
+    var glow: Color? = nil
+    var glyph: CGFloat = 11
     let act: () -> Void
 
     @State private var hovering = false
@@ -747,12 +717,13 @@ struct Door: View {
     var body: some View {
         Button(action: act) {
             Image(systemName: icon)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(on ? Palette.ink : (hovering ? Palette.ink.opacity(0.7) : Palette.muted))
+                .font(.system(size: glyph, weight: .medium))
+                .foregroundStyle(ink.map { on || hovering ? $0 : $0.opacity(0.72) }
+                                 ?? (on ? Palette.ink : (hovering ? Palette.ink.opacity(0.7) : Palette.muted)))
                 .frame(width: size, height: size)
                 .background(
                     RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                        .fill(on ? Palette.wash : (hovering ? Palette.hover : .clear))
+                        .fill(on ? Palette.wash : (hovering ? (glow ?? Palette.hover) : .clear))
                 )
                 .contentShape(RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
         }
@@ -762,4 +733,97 @@ struct Door: View {
         .animation(Motion.quick, value: hovering)
         .animation(Motion.quick, value: on)
     }
+}
+
+/// The address, at the top of the column where Arc keeps it: the site's host
+/// on a soft field, and the doors for downloads and extensions at its end.
+/// A click is ⌘L — the omnibox, with the whole address to change.
+///
+/// The extensions come out only under the pointer, as Arc's do: the pinned
+/// ones, then the puzzle piece last, which goes to Settings › Extensions.
+/// The host gives them its room and truncates, rather than sitting under
+/// them. Downloads, while there are any, stay put ahead of them.
+struct SideAddress: View {
+    @ObservedObject var browser: Browser
+    let tint: SpaceTint
+    @ObservedObject private var downloads = Downloads.shared
+    @ObservedObject private var bench = SideAddressHover.shared
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button { browser.edit() } label: {
+                Group {
+                    if let tab = browser.active {
+                        Host(tab: tab, tint: tint)
+                    } else {
+                        Placeholder(tint: tint)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Change the address   ⌘L")
+            if downloads.doorShowing {
+                DownloadsDoor(browser: browser, size: 24, arrowEdge: .bottom)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
+            ExtensionSlot(edge: .bottom, reveal: hovering || bench.forced, ink: tint.ink, glow: tint.hover) {
+                browser.openSettings(.extensions)
+            }
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 5)
+        .frame(height: 36)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(hovering || bench.forced ? tint.hover : tint.square)
+        )
+        .onHover { hovering = $0 }
+        .animation(Motion.quick, value: hovering)
+        .animation(Motion.quick, value: bench.forced)
+        .animation(Motion.settle, value: downloads.doorShowing)
+    }
+
+    private struct Host: View {
+        @ObservedObject var tab: Tab
+        let tint: SpaceTint
+
+        var body: some View {
+            if let url = tab.address, !tab.isBlank {
+                Text(SideAddress.host(url))
+                    .font(.system(size: 14.5))
+                    .foregroundStyle(tint.ink.opacity(0.82))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Placeholder(tint: tint)
+            }
+        }
+    }
+
+    private struct Placeholder: View {
+        let tint: SpaceTint
+        var body: some View {
+            Text("Search or Enter URL…")
+                .font(.system(size: 14.5))
+                .foregroundStyle(tint.faint)
+                .lineLimit(1)
+        }
+    }
+
+    /// `https://www.calendar.google.com/x` → `calendar.google.com`.
+    static func host(_ url: URL) -> String {
+        guard let host = url.host(), !host.isEmpty else { return url.absoluteString }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+}
+
+/// The pointer over the address pill, as the bench fakes it: `ui
+/// addressHover on` for a picture of what comes out under it. (Fork)
+@MainActor
+final class SideAddressHover: ObservableObject {
+    static let shared = SideAddressHover()
+    @Published var forced = false
 }

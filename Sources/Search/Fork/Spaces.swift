@@ -150,7 +150,20 @@ final class Spaces: ObservableObject {
     // MARK: - switching
 
     func select(_ id: UUID, in browser: Browser) {
-        guard id != current, all.contains(where: { $0.id == id }) else { return }
+        guard id != current, let to = all.firstIndex(where: { $0.id == id }) else { return }
+        let from = all.firstIndex { $0.id == current } ?? to
+        // The column on screen is pictured before anything changes, and the
+        // new row goes in with animations off: the slide is the one motion,
+        // not every old row leaving and every new one arriving (SpaceSlide).
+        // With no column on screen — the tab bar, a folded sidebar — the
+        // switch is what it always was.
+        guard SpaceSlide.shared.begin(forward: to > from, in: browser) else { return swap(to: id, in: browser) }
+        var calm = Transaction()
+        calm.disablesAnimations = true
+        withTransaction(calm) { swap(to: id, in: browser) }
+    }
+
+    private func swap(to id: UUID, in browser: Browser) {
         parked[current] = (browser.tabs, browser.activeID)
         let next = parked.removeValue(forKey: id) ?? ([], nil)
         current = id
@@ -536,7 +549,9 @@ extension Spaces {
     /// page) and `spaces tap header` (the title row's icon), `spaces delete
     /// N|NAME` (the sheet) and `spaces answer close|move|cancel` (its
     /// buttons), `spaces profile NAME`, `spaces theme N|NAME colors|intensity|
-    /// grain|image|blur|tone|motion|speed|clear …` (see `benchTheme`).
+    /// grain|image|blur|tone|motion|speed|clear …` (see `benchTheme`),
+    /// `spaces slide [at X|off]` (the last switch's timings; hold the next
+    /// slides at X for a picture — see `SpaceSlide.bench`).
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         func find(_ key: String) -> UUID? {
             if let n = Int(key), all.indices.contains(n) { return all[n].id }
@@ -596,6 +611,7 @@ extension Spaces {
         case "answer":
             guard SpaceDelete.answer(arg) else { return ["error": "no sheet up, or no \(arg) button on it"] }
             return ["answered": arg, "did": SpaceDelete.last]
+        case "slide": return ["slide": SpaceSlide.shared.bench(arg)]
         case "profile": profile(current, named: arg)
         case "theme":
             if let error = benchTheme(words, find: find) { return ["error": error] }

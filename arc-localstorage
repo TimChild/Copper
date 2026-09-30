@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""Lift Arc's localStorage out of its LevelDB, as JSON Copper can import.
+
+    ./arc-localstorage OUT.json                   every profile, every origin
+    ./arc-localstorage OUT.json --profile Default --profile "Profile 2"
+    ./arc-localstorage OUT.json --only-https --max-bytes 5000000
+    ./arc-localstorage OUT.json --root DIR        another copy of Arc's "User Data"
+
+Writes {"<origin>": {"<key>": "<value>", ...}, ...} and then, in Copper,
+`./bench storage import OUT.json` puts each origin's keys back.
+
+Arc is Chromium, and Chromium keeps localStorage for a profile in one LevelDB
+under "Local Storage/leveldb". There is no LevelDB in the standard library
+and the point is to need nothing installed, so this reads the two file kinds
+itself: the write-ahead .log (what was written since the last compaction)
+and the .ldb tables (everything older), Snappy blocks included. Arc may be
+running and writing, so the folder is copied to a temporary one first and
+only the copy is read; nothing of Arc's is ever opened for writing.
+
+When several profiles have the same origin, their keys are merged, the
+profile named later on the command line (or later in Arc's own order)
+winning a clash. Storage partitioned under another top-level site (a
+third-party iframe's) is left out: Copper has no way to put it back.
+"""
+
+import argparse
+import glob
+import json
+import os
+import shutil
+import struct
+import sys
+import tempfile
+
+ROOT = os.path.expanduser("~/Library/Application Support/Arc/User Data")
+BLOCK = 32768
+warnings = []
+
+
+def warn(text):
+    if text not in warnings:
+        warnings.append(text)
+        print(f"warning: {text}", file=sys.stderr)
+
+
+# MARK: - bytes
+
+def varint(buf, pos):
+    result = shift = 0
+    while True:
+        b = buf[pos]
+        pos += 1
+        result |= (b & 0x7F) << shift
+        if b < 0x80:
+            return result, pos
+        shift += 7
+
+
+def snappy(data):
+    """Snappy's raw format: a varint length, then literals and back-copies."""
+    size, pos = varint(data, 0)
+    out = bytearray()
+    n = len(data)
+    while pos < n:
+        tag = data[pos]
+        pos += 1
+        kind = tag & 3
+        if kind == 0:
+            length = tag >> 2
+            if length >= 60:
+                extra = length - 59
+                length = int.from_bytes(data[pos:pos + extra], "little")
+                pos += extra
+            length += 1
+            out += data[pos:pos + length]
+            pos += length
+            continue
+        if kind == 1:
+            length = ((tag >> 2) & 7) + 4
+            offset = ((tag >> 5) << 8) | data[pos]
+            pos += 1
+        elif kind == 2:
+            length = (tag >> 2) + 1
+            offset = data[pos] | (data[pos + 1] << 8)
+            pos += 2
+        else:
+            length = (tag >> 2) + 1
+            offset = int.from_bytes(data[pos:pos + 4], "little")
+            pos += 4
+        if offset == 0 or offset > len(out):
+            raise ValueError("snappy: bad offset")
+        start = len(out) - offset
+        if offset >= length:
+            out += out[start:start + length]
+        else:
+            # An overlapping copy repeats the last `offset` bytes.
+            for i in range(length):
+                out.append(out[start + i])
+    if len(out) != size:
+        raise ValueError("snappy: wrong length")
+    return bytes(out)
+
+
+# MARK: - LevelDB
+
+def entries(found, user_key, seq, kind, value):
+    """Keep the newest write of each key; a deletion is a write too."""
+    have = found.get(user_key)
+    if have is None or seq > have[0]:
+        found[user_key] = (seq, kind, value)
+
+
+def read_log(path, found):
+    """The write-ahead log: 32 KB blocks of records, a record possibly split
+    across blocks (FIRST/MIDDLE/LAST), each whole record one WriteBatch."""
+    data = open(path, "rb").read()
+    pos, pending = 0, None
+    while pos + 7 <= len(data):
+        room = BLOCK - pos % BLOCK
+        if room < 7:
+            pos += room  # the tail of a block too short for a header is padding
+            continue
+        length, kind = struct.unpack_from("<HB", data, pos + 4)
+        body = data[pos + 7:pos + 7 + length]
+        pos += 7 + length
+        if kind == 0 and length == 0:
+            pos += BLOCK - pos % BLOCK if pos % BLOCK else 0
+            continue
+        if kind == 1:
+            batch(body, found)
+            pending = None
+        elif kind == 2:
+            pending = bytearray(body)
+        elif kind == 3 and pending is not None:
+            pending += body
+        elif kind == 4 and pending is not None:
+            pending += body
+            batch(bytes(pending), found)
+            pending = None
+
+
+def batch(body, found):
+    if len(body) < 12:
+        return
+    seq, count = struct.unpack_from("<QI", body, 0)
+    pos = 12
+    try:
+        for i in range(count):
+            kind = body[pos]
+            pos += 1
+            size, pos = varint(body, pos)
+            key = body[pos:pos + size]
+            pos += size
+            value = b""
+            if kind == 1:
+                size, pos = varint(body, pos)
+                value = body[pos:pos + size]
+                pos += size
+            entries(found, bytes(key), seq + i, kind, bytes(value))
+    except IndexError:
+        warn("a torn write at the end of a .log was skipped")
+
+
+def block_at(data, offset, size, name):
+    raw = data[offset:offset + size]
+    kind = data[offset + size]
+    if kind == 0:
+        return raw
+    if kind == 1:
+        return snappy(raw)
+    if kind == 2:
+        try:
+            import zstd  # not in the standard library; only if someone has it
+            return zstd.decompress(raw)
+        except ImportError:
+            warn(f"{name}: zstd blocks skipped (no zstd module)")
+            return None
+    warn(f"{name}: unknown compression {kind}, block skipped")
+    return None
+
+
+def block_entries(block):
+    """A block's key/value pairs. Keys share prefixes with the one before;
+    the restart array at the end is for seeking, not needed to walk."""
+    restarts = struct.unpack_from("<I", block, len(block) - 4)[0]
+    end = len(block) - 4 - 4 * restarts
+    pos, key = 0, b""
+    while pos < end:
+        shared, pos = varint(block, pos)
+        unshared, pos = varint(block, pos)
+        size, pos = varint(block, pos)
+        key = key[:shared] + block[pos:pos + unshared]
+        pos += unshared
+        yield key, block[pos:pos + size]
+        pos += size
+
+
+def read_table(path, found):
+    data = open(path, "rb").read()
+    name = os.path.basename(path)
+    if len(data) < 48 or data[-8:] != bytes.fromhex("57fb808b247547db"):
+        warn(f"{name}: not a LevelDB table, skipped")
+        return
+    footer = data[-48:]
+    _, pos = varint(footer, 0)
+    _, pos = varint(footer, pos)          # metaindex (the bloom filter), unused
+    index_offset, pos = varint(footer, pos)
+    index_size, pos = varint(footer, pos)
+    index = block_at(data, index_offset, index_size, name)
+    if index is None:
+        return
+    for _, handle in block_entries(index):
+        offset, p = varint(handle, 0)
+        size, _ = varint(handle, p)
+        block = block_at(data, offset, size, name)
+        if block is None:
+            continue
+        for key, value in block_entries(block):
+            if len(key) < 8:
+                continue
+            tag = int.from_bytes(key[-8:], "little")
+            entries(found, bytes(key[:-8]), tag >> 8, tag & 0xFF, bytes(value))
+
+
+def read_leveldb(folder):
+    found = {}
+    for path in sorted(glob.glob(os.path.join(folder, "*.ldb")) + glob.glob(os.path.join(folder, "*.sst"))):
+        try:
+            read_table(path, found)
+        except (ValueError, IndexError, struct.error) as e:
+            warn(f"{os.path.basename(path)}: {e}, rest of table skipped")
+    for path in sorted(glob.glob(os.path.join(folder, "*.log"))):
+        read_log(path, found)
+    return {k: v for k, (_, kind, v) in found.items() if kind == 1}
+
+
+# MARK: - Chromium's localStorage keys
+
+def text(raw):
+    """Chromium's string encoding: a leading 0 is UTF-16LE, a 1 is Latin-1."""
+    if not raw:
+        return ""
+    if raw[0] == 0:
+        return raw[1:].decode("utf-16-le", errors="replace")
+    if raw[0] == 1:
+        return raw[1:].decode("latin-1")
+    return None
+
+
+def storage(records, stats):
+    origins = {}
+    for key, value in records.items():
+        if not key.startswith(b"_"):
+            continue  # VERSION, META:, METAACCESS:
+        cut = key.find(b"\x00", 1)
+        if cut < 0:
+            continue
+        origin = key[1:cut].decode("utf-8", errors="replace")
+        if "^" in origin:
+            # A storage key with a top-level site or nonce after the origin:
+            # third-party (partitioned) storage, not the site's own.
+            stats["partitioned"] += 1
+            continue
+        name, content = text(key[cut + 1:]), text(value)
+        if name is None or content is None:
+            stats["undecoded"] += 1
+            continue
+        origins.setdefault(origin.rstrip("/"), {})[name] = content
+    return origins
+
+
+def size(keys):
+    return sum(2 * (len(k) + len(v)) for k, v in keys.items())  # UTF-16, as WebKit counts
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("out")
+    parser.add_argument("--profile", action="append", help='"Default", "Profile 1", ... (repeatable; default all)')
+    parser.add_argument("--only-https", action="store_true")
+    parser.add_argument("--max-bytes", type=int, default=0, help="skip an origin whose storage is bigger than this")
+    parser.add_argument("--root", default=ROOT)
+    args = parser.parse_args()
+
+    def order(name):
+        return (0, 0) if name == "Default" else (1, int(name.split()[-1]) if name.split()[-1].isdigit() else 0)
+
+    names = args.profile or sorted(
+        (os.path.basename(os.path.dirname(os.path.dirname(p))) for p in glob.glob(os.path.join(args.root, "*", "Local Storage", "leveldb"))),
+        key=order)
+    merged, stats = {}, {"partitioned": 0, "undecoded": 0}
+    for name in names:
+        source = os.path.join(args.root, name, "Local Storage", "leveldb")
+        if not os.path.isdir(source):
+            warn(f"{name}: no Local Storage, skipped")
+            continue
+        with tempfile.TemporaryDirectory(prefix="arc-ls-") as scratch:
+            copy = os.path.join(scratch, "leveldb")
+            shutil.copytree(source, copy, ignore=shutil.ignore_patterns("LOCK"))
+            origins = storage(read_leveldb(copy), stats)
+        print(f"{name}: {len(origins)} origins, {sum(len(v) for v in origins.values())} keys")
+        for origin, keys in origins.items():
+            merged.setdefault(origin, {}).update(keys)
+
+    out, skipped = {}, []
+    for origin in sorted(merged):
+        keys = merged[origin]
+        if args.only_https and not origin.startswith("https://"):
+            continue
+        if not origin.startswith(("https://", "http://")):
+            continue  # chrome-extension://, file:// and such have nowhere to go in Copper
+        if args.max_bytes and size(keys) > args.max_bytes:
+            skipped.append((origin, size(keys)))
+            continue
+        out[origin] = keys
+    with open(args.out, "w") as f:
+        json.dump(out, f, ensure_ascii=False)
+    total = sum(size(k) for k in out.values())
+    print(f"wrote {args.out}: {len(out)} origins, {sum(len(k) for k in out.values())} keys, {total / 1e6:.1f} MB (UTF-16)")
+    if stats["partitioned"]:
+        print(f"left out {stats['partitioned']} partitioned (third-party) keys")
+    if stats["undecoded"]:
+        print(f"left out {stats['undecoded']} keys in an encoding this does not know")
+    for origin, n in sorted(skipped, key=lambda s: -s[1]):
+        print(f"skipped {origin}: {n / 1e6:.1f} MB > --max-bytes")
+
+
+if __name__ == "__main__":
+    main()

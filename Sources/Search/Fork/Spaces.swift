@@ -459,7 +459,7 @@ struct ForkCommands: Commands {
     @ObservedObject var spaces = Spaces.shared
     @ObservedObject var split = Split.shared
     @ObservedObject var agent = Agent.shared
-    @ObservedObject var trace = JevTrace.shared
+    @ObservedObject var trace = Drive.shared
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
@@ -473,7 +473,7 @@ struct ForkCommands: Commands {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
             // Jev's timeline had no way back once closed; and with two or
             // three panes open there was no one move that put them all away.
-            Button(trace.paneOpen ? "Close Jev Timeline" : "Jev Timeline") { trace.paneOpen.toggle() }
+            Button(trace.paneOpen ? "Close Driver Timeline" : "Driver Timeline") { trace.paneOpen.toggle() }
                 .keyboardShortcut("j", modifiers: [.command, .option])
             // Never disabled: a menu item's enabled state is decided when the
             // menu is built, and ⌘⌥E pressed with two panes open did nothing

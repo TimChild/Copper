@@ -514,7 +514,8 @@ final class AgentLink: ObservableObject, Identifiable {
                 reporter = made
             }
             let who = request.caller.botHandle.isEmpty ? "bot" : request.caller.botHandle
-            rpc = await MCP.shared.handle(request.message, announce: config.announces ? .prefix("@\(who) · \(appName)") : .quiet)
+            rpc = await MCP.shared.handle(request.message, announce: config.announces ? .prefix("@\(who) · \(appName)") : .quiet,
+                                          driver: .bot("@\(who) · \(appName)"))
             // The last progress frame goes before the reply.
             await reporter?.finish()
             reporters[request.id] = nil

@@ -77,7 +77,7 @@ The feed installer accepts `COPPER_NO_LAUNCH=1` / `--no-launch` for scripts that
 | `⌘L` address · `⌘K` switch tab · `⌘T` new tab · `⌘W` close · `⇧⌘T` reopen | `⌘[` `⌘]` back, forward · `⇧⌘[` `⇧⌘]` previous, next tab · `⌘1`–`⌘9` jump |
 | `⇧⌘S` tabs across the top or down the left · `⌘S` fold the sidebar away · `⇧⌘B` bookmark this page | `⇧⌘R` reading mode · `⇧⌘P` float the video · `⇧⌘H` hide something · `⇧⌘U` what is hidden here |
 | `⌘F` find · `⌘D` duplicate tab · `⇧⌘C` copy address · `⇧⌘V` paste and go | `⌘Y` history · `⇧⌘J` downloads · `⌘,` settings · `⌥⌘L` passwords |
-| `⌘E` agent pane · `⌥⌘J` Jev timeline · `⌥⌘E` close every pane · `⇧⌘D` split | `⌃N` new space · `⌃⌥←` `⌃⌥→` previous, next space · `⌃1`–`⌃9` jump to a space |
+| `⌘E` agent pane · `⌥⌘J` driver timeline (who is driving the page, and what they are doing) · `⌥⌘E` close every pane · `⇧⌘D` split | `⌃N` new space · `⌃⌥←` `⌃⌥→` previous, next space · `⌃1`–`⌃9` jump to a space |
 
 `Tab` walks along the row of tabs; `⌃Tab` does too, or flips between your most recent tabs (Settings › Tabs); `esc` puts away whatever is open. `⌘←` and `⌘→` move the caret when you are typing and go back and forward otherwise; a middle click opens a link behind the current tab; the thumb buttons on a mouse go back and forward.
 

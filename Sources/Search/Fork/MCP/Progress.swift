@@ -2,7 +2,7 @@ import Foundation
 
 // What the owner watching an agent thread sees of a Jev run while it runs:
 // the `progress` object of a link `progress` frame (LinkWire.progress), built
-// from the same JevTrace.Run the pane beside the page reads.
+// from the same Drive.Run the pane beside the page reads.
 //
 // A pure function with hard caps, so a frame stays small whatever the page
 // says: goal ≤ 300, note ≤ 300, url ≤ 500, title ≤ 200, the last ≤ 12
@@ -25,7 +25,7 @@ import Foundation
 enum JevProgress {
     static let recentLimit = 12
 
-    static func build(_ run: JevTrace.Run) -> [String: Any] {
+    static func build(_ run: Drive.Run) -> [String: Any] {
         var out: [String: Any] = [
             "v": 1,
             "kind": "jev",
@@ -42,7 +42,7 @@ enum JevProgress {
         return out
     }
 
-    static func cycle(_ c: JevTrace.Cycle) -> [String: Any] {
+    static func cycle(_ c: Drive.Cycle) -> [String: Any] {
         var out: [String: Any] = [
             "n": c.number,
             "startedAt": iso(c.started),
@@ -53,14 +53,14 @@ enum JevProgress {
         return out
     }
 
-    static func phase(_ p: JevTrace.Phase) -> [String: Any] {
+    static func phase(_ p: Drive.Phase) -> [String: Any] {
         var out: [String: Any] = ["kind": p.kind.rawValue, "title": cap(p.title, 120)]
         if let detail = p.detail, !detail.isEmpty { out["detail"] = cap(detail, 160) }
         if let ms = p.ms { out["ms"] = max(0, ms) }
         return out
     }
 
-    static func outcome(_ o: JevTrace.Outcome) -> [String: Any] {
+    static func outcome(_ o: Drive.Outcome) -> [String: Any] {
         let probability = o.probability.isFinite ? min(1, max(0, o.probability)) : 0
         var out: [String: Any] = [
             "operation": cap(o.operation, 40),

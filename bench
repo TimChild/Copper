@@ -35,7 +35,10 @@
     ./bench ext-remove ID
     ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade
     ./bench downloads [open|close|cancel ID|retry ID|clear|start URL]
-    ./bench bw status|server URL|login EMAIL PW [OTP]|unlock PW|lock|sync|candidates HOST|choose ID
+    ./bench render bitwarden|drive PATH  one card drawn to a PNG on its own, no window brought forward
+    ./bench drive [status|stop|resume|clear|pane on|off]
+                                       who is driving the page (Jev, an agent, a bot) and every row of the timeline
+    ./bench bw status|server URL|login EMAIL PW [OTP] [--method N]|code OTP|cancel|unlock PW|lock|sync|candidates HOST|choose ID
               |identities|cards|fields HOST|usernames|counts|autofill card|identity ID
               |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
                                        Bitwarden probe controls and Copper feed status
@@ -175,8 +178,12 @@ def main(argv):
             request["arg"] = args[1]
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads"):
-        request["op"] = args[0] if args else ("status" if verb in ("updates", "bw") else "list")
+    elif verb == "render":
+        if len(args) < 2: sys.exit("usage: bench render bitwarden|drive PATH")
+        request["op"] = args[0]
+        request["path"] = os.path.abspath(args[1])
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive"):
+        request["op"] = args[0] if args else ("status" if verb in ("updates", "bw", "drive") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "history":
         if not args or args[0] != "import" or len(args) < 2:
@@ -273,7 +280,7 @@ def main(argv):
     elif verb in ("eval", "ext-popup"):
         value = answer.get("value")
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
-    elif verb in ("updates", "bw"):
+    elif verb in ("updates", "bw", "drive", "render"):
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True))
     elif verb == "bar":
         for o in answer.get("offers", []):

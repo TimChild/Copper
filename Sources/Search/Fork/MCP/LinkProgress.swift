@@ -1,11 +1,11 @@
 import Combine
 import Foundation
 
-/// Watches JevTrace while one agent-link request (a `jev_run` or `jev_step`
+/// Watches Drive while one agent-link request (a `jev_run` or `jev_step`
 /// tools/call) is being served, and hands `progress` frames to `post` — so
 /// the owner's thread shows the run live and can stop it.
 ///
-/// Only the run that belongs to this request is reported. JevTrace holds one
+/// Only the run that belongs to this request is reported. Drive holds one
 /// run at a time: the run is ours when it starts after the call did (a new
 /// id), or — for a `jev_step` that continues a live session with the same
 /// goal — the run already live when the call came in. Anything else (a run
@@ -28,7 +28,7 @@ final class JevProgressReporter {
     private let baseline: UUID?
     private(set) var runID: UUID?
     private var subscription: AnyCancellable?
-    private var latest: JevTrace.Run?
+    private var latest: Drive.Run?
     private var seq = 0
     private var lastSent = Date.distantPast
     private var lastCycles = 0
@@ -44,13 +44,13 @@ final class JevProgressReporter {
         self.requestId = requestId
         self.tool = tool
         self.post = post
-        let trace = JevTrace.shared
+        let trace = Drive.shared
         baseline = trace.run?.id
         if tool == "jev_step", trace.live, let run = trace.run, run.goal == goal {
             runID = run.id // continuing the live session
         }
         // @Published emits in willSet with the new value, on the main actor
-        // (every JevTrace write is main-actor), the current value first.
+        // (every Drive write is main-actor), the current value first.
         subscription = trace.$run.sink { [weak self] run in
             MainActor.assumeIsolated { self?.observe(run) }
         }
@@ -60,7 +60,7 @@ final class JevProgressReporter {
     /// before the run has begun is kept until it does.
     func cancel() {
         if let runID {
-            if JevTrace.shared.run?.id == runID { JevTrace.shared.stop() }
+            if Drive.shared.run?.id == runID { Drive.shared.stop() }
         } else {
             cancelWanted = true
         }
@@ -76,13 +76,13 @@ final class JevProgressReporter {
         trailing?.cancel()
         trailing = nil
         if runID != nil, !finalQueued {
-            if let run = JevTrace.shared.run, run.id == runID { latest = run }
+            if let run = Drive.shared.run, run.id == runID { latest = run }
             emit(final: true)
         }
         await pump?.value
     }
 
-    private func observe(_ run: JevTrace.Run?) {
+    private func observe(_ run: Drive.Run?) {
         guard !finished, let run else { return }
         if runID == nil {
             guard run.id != baseline else { return }
@@ -91,7 +91,7 @@ final class JevProgressReporter {
                 // Not from inside begin()'s own write: stop() needs the run
                 // live, and begin() clears a stop made before it finished.
                 Task { @MainActor in
-                    if JevTrace.shared.run?.id == run.id { JevTrace.shared.stop() }
+                    if Drive.shared.run?.id == run.id { Drive.shared.stop() }
                 }
             }
         }

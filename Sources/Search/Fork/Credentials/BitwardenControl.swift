@@ -12,6 +12,18 @@ import Foundation
 // external daemon decrypted (server, email, master password, optional API key,
 // optional two-step code, policy); the secrets go to `bw` through the child's
 // environment only (Bitwarden.run) and are gone when this returns.
+//
+// A sign-in that needs a code takes two calls. The first, without `otp`,
+// answers `ok:false, needs:"code"` with `prompt` ("twoStep" | "newDevice"),
+// `method` (0 authenticator, 1 email, 3 YubiKey, or null when the account
+// has one method and the CLI picked it) and `pending:true` — `bw` is holding
+// the sign-in open, and an emailed code has been sent when the method is
+// email or the prompt is newDevice. The second call, with `otp` (and the
+// same email), hands the code over. When the account has several two-step
+// methods the first call answers `needs:"method"` with `methods:[{id,name}]`;
+// call again with `otpMethod`.
+// A call with `otp` and no sign-in waiting starts one and answers the prompt
+// with it at once — so an authenticator code works in a single call, as before.
 
 extension Bitwarden {
     /// Everything Copper may say about the vault. No secret, by construction:
@@ -58,6 +70,11 @@ extension Bitwarden {
 
     /// `op`: status | login | lock | logout | sync | policy. Always answers
     /// `{ok, …statusReport()}`; a failure adds `error`, one sanitized line.
+    /// `login` came back with a step rather than a session.
+    struct StepNeeded: Error {
+        let step: LoginStep
+    }
+
     func control(_ params: [String: Any]) async -> [String: Any] {
         let op = (params["op"] as? String ?? "status").trimmingCharacters(in: .whitespacesAndNewlines)
         // Whatever the caller sent that must never be echoed back, even
@@ -70,6 +87,9 @@ extension Bitwarden {
                 await refreshStatus()
             case "login":
                 try await controlLogin(params)
+            case "cancel":
+                cancelPendingLogin()
+                await refreshStatus()
             case "lock":
                 await lock()
             case "logout":
@@ -85,6 +105,35 @@ extension Bitwarden {
             await loadCLIVersion()
             var out = statusReport()
             out["ok"] = true
+            return out
+        } catch let needed as StepNeeded {
+            await loadCLIVersion()
+            var out = statusReport()
+            out["ok"] = false
+            switch needed.step {
+            case .chooseMethod(let methods):
+                out["needs"] = "method"
+                out["methods"] = methods.map { ["id": $0.id, "name": $0.name] as [String: Any] }
+                out["error"] = "Bitwarden needs a two-step method: " + methods.map { "\($0.name) (\($0.id))" }.joined(separator: ", ") + " — call again with otpMethod"
+            case .needsCode(let prompt):
+                out["needs"] = "code"
+                out["pending"] = pendingLogin != nil
+                switch prompt {
+                case .newDevice:
+                    out["prompt"] = "newDevice"
+                    out["method"] = NSNull()
+                    out["error"] = "Bitwarden emailed a new-device verification code to the account — call again with otp"
+                case .twoStep(let method):
+                    out["prompt"] = "twoStep"
+                    out["method"] = method.map { $0 as Any } ?? NSNull()
+                    switch method {
+                    case 1: out["error"] = "Bitwarden emailed a two-step code to the account — call again with otp"
+                    case 3: out["error"] = "Bitwarden needs the YubiKey code — call again with otp"
+                    case 0: out["error"] = "Bitwarden needs the authenticator app code — call again with otp"
+                    default: out["error"] = "Bitwarden needs the two-step code (emailed, if the account uses email codes) — call again with otp"
+                    }
+                }
+            }
             return out
         } catch {
             await loadCLIVersion()
@@ -112,7 +161,9 @@ extension Bitwarden {
         let clientId = text("clientId")
         let clientSecret = text("clientSecret")
         let otp = text("otp")
-        let method = (p["otpMethod"] as? NSNumber)?.intValue ?? 0
+        // Unsaid, the CLI picks the account's method (or lists them); a code
+        // with no method is an authenticator code, as it always was.
+        let method: Int? = (p["otpMethod"] as? NSNumber)?.intValue ?? (otp != nil ? 0 : nil)
 
         // Everything is checked before anything runs, so a bad payload never
         // leaves the CLI half signed in.
@@ -122,12 +173,23 @@ extension Bitwarden {
         let apiKey = clientId != nil
         guard !password.isEmpty else { throw Failure(message: "Bitwarden master password is required to unlock the vault") }
         if !apiKey, email == nil { throw Failure(message: "Bitwarden email is required") }
-        guard [0, 1, 3].contains(method) else {
+        if let method, TwoStepMethod.named(method) == nil {
             throw Failure(message: "otpMethod must be 0 (authenticator), 1 (email) or 3 (YubiKey)")
         }
         let server = try text("server").map(Self.validServer)
         try validatePolicy(p)
         guard Self.installed else { throw Failure(message: "Bitwarden CLI is not installed") }
+
+        // The second call of a two-call sign-in: the code for the prompt
+        // `bw` is holding open. Same account, or it is a different sign-in.
+        if let otp, let pending = pendingLogin, !apiKey,
+           pending.email.lowercased() == (email ?? "").lowercased() {
+            try await submit(code: otp)
+            if case .locked = state { try await unlock(password: password) }
+            guard case .unlocked = state else { throw Failure(message: "Bitwarden did not unlock") }
+            try applyPolicy(p)
+            return
+        }
 
         await refreshStatus()
 
@@ -162,7 +224,8 @@ extension Bitwarden {
             if let clientId, let clientSecret {
                 try await loginWithAPIKey(clientId: clientId, clientSecret: clientSecret)
             } else if let email {
-                try await login(email: email, password: password, otp: otp, method: method)
+                let outcome = try await login(email: email, password: password, otp: otp, method: method)
+                if case .step(let step) = outcome { throw StepNeeded(step: step) }
             }
         }
 

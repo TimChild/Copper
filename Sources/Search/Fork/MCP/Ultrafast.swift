@@ -772,13 +772,13 @@ enum Ultrafast {
             traced = true
             // cosmetic only: the run is over, take the layer off the page.
             Trail.clear(tab.web)
-            JevTrace.shared.finish(JevTrace.Status(rawValue: status ?? self.status) ?? .error, note: note ?? self.note)
+            Drive.shared.finish(Drive.Status(rawValue: status ?? self.status) ?? .error, note: note ?? self.note)
         }
 
         /// The hard stop, asked three times a tick: before the read, after
         /// the decision, after the text. Nothing has gone in yet either way.
         private func stopped() -> Bool {
-            guard JevTrace.shared.stopRequested else { return false }
+            guard Drive.shared.stopRequested else { return false }
             status = "stopped"
             note = "Stopped by the user"
             return true
@@ -794,7 +794,7 @@ enum Ultrafast {
             guard Intelligence.shared.jevReady else { throw Failure(text: "No Jev key — Settings › Agents › Jev mode (or Settings › Intelligence)") }
             if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
             let web = tab.web
-            let trace = JevTrace.shared
+            let trace = Drive.shared
             trace.cycle()
 
             var obs: Observation
@@ -828,7 +828,7 @@ enum Ultrafast {
                 guard await Ultrafast.fresh(web, obs) else { observation = nil; return nil }
                 status = decision.choice.lowercased()
                 note = String(format: "Jev said %@, %.0f%% sure", decision.choice, decision.probability * 100)
-                trace.outcome(JevTrace.Outcome(operation: decision.choice, label: "", text: nil,
+                trace.outcome(Drive.Outcome(operation: decision.choice, label: "", text: nil,
                                                probability: decision.probability, confidence: decision.confidence,
                                                pageChanged: nil, stale: false, candidates: []))
                 return nil
@@ -886,7 +886,7 @@ enum Ultrafast {
                 observation = nil
                 if let writing { trace.close(phase: writing) }
                 if let acting { trace.close(phase: acting) }
-                trace.outcome(JevTrace.Outcome(operation: decision.operation, label: label, text: text,
+                trace.outcome(Drive.Outcome(operation: decision.operation, label: label, text: text,
                                                probability: decision.probability, confidence: decision.confidence,
                                                pageChanged: nil, stale: true, candidates: decision.candidates))
                 if staleStreak > 6 { status = "blocked"; note = "The page kept changing under the agent: \(stale.text)" }
@@ -911,7 +911,7 @@ enum Ultrafast {
             history[history.count - 1] = step
             trace.close(phase: settling, detail: step.pageChanged == true ? "changed" : "no change")
             trace.page(url: next.url, title: next.title)
-            trace.outcome(JevTrace.Outcome(operation: decision.operation, label: label, text: text,
+            trace.outcome(Drive.Outcome(operation: decision.operation, label: label, text: text,
                                            probability: decision.probability, confidence: decision.confidence,
                                            pageChanged: step.pageChanged, stale: false, candidates: decision.candidates))
             let last = history.suffix(3)
@@ -1053,7 +1053,7 @@ enum Ultrafast {
             else {
                 session = Session(goal: goal, tab: tab, browser: browser)
                 sessions[tab.id] = session
-                JevTrace.shared.begin(goal: goal, tab: tab)
+                Drive.shared.begin(goal: goal, tab: tab)
             }
             let step: Step?
             do { step = try await session.tick() } catch {
@@ -1092,25 +1092,25 @@ enum Ultrafast {
                 // The pane and the pill come up with the page, not after it:
                 // waiting for the first load is the first thing the run does,
                 // and it is the longest thing it does on a slow site.
-                JevTrace.shared.begin(goal: goal, tab: tab)
-                JevTrace.shared.cycle()
+                Drive.shared.begin(goal: goal, tab: tab)
+                Drive.shared.cycle()
                 var host = url.host ?? raw
                 if host.hasPrefix("www.") { host.removeFirst(4) }
-                let opening = JevTrace.shared.phase(.observe, "Opening \(host)")
+                let opening = Drive.shared.phase(.observe, "Opening \(host)")
                 do {
                     try await Tools.settle(tab)
                 } catch {
-                    JevTrace.shared.close(phase: opening)
-                    JevTrace.shared.finish(.error, note: (error as? Failure)?.text ?? error.localizedDescription)
+                    Drive.shared.close(phase: opening)
+                    Drive.shared.finish(.error, note: (error as? Failure)?.text ?? error.localizedDescription)
                     Tools.summary?.line = summary("error", actions: 0, ms: 0, tab: tab)
                     throw error
                 }
-                JevTrace.shared.close(phase: opening)
+                Drive.shared.close(phase: opening)
             } else {
                 guard let current = browser.active else { throw Failure(text: "no active tab") }
                 tab = current
                 if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
-                JevTrace.shared.begin(goal: goal, tab: tab)
+                Drive.shared.begin(goal: goal, tab: tab)
             }
             // begin() happened above, on whichever road got here.
             let session = Session(goal: goal, tab: tab, browser: browser)

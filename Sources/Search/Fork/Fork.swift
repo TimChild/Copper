@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Foundation
 
 // Everything Copper adds to Search lives under Fork/. Upstream files get
@@ -43,6 +44,8 @@ enum Fork {
 
     /// The last thing Bitwarden refused over the bench, for `bw status`.
     @MainActor static var bwLastError: String?
+    /// What the last `bench bw login` / `bw code` came to: signedIn, needsCode:…, chooseMethod:…, failed, cancelled.
+    @MainActor static var bwLastStep: String?
 
     /// The bench verbs Copper adds; see Bench.swift's switch.
     @MainActor static func bench(_ verb: String, _ request: [String: Any], in browser: Browser) -> [String: Any] {
@@ -160,7 +163,18 @@ enum Fork {
                 case .locked: state = "locked"
                 case .unlocked: state = "unlocked"
                 }
-                return ["state": state, "server": bw.serverURL, "installed": Bitwarden.installed, "lastError": Fork.bwLastError ?? ""]
+                var out: [String: Any] = ["state": state, "server": bw.serverURL, "installed": Bitwarden.installed, "lastError": Fork.bwLastError ?? ""]
+                // A sign-in `bw` is holding open for a code, and what kind.
+                if let pending = bw.pendingLogin {
+                    var waiting: [String: Any] = ["email": pending.email]
+                    switch pending.prompt {
+                    case .newDevice: waiting["prompt"] = "newDevice"
+                    case .twoStep(let method): waiting["prompt"] = "twoStep"; waiting["method"] = method.map { $0 as Any } ?? NSNull()
+                    }
+                    out["pending"] = waiting
+                }
+                if let step = Fork.bwLastStep { out["step"] = step }
+                return out
             }
             switch op {
             case "status": return describe()
@@ -169,9 +183,43 @@ enum Fork {
                 Task { do { try await bw.configure(server: url) } catch { Fork.bwLastError = error.localizedDescription } }
                 return ["started": true]
             case "login":
-                guard words.count >= 2 else { return ["error": "bw login EMAIL PASSWORD [OTP]"] }
+                // bw login EMAIL PASSWORD [OTP] [--method N]: the sign-in as
+                // Settings runs it. `status` then says `step`: signedIn, or
+                // needsCode / chooseMethod with the prompt `bw` is holding.
+                var rest = words
+                var method: Int?
+                if let at = rest.firstIndex(of: "--method"), at + 1 < rest.count {
+                    method = Int(rest[at + 1])
+                    rest.removeSubrange(at...(at + 1))
+                }
+                guard rest.count >= 2 else { return ["error": "bw login EMAIL PASSWORD [OTP] [--method N]"] }
                 Fork.bwLastError = nil
-                Task { do { try await bw.login(email: words[0], password: words[1], otp: words.count > 2 ? words[2] : nil) } catch { Fork.bwLastError = error.localizedDescription } }
+                Fork.bwLastStep = nil
+                Task {
+                    do {
+                        let outcome = try await bw.login(email: rest[0], password: rest[1], otp: rest.count > 2 ? rest[2] : nil, method: method)
+                        switch outcome {
+                        case .signedIn: Fork.bwLastStep = "signedIn"
+                        case .step(.chooseMethod(let methods)): Fork.bwLastStep = "chooseMethod:" + methods.map { String($0.id) }.joined(separator: ",")
+                        case .step(.needsCode(.newDevice)): Fork.bwLastStep = "needsCode:newDevice"
+                        case .step(.needsCode(.twoStep(let m))): Fork.bwLastStep = "needsCode:twoStep:" + (m.map(String.init) ?? "-")
+                        }
+                    } catch { Fork.bwLastError = error.localizedDescription; Fork.bwLastStep = "failed" }
+                }
+                return ["started": true]
+            case "code":
+                // bw code OTP: the code for the sign-in `bw` is holding open.
+                guard let code = words.first else { return ["error": "bw code OTP"] }
+                Fork.bwLastError = nil
+                Fork.bwLastStep = nil
+                Task {
+                    do { try await bw.submit(code: code); Fork.bwLastStep = "signedIn" }
+                    catch { Fork.bwLastError = error.localizedDescription; Fork.bwLastStep = "failed" }
+                }
+                return ["started": true]
+            case "cancel":
+                bw.cancelPendingLogin()
+                Fork.bwLastStep = "cancelled"
                 return ["started": true]
             case "unlock":
                 guard let password = words.first else { return ["error": "bw unlock PASSWORD"] }
@@ -297,6 +345,53 @@ enum Fork {
                 return Updates.shared.status
             default: return ["error": "unknown updates operation \(op)"]
             }
+        case "drive":
+            // The driver timeline as data: who is driving, live/busy, the
+            // rows; `stop` / `resume` / `pane on|off` / `clear` do what the
+            // pill and the pane do.
+            let drive = Drive.shared
+            switch request["op"] as? String ?? "status" {
+            case "stop": drive.stop()
+            case "resume": drive.resume()
+            case "clear": drive.dismiss()
+            case "pane": drive.paneOpen = (request["arg"] as? String ?? "on") != "off"
+            default: break
+            }
+            var out: [String: Any] = ["live": drive.live, "busy": drive.busy, "paneOpen": drive.paneOpen,
+                                      "refusing": drive.refusingUntil != nil, "stopRequested": drive.stopRequested]
+            if let run = drive.run {
+                out["run"] = [
+                    "driver": run.driver.name, "goal": run.goal, "status": run.status.rawValue, "note": run.note,
+                    "thought": run.thought ?? "", "url": run.url, "title": run.title,
+                    "cycles": run.cycles.map { c -> [String: Any] in
+                        var row: [String: Any] = ["n": c.number, "phases": c.phases.map { ["kind": $0.kind.rawValue, "title": $0.title, "detail": $0.detail ?? "", "ms": $0.ms ?? -1] as [String: Any] }]
+                        if let o = c.outcome {
+                            row["outcome"] = ["operation": o.operation, "label": o.label, "text": o.text ?? "", "pageChanged": o.pageChanged.map { $0 as Any } ?? NSNull(), "error": o.error ?? ""] as [String: Any]
+                        }
+                        return row
+                    },
+                ] as [String: Any]
+            }
+            return out
+        case "render":
+            // One SwiftUI card drawn to a PNG on its own, off any window —
+            // for looking at a Settings card or the driver pane without
+            // scrolling a panel to it or bringing a window forward.
+            guard let path = request["path"] as? String else { return ["error": "render needs a path"] }
+            let which = request["op"] as? String ?? ""
+            let view: AnyView
+            switch which {
+            case "bitwarden": view = AnyView(BitwardenCard(browser: browser).frame(width: 460).padding(12).background(Palette.wash))
+            case "drive": view = AnyView(DrivePane(browser: browser).frame(height: 560))
+            default: return ["error": "render bitwarden|drive PATH"]
+            }
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            guard let image = renderer.cgImage else { return ["error": "no image"] }
+            let rep = NSBitmapImageRep(cgImage: image)
+            guard let png = rep.representation(using: .png, properties: [:]) else { return ["error": "no png"] }
+            do { try png.write(to: URL(fileURLWithPath: path)) } catch { return ["error": "\(error)"] }
+            return ["path": path, "size": [image.width, image.height]]
         case "summon":
             // ⌘K left open with this text in it, for a look at the bar itself.
             browser.summon()

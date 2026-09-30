@@ -233,7 +233,7 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
-        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history":
+        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render":
             answer(Fork.bench(verb, request, in: browser))
 
         case "tabs":
@@ -380,7 +380,7 @@ final class Bench {
             // (its button number and modifiers) — for the mouse-button work. (Fork)
             out["firstResponder"] = Links.window?.firstResponder.map { "\(type(of: $0))" } ?? ""
             out["lastLinkClick"] = MouseButtons.lastLinkClick
-            out["panes"] = ["agent": Agent.shared.open, "jev": JevTrace.shared.paneOpen, "split": Split.shared.on]
+            out["panes"] = ["agent": Agent.shared.open, "jev": Drive.shared.paneOpen, "split": Split.shared.on]
             // The column folded away, out for a look, and the lights with it (see Fold.swift).
             out["folded"] = browser.folded
             out["peeking"] = browser.peeking

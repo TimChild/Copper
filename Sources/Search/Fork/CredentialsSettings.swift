@@ -13,6 +13,29 @@ struct BitwardenCard: View {
     @State private var busy = false
     @State private var error: String?
     @State private var autolock = 0
+    /// Where the sign-in stands: the form, a choice of two-step method, or
+    /// the code `bw` is waiting for.
+    @State private var step: SignInStep = .credentials
+    /// The two-step method the user picked, when the account has several.
+    @State private var method: Int?
+    @FocusState private var codeFocused: Bool
+
+    enum SignInStep: Equatable {
+        case credentials
+        case chooseMethod([Bitwarden.TwoStepMethod])
+        case code(Bitwarden.CodePrompt)
+    }
+
+    /// A card that opens while a sign-in started elsewhere (`copper bitwarden
+    /// login`, a linked app) waits for its code starts on the code step.
+    init(browser: Browser) {
+        self.browser = browser
+        if let pending = Bitwarden.shared.pendingLogin {
+            _step = State(initialValue: .code(pending.prompt))
+            _email = State(initialValue: pending.email)
+            _method = State(initialValue: pending.method)
+        }
+    }
 
     var body: some View {
         Card {
@@ -28,6 +51,27 @@ struct BitwardenCard: View {
         .onAppear {
             server = bitwarden.serverURL
             autolock = storedAutolock
+            if bitwarden.pendingLogin == nil, case .code = step { step = .credentials }
+        }
+        .onChange(of: bitwarden.pendingLogin) { _, pending in
+            if let pending {
+                // A sign-in started elsewhere — `copper bitwarden login`, a
+                // linked app — is waiting for its code: this is where to type it.
+                guard !busy, case .credentials = step else { return }
+                email = pending.email
+                method = pending.method
+                otp = ""
+                error = nil
+                step = .code(pending.prompt)
+                codeFocused = true
+            } else {
+                // `bw` let go of the sign-in (ten minutes without a code): the
+                // code step has nothing to send to any more.
+                guard !busy, case .code = step else { return }
+                step = .credentials
+                otp = ""
+                if error == nil { error = "Bitwarden stopped waiting for the code — sign in again" }
+            }
         }
     }
 
@@ -119,34 +163,104 @@ struct BitwardenCard: View {
 
     @ViewBuilder
     private var signInLines: some View {
-        Line("Bitwarden server", "Use bitwarden.com, EU, or a self-hosted Vaultwarden server") {
-            TextField("https://vault.bitwarden.com", text: $server)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 260)
+        switch step {
+        case .credentials:
+            Line("Bitwarden server", "Use bitwarden.com, EU, or a self-hosted Vaultwarden server") {
+                TextField("https://vault.bitwarden.com", text: $server)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 260)
+            }
+            Rule()
+            Line("Email") {
+                TextField("Email", text: $email)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 260)
+            }
+            Rule()
+            Line("Master password", "A two-step or new-device code is asked for next, if the account wants one") {
+                SecureField("Password", text: $password)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 260)
+                    .onSubmit { signIn() }
+            }
+            Rule()
+            Line("Connect") {
+                actionPill("Sign in") { signIn() }
+            }
+        case .chooseMethod(let methods):
+            Line("Two-step login", "This account has more than one way to get a code — which one?") {
+                HStack(spacing: 6) {
+                    ForEach(methods) { choice in
+                        Pill(choice.name, filled: methods.count == 1) { pick(choice) }
+                    }
+                }
+                .fixedSize()
+            }
+            Rule()
+            Line("Account", email) {
+                Pill("Cancel") { cancelSignIn() }
+            }
+        case .code(let prompt):
+            Line(codeTitle(prompt), codeDetail(prompt)) {
+                HStack(spacing: 8) {
+                    TextField("Code", text: $otp)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                        .focused($codeFocused)
+                        .onSubmit { submitCode() }
+                    actionPill("Continue") { submitCode() }
+                }
+            }
+            Rule()
+            Line("Account", email) {
+                HStack(spacing: 6) {
+                    if wantsEmailOption(prompt) {
+                        Pill(emailOptionTitle(prompt)) { pick(.email) }
+                            .disabled(busy)
+                    }
+                    Pill("Cancel") { cancelSignIn() }
+                }
+                .fixedSize()
+            }
         }
-        Rule()
-        Line("Email") {
-            TextField("Email", text: $email)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 260)
+    }
+
+    private func codeTitle(_ prompt: Bitwarden.CodePrompt) -> String {
+        switch prompt {
+        case .newDevice: return "New device — enter the emailed code"
+        case .twoStep(let method):
+            switch method {
+            case 1: return "Enter the code Bitwarden emailed"
+            case 3: return "Touch your YubiKey"
+            case 0: return "Enter your authenticator app code"
+            default: return "Enter your two-step login code"
+            }
         }
-        Rule()
-        Line("Master password") {
-            SecureField("Password", text: $password)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 260)
-                .onSubmit { signIn() }
+    }
+
+    private func codeDetail(_ prompt: Bitwarden.CodePrompt) -> String {
+        switch prompt {
+        case .newDevice:
+            return "This Mac hasn't signed in to \(email) before, so Bitwarden emailed a verification code to it — check the inbox, spam too"
+        case .twoStep(let method):
+            switch method {
+            case 1: return "A two-step code was just sent to \(email); the newest email is the one that counts"
+            case 3: return "With the field focused, press the key so it types its code"
+            case 0: return "The six digits your authenticator app shows for Bitwarden right now"
+            default: return "Your authenticator app's code — or the one just emailed, if this account uses email codes"
+            }
         }
-        Rule()
-        Line("Two-factor code", "Optional — leave blank when the account has no 2FA") {
-            TextField("Code", text: $otp)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 140)
-        }
-        Rule()
-        Line("Connect") {
-            actionPill("Sign in") { signIn() }
-        }
+    }
+
+    /// A way to ask for an email code when the prompt did not say one was sent.
+    private func wantsEmailOption(_ prompt: Bitwarden.CodePrompt) -> Bool {
+        if case .twoStep(let method) = prompt { return method == nil || method == 1 }
+        return false
+    }
+
+    private func emailOptionTitle(_ prompt: Bitwarden.CodePrompt) -> String {
+        if case .twoStep(let method) = prompt, method == 1 { return "Send again" }
+        return "Email me a code"
     }
 
     @ViewBuilder
@@ -167,6 +281,8 @@ struct BitwardenCard: View {
         return [0, 5, 15, 60].contains(minutes) ? minutes : 0
     }
 
+    /// Email and master password go to `bw`; what comes back decides the
+    /// next step — signed in, a method to choose, or a code to enter.
     private func signIn() {
         guard !busy else { return }
         busy = true
@@ -174,19 +290,87 @@ struct BitwardenCard: View {
         let server = self.server
         let email = self.email.trimmingCharacters(in: .whitespacesAndNewlines)
         let password = self.password
-        let otp = self.otp.trimmingCharacters(in: .whitespacesAndNewlines)
+        let method = self.method
         Task { @MainActor in
             defer { busy = false }
             do {
                 try await bitwarden.configure(server: server)
-                try await bitwarden.login(email: email, password: password,
-                                          otp: otp.isEmpty ? nil : otp)
-                self.password = ""
-                self.otp = ""
+                let outcome = try await bitwarden.login(email: email, password: password, method: method)
+                handle(outcome)
             } catch {
                 self.error = firstLine(error)
+                self.step = .credentials
             }
         }
+    }
+
+    private func handle(_ outcome: Bitwarden.LoginOutcome) {
+        switch outcome {
+        case .signedIn:
+            password = ""
+            otp = ""
+            method = nil
+            step = .credentials
+        case .step(.chooseMethod(let methods)):
+            step = .chooseMethod(methods)
+        case .step(.needsCode(let prompt)):
+            otp = ""
+            step = .code(prompt)
+            codeFocused = true
+        }
+    }
+
+    private func pick(_ choice: Bitwarden.TwoStepMethod) {
+        method = choice.id
+        signIn()
+    }
+
+    /// The code, to the `bw` that is waiting for it. A code that is refused
+    /// ends that `bw`; a fresh sign-in is started at once so the next try
+    /// has somewhere to go (and a fresh email is sent when that is the method).
+    private func submitCode() {
+        guard !busy else { return }
+        let code = otp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+        busy = true
+        error = nil
+        let email = self.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = self.password
+        let method = self.method
+        Task { @MainActor in
+            defer { busy = false }
+            do {
+                try await bitwarden.submit(code: code)
+                handle(.signedIn)
+            } catch {
+                let why = firstLine(error)
+                otp = ""
+                do {
+                    let outcome = try await bitwarden.login(email: email, password: password, method: method)
+                    handle(outcome)
+                    if case .step(.needsCode(let prompt)) = outcome {
+                        var hint = why
+                        if case .twoStep(let m) = prompt, m == 1 { hint += " — a new code was emailed; enter that one" }
+                        else if case .newDevice = prompt { hint += " — a new code was emailed; enter that one" }
+                        else if case .twoStep(let m) = prompt, m == 0 { hint += " — enter the code your app shows now" }
+                        self.error = hint
+                    } else {
+                        self.error = why
+                    }
+                } catch {
+                    self.error = why
+                    self.step = .credentials
+                }
+            }
+        }
+    }
+
+    private func cancelSignIn() {
+        bitwarden.cancelPendingLogin()
+        otp = ""
+        method = nil
+        error = nil
+        step = .credentials
     }
 
     private func unlock() {

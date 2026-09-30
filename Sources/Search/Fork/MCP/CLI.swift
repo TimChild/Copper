@@ -834,7 +834,7 @@ enum CLI {
 
     // MARK: - Bitwarden
 
-    /// `copper bitwarden status|login -|lock|logout|sync|policy`: the vault
+    /// `copper bitwarden status|login -|cancel|lock|logout|sync|policy`: the vault
     /// in the running app, through the loopback server's `copper/bitwarden`
     /// method. Secrets never ride on argv: `login -` reads one JSON object
     /// from stdin. Output is always the JSON control result — a status
@@ -849,7 +849,7 @@ enum CLI {
         var params: [String: Any] = ["op": op]
         var timeout: TimeInterval = 60
         switch op {
-        case "status", "lock", "logout", "sync":
+        case "status", "lock", "logout", "sync", "cancel":
             guard args.isEmpty else { error("bitwarden \(op) takes no arguments"); return 2 }
         case "login":
             guard args == ["-"] else {
@@ -917,6 +917,14 @@ enum CLI {
                                  clientId + clientSecret = API-key login (recommended
                                  unattended); the password then unlocks. Secrets are
                                  never accepted as arguments.
+                                 When Bitwarden asks for a code the call did not carry
+                                 (email two-step, new-device verification), the result
+                                 is {ok:false, needs:"code", prompt, method, pending:true}
+                                 and bw holds the sign-in open ten minutes: call login -
+                                 again with the same email and the otp. Several methods
+                                 on the account: {needs:"method", methods:[{id,name}]} —
+                                 call again with otpMethod.
+      cancel                     let a sign-in that is waiting for a code go
       lock                       drop the session (the master password unlocks again)
       logout                     sign out and wipe the CLI's account state
       sync                       pull the vault now (unlocked only)
@@ -1257,7 +1265,7 @@ enum CLI {
       claude [status|signin|paste -|signout|cancel]
                                                 Claude account sign-in and status; never prints a token
                                                 (copper claude --help)
-      bitwarden [status|login -|lock|logout|sync|policy]
+      bitwarden [status|login -|cancel|lock|logout|sync|policy]
                                                 the Bitwarden vault; JSON only, login reads stdin
                                                 (copper bitwarden --help)
       call TOOL [JSON-ARGS]                     call any MCP tool

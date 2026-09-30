@@ -33,9 +33,32 @@ Install the CLI first:
 brew install bitwarden-cli
 ```
 
-Then open **Settings › Passwords › Bitwarden**. Enter the server, email, master
-password, and (when needed) the optional two-factor code, then choose **Sign
-in**. The server field accepts:
+Then open **Settings › Passwords › Bitwarden**. Enter the server, email and
+master password, then choose **Sign in**. When the account wants more, the card
+asks for it next, the way `bw login` itself does:
+
+- **Two-step login by email.** Bitwarden sends the code when the password has
+  been accepted — not before — so the card says *Enter the code Bitwarden
+  emailed*, with **Send again** beside it. The newest email is the one that
+  counts.
+- **Authenticator app or YubiKey.** *Enter your authenticator app code* /
+  *Touch your YubiKey*.
+- **Several methods on the account.** The card lists them (Authenticator app,
+  Email, YubiKey); pick one and the code step follows.
+- **A Mac that has not signed in before, on an account without two-step
+  login.** Bitwarden emails a new-device verification code; the card asks for
+  it the same way.
+
+A code that is refused ends that `bw`; the card starts a fresh sign-in at once
+(and a fresh email goes out, when that is the method) and says so, so the next
+code has somewhere to go. **Cancel** lets the waiting `bw` go. The card waits
+ten minutes for a code, then gives up and says so.
+
+Under the hood `bw login` runs *with its prompts on* — stdin, stdout and stderr
+are pipes, stderr is watched for the prompt (`Two-step login code:`,
+`Two-step login method:`, `New device verification required…`), and the code is
+written to stdin when you have it. Every other `bw` command still runs with
+`BW_NOINTERACTION`. The server field accepts:
 
 - Bitwarden cloud: `https://vault.bitwarden.com`
 - Bitwarden EU: `https://vault.bitwarden.eu`
@@ -110,6 +133,7 @@ reach it) and its CLI:
 ```sh
 copper bitwarden status                    # JSON report (default)
 copper bitwarden login - < payload.json    # sign in + unlock; ONE JSON object on stdin
+copper bitwarden cancel                    # let a sign-in that is waiting for a code go
 copper bitwarden lock | logout | sync
 copper bitwarden policy [--share folder|all] [--stay-unlocked on|off]
 ```
@@ -136,8 +160,18 @@ What `login` does, in order:
    new-device email verification. It leaves the account signed in but
    **locked**.
    **Email + master password** otherwise: `bw login EMAIL --passwordenv
-   BW_PASSWORD`, plus `--method N --code OTP` when `otp` is given. N is 0 for an
-   authenticator app (the default), 1 for email and 3 for YubiKey OTP.
+   BW_PASSWORD` with its prompts on, plus `--method N` when `otpMethod` is
+   given and `--code OTP` when `otp` is. N is 0 for an authenticator app, 1 for
+   email and 3 for YubiKey OTP; a code with no method is sent as an
+   authenticator code. When `bw` asks for a code that the call did not carry,
+   the answer is `ok: false` with `needs: "code"`, `prompt` (`twoStep` |
+   `newDevice`), `method` (the one asked for, or `null` when the account has
+   one method and the CLI picked it) and `pending: true` — `bw` is holding the
+   sign-in open for ten minutes, and the email has gone out when the method is
+   email or the prompt is `newDevice`. **Call `login` again with the same
+   `email` and the `otp`** to finish. When the account has several methods and
+   none was named, the answer is `needs: "method"` with `methods: [{id, name}]`;
+   call again with `otpMethod`. `copper bitwarden cancel` lets a waiting sign-in go.
 4. `bw unlock --passwordenv BW_PASSWORD` when the vault is locked. The master
    password is always required, because it is what decrypts the vault.
 5. Applies the policy: `share` `folder` | `all` (below) and `stayUnlocked`.
@@ -218,7 +252,9 @@ Available verbs are:
 ```text
 ./bench bw status
 ./bench bw server URL
-./bench bw login EMAIL PASSWORD [OTP]
+./bench bw login EMAIL PASSWORD [OTP] [--method N]
+./bench bw code OTP
+./bench bw cancel
 ./bench bw unlock PASSWORD
 ./bench bw lock
 ./bench bw sync
@@ -234,7 +270,13 @@ Available verbs are:
 ./bench bw share bw:<item-id> on|off
 ```
 
-`status` reports state, server, installation, and the last error. `candidates`
+`status` reports state, server, installation, the last error, `step` (what the
+last `login` / `code` came to: `signedIn`, `needsCode:twoStep:1`,
+`needsCode:newDevice`, `chooseMethod:0,1`, `failed`, `cancelled`) and
+`pending` (the prompt `bw` is holding open, if any). `code` answers that
+prompt. `./bench render bitwarden PATH` draws the Settings card on its own to
+a PNG — no window comes forward — which is how the code step is looked at in a
+headless probe world. `candidates`
 returns stripped usernames and matching metadata; `share` changes Copper's
 agent policy. Use placeholders in examples and avoid shell history or
 transcripts containing credentials—never paste a real password, TOTP, or session

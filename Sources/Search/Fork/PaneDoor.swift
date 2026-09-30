@@ -70,6 +70,12 @@ enum Panes {
     /// the page. The split's halves are pages, so Escape never ends a split.
     static func escape(_ event: NSEvent, in browser: Browser) -> Bool {
         guard let window = event.window, window == Links.window else { return false }
+        // The Space page is a card over everything, the keyboard in its
+        // fields or not: Escape puts it away first.
+        if SpaceEditing.shared.space != nil {
+            SpaceEditing.shared.close()
+            return true
+        }
         if let view = window.firstResponder as? NSView, LineKeys.page(of: view) != nil { return false }
         let trace = JevTrace.shared
         if trace.paneOpen {

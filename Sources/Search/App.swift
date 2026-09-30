@@ -391,6 +391,7 @@ struct ContentView: View {
             .overlay(alignment: .bottom) { bars }
             .overlay { field }
             .overlay { panels }
+            .overlay { SpacePageLayer(browser: browser) } // Fork: the Space page
             .animation(Motion.settle, value: browser.fieldShowing)
             .background(WindowSetup { window = $0; dress($0) })
             .onChange(of: browser.prefs.sidebar) { _, _ in

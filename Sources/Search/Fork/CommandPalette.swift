@@ -231,9 +231,11 @@ struct CommandPalette: View {
                 glyph("magnifyingglass")
             default:
                 // The same mark the sidebar row wears — icon or tinted letter
-                // chip — so a site looks like itself on both surfaces.
+                // chip — so a site looks like itself on both surfaces. On
+                // the card's ground, not the column's: a toned-dark column's
+                // light letter would vanish on a white card.
                 RowMark(icon: Marks.key(for: offer.url).flatMap { Favicons.shared.cached($0) },
-                        letter: initial, tint: SpaceTint(scheme))
+                        letter: initial, tint: SpaceTint(scheme).offColumn)
             }
         }
 

@@ -40,12 +40,17 @@
               |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
                                        Bitwarden probe controls and Copper feed status
     ./bench spaces [new NAME|select N|next|prev|move N|remove N [--keep]|profile NAME]
-    ./bench spaces [icon N EMOJI|sf:symbol|none|colour N NAME|reorder N M|edit [N]]
+    ./bench spaces [icon N EMOJI|sf:symbol|none|colour N NAME|reorder N M]
+    ./bench spaces [page [N]|page close|tap N|tap header]
+                                       the Space page; tap is a click on chip N (another space
+                                       switches, the current one opens its page) or the title icon
     ./bench spaces [delete N|answer close|move|cancel]
-    ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|clear]
-                                       a space's own theme, as the Edit Space popover sets it
-    ./bench spaces picture N PATH      the Edit Space popover as a PNG, drawn off screen
                                        the Delete Space sheet, and its buttons
+    ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|blur X
+                           |tone X|motion STYLE|none|speed X|clear]
+                                       a space's own theme, as the Space page sets it
+    ./bench spaces picture N PATH [light|dark]
+                                       the Space page as a PNG, drawn off screen, laid out whole
                                        spaces by index or name; --keep moves a deleted space's tabs
                                        to its neighbour; colours are Graphite Copper Orange Yellow
                                        Green Teal Blue Indigo Pink Red
@@ -290,6 +295,7 @@ def main(argv):
     elif verb == "spaces":
         if "sheet" in answer: print(json.dumps(answer["sheet"], ensure_ascii=False))
         if "path" in answer: print(answer["path"])
+        if "page" in answer: print(f"page: {answer['page'] or 'closed'}" + (f"  (current: {answer['current']})" if answer.get("current") else ""))
         for s in answer.get("spaces", []):
             icon = f" {s['icon']}" if s.get("icon") else ""
             print(f"{'●' if s['current'] else ' '} {s['index']}  {s['name']}{icon}  ({s['tabs']} tabs, {s['profile']}, {s.get('colour', '')})")

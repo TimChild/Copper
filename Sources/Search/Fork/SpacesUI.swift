@@ -1,5 +1,4 @@
 import AppKit
-import UniformTypeIdentifiers
 import SwiftUI
 
 // The space, as the column shows it — and the ways to manage it.
@@ -12,14 +11,14 @@ import SwiftUI
 // the management two clicks away at most:
 //
 // - `SpaceHeader`: a title row under the traffic lights — the space's mark,
-//   its name in full, a chevron. Click it for the space menu; hover shows
-//   how many tabs it holds.
-// - `SpaceStrip`: every space a 22pt chip at the foot — emoji, symbol or
-//   first letter in the space's own colour; the current one on the column's
-//   paper-white pill, the way the live row is. Hover names it at once; drag
-//   reorders; a plus makes a space and opens its editor straight away.
-// - `SpaceEditor`: one popover for name, icon, colour and profile, with
-//   Delete at the bottom — and Delete asks first, and can keep the tabs.
+//   its name in full, a chevron. Click the mark for the Space page, the
+//   rest for the space menu; hover shows how many tabs it holds.
+// - `SpaceStrip`: every space a chip at the foot — emoji, symbol or a dot,
+//   the current one in colour. Click another space's chip to go there, the
+//   current one's for its Space page (Arc's two clicks); hover names it at
+//   once; drag reorders; a plus makes a space and opens its page at once.
+// - `SpacePage` (SpacePage.swift): name, icon, look, profile — and Delete,
+//   which asks first, and can keep the tabs.
 
 // MARK: - the mark
 
@@ -58,32 +57,37 @@ struct SpaceGlyph: View {
     }
 }
 
-/// Which space has its editor open, and from where — the header, or its
-/// chip at the foot, so the popover comes from the thing that was clicked.
+/// Which space has its Space page open, if any.
 @MainActor
 final class SpaceEditing: ObservableObject {
     static let shared = SpaceEditing()
     @Published var space: UUID?
-    @Published var atStrip = false
 
-    func open(_ id: UUID, atStrip: Bool) {
-        self.atStrip = atStrip
-        space = id
-    }
+    func open(_ id: UUID) { space = id }
 
     func close() { space = nil }
 
-    /// The editor for a space, drawn off screen on a popover's ground — for
-    /// the bench, which can't keep a popover open in a browser that isn't
-    /// in front (the same trick as the extensions menu's picture).
-    static func picture(of id: UUID, in browser: Browser) -> NSBitmapImageRep? {
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let host = NSHostingView(rootView: SpaceEditor(browser: browser, id: id)
-            .background(Color(nsColor: dark ? NSColor(white: 0.17, alpha: 1) : NSColor(white: 0.98, alpha: 1)))
+    /// A chip at the foot, clicked — and `bench spaces tap`, by the same
+    /// door. Arc's rule: another space's icon takes you there; the icon of
+    /// the space you are in opens its page, so a second click on a chip
+    /// you just switched to is the way in.
+    func pressed(_ id: UUID, in browser: Browser) {
+        let spaces = Spaces.shared
+        if id == spaces.current { open(id) } else { spaces.select(id, in: browser) }
+    }
+
+    /// The Space page for a space, drawn off screen on its own — for the
+    /// bench, which gets the whole controls at once this way rather than
+    /// the top of a scroll. `dark` nil is the app's own appearance.
+    static func picture(of id: UUID, in browser: Browser, dark: Bool? = nil) -> NSBitmapImageRep? {
+        let dark = dark ?? (NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+        let host = NSHostingView(rootView: SpacePage(browser: browser, id: id, unrolled: true)
+            .padding(40)
+            .background(Color(nsColor: dark ? NSColor(white: 0.08, alpha: 1) : NSColor(white: 0.9, alpha: 1)))
             .environment(\.colorScheme, dark ? .dark : .light))
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
         let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
-        window.appearance = NSApp.effectiveAppearance
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = host
         host.layoutSubtreeIfNeeded()
         guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
@@ -99,63 +103,74 @@ final class SpaceEditing: ObservableObject {
 struct SpaceHeader: View {
     @ObservedObject var browser: Browser
     @ObservedObject private var spaces = Spaces.shared
-    @ObservedObject private var editing = SpaceEditing.shared
     @Environment(\.colorScheme) private var scheme
     @State private var over = false
+    @State private var overMark = false
 
     var body: some View {
         let space = spaces.space
         let tint = SpaceTint(space: space, dark: scheme == .dark)
-        Menu {
-            SpaceMenu(browser: browser, space: space, fromStrip: false)
-        } label: {
-            // Arc's: the space's icon where a row's mark goes and its name in
-            // the theme's own colour, first thing under the favourites.
-            HStack(spacing: 10) {
+        // Arc's: the space's icon where a row's mark goes and its name in
+        // the theme's own colour, first thing under the favourites. The
+        // icon is its own door, to the Space page; the rest is the menu.
+        HStack(spacing: 0) {
+            Button { SpaceEditing.shared.open(space.id) } label: {
                 SpaceGlyph(space: space, size: 16, dark: scheme == .dark, ink: tint.muted, bare: true)
-                Text(space.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(tint.muted)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 4)
-                if over {
-                    let n = spaces.count(of: space.id, in: browser)
-                    Text("\(n) tab\(n == 1 ? "" : "s")")
-                        .font(.system(size: 11))
-                        .foregroundStyle(tint.faint)
-                        .transition(.opacity)
-                }
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(tint.muted)
-                    .frame(width: 16)
-                    .opacity(over ? 1 : 0)
+                    .frame(width: 24, height: 24)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(overMark ? tint.hover : .clear))
+                    .contentShape(Rectangle())
             }
-            .padding(.leading, SideBar.rowInset)
-            .padding(.trailing, 8)
-            .frame(height: SideBar.row)
-            .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(over ? tint.hover : .clear))
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .buttonStyle(.plain)
+            .onHover { overMark = $0 }
+            .help("Customize \(space.title)…")
+            // The mark's centre stays where a row's mark is.
+            .padding(.leading, -4)
+            .padding(.trailing, 6)
+            Menu {
+                SpaceMenu(browser: browser, space: space)
+            } label: {
+                header(space, tint: tint)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
+        .padding(.leading, SideBar.rowInset)
+        .padding(.trailing, 8)
+        .frame(height: SideBar.row)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(over ? tint.hover : .clear))
         .onHover { over = $0 }
         .help("\(space.title) — click for the space menu")
-        .popover(isPresented: editorShowing(space.id), arrowEdge: .bottom) {
-            SpaceEditor(browser: browser, id: space.id)
-        }
         .animation(Motion.quick, value: over)
+        .animation(Motion.quick, value: overMark)
         .animation(Motion.glide, value: spaces.current)
     }
 
-    private func editorShowing(_ id: UUID) -> Binding<Bool> {
-        Binding(
-            get: { editing.space == id && !editing.atStrip },
-            set: { if !$0, editing.space == id { editing.close() } }
-        )
+    private func header(_ space: Space, tint: SpaceTint) -> some View {
+        HStack(spacing: 10) {
+            Text(space.title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint.muted)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 4)
+            if over {
+                let n = spaces.count(of: space.id, in: browser)
+                Text("\(n) tab\(n == 1 ? "" : "s")")
+                    .font(.system(size: 11))
+                    .foregroundStyle(tint.faint)
+                    .transition(.opacity)
+            }
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint.muted)
+                .frame(width: 16)
+                .opacity(over ? 1 : 0)
+        }
+        .frame(height: SideBar.row)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
     }
 }
 
@@ -167,7 +182,6 @@ struct SpaceStrip<Tools: View>: View {
     /// strip's row, the way Arc's do.
     @ViewBuilder var tools: () -> Tools
     @ObservedObject private var spaces = Spaces.shared
-    @ObservedObject private var editing = SpaceEditing.shared
     @Environment(\.colorScheme) private var scheme
     @State private var hovering: UUID?
     /// How wide the row of chips actually is, against how wide it wants to
@@ -252,28 +266,18 @@ struct SpaceStrip<Tools: View>: View {
     private func chip(_ space: Space, index: Int) -> some View {
         let held = dragging == space.id
         return SpaceChip(space: space, current: space.id == spaces.current, dark: scheme == .dark,
-                         over: hovering == space.id, ink: tint.ink)
+                         over: hovering == space.id, ink: tint.ink, glow: tint.hover)
             .id(space.id)
             .anchorPreference(key: ChipFrames.self, value: .bounds) { [space.id: $0] }
             .offset(x: held ? travel - CGFloat(index - from) * step : 0)
             .zIndex(held ? 1 : 0)
             .shadow(color: .black.opacity(held ? 0.16 : 0), radius: 8, y: 2)
             .contentShape(Rectangle())
-            .onTapGesture { spaces.select(space.id, in: browser) }
+            .onTapGesture { SpaceEditing.shared.pressed(space.id, in: browser) }
             .gesture(reorder(space, index: index))
             .onHover { over in hovering = over ? space.id : (hovering == space.id ? nil : hovering) }
-            .help(space.title)
-            .contextMenu { SpaceMenu(browser: browser, space: space, fromStrip: true) }
-            .popover(isPresented: editorShowing(space.id), arrowEdge: .top) {
-                SpaceEditor(browser: browser, id: space.id)
-            }
-    }
-
-    private func editorShowing(_ id: UUID) -> Binding<Bool> {
-        Binding(
-            get: { editing.space == id && editing.atStrip },
-            set: { if !$0, editing.space == id { editing.close() } }
-        )
+            .help(space.id == spaces.current ? "\(space.title) — click to customize" : space.title)
+            .contextMenu { SpaceMenu(browser: browser, space: space) }
     }
 
     /// Pick a chip up and the others make way, one step per chip's width —
@@ -328,12 +332,12 @@ struct SpaceStrip<Tools: View>: View {
         .animation(Motion.quick, value: hovering)
     }
 
-    /// A space, and its editor open at once, so it gets a name, an icon and
+    /// A space, and its page open at once, so it gets a name, an icon and
     /// a colour instead of being "Space 9".
     private var plus: some View {
         Button {
             let id = spaces.add(in: browser)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { editing.open(id, atStrip: true) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id) }
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .regular))
@@ -370,6 +374,9 @@ struct SpaceChip: View {
     let over: Bool
     /// The column's ink, for the dot a space without an icon wears.
     var ink: Color? = nil
+    /// The column's hover, for the square under the pointer — the column's
+    /// and not the window's, so it shows on a column toned dark.
+    var glow: Color? = nil
 
     static let size: CGFloat = 28
     static let gap: CGFloat = 5
@@ -383,7 +390,7 @@ struct SpaceChip: View {
             .frame(width: SpaceChip.size, height: SpaceChip.size)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(over && !current ? Color.black.opacity(dark ? 0 : 0.05) : .clear)
+                    .fill(over && !current ? (glow ?? Color.black.opacity(dark ? 0 : 0.05)) : .clear)
             )
             .animation(Motion.quick, value: over)
             .animation(Motion.quick, value: current)
@@ -396,13 +403,12 @@ struct SpaceChip: View {
 struct SpaceMenu: View {
     @ObservedObject var browser: Browser
     let space: Space
-    let fromStrip: Bool
     @ObservedObject private var spaces = Spaces.shared
 
     private var index: Int { spaces.all.firstIndex { $0.id == space.id } ?? 0 }
 
     var body: some View {
-        Button("Edit Space…") { SpaceEditing.shared.open(space.id, atStrip: fromStrip) }
+        Button("Edit Space…") { SpaceEditing.shared.open(space.id) }
         Button("New Tab in Space") {
             if space.id != spaces.current { spaces.select(space.id, in: browser) }
             browser.newTab()
@@ -438,230 +444,11 @@ struct SpaceMenu: View {
                 }
             }
             Divider()
-            Button("New Profile…") { SpaceEditing.shared.open(space.id, atStrip: fromStrip) }
+            Button("New Profile…") { SpaceEditing.shared.open(space.id) }
         }
         if spaces.all.count > 1 {
             Divider()
             Button("Delete Space…", role: .destructive) { SpaceDelete.ask(space.id, in: browser) }
-        }
-    }
-}
-
-// MARK: - the editor
-
-/// Name, icon, colour, profile — and Delete — in one popover. Every change
-/// lands as it is made: the header re-titles and the column re-tints while
-/// the popover is still up, so the choice can be seen before it is kept.
-struct SpaceEditor: View {
-    @ObservedObject var browser: Browser
-    let id: UUID
-    @ObservedObject private var spaces = Spaces.shared
-    @Environment(\.colorScheme) private var scheme
-    @State private var draft = ""
-    @State private var emoji = ""
-    @State private var profileDraft = ""
-    @State private var namingProfile = false
-    @FocusState private var focus: Field?
-
-    private enum Field { case name, emoji, profile }
-
-    /// The symbols on offer. Enough to cover the spaces people actually
-    /// make; anything else is an emoji away.
-    static let symbols = [
-        "house", "briefcase", "book", "hammer", "gamecontroller", "cart", "heart",
-        "star", "flask", "graduationcap", "music.note", "airplane", "paintbrush", "leaf", "terminal",
-    ]
-
-    private var space: Space? { spaces.all.first { $0.id == id } }
-    private var tint: SpaceTint { space.map { SpaceTint(space: $0, dark: scheme == .dark) } ?? SpaceTint(hue: nil, dark: scheme == .dark) }
-
-    var body: some View {
-        if let space {
-            VStack(alignment: .leading, spacing: 12) {
-                // Named, so the popover says what it is before the field
-                // does — and the field reads as the name, not a search box.
-                section("Edit Space") { name }
-                section("Icon") { icons(space) }
-                section("Colour", trailing: space.theme == nil ? SpaceColour.nearest(space.hue).name : "Custom") { colours(space) }
-                section("Theme", trailing: space.theme?.kind) { ThemeEditor(id: id) }
-                section("Profile") { profile(space) }
-                Rectangle().fill(Palette.hairline).frame(height: 1).padding(.top, 2)
-                footer
-            }
-            .padding(14)
-            .frame(width: 296)
-            .onAppear {
-                draft = space.name
-                focus = .name
-            }
-        }
-    }
-
-    private var name: some View {
-        TextField("Name", text: $draft)
-            .textFieldStyle(.plain)
-            .font(.system(size: 14, weight: .medium))
-            .focused($focus, equals: .name)
-            .padding(.horizontal, 9)
-            .frame(height: 30)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.wash))
-            .onChange(of: draft) { _, now in
-                let trimmed = now.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty { spaces.rename(id, to: trimmed) }
-            }
-            .onSubmit { SpaceEditing.shared.close() }
-    }
-
-    /// A caption over its content; `trailing` names the current choice at
-    /// the far end — the colour's name, so a swatch is never just a colour.
-    private func section<Content: View>(_ title: String, trailing: String? = nil, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
-                if let trailing {
-                    Spacer(minLength: 6)
-                    Text(trailing).font(.system(size: 11)).foregroundStyle(Palette.muted)
-                        .transition(.opacity)
-                        .animation(Motion.quick, value: trailing)
-                }
-            }
-            content()
-        }
-    }
-
-    /// The letter, the symbols, and a field for an emoji.
-    private func icons(_ space: Space) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(30), spacing: 4), count: 8), alignment: .leading, spacing: 4) {
-                tile(selected: space.icon == nil) {
-                    Text(space.letter).font(.system(size: 12, weight: .semibold)).foregroundStyle(tint.mark)
-                } act: { spaces.icon(id, nil); emoji = "" }
-                ForEach(SpaceEditor.symbols, id: \.self) { symbol in
-                    tile(selected: space.symbol == symbol) {
-                        Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(tint.mark)
-                    } act: { spaces.icon(id, "sf:" + symbol); emoji = "" }
-                }
-            }
-            HStack(spacing: 6) {
-                if let shown = space.emoji, space.icon != nil {
-                    Text(shown).font(.system(size: 14)).frame(width: 22)
-                }
-                TextField("or type an emoji", text: $emoji)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .focused($focus, equals: .emoji)
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Palette.wash))
-                    .onChange(of: emoji) { _, now in
-                        // The first emoji typed is the icon; the rest is noise.
-                        guard let first = now.first(where: { $0.unicodeScalars.first?.properties.isEmojiPresentation == true
-                            || $0.unicodeScalars.contains { $0.properties.isEmojiModifierBase } }) else { return }
-                        spaces.icon(id, String(first))
-                        if now != String(first) { emoji = String(first) }
-                    }
-            }
-        }
-    }
-
-    private func tile<Content: View>(selected: Bool, @ViewBuilder _ content: () -> Content, act: @escaping () -> Void) -> some View {
-        Button(action: act) {
-            content()
-                .frame(width: 30, height: 28)
-                // The chosen tile wears the column's own colour. The column's
-                // live pill is a translucent white meant to sit over that
-                // colour; a popover is not over the column, so on its white
-                // the pill would vanish and leave only the ring.
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? tint.ground : Palette.wash.opacity(0.6)))
-                .overlay {
-                    if selected {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(tint.dot.opacity(0.8), lineWidth: 1.5)
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// The named swatches. The chosen one carries a check; Graphite is a
-    /// real choice here, not the absence of one.
-    private func colours(_ space: Space) -> some View {
-        // Ten 22pt swatches in the popover's 268pt: 4pt between them.
-        HStack(spacing: 4) {
-            ForEach(SpaceColour.allCases) { colour in
-                let chosen = space.theme == nil && SpaceColour.nearest(space.hue) == colour
-                Button { spaces.tint(id, hue: colour.hue) } label: {
-                    ZStack {
-                        Circle().fill(SpaceTint(hue: colour.hue, dark: scheme == .dark).swatch)
-                        if chosen {
-                            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
-                        }
-                    }
-                    .frame(width: 22, height: 22)
-                    .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help(colour.name)
-                .scaleEffect(chosen ? 1.12 : 1)
-                .animation(Motion.quick, value: chosen)
-            }
-        }
-    }
-
-    /// Shared, one of the names in use, or a new one.
-    private func profile(_ space: Space) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker("Profile", selection: Binding(
-                get: { namingProfile ? "\u{0}new" : (space.profile ?? "") },
-                set: { value in
-                    if value == "\u{0}new" { namingProfile = true; profileDraft = ""; focus = .profile }
-                    else { namingProfile = false; spaces.profile(id, named: value.isEmpty ? nil : value) }
-                }
-            )) {
-                Text("Shared").tag("")
-                ForEach(spaces.profiles, id: \.self) { Text($0).tag($0) }
-                Divider()
-                Text("New Profile…").tag("\u{0}new")
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(maxWidth: 180, alignment: .leading)
-            if namingProfile {
-                TextField("Profile name", text: $profileDraft)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .focused($focus, equals: .profile)
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Palette.wash))
-                    .onSubmit {
-                        let name = profileDraft.trimmingCharacters(in: .whitespaces)
-                        guard !name.isEmpty else { return }
-                        spaces.profile(id, named: name)
-                        namingProfile = false
-                    }
-            }
-            // What a profile is, in one line: the cookie jar. A page that is
-            // already up keeps the jar it was built with.
-            Text("Its own sign-ins and cookies, shared with spaces of the same profile. Pages opened from now on use it.")
-                .font(.system(size: 10.5))
-                .foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var footer: some View {
-        HStack {
-            if spaces.all.count > 1 {
-                Button("Delete Space…") { SpaceDelete.ask(id, in: browser) }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.red)
-            }
-            Spacer()
-            Button("Done") { SpaceEditing.shared.close() }
-                .keyboardShortcut(.defaultAction)
-                .font(.system(size: 12))
         }
     }
 }
@@ -704,8 +491,8 @@ enum SpaceDelete {
         guard spaces.all.count > 1, let space = spaces.all.first(where: { $0.id == id }) else { return }
         let count = spaces.count(of: id, in: browser)
         let neighbour = spaces.neighbour(of: id)
-        // The editor's popover goes first, or the sheet lands on top of it.
-        SpaceEditing.shared.close()
+        // The Space page stays up under the sheet: Cancel goes back to it,
+        // and a delete takes it down with the space.
 
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -731,9 +518,11 @@ enum SpaceDelete {
             case .alertFirstButtonReturn:
                 spaces.remove(id, in: browser)
                 last = "deleted"
+                if SpaceEditing.shared.space == id { SpaceEditing.shared.close() }
             case .alertSecondButtonReturn where count > 0 && neighbour != nil:
                 spaces.remove(id, in: browser, movingTabsTo: neighbour?.id)
                 last = "moved"
+                if SpaceEditing.shared.space == id { SpaceEditing.shared.close() }
             default:
                 last = "cancelled"
             }
@@ -746,103 +535,5 @@ enum SpaceDelete {
                 decide(alert.runModal())
             }
         }
-    }
-}
-
-/// A space's own theme, past the named colours: one colour or a gradient of
-/// up to three, how strongly the column wears it, a grain, and a picture
-/// under it all. Every change lands at once, so the column behind the
-/// popover is the preview.
-struct ThemeEditor: View {
-    let id: UUID
-    @ObservedObject private var spaces = Spaces.shared
-    @Environment(\.colorScheme) private var scheme
-
-    private var space: Space? { spaces.all.first { $0.id == id } }
-    private var look: SpaceTheme { space?.look ?? .plain }
-
-    private func set(_ change: (inout SpaceTheme) -> Void) {
-        var theme = look
-        change(&theme)
-        spaces.theme(id, theme)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // The theme itself, drawn: what the column will be.
-            ThemeBackdrop(theme: look, dark: scheme == .dark)
-                .frame(height: 30)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
-
-            HStack(spacing: 6) {
-                ForEach(Array(look.colors.enumerated()), id: \.offset) { index, stop in
-                    ColorPicker("", selection: Binding(
-                        get: { stop.color },
-                        set: { new in
-                            guard let picked = SpaceTheme.Stop(new) else { return }
-                            set { if $0.colors.indices.contains(index) { $0.colors[index] = picked } }
-                        }
-                    ), supportsOpacity: false)
-                    .labelsHidden()
-                    // Its own well, at its own size: a narrower frame only
-                    // pushed the well out past the popover's edge.
-                    .fixedSize()
-                }
-                if look.colors.count < 3 {
-                    round("plus", help: "Add a colour — a gradient") { set { $0.colors.append(SpaceTheme.next(after: $0.colors.last)) } }
-                }
-                if look.colors.count > 1 {
-                    round("minus", help: "One colour fewer") { set { $0.colors.removeLast() } }
-                }
-                Spacer(minLength: 4)
-                Button(look.image == nil ? "Image…" : "Change Image…") { choose() }
-                    .controlSize(.small)
-                if look.image != nil {
-                    Button { set { $0.image = nil } } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Palette.muted)
-                        .help("No image")
-                }
-            }
-
-            slider("Intensity", value: look.intensity, range: 0.2...1) { v in set { $0.intensity = v } }
-            slider("Grain", value: look.grain, range: 0...1) { v in set { $0.grain = v } }
-        }
-    }
-
-    /// A small round door beside the colour wells.
-    private func round(_ symbol: String, help: String, act: @escaping () -> Void) -> some View {
-        Button(action: act) {
-            Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Palette.muted)
-                .frame(width: 20, height: 20)
-                .background(Circle().fill(Palette.wash))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-    }
-
-    private func slider(_ title: String, value: Double, range: ClosedRange<Double>, _ change: @escaping (Double) -> Void) -> some View {
-        HStack(spacing: 8) {
-            Text(title).font(.system(size: 11)).foregroundStyle(Palette.muted).frame(width: 58, alignment: .leading)
-            Slider(value: Binding(get: { value }, set: change), in: range).controlSize(.small)
-            Text("\(Int((value * 100).rounded()))%")
-                .font(.system(size: 10.5).monospacedDigit())
-                .foregroundStyle(Palette.muted)
-                .frame(width: 32, alignment: .trailing)
-        }
-    }
-
-    private func choose() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "A picture for the space's column"
-        guard panel.runModal() == .OK, let url = panel.url, let name = SpaceTheme.adopt(image: url) else { return }
-        set { $0.image = name }
     }
 }

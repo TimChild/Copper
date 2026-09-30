@@ -62,9 +62,9 @@ enum CommandBar {
             .init(id: "ask-page", name: "Ask About This Page", glyph: "text.bubble") { Agent.shared.askOnPage(in: $0) },
             .init(id: "new-space", name: "New Space", glyph: "square.on.square") { b in
                 let id = Spaces.shared.add(in: b)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id, atStrip: false) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id) }
             },
-            .init(id: "edit-space", name: "Edit Space", glyph: "slider.horizontal.3") { _ in SpaceEditing.shared.open(Spaces.shared.current, atStrip: false) },
+            .init(id: "edit-space", name: "Edit Space", glyph: "slider.horizontal.3") { _ in SpaceEditing.shared.open(Spaces.shared.current) },
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },
             .init(id: "prev-space", name: "Previous Space", glyph: "chevron.left") { Spaces.shared.step(-1, in: $0) },
         ]

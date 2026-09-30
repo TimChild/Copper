@@ -369,7 +369,7 @@ struct SideBar: View {
     /// so the edge says it can be taken before it is.
     private var edge: some View {
         Rectangle()
-            .fill(Palette.ink.opacity(onEdge || grabbed != nil ? 0.18 : 0))
+            .fill(tint.ink.opacity(onEdge || grabbed != nil ? 0.18 : 0))
             .frame(width: onEdge || grabbed != nil ? 2 : 1)
             .frame(width: 9)
             .contentShape(Rectangle())
@@ -553,7 +553,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(tint.muted)
                         .frame(width: 15, height: 15)
-                        .background(Palette.ink.opacity(0.07), in: Circle())
+                        .background(tint.ink.opacity(0.07), in: Circle())
                         .transition(.opacity)
                 } else if tab.loading {
                     Ring().transition(.opacity)
@@ -626,7 +626,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                 Rectangle().fill(tint.pill)
                 GeometryReader { geo in
                     Rectangle()
-                        .fill(Palette.ink.opacity(0.055))
+                        .fill(tint.ink.opacity(0.055))
                         .frame(width: geo.size.width * tab.reading)
                         .animation(.easeOut(duration: 0.15), value: tab.reading)
                 }

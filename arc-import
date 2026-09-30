@@ -6,6 +6,7 @@ was left open.
     ./arc-import              write ~/Library/Application Support/Copper/session.json
     ./arc-import --world W    write into the test world "Copper (W)" instead
     ./arc-import --dry        print what would be written
+    ./arc-import --sidebar F  read another copy of Arc's StorableSidebar.json
 
 Arc's favourites become the pin grid. Arc folders become Copper's tab
 groups (groups.json + a group id on each entry); groups are flat, so a nested
@@ -94,8 +95,13 @@ def main(argv):
     name = f"Copper ({world})" if world else "Copper"
     out = os.path.expanduser(f"~/Library/Application Support/{name}/session.json")
 
-    sidebar = json.load(open(ARC))["sidebar"]["containers"]
-    container = next(c for c in sidebar if isinstance(c, dict) and "spaces" in c)
+    source = argv[argv.index("--sidebar") + 1] if "--sidebar" in argv else ARC
+    sidebar = json.load(open(source))["sidebar"]["containers"]
+    # Arc can keep more than one container of spaces — a fresh window's
+    # single untitled space beside the real ones. The real ones are the
+    # container with the most spaces.
+    container = max((c for c in sidebar if isinstance(c, dict) and "spaces" in c),
+                    key=lambda c: sum(1 for s in c["spaces"] if isinstance(s, dict)))
     items = {i["id"]: i for i in container["items"] if isinstance(i, dict)}
     arc_spaces = [s for s in container["spaces"] if isinstance(s, dict)]
 
@@ -160,7 +166,7 @@ def main(argv):
     for s in arc_spaces:
         sid = str(uuid.uuid4()).upper()
         space_id = sid
-        space = {"id": sid, "name": s["title"]}
+        space = {"id": sid, "name": s.get("title") or "Space %d" % (len(spaces) + 1)}
         h = hue(s.get("customInfo", {}).get("windowTheme", {}))
         if h is not None:
             space["hue"] = h

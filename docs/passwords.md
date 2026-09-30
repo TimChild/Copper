@@ -58,7 +58,9 @@ Under the hood `bw login` runs *with its prompts on* — stdin, stdout and stder
 are pipes, stderr is watched for the prompt (`Two-step login code:`,
 `Two-step login method:`, `New device verification required…`), and the code is
 written to stdin when you have it. Every other `bw` command still runs with
-`BW_NOINTERACTION`. The server field accepts:
+`BW_NOINTERACTION`. Why and how, with the verification rig:
+[plans/2026-09-30-bitwarden-two-step-codes.md](plans/2026-09-30-bitwarden-two-step-codes.md).
+The server field accepts:
 
 - Bitwarden cloud: `https://vault.bitwarden.com`
 - Bitwarden EU: `https://vault.bitwarden.eu`

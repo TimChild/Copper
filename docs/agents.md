@@ -210,6 +210,7 @@ calls — and ends on its own after that (*Let go · 7 calls*); the same driver
 back within three minutes continues the same timeline. `./bench drive
 [status|stop|resume|clear|pane on|off]` reads and drives all of this from a
 script; `./bench render drive PATH` draws the pane to a PNG on its own.
+Design and verification record: [plans/2026-09-30-driver-timeline.md](plans/2026-09-30-driver-timeline.md).
 
 ## The agent in the window — ⌘E
 

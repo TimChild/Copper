@@ -411,7 +411,7 @@ struct SpaceMenu: View {
         Button("Edit Space…") { SpaceEditing.shared.open(space.id) }
         Button("New Tab in Space") {
             if space.id != spaces.current { spaces.select(space.id, in: browser) }
-            browser.newTab()
+            browser.launch()
         }
         if let tab = browser.active, space.id != spaces.current {
             Button("Move Current Tab Here") { spaces.move(tab, to: space.id, in: browser) }

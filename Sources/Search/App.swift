@@ -26,7 +26,7 @@ struct SearchApp: App {
             ForkCommands(browser: browser)
             // One window. Tabs are the only kind of "new" there is.
             CommandGroup(replacing: .newItem) {
-                Button("New Tab") { browser.newTab() }
+                Button("New Tab") { browser.launch() } // Fork: the ⌘T card (Fork/Launcher)
                     .keyboardShortcut("t")
                 Button("New Private Tab") { browser.newShyTab() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -671,6 +671,10 @@ struct ContentView: View {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
 
+        // Fork (new-tab-launcher): while the ⌘T card is up, Escape, ⇧/⌥
+        // Return and ⌘1–9 are its own.
+        if browser.launching, Launcher.key(event, in: browser) { return true }
+
         // Escape puts the page back. On a blank tab there is no page to put
         // back, so it belongs to whatever else wants it.
         if event.keyCode == 53 {
@@ -760,7 +764,7 @@ struct ContentView: View {
 
         switch key {
         case "t" where !shifted:
-            browser.newTab()
+            browser.launch() // Fork: the ⌘T card (Fork/Launcher)
         case "t" where shifted:
             browser.reopen()
         case "c" where shifted:

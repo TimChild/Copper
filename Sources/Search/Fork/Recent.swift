@@ -14,12 +14,25 @@ final class Recent: ObservableObject {
     private var snapshot: [Tab.ID] = []
     private var reveal: DispatchWorkItem?
 
+    /// Every tab looked at, newest first, in every space. `order` is the row
+    /// on screen and is rebuilt from that row whenever the space changes;
+    /// this is not, so ⌘T's empty card (Fork/Launcher) still knows which tab
+    /// you were on before you went to another space and came back.
+    private(set) var trail: [Tab.ID] = []
+
+    private func mark(_ id: Tab.ID) {
+        trail.removeAll { $0 == id }
+        trail.insert(id, at: 0)
+        if trail.count > 64 { trail.removeLast() }
+    }
+
     /// A normal selection puts the tab at the front. During a Control-Tab
     /// walk, the snapshot is deliberately frozen until `end(in:)` commits it.
     func touched(_ id: Tab.ID?) {
         guard !walking, let id else { return }
         order.removeAll { $0 == id }
         order.insert(id, at: 0)
+        mark(id)
     }
 
     /// Remove tabs that left the row, without disturbing the order of the
@@ -81,6 +94,7 @@ final class Recent: ObservableObject {
         let ids = Set(browser.tabs.filter { !$0.isBlank }.map(\.id))
         let valid = snapshot.filter { ids.contains($0) }
         if let active = browser.activeID, ids.contains(active) {
+            mark(active)
             order = [active] + valid.filter { $0 != active }
                 + browser.tabs.filter { !$0.isBlank }.map(\.id).filter { !valid.contains($0) && $0 != active }
         } else {

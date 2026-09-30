@@ -236,6 +236,11 @@ final class Bench {
         case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "ext-manager":
             answer(Fork.bench(verb, request, in: browser))
 
+        case "newtab":
+            // Fork (new-tab-launcher): what ⌘T's card offers, by group, once
+            // Google and the history ranking have had a moment to answer.
+            Launcher.shared.bench(request, in: browser, answer: answer)
+
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 
@@ -356,6 +361,13 @@ final class Bench {
                 "downloads": browser.hoarding,
                 "bookmarks": browser.bookmarking,
                 "field": browser.editing,
+                // Fork (new-tab-launcher): the ⌘T card, its question, and its rows.
+                "launching": browser.launching,
+                "summoning": browser.summoning,
+                "typed": browser.typed,
+                "picked": browser.picked ?? -1,
+                "offers": browser.offers.map(\.key),
+                "tabCount": browser.tabs.count,
                 "suggesting": browser.suggesting != nil,
                 "offering": browser.offering != nil,
                 "modal": NSApp.modalWindow.map { "\(type(of: $0)) “\($0.title)”" } ?? "",
@@ -448,9 +460,14 @@ final class Bench {
                     if character == "\u{21E7}" { holding.insert(.shift); continue }
                     if character == "\u{2325}" { holding.insert(.option); continue }
                     if character == "\u{2303}" { holding.insert(.control); continue }
-                    let arrow = character == "\u{2190}" ? UInt16(123) : character == "\u{2192}" ? UInt16(124) : character == "\u{238B}" ? UInt16(53) : nil
+                    // Fork (new-tab-launcher): ↑ ↓ and ↩ as well, for walking a list.
+                    let arrows: [Character: (UInt16, String)] = [
+                        "\u{2190}": (123, "\u{F702}"), "\u{2192}": (124, "\u{F703}"), "\u{238B}": (53, "\u{1B}"),
+                        "\u{2191}": (126, "\u{F700}"), "\u{2193}": (125, "\u{F701}"), "\u{21A9}": (36, "\r"),
+                    ]
+                    let arrow = arrows[character]?.0
                     let tab = character == "\u{21E5}"
-                    let chars = tab ? "\t" : arrow.map { $0 == 123 ? "\u{F702}" : $0 == 124 ? "\u{F703}" : "\u{1B}" } ?? String(character)
+                    let chars = tab ? "\t" : arrows[character]?.1 ?? String(character)
                     let flags = holding
                     if flags.contains(.control), !heldControl {
                         sendFlags(.control)

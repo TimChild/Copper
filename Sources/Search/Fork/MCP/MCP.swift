@@ -106,6 +106,10 @@ final class MCP: ObservableObject {
     @Published private(set) var trouble: String?
     @Published private(set) var calls = 0
     @Published private(set) var lastTool = ""
+    /// The name the last client gave at `initialize` ("Claude Code", "phi"),
+    /// for the pill and the pane: whose hands are on the page. The transport
+    /// has no sessions, so this is the best the server knows.
+    @Published private(set) var clientName = ""
     /// The last Jev run, in a few words, for Settings.
     @Published var jevNote = ""
 
@@ -221,6 +225,20 @@ final class MCP: ObservableObject {
         Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless task names another tab. ANY task: FIRST call `jev_run` with whole goal (all concrete values: places, dates, names, filters; stop condition); no `browser_tabs` or snapshot first. Add `url` only for named non-current page. `jev_observe` = indexed read; `jev_extract` = JSON; `jev_step` = one decision. BLOCKED → browser_snapshot/click/type for that part then `jev_run`; DONE is Jev's claim — verify with `jev_observe`/`jev_extract`.
         Connect MCP server `copper` at \(endpoint) with `Authorization: Bearer \(config.token)`. Claude Code: `claude mcp add -s user --transport http copper \(endpoint) --header \"Authorization: Bearer \(config.token)\"`.
         """
+    }
+
+    /// A client's `initialize` name as a person would say it.
+    static func pretty(client raw: String) -> String {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let low = name.lowercased()
+        if low.isEmpty { return "" }
+        if low.contains("claude") { return "Claude Code" }
+        if low == "pi" || low == "phi" || low.hasPrefix("pi-") || low.hasPrefix("phi-") || low.contains("pi-coding") { return "phi" }
+        if low.contains("copper-cli") || low == "copper" { return "copper CLI" }
+        if low.contains("cursor") { return "Cursor" }
+        if low.contains("codex") { return "Codex" }
+        if low.contains("mcp-remote") || low.contains("inspector") { return "MCP client" }
+        return name.count > 24 ? String(name.prefix(23)) + "…" : name
     }
 
     static func jevCommand(goal: String?) -> String {
@@ -394,7 +412,9 @@ final class MCP: ObservableObject {
     // MARK: - JSON-RPC
 
     /// One message in, one reply out — or none, for a notification.
-    func handle(_ message: [String: Any], announce: Announce = .agent) async -> [String: Any]? {
+    /// `driver` names whose call this is for the pane beside the page; unsaid,
+    /// it is the loopback client by the name it gave at `initialize`.
+    func handle(_ message: [String: Any], announce: Announce = .agent, driver: Drive.Driver? = nil) async -> [String: Any]? {
         let id = message["id"]
         let method = message["method"] as? String ?? ""
         let params = message["params"] as? [String: Any] ?? [:]
@@ -410,6 +430,9 @@ final class MCP: ObservableObject {
 
         switch method {
         case "initialize":
+            if let info = params["clientInfo"] as? [String: Any], let name = info["name"] as? String {
+                clientName = MCP.pretty(client: name)
+            }
             let asked = params["protocolVersion"] as? String ?? ""
             let version = MCP.protocolVersions.contains(asked) ? asked : "2025-06-18"
             return reply([
@@ -435,6 +458,14 @@ final class MCP: ObservableObject {
             case .prefix(let who): browser.announce("\(who) · \(name)")
             case .quiet: break
             }
+            // The user pressed Stop on this driver: the call is refused with
+            // words the agent can act on, and nothing touches the page.
+            let who = driver ?? .agent(clientName.isEmpty ? "Agent" : clientName)
+            if let refusal = Drive.shared.refusal {
+                Drive.shared.refused(call: name, args: arguments, by: who)
+                return reply(["content": [["type": "text", "text": refusal]], "isError": true])
+            }
+            let ticket = Drive.shared.began(call: name, args: arguments, by: who, tab: browser.active)
             // A tool may leave a one-line summary (jev_run / jev_step do:
             // "done · 7 actions · 12.3 s · example.com"); it rides as
             // `_meta.summary`, which the app's gateway copies into its audit.
@@ -448,9 +479,11 @@ final class MCP: ObservableObject {
                 let content = try await Tools.$summary.withValue(summary) {
                     try await Tools.call(name, arguments, in: browser)
                 }
+                if let ticket { Drive.shared.ended(ticket, error: nil, tab: browser.active) }
                 return reply(result(content.map(\.json), isError: false))
             } catch {
                 let text = (error as? Tools.Failure)?.text ?? error.localizedDescription
+                if let ticket { Drive.shared.ended(ticket, error: text, tab: browser.active) }
                 return reply(result([["type": "text", "text": text]], isError: true))
             }
         case "resources/list":

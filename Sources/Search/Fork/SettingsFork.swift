@@ -329,7 +329,16 @@ struct UpdatesPage: View {
     }
 
     private var installLine: String {
-        updates.managedByBrew ? "Installed via Homebrew" : "Installed from the feed"
+        "Updates come from \(updates.feedHost)" + (updates.managedByBrew ? " · installed via Homebrew" : "")
+    }
+
+    /// What the last update left behind, in one sentence. A failure stays
+    /// here until the next update, next to the button that retries it.
+    private var outcomeLine: (title: String, detail: String)? {
+        guard let outcome = updates.outcome else { return nil }
+        let when = outcome.at.formatted(.relative(presentation: .named))
+        if outcome.ok { return ("Updated to \(outcome.detail)", when) }
+        return ("The last update didn’t finish", "\(outcome.detail) · \(when)")
     }
 
     var body: some View {
@@ -343,21 +352,52 @@ struct UpdatesPage: View {
                         Pill("Check now") { updates.check(force: true) }
                     }
                 }
-                if updates.available {
+                if updates.available, let version = updates.latest?.version {
                     Rule()
-                    Line("Copper \(updates.latest?.version ?? "") is ready", "Backs up your tabs, quits, upgrades via \(updates.managedByBrew ? "Homebrew" : "the feed installer"), relaunches") {
-                        VStack(alignment: .trailing, spacing: 3) {
+                    // The three states of a newer release: on its way, ready
+                    // (the only one with an Update button), or not obtained —
+                    // with the reason, and a way to try again.
+                    if updates.downloading {
+                        Line("Getting Copper \(version) ready", "Downloading from \(updates.feedHost) and verifying the bundle") {
+                            Ring(size: 12)
+                        }
+                    } else if updates.ready {
+                        Line("Copper \(version) is ready", "Downloaded and verified. Update backs up your tabs, swaps in the new Copper and relaunches — a few seconds.") {
                             Pill(updates.state == .upgrading ? "Updating…" : "Update", filled: true) {
                                 updates.upgrade()
                             }
                             .disabled(updates.state == .upgrading)
                         }
+                    } else {
+                        Line("Copper \(version) isn’t downloaded yet", updates.stageError ?? "It downloads on its own after a check; Download gets it now.") {
+                            Pill(updates.stageError == nil ? "Download" : "Retry") { updates.stage(force: true) }
+                        }
                     }
                 }
+                if let outcome = outcomeLine, updates.outcome?.ok == false {
+                    Rule()
+                    Line(outcome.title, outcome.detail) {
+                        Pill("Open log") { NSWorkspace.shared.open(Updates.log) }
+                    }
+                }
+            }
+            // Why an update could not start in this process ("not downloaded
+            // yet", "no longer there"). A refusal that was recorded as the
+            // outcome is already in the card above, so it is not repeated.
+            if let problem = updates.problem, updates.outcome?.detail != problem {
+                Text(problem)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(installLine)
                 .font(.system(size: 11))
                 .foregroundStyle(Palette.muted)
+            if let outcome = outcomeLine, updates.outcome?.ok == true {
+                Text("\(outcome.title) · \(outcome.detail)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+            }
             if let checked = updates.checkedAt {
                 Text("Last checked \(checked.formatted(.relative(presentation: .named)))")
                     .font(.system(size: 11))

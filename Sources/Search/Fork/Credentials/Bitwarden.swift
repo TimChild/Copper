@@ -111,6 +111,13 @@ final class Bitwarden: ObservableObject {
         )
     }
 
+    /// A `bw login` holding the sign-in open for a code (BitwardenLogin.swift).
+    private var interactive: Interactive?
+    /// What that sign-in waits for, for Settings and `copper bitwarden` to
+    /// describe; nil when nothing is pending.
+    @Published private(set) var pendingLogin: PendingLogin?
+    private var pendingTimer: Timer?
+
     private var lastActivity = Date()
     private var lastCacheRefresh = Date.distantPast
     private var cacheRefreshInFlight = false
@@ -207,9 +214,52 @@ final class Bitwarden: ObservableObject {
         return URL(fileURLWithPath: path)
     }
 
-    private var appDataURL: URL {
+    var appDataURL: URL {
         let suffix = Store.world.map { " (\($0))" } ?? ""
         return Store.folder.appendingPathComponent("bitwarden\(suffix)", isDirectory: true)
+    }
+    var appDataFolder: URL { appDataURL }
+
+    // MARK: - A sign-in waiting for its code
+
+    /// A session `bw login` just returned: kept, and persisted when asked to.
+    func adopt(sessionKey key: String) {
+        sessionKey = key
+        persistSession()
+    }
+
+    /// Keep the conversation with `bw` open until the code comes — or for
+    /// `pendingLoginLifetime`, after which it is let go.
+    func hold(_ runner: Interactive, _ pending: PendingLogin) {
+        interactive?.terminate()
+        interactive = runner
+        pendingLogin = pending
+        pendingTimer?.invalidate()
+        pendingTimer = Timer.scheduledTimer(withTimeInterval: Self.pendingLoginLifetime, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cancelPendingLogin() }
+        }
+    }
+
+    /// Whether this is the `bw` being held open right now.
+    func isHolding(_ runner: Interactive) -> Bool { interactive === runner }
+
+    /// The waiting sign-in, taken over by whoever has the code.
+    func takePendingLogin() -> (Interactive, PendingLogin)? {
+        guard let runner = interactive, let pending = pendingLogin else { return nil }
+        interactive = nil
+        pendingLogin = nil
+        pendingTimer?.invalidate()
+        pendingTimer = nil
+        return (runner, pending)
+    }
+
+    /// Let a waiting sign-in go: `bw` ends, nothing is signed in.
+    func cancelPendingLogin() {
+        pendingTimer?.invalidate()
+        pendingTimer = nil
+        interactive?.terminate()
+        interactive = nil
+        pendingLogin = nil
     }
 
     /// Run a CLI command away from the main actor. `extra` is used for the
@@ -425,26 +475,8 @@ final class Bitwarden: ObservableObject {
         serverURL = value
     }
 
-    /// Email + master password, with a two-step code when the account has
-    /// one: `method` 0 authenticator app, 1 email, 3 YubiKey OTP.
-    func login(email: String, password: String, otp: String? = nil, method: Int = 0) async throws {
-        guard !email.isEmpty, !password.isEmpty else {
-            throw Failure(message: "Bitwarden email and password are required")
-        }
-        guard [0, 1, 3].contains(method) else {
-            throw Failure(message: "Bitwarden two-step method must be 0 (authenticator), 1 (email) or 3 (YubiKey)")
-        }
-        var args = ["login", email, "--passwordenv", "BW_PASSWORD"]
-        if let otp, !otp.isEmpty { args += ["--method", String(method), "--code", otp] }
-        args.append("--raw")
-        let data = try await run(args, env: ["BW_PASSWORD": password], timeout: 30)
-        let key = Self.session(from: data)
-        guard !key.isEmpty else { throw Failure(message: "Bitwarden did not return a session") }
-        sessionKey = key
-        persistSession()
-        await refreshStatus()
-        await refreshCacheIfPossible()
-    }
+    // `login(email:password:otp:method:)` — the interactive sign-in that
+    // takes two-step and new-device codes — lives in BitwardenLogin.swift.
 
     /// Personal API key login — the unattended path: no two-step prompt, no
     /// new-device email. The id and secret reach `bw` only through the
@@ -486,6 +518,7 @@ final class Bitwarden: ObservableObject {
     }
 
     func logout() async {
+        cancelPendingLogin()
         let missing: Bool
         if case .missing = state { missing = true } else { missing = false }
         _ = try? await run(["logout"])
@@ -847,7 +880,7 @@ final class Bitwarden: ObservableObject {
         lastCacheRefresh = Date()
     }
 
-    private func refreshCacheIfPossible() async {
+    func refreshCacheIfPossible() async {
         guard sessionKey != nil else { return }
         do {
             try await refreshCache()

@@ -49,7 +49,7 @@ struct PaneDoor: View {
 enum Panes {
     /// How many panes are open right now: the agent, Jev, the split.
     static var open: Int {
-        (Agent.shared.open ? 1 : 0) + (JevTrace.shared.paneOpen ? 1 : 0) + (Split.shared.on ? 1 : 0)
+        (Agent.shared.open ? 1 : 0) + (Drive.shared.paneOpen ? 1 : 0) + (Split.shared.on ? 1 : 0)
     }
 
     /// Whether the "close all" door earns its place: only beside a second pane.
@@ -59,7 +59,7 @@ enum Panes {
     /// the page goes. Jev's run is put away too unless it is still driving.
     static func closeAll(in browser: Browser) {
         Agent.shared.open = false
-        let trace = JevTrace.shared
+        let trace = Drive.shared
         if trace.live { trace.paneOpen = false } else { trace.dismiss() }
         Split.shared.close()
     }
@@ -81,7 +81,7 @@ enum Panes {
             return true
         }
         if let view = window.firstResponder as? NSView, LineKeys.page(of: view) != nil { return false }
-        let trace = JevTrace.shared
+        let trace = Drive.shared
         if trace.paneOpen {
             if trace.live { trace.paneOpen = false } else { trace.dismiss() }
             return true

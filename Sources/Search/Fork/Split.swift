@@ -200,11 +200,12 @@ struct SplitStage: View {
     /// Zero in a sane layout; see `PaneSpill`.
     @State private var spill = PaneSpill.none
     @ObservedObject private var agent = Agent.shared
-    @ObservedObject private var trace = JevTrace.shared
+    @ObservedObject private var trace = Drive.shared
     @ObservedObject private var flow = Flow.shared
 
     /// The stage, and the panes beside it when they are open — the agent's,
-    /// and Jev's timeline while a run is on. Both may be open at once; they
+    /// and the driver timeline while something drives the page (Jev, an agent
+    /// on the loopback server, a linked bot). Both may be open at once; they
     /// take their width from the page, never from the sidebar.
     var body: some View {
         HStack(spacing: 0) {
@@ -216,7 +217,7 @@ struct SplitStage: View {
             }
             if trace.paneOpen {
                 Rectangle().fill(Palette.hairline).frame(width: 1)
-                JevPane(browser: browser)
+                DrivePane(browser: browser)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
@@ -232,11 +233,11 @@ struct SplitStage: View {
         stage
             .overlay {
                 RoundedRectangle(cornerRadius: split.on ? SplitMetrics.corner : 0, style: .continuous)
-                    .strokeBorder(JevStyle.accent.opacity(trace.live ? 0.35 : 0), lineWidth: 1.5)
+                    .strokeBorder(DriveStyle.accent.opacity(trace.live ? 0.35 : 0), lineWidth: 1.5)
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .topTrailing) {
-                if trace.live { JevPill().padding(8).transition(.opacity) }
+                if trace.live { DrivePill().padding(8).transition(.opacity) }
             }
             .animation(Motion.quick, value: trace.live)
     }

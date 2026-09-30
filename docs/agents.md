@@ -166,6 +166,52 @@ chat with your agent — endpoint, token, how to add the server, what it can
 do. There is one for the Playwright-shaped tools and one for Jev mode.
 `./bench agent jev on|off`.
 
+## Who is driving — the pill, the ring, the timeline
+
+Whenever a hand that is not yours is on the page, Copper says so, whoever it
+belongs to: a Jev run, an agent on the loopback server calling `browser_*`
+tools one at a time (phi, Claude Code, the `copper` CLI — named by the
+`clientInfo` it gave at `initialize`), a bot through an agent link (`@dev-s ·
+agents`), or the agent in Copper's own pane.
+
+- **The pill** in the page's top-right corner — *phi is driving*, *Jev is
+  driving*, *@dev-s · agents is driving* — and a warm 1.5 pt ring just inside
+  the page's edge. The dot is solid while a call is in flight and breathes
+  while the driver thinks between calls. Both go when the driver lets go.
+- **The driver timeline** (⌥⌘J, ⌘K › *Driver Timeline*, or click the pill):
+  a pane beside the page with one row per thing the driver did — *Clicking
+  Search button · 600 ms · CLICK → page changed*, *Typing into Email field
+  “…” · TYPE*, *Reading the page's controls · READ*, a failed call in red
+  with its error — and, under the header, the latest thing the driver said
+  about what it is doing. For a Jev run the rows are its cycles (read → ask →
+  act → settle) as before.
+- **On the page**, the same trail Jev draws: the element about to be clicked
+  or typed into is outlined and named, a pointer glides to it, a numbered
+  dot marks the press, the typed value rises beside the field (masked when
+  the field sounds like a secret), a chevron marks a scroll.
+- **Stop** (the pill's square, or the pane's) takes the browser back. A Jev
+  run ends before its next action. An agent's next tool calls are refused for
+  30 s with *Stopped by the user in Copper: they took the browser back. Do not
+  retry; tell them what you were doing and wait…* — the refused attempts show
+  in the timeline — and *Let it back in* on the pane's footer ends the
+  refusal early.
+
+**`reason`.** Every `browser_*` tool takes an optional `reason` string: one
+short sentence on what the agent is doing and why. It is never acted on; it
+is shown to the user in the timeline, over the calls that follow. The server's
+`instructions` ask agents to pass it on each call, together with `element`
+(Playwright's own human-readable element description) for anything they click
+or type into — those two are what the rows are made of. The agent in the
+window needs no `reason`: what the model wrote before reaching for a tool is
+shown instead.
+
+An agent's run stays live for 30 s after its last call — agents think between
+calls — and ends on its own after that (*Let go · 7 calls*); the same driver
+back within three minutes continues the same timeline. `./bench drive
+[status|stop|resume|clear|pane on|off]` reads and drives all of this from a
+script; `./bench render drive PATH` draws the pane to a PNG on its own.
+Design and verification record: [plans/2026-09-30-driver-timeline.md](plans/2026-09-30-driver-timeline.md).
+
 ## The agent in the window — ⌘E
 
 The other direction: Copper as an MCP **client**. ⌘E opens a pane beside

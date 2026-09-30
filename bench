@@ -33,7 +33,7 @@
     ./bench ext-answer yes|no|ask      test run: answer extensions' questions without asking; lists what was asked
     ./bench ext-enable ID on|off       switch an extension on or off
     ./bench ext-remove ID
-    ./bench updates status|check|stub URL|dry-run on|off|upgrade
+    ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade
     ./bench downloads [open|close|cancel ID|retry ID|clear|start URL]
     ./bench bw status|server URL|login EMAIL PW [OTP]|unlock PW|lock|sync|candidates HOST|choose ID
               |identities|cards|fields HOST|usernames|counts|autofill card|identity ID

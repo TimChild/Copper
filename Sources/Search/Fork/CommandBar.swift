@@ -71,7 +71,9 @@ enum CommandBar {
         if FileManager.default.fileExists(atPath: Store.file("session.previous.json").path) {
             list.append(.init(id: "session-restore", name: "Restore previous session", glyph: "arrow.counterclockwise") { $0.restorePreviousSession() })
         }
-        if Updates.shared.available {
+        // Offered once the release is downloaded and verified: the command
+        // then only swaps the bundle in and relaunches.
+        if Updates.shared.ready {
             list.insert(.init(id: "update", name: "Update Copper to \(Updates.shared.latest?.version ?? "")", glyph: "arrow.down.circle") { _ in Updates.shared.upgrade() }, at: 0)
         }
         if Spaces.shared.all.count > 1 {

@@ -289,9 +289,12 @@ enum Fork {
             case "dry-run":
                 Updates.shared.dryRun = (request["arg"] as? String ?? "off") == "on"
                 return ["dryRun": Updates.shared.dryRun]
+            case "stage":
+                Updates.shared.stage(force: true)
+                return ["downloading": Updates.shared.downloading]
             case "upgrade":
                 Updates.shared.upgrade()
-                return ["state": Updates.shared.state == .upgrading ? "upgrading" : "idle", "lastScript": Updates.shared.lastScript?.path ?? ""]
+                return Updates.shared.status
             default: return ["error": "unknown updates operation \(op)"]
             }
         case "summon":

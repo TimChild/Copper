@@ -72,6 +72,10 @@ enum Panes {
         guard let window = event.window, window == Links.window else { return false }
         // The Space page is a card over everything, the keyboard in its
         // fields or not: Escape puts it away first.
+        if ExtensionManager.shared.showing {
+            ExtensionManager.shared.close()
+            return true
+        }
         if SpaceEditing.shared.space != nil {
             SpaceEditing.shared.close()
             return true

@@ -393,12 +393,16 @@ struct SideBar: View {
     }
 
     /// The door at the foot's left, where Arc keeps its library: bookmarks.
+    /// Fork: and beside it the Extensions page's (Fork/ExtensionsManager.swift).
     private var foot: some View {
-        Door(icon: "books.vertical", help: "Bookmarks", size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
-            browser.bookmarksOpen.toggle()
-        }
-        .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .top) {
-            BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
+        HStack(spacing: 2) {
+            Door(icon: "books.vertical", help: "Bookmarks", size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
+                browser.bookmarksOpen.toggle()
+            }
+            .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .top) {
+                BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
+            }
+            ExtensionsDoor(browser: browser, tint: tint)
         }
     }
 
@@ -740,7 +744,7 @@ struct Door: View {
 /// A click is ⌘L — the omnibox, with the whole address to change.
 ///
 /// The extensions come out only under the pointer, as Arc's do: the pinned
-/// ones, then the puzzle piece last, which goes to Settings › Extensions.
+/// ones, then the puzzle piece last, which goes to the Extensions page.
 /// The host gives them its room and truncates, rather than sitting under
 /// them. Downloads, while there are any, stay put ahead of them.
 struct SideAddress: View {

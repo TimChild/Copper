@@ -98,6 +98,16 @@ struct SpaceTint {
     /// split's outline, and what the chips at the foot are thinned from.
     var dot: Color { mix(0.62, dark ? 0.86 : 0.70) }
 
+    /// The space's colour as a swatch shows it — in the editor and the
+    /// Colour menu: the theme's own colour, a touch fuller and deeper so it
+    /// holds on a white popover. `dot` is darker and duller on purpose (it
+    /// is thinned for the chips); on a swatch it made yellow olive.
+    var swatch: Color {
+        guard let hue else { return Color(white: dark ? 0.55 : 0.64) }
+        let (s, v) = SpaceTheme.strength(hue)
+        return Color(hue: hue, saturation: min(1, s + 0.14), brightness: v * (dark ? 0.92 : 0.9))
+    }
+
     /// A space's own mark — its letter or symbol — on a chip: the same hue,
     /// dark enough to read on a light square and light enough on a dark one.
     var mark: Color { mix(hue == nil ? 0 : 0.66, dark ? 0.92 : 0.40) }

@@ -72,6 +72,24 @@ final class SpaceEditing: ObservableObject {
     }
 
     func close() { space = nil }
+
+    /// The editor for a space, drawn off screen on a popover's ground — for
+    /// the bench, which can't keep a popover open in a browser that isn't
+    /// in front (the same trick as the extensions menu's picture).
+    static func picture(of id: UUID, in browser: Browser) -> NSBitmapImageRep? {
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let host = NSHostingView(rootView: SpaceEditor(browser: browser, id: id)
+            .background(Color(nsColor: dark ? NSColor(white: 0.17, alpha: 1) : NSColor(white: 0.98, alpha: 1)))
+            .environment(\.colorScheme, dark ? .dark : .light))
+        host.frame = NSRect(origin: .zero, size: host.fittingSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.appearance = NSApp.effectiveAppearance
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+        host.cacheDisplay(in: host.bounds, to: picture)
+        return picture
+    }
 }
 
 // MARK: - the header
@@ -405,7 +423,7 @@ struct SpaceMenu: View {
                         Text(colour.name)
                     } icon: {
                         Image(systemName: SpaceColour.nearest(space.hue) == colour ? "checkmark.circle.fill" : "circle.fill")
-                            .foregroundStyle(SpaceTint(hue: colour.hue, dark: false).dot)
+                            .foregroundStyle(SpaceTint(hue: colour.hue, dark: false).swatch)
                     }
                 }
             }
@@ -465,7 +483,7 @@ struct SpaceEditor: View {
                 section("Edit Space") { name }
                 section("Icon") { icons(space) }
                 section("Colour", trailing: space.theme == nil ? SpaceColour.nearest(space.hue).name : "Custom") { colours(space) }
-                section("Theme") { ThemeEditor(id: id) }
+                section("Theme", trailing: space.theme?.kind) { ThemeEditor(id: id) }
                 section("Profile") { profile(space) }
                 Rectangle().fill(Palette.hairline).frame(height: 1).padding(.top, 2)
                 footer
@@ -550,7 +568,11 @@ struct SpaceEditor: View {
         Button(action: act) {
             content()
                 .frame(width: 30, height: 28)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? tint.pill : Palette.wash.opacity(0.6)))
+                // The chosen tile wears the column's own colour. The column's
+                // live pill is a translucent white meant to sit over that
+                // colour; a popover is not over the column, so on its white
+                // the pill would vanish and leave only the ring.
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? tint.ground : Palette.wash.opacity(0.6)))
                 .overlay {
                     if selected {
                         RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(tint.dot.opacity(0.8), lineWidth: 1.5)
@@ -564,12 +586,13 @@ struct SpaceEditor: View {
     /// The named swatches. The chosen one carries a check; Graphite is a
     /// real choice here, not the absence of one.
     private func colours(_ space: Space) -> some View {
-        HStack(spacing: 6) {
+        // Ten 22pt swatches in the popover's 268pt: 4pt between them.
+        HStack(spacing: 4) {
             ForEach(SpaceColour.allCases) { colour in
                 let chosen = space.theme == nil && SpaceColour.nearest(space.hue) == colour
                 Button { spaces.tint(id, hue: colour.hue) } label: {
                     ZStack {
-                        Circle().fill(SpaceTint(hue: colour.hue, dark: scheme == .dark).dot)
+                        Circle().fill(SpaceTint(hue: colour.hue, dark: scheme == .dark).swatch)
                         if chosen {
                             Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
                         }
@@ -762,21 +785,15 @@ struct ThemeEditor: View {
                         }
                     ), supportsOpacity: false)
                     .labelsHidden()
-                    .frame(width: 30)
+                    // Its own well, at its own size: a narrower frame only
+                    // pushed the well out past the popover's edge.
+                    .fixedSize()
                 }
                 if look.colors.count < 3 {
-                    Button {
-                        set { $0.colors.append(($0.colors.last ?? .white).mixed(.white, 0.35)) }
-                    } label: { Image(systemName: "plus").font(.system(size: 10, weight: .semibold)) }
-                    .buttonStyle(.plain)
-                    .help("Add a colour — a gradient")
+                    round("plus", help: "Add a colour — a gradient") { set { $0.colors.append(SpaceTheme.next(after: $0.colors.last)) } }
                 }
                 if look.colors.count > 1 {
-                    Button { set { $0.colors.removeLast() } } label: {
-                        Image(systemName: "minus").font(.system(size: 10, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .help("One colour fewer")
+                    round("minus", help: "One colour fewer") { set { $0.colors.removeLast() } }
                 }
                 Spacer(minLength: 4)
                 Button(look.image == nil ? "Image…" : "Change Image…") { choose() }
@@ -794,10 +811,28 @@ struct ThemeEditor: View {
         }
     }
 
+    /// A small round door beside the colour wells.
+    private func round(_ symbol: String, help: String, act: @escaping () -> Void) -> some View {
+        Button(action: act) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Palette.muted)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(Palette.wash))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
     private func slider(_ title: String, value: Double, range: ClosedRange<Double>, _ change: @escaping (Double) -> Void) -> some View {
         HStack(spacing: 8) {
             Text(title).font(.system(size: 11)).foregroundStyle(Palette.muted).frame(width: 58, alignment: .leading)
             Slider(value: Binding(get: { value }, set: change), in: range).controlSize(.small)
+            Text("\(Int((value * 100).rounded()))%")
+                .font(.system(size: 10.5).monospacedDigit())
+                .foregroundStyle(Palette.muted)
+                .frame(width: 32, alignment: .trailing)
         }
     }
 

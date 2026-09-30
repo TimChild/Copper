@@ -530,10 +530,13 @@ extension Spaces {
     /// `spaces icon N|NAME EMOJI|sf:symbol|none`, `spaces colour N|NAME
     /// Teal|…|graphite`, `spaces reorder N|NAME M`, `spaces remove N|NAME
     /// [--keep]` (the tabs go to the neighbour instead of closing),
-    /// `spaces edit [N|NAME]` (the editor, on the header), `spaces delete
+    /// `spaces page [N|NAME|close]` (the Space page; `edit` is the old name
+    /// for it), `spaces tap N|NAME` (a click on that chip at the foot, by the
+    /// chip's own door: another space switches, the current one opens its
+    /// page) and `spaces tap header` (the title row's icon), `spaces delete
     /// N|NAME` (the sheet) and `spaces answer close|move|cancel` (its
     /// buttons), `spaces profile NAME`, `spaces theme N|NAME colors|intensity|
-    /// grain|image|clear …` (see `benchTheme`).
+    /// grain|image|blur|tone|motion|speed|clear …` (see `benchTheme`).
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         func find(_ key: String) -> UUID? {
             if let n = Int(key), all.indices.contains(n) { return all[n].id }
@@ -570,10 +573,21 @@ extension Spaces {
         case "reorder":
             guard words.count >= 2, let id = find(key), let to = Int(value) else { return ["error": "spaces reorder N|NAME M"] }
             move(id, to: to)
-        case "edit":
-            let id = words.first.flatMap(find) ?? current
-            if id != current { select(id, in: browser) }
-            SpaceEditing.shared.open(id, atStrip: false)
+        case "edit", "page":
+            if arg == "close" { SpaceEditing.shared.close(); return ["page": ""] }
+            let id = words.isEmpty ? current : (find(arg) ?? UUID())
+            guard all.contains(where: { $0.id == id }) else { return ["error": "no space \(arg)"] }
+            SpaceEditing.shared.open(id)
+            return ["page": all.first { $0.id == id }?.name ?? ""]
+        case "tap":
+            if arg == "header" {
+                SpaceEditing.shared.open(current)
+            } else {
+                guard let id = find(arg) else { return ["error": "spaces tap N|NAME|header"] }
+                SpaceEditing.shared.pressed(id, in: browser)
+            }
+            return ["page": SpaceEditing.shared.space.flatMap { id in all.first { $0.id == id }?.name } ?? "",
+                    "current": all.first { $0.id == current }?.name ?? ""]
         case "delete":
             // The sheet, as Delete Space… shows it; `answer` presses a button.
             guard let id = find(arg) else { return ["error": "no space \(arg)"] }
@@ -586,10 +600,14 @@ extension Spaces {
         case "theme":
             if let error = benchTheme(words, find: find) { return ["error": error] }
         case "picture":
-            // `picture N PATH`: the Edit Space popover as a PNG, drawn off
-            // screen, since a popover will not stay up behind other apps.
-            guard words.count >= 2, let id = find(key) else { return ["error": "spaces picture N|NAME PATH"] }
-            guard let png = SpaceEditing.picture(of: id, in: browser)?.representation(using: .png, properties: [:]) else {
+            // `picture N PATH [light|dark]`: the Space page as a PNG, drawn
+            // off screen and laid out whole, not scrolled.
+            var rest = words
+            let look = ["light", "dark"].contains(rest.last ?? "") ? rest.removeLast() : nil
+            guard rest.count >= 2, let id = find(rest.dropLast().joined(separator: " ")) else { return ["error": "spaces picture N|NAME PATH [light|dark]"] }
+            let value = rest.last ?? ""
+            guard let png = SpaceEditing.picture(of: id, in: browser, dark: look.map { $0 == "dark" })?
+                .representation(using: .png, properties: [:]) else {
                 return ["error": "no picture"]
             }
             do { try png.write(to: URL(fileURLWithPath: value)) } catch { return ["error": "\(error)"] }
@@ -608,18 +626,22 @@ extension Spaces {
         var line = theme.colors.map(\.hex).joined(separator: ",")
             + String(format: " intensity %.2f grain %.2f", theme.intensity, theme.grain)
         if let image = theme.image { line += " image \(image)" }
+        if let motion = theme.motion { line += String(format: " motion %@ speed %.2f", motion.style, motion.speed) }
+        if theme.blur > 0 { line += String(format: " blur %.2f", theme.blur) }
+        if theme.tone != 0 { line += String(format: " tone %+.2f", theme.tone) }
         return line
     }
 
     /// `spaces theme N|NAME colors #hex[,#hex,#hex] | intensity X | grain X
-    /// | image PATH|none | clear`: what the theme editor does, by the same
+    /// | image PATH|none | blur X | tone X | motion STYLE|none | speed X |
+    /// clear`: what the Space page does, by the same
     /// doors — `theme(_:_:)` for every change, `SpaceTheme.adopt` for a
     /// picture — so a picture can be tried without an open panel. A space
     /// on a plain hue starts from that hue's theme, as the editor does.
     /// Nil when it worked, or what was wrong.
     private func benchTheme(_ words: [String], find: (String) -> UUID?) -> String? {
-        let usage = "spaces theme N|NAME colors #hex[,#hex..]|intensity X|grain X|image PATH|none|clear"
-        let verbs: Set = ["colors", "colours", "intensity", "grain", "image", "clear"]
+        let usage = "spaces theme N|NAME colors #hex[,#hex..]|intensity X|grain X|image PATH|none|blur X|tone X|motion STYLE|none|speed X|clear"
+        let verbs: Set = ["colors", "colours", "intensity", "grain", "image", "blur", "tone", "motion", "speed", "clear"]
         guard let at = words.firstIndex(where: { verbs.contains($0) }), at > 0,
               let id = find(words[..<at].joined(separator: " ")),
               let space = all.first(where: { $0.id == id }) else { return usage }
@@ -638,6 +660,25 @@ extension Spaces {
         case "intensity", "grain":
             guard let x = Double(value) else { return usage }
             if words[at] == "intensity" { look.intensity = min(1, max(0.2, x)) } else { look.grain = min(1, max(0, x)) }
+        case "blur":
+            guard let x = Double(value) else { return usage }
+            look.blur = min(1, max(0, x))
+        case "tone":
+            guard let x = Double(value) else { return usage }
+            look.tone = min(1, max(-1, x))
+        case "motion":
+            if value == "none" {
+                look.motion = nil
+            } else {
+                guard AnimatedBackdrop.styles.contains(where: { $0.id == value }) else {
+                    return "no scene \(value); one of \(AnimatedBackdrop.styles.map(\.id).joined(separator: "|"))|none"
+                }
+                look.motion = SpaceTheme.Motion(style: value, speed: look.motion?.speed ?? 1)
+            }
+        case "speed":
+            guard let x = Double(value) else { return usage }
+            guard look.motion != nil else { return "no scene to speed up — spaces theme N motion STYLE first" }
+            look.motion?.speed = min(2, max(0, x))
         default:
             if value == "none" {
                 look.image = nil

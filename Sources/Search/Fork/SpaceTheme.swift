@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import ImageIO
 import SwiftUI
 
@@ -15,6 +16,11 @@ import SwiftUI
 // Everything the column draws on top — favourites, hover, the live pill, the
 // hairline — is a translucent white or black over this (see `SpaceTint`), so
 // it reads the same over a flat colour, a gradient or a photograph.
+//
+// Over whichever ground it is, the tone lays black or white, and the ink
+// follows it (`SpaceTint` reads `toned`): a space taken most of the way to
+// black gets light titles even in the light, and one taken to white gets
+// dark ones in the dark.
 
 struct SpaceTheme: Codable, Hashable {
     struct Stop: Codable, Hashable {
@@ -52,6 +58,13 @@ struct SpaceTheme: Codable, Hashable {
 
         func scaled(_ k: Double) -> Stop { Stop(r: r * k, g: g * k, b: b * k) }
 
+        /// Relative luminance, 0 for black to 1 for white — what decides
+        /// which ink a ground of this colour needs.
+        var luminance: Double {
+            func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+            return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        }
+
         /// `#e8a07a`, `e8a07a` or `#fa7`; nil for anything else.
         init?(hex: String) {
             var digits = hex.trimmingCharacters(in: .whitespaces)
@@ -80,14 +93,47 @@ struct SpaceTheme: Codable, Hashable {
     /// A picture under the colour: a file name in `themes/`.
     var image: String? = nil
 
-    init(colors: [Stop], intensity: Double = 0.8, grain: Double = 0, image: String? = nil) {
+    /// A living backdrop instead of a still one: a three.js scene drawn in
+    /// the theme's colours (see `AnimatedBackdrop`). Nil is still.
+    struct Motion: Codable, Hashable {
+        /// Which scene: one of `AnimatedBackdrop.styles`.
+        var style: String
+        /// How fast it moves, 0…2; 1 is the scene's own pace.
+        var speed: Double = 1
+
+        init(style: String, speed: Double = 1) {
+            self.style = style
+            self.speed = speed
+        }
+
+        private enum CodingKeys: String, CodingKey { case style, speed }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            style = (try? c.decodeIfPresent(String.self, forKey: .style)) ?? "ribbons"
+            speed = min(2, max(0, (try? c.decodeIfPresent(Double.self, forKey: .speed)) ?? 1))
+        }
+    }
+    var motion: Motion? = nil
+    /// How soft the picture or the scene is drawn, 0…1 — a frosted column.
+    var blur: Double = 0
+    /// Dark to bright, -1…1: 0 is the theme as it is, below it is tinted
+    /// towards black and above it towards white. The ink follows, so the
+    /// titles turn light once the column is dark enough.
+    var tone: Double = 0
+
+    init(colors: [Stop], intensity: Double = 0.8, grain: Double = 0, image: String? = nil,
+         motion: Motion? = nil, blur: Double = 0, tone: Double = 0) {
         self.colors = colors
         self.intensity = intensity
         self.grain = grain
         self.image = image
+        self.motion = motion
+        self.blur = blur
+        self.tone = tone
     }
 
-    private enum CodingKeys: String, CodingKey { case colors, intensity, grain, image }
+    private enum CodingKeys: String, CodingKey { case colors, intensity, grain, image, motion, blur, tone }
 
     // Read by hand, not synthesized: a synthesized decoder wants every
     // non-optional key there, defaults or no, so a theme written before a
@@ -101,6 +147,9 @@ struct SpaceTheme: Codable, Hashable {
         intensity = min(1, max(0, (try? c.decodeIfPresent(Double.self, forKey: .intensity)) ?? 0.8))
         grain = min(1, max(0, (try? c.decodeIfPresent(Double.self, forKey: .grain)) ?? 0))
         image = try? c.decodeIfPresent(String.self, forKey: .image)
+        motion = try? c.decodeIfPresent(Motion.self, forKey: .motion)
+        blur = min(1, max(0, (try? c.decodeIfPresent(Double.self, forKey: .blur)) ?? 0))
+        tone = min(1, max(-1, (try? c.decodeIfPresent(Double.self, forKey: .tone)) ?? 0))
     }
 
     /// A space that only ever had a hue: that hue, at the strength that
@@ -143,8 +192,14 @@ struct SpaceTheme: Codable, Hashable {
         return Stop(hue: (h + 0.09).truncatingRemainder(dividingBy: 1), saturation: s, brightness: v)
     }
 
-    /// What the editor calls it, beside the Theme caption.
-    var kind: String { image != nil ? "Picture" : colors.count > 1 ? "Gradient" : "Colour" }
+    /// What the editor calls it. A scene outranks a picture, as it does
+    /// on the column (see `ThemeBackdrop`).
+    var kind: String { motion != nil ? "Animated" : image != nil ? "Picture" : colors.count > 1 ? "Gradient" : "Colour" }
+
+    /// How far the tone's black or white goes over the column at its ends:
+    /// short of all the way, so the theme's colour still shows through at
+    /// -1 and +1.
+    static let toneReach = 0.7
 
     /// Graphite: no colour at all.
     static let plain = SpaceTheme(colors: [Stop(r: 0.62, g: 0.62, b: 0.64)], intensity: 0.34)
@@ -170,9 +225,17 @@ struct SpaceTheme: Codable, Hashable {
     /// One colour standing for the whole column: what a flat surface beside
     /// it (the split's gutter, a popover's arrow) should be.
     func flat(dark: Bool) -> Color {
-        guard let first = colors.first else { return Palette.ground }
-        let sum = colors.dropFirst().reduce(first) { $0.mixed($1, 0.5) }
-        return ground(sum, dark: dark).color
+        guard !colors.isEmpty else { return Palette.ground }
+        return toned(dark: dark).color
+    }
+
+    /// The same one colour with the tone laid over it — the ground the ink
+    /// has to read on.
+    func toned(dark: Bool) -> Stop {
+        let first = colors.first ?? SpaceTheme.plain.colors[0]
+        let sum = ground(colors.dropFirst().reduce(first) { $0.mixed($1, 0.5) }, dark: dark)
+        guard abs(tone) > 0.005 else { return sum }
+        return sum.mixed(tone < 0 ? .black : .white, abs(tone) * SpaceTheme.toneReach)
     }
 
     /// The colours the backdrop runs through.
@@ -249,33 +312,29 @@ struct SpaceTheme: Codable, Hashable {
     }
 }
 
-/// The column's ground: the theme's colour, gradient or picture, and its grain.
+/// The column's ground: the theme's colour, gradient, picture or scene, its
+/// tone, and its grain.
 struct ThemeBackdrop: View {
     let theme: SpaceTheme
     let dark: Bool
 
     var body: some View {
         ZStack {
-            colour
-            if let name = theme.image, let picture = ThemeBackdrop.picture(name) {
-                GeometryReader { geo in
-                    Image(nsImage: picture)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                }
-                // A neutral veil first — white in the light, black in the
-                // dark — so the picture's own darks (or lights) are pulled
-                // towards the ground the ink was chosen for: over a photo's
-                // shadowed band the brown titles were going under. It greys
-                // the picture less than more colour would.
-                (dark ? Color.black.opacity(0.3) : Color.white.opacity(0.22))
-                // The colour stays on the picture, thinly, so the ink that is
-                // right for the colour stays right over it — thin enough that
-                // a vivid picture keeps its colour; deeper in the dark, where
-                // light ink needs the picture held down.
-                colour.opacity(dark ? 0.35 : 0.15)
+            // A scene wins over a picture: choosing Animated keeps the
+            // picture in the theme, so going back to Picture finds it again,
+            // but the column only ever draws one of the two.
+            if let motion = theme.motion {
+                AnimatedBackdrop(style: motion.style, colors: theme.grounds(dark: dark), speed: motion.speed,
+                                 blur: theme.blur, dark: dark)
+            } else {
+                still
+            }
+            // The tone over everything but the grain, so a dark column is
+            // still grainy rather than grain under a black sheet.
+            if abs(theme.tone) > 0.005 {
+                (theme.tone < 0 ? Color.black : Color.white)
+                    .opacity(abs(theme.tone) * SpaceTheme.toneReach)
+                    .allowsHitTesting(false)
             }
             if theme.grain > 0.01 {
                 Image(nsImage: ThemeBackdrop.noise)
@@ -289,6 +348,34 @@ struct ThemeBackdrop: View {
                     .blendMode(.overlay)
                     .allowsHitTesting(false)
             }
+        }
+        .clipped()
+    }
+
+    /// The colour or gradient, and the picture over it when there is one.
+    @ViewBuilder
+    private var still: some View {
+        colour
+        if let name = theme.image, let picture = ThemeBackdrop.picture(name, blur: theme.blur) {
+            GeometryReader { geo in
+                Image(nsImage: picture)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+            }
+            // A neutral veil first — white in the light, black in the
+            // dark — so the picture's own darks (or lights) are pulled
+            // towards the ground the ink was chosen for: over a photo's
+            // shadowed band the brown titles were going under. It greys
+            // the picture less than more colour would.
+            (dark ? Color.black.opacity(0.3) : Color.white.opacity(0.22))
+            // The colour stays on the picture, thinly, so the ink that is
+            // right for the colour stays right over it — thin enough that
+            // a vivid picture keeps its colour; deeper in the dark, where
+            // light ink needs the picture held down.
+            colour.opacity(dark ? 0.35 : 0.15)
         }
     }
 
@@ -308,6 +395,41 @@ struct ThemeBackdrop: View {
         if let seen = pictures[name] { return seen }
         guard let image = NSImage(contentsOf: SpaceTheme.file(name)) else { return nil }
         pictures[name] = image
+        return image
+    }
+
+    /// The picture made soft, once per name and step of blur. A live
+    /// `.blur` on a 2800-pixel picture re-runs the filter on every frame
+    /// the column draws (and fades its edges to clear); the backdrop is
+    /// still, so it is blurred once here instead. The blur is taken in
+    /// twentieths so a slider drag makes at most twenty of them, and the
+    /// picture is taken down first — as far as the blur hides it — so a
+    /// full blur runs on a couple of hundred pixels, not millions.
+    private static var softened: [String: NSImage] = [:]
+    private static let filters = CIContext(options: [.cacheIntermediates: false])
+
+    static func picture(_ name: String, blur: Double) -> NSImage? {
+        let step = Int((min(1, max(0, blur)) * 20).rounded())
+        guard step > 0 else { return picture(name) }
+        let key = "\(name)@\(step)"
+        if let seen = softened[key] { return seen }
+        guard let sharp = picture(name),
+              let cg = sharp.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let input = CIImage(cgImage: cg)
+        let long = max(input.extent.width, input.extent.height)
+        // At full blur the soft edge is a fiftieth of the picture's long side.
+        let sigma = Double(step) / 20 * 0.02 * long
+        // Small enough that the blur is still six pixels wide in it, which
+        // hides the pixels when it is stretched back over the column.
+        let scale = min(1, max(160 / long, 6 / sigma))
+        let small = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        // Clamped first so the edges blur into more picture, not into clear.
+        let soft = small.clampedToExtent().applyingGaussianBlur(sigma: sigma * scale).cropped(to: small.extent)
+        guard let out = filters.createCGImage(soft, from: small.extent) else { return sharp }
+        let image = NSImage(cgImage: out, size: NSSize(width: small.extent.width, height: small.extent.height))
+        // A handful at most: a drag leaves a trail of steps nobody keeps.
+        if softened.count >= 12 { softened.removeAll() }
+        softened[key] = image
         return image
     }
 

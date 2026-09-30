@@ -238,6 +238,7 @@ final class Extensions: NSObject, ObservableObject {
             for pattern in found.allRequestedMatchPatterns {
                 context.setPermissionStatus(.grantedExplicitly, for: pattern)
             }
+            applySiteChoices(context) // Fork: sites taken back on the Extensions page stay taken back
             try controller.load(context)
             watch(context)
             if contexts[item.id] == nil, loadsThisRun.contains(item.id) { loadedBefore.insert(item.id) }
@@ -487,6 +488,7 @@ final class Extensions: NSObject, ObservableObject {
         errors[id] = nil
         Extensions.setSettings([:], for: id)
         Store.settings.removeObject(forKey: "extensions.granted.\(id)")
+        Extensions.forgetSites(id) // Fork
         loadsThisRun.remove(id)
         loadedBefore.remove(id)
         Store.settings.removeObject(forKey: "extensions.newtab.\(id)")
@@ -1025,7 +1027,7 @@ struct ExtensionSlot: View {
     var ink: Color? = nil
     var glow: Color? = nil
     /// Fork: where the puzzle button goes instead of opening the list —
-    /// the pill sends it to Settings › Extensions, and keeps the list on a
+    /// the pill sends it to the Extensions page, and keeps the list on a
     /// right-click.
     var manage: (() -> Void)? = nil
 

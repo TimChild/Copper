@@ -120,6 +120,11 @@ final class Browser: NSObject, ObservableObject {
     /// one question — which of the pages I already have open — and answering it
     /// with somewhere you went last week would be answering a different one.
     @Published private(set) var summoning = false
+    /// Fork (new-tab-launcher): the card is up for ⌘T rather than ⌘K — it
+    /// opens what you pick in a new tab instead of in this one, and nothing
+    /// exists until you pick. Always true together with `summoning`, so
+    /// everything that draws the card draws it the same. See Fork/Launcher.
+    @Published private(set) var launching = false
     /// True between the first ⌘K and letting go of ⌘.
     var cycling = false
 
@@ -1005,9 +1010,11 @@ final class Browser: NSObject, ObservableObject {
         if #available(macOS 15.4, *), let page = Extensions.shared.newTabPage {
             open(page, foreground: true)
             summoning = false
+            launching = false
             rememberSession()
             return
         }
+        launching = false
         if let active, active.isBlank {
             summoning = false
             editing = true
@@ -1043,6 +1050,7 @@ final class Browser: NSObject, ObservableObject {
     func select(_ tab: Tab) {
         cancelTabEdit()
         summoning = false
+        launching = false
         suggesting = nil
         guard tab.id != activeID else { return }
         // Fork: if this tab is the one in the side pane, the two panes trade
@@ -1578,13 +1586,53 @@ final class Browser: NSObject, ObservableObject {
     func summon() {
         reviewing = false
         cancelTabEdit()
+        launching = false
         summoning = true
         typed = ""
         editing = true
         focusRequest += 1
     }
 
+    /// Fork (new-tab-launcher): ⌘T, the way Arc has it — the card, asking
+    /// where to, and no tab until there is an answer. An extension's new tab
+    /// page, when one was allowed to take over, still gets the new tab.
+    func launch() {
+        if #available(macOS 15.4, *), Extensions.shared.newTabPage != nil {
+            newTab()
+            return
+        }
+        reviewing = false
+        cancelTabEdit()
+        Launcher.shared.begin()
+        launching = true
+        summoning = true
+        typed = ""
+        editing = true
+        focusRequest += 1
+    }
+
+    /// Fork (new-tab-launcher): rows that arrived after the keystroke that
+    /// asked for them — Google's completions, history ranked off the main
+    /// thread. The row you had walked to stays the row you are on, by what it
+    /// is rather than where it was.
+    func relaunch(_ rows: [OmniboxSuggestion]) {
+        guard launching else { return }
+        let was = picked.flatMap { offers.indices.contains($0) ? offers[$0].url : nil }
+        let index = picked
+        offers = rows
+        if let index, index > 0, let was { picked = rows.firstIndex { $0.url == was } ?? min(index, rows.count - 1) }
+        else { picked = rows.isEmpty ? nil : index }
+    }
+
     private func guess() {
+        if launching {
+            offers = Launcher.shared.rows(for: typed, in: self)
+            ending = nil
+            // A question is answered by its first row; the empty card is a
+            // list to walk down, and Return on nothing picked does nothing.
+            picked = offers.isEmpty || typed.trimmingCharacters(in: .whitespaces).isEmpty ? nil : 0
+            return
+        }
         guard !summoning else {
             offers = CommandBar.offers(for: typed, open: openPages(matching: typed), in: self)
             ending = history.completion(for: typed, among: offers)
@@ -1655,6 +1703,7 @@ final class Browser: NSObject, ObservableObject {
     /// same question but must not share an answer: a list that appears under a
     /// resting cursor would otherwise rewrite the field before you had moved.
     func take(_ offer: OmniboxSuggestion) {
+        if launching { Launcher.shared.take(offer, in: self); return }
         summoning = false
         if let id = offer.tab, let tab = tabs.first(where: { $0.id == id }) {
             select(tab)
@@ -1664,6 +1713,18 @@ final class Browser: NSObject, ObservableObject {
         editing = false
         typed = ""
         picked = nil
+    }
+
+    /// Fork (new-tab-launcher): the card put away after ⌘T has done what was
+    /// picked — which may have been to open a tab, switch to one, or nothing.
+    func landed() {
+        launching = false
+        summoning = false
+        typed = ""
+        picked = nil
+        // A blank tab behind the card keeps its own field; anything else goes
+        // back to being a page.
+        if active?.isBlank == false { editing = false }
     }
 
     /// A backspace means the ending was not wanted. Recomputing it on the very
@@ -1695,13 +1756,18 @@ final class Browser: NSObject, ObservableObject {
     /// and Escape puts it back.
     func edit() {
         summoning = false
+        launching = false
         typed = active?.address?.absoluteString ?? ""
         editing = true
         focusRequest += 1
     }
 
     func dismiss() {
+        // Fork (new-tab-launcher): Escape out of ⌘T leaves nothing behind —
+        // not even the words in the field of a blank tab under the card.
+        if launching { typed = "" }
         summoning = false
+        launching = false
         cycling = false
         // A blank tab has nothing behind the field to go back to.
         guard active?.isBlank == false else { return }
@@ -1713,6 +1779,12 @@ final class Browser: NSObject, ObservableObject {
     /// finishing for you wins; otherwise what you actually typed. If none of
     /// those is a place, nothing happens and the field says so.
     func submit() {
+        // Fork (new-tab-launcher): ⌘T has its own idea of what Return does.
+        if launching {
+            if let picked, offers.indices.contains(picked) { Launcher.shared.take(offers[picked], in: self) }
+            else { Launcher.shared.take(typed: typed, in: self) }
+            return
+        }
         // A page already open is switched to, not opened again.
         if let picked, offers.indices.contains(picked), let id = offers[picked].tab {
             summoning = false

@@ -24,6 +24,12 @@ struct ExtensionsPage: View {
 
         var body: some View {
             VStack(alignment: .leading, spacing: 18) {
+                // Fork: the whole story of each one is on its own page.
+                Card {
+                    Line("Everything about each extension", "Site access, permissions, shortcuts, errors, its folder — on the Extensions page.") {
+                        Pill("Open Extensions Page", filled: true) { ExtensionManager.shared.open(in: browser) }
+                    }
+                }
                 Card {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 8) {

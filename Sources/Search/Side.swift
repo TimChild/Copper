@@ -358,7 +358,7 @@ struct SideBar: View {
     /// right under the rows you keep.
     private var newTab: some View {
         Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.hover, ink: tint.muted) {
-            browser.newTab()
+            browser.launch() // Fork: the ⌘T card, as Arc's New Tab row opens it
         }
     }
 
@@ -369,7 +369,7 @@ struct SideBar: View {
     /// so the edge says it can be taken before it is.
     private var edge: some View {
         Rectangle()
-            .fill(Palette.ink.opacity(onEdge || grabbed != nil ? 0.18 : 0))
+            .fill(tint.ink.opacity(onEdge || grabbed != nil ? 0.18 : 0))
             .frame(width: onEdge || grabbed != nil ? 2 : 1)
             .frame(width: 9)
             .contentShape(Rectangle())
@@ -393,12 +393,16 @@ struct SideBar: View {
     }
 
     /// The door at the foot's left, where Arc keeps its library: bookmarks.
+    /// Fork: and beside it the Extensions page's (Fork/ExtensionsManager.swift).
     private var foot: some View {
-        Door(icon: "books.vertical", help: "Bookmarks", size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
-            browser.bookmarksOpen.toggle()
-        }
-        .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .top) {
-            BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
+        HStack(spacing: 2) {
+            Door(icon: "books.vertical", help: "Bookmarks", size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
+                browser.bookmarksOpen.toggle()
+            }
+            .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .top) {
+                BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
+            }
+            ExtensionsDoor(browser: browser, tint: tint)
         }
     }
 
@@ -553,7 +557,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(tint.muted)
                         .frame(width: 15, height: 15)
-                        .background(Palette.ink.opacity(0.07), in: Circle())
+                        .background(tint.ink.opacity(0.07), in: Circle())
                         .transition(.opacity)
                 } else if tab.loading {
                     Ring().transition(.opacity)
@@ -626,7 +630,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                 Rectangle().fill(tint.pill)
                 GeometryReader { geo in
                     Rectangle()
-                        .fill(Palette.ink.opacity(0.055))
+                        .fill(tint.ink.opacity(0.055))
                         .frame(width: geo.size.width * tab.reading)
                         .animation(.easeOut(duration: 0.15), value: tab.reading)
                 }
@@ -740,7 +744,7 @@ struct Door: View {
 /// A click is ⌘L — the omnibox, with the whole address to change.
 ///
 /// The extensions come out only under the pointer, as Arc's do: the pinned
-/// ones, then the puzzle piece last, which goes to Settings › Extensions.
+/// ones, then the puzzle piece last, which goes to the Extensions page.
 /// The host gives them its room and truncates, rather than sitting under
 /// them. Downloads, while there are any, stay put ahead of them.
 struct SideAddress: View {

@@ -87,6 +87,11 @@
     ./bench flow open                  open the Move in sheet
     ./bench history import arc|chrome [--root PATH] [--limit N]
                                        import all URL history from an isolated copy
+    ./bench storage import PATH [--only ORIGIN] [--profile-store NAME]
+                                       put localStorage from `arc-localstorage` JSON into the
+                                       shared website store (and NAME's profile jar), one hidden
+                                       page per origin, nothing fetched; waits and prints the report
+    ./bench storage status             the last import's report so far
     ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
                                        the MCP server agents drive the window through; setup bridges terminal agents
     ./bench ai [mode off|ask|auto]   which model lanes have keys, and the grouper's last note
@@ -239,6 +244,19 @@ def main(argv):
                 request["limit"] = int(args[i + 1]); i += 2
             else:
                 sys.exit("usage: bench history import arc|chrome [--root PATH] [--limit N]")
+    elif verb == "storage":
+        usage = "usage: bench storage import PATH [--only ORIGIN] [--profile-store NAME] | storage status"
+        if not args or args[0] not in ("import", "status"): sys.exit(usage)
+        request["op"] = args[0]
+        if args[0] == "import":
+            if len(args) < 2: sys.exit(usage)
+            request["path"] = os.path.abspath(args[1])
+            rest = args[2:]
+            while rest:
+                if rest[0] == "--only" and len(rest) > 1: request["only"] = rest[1]
+                elif rest[0] == "--profile-store" and len(rest) > 1: request["profileStore"] = rest[1]
+                else: sys.exit(usage)
+                rest = rest[2:]
     elif verb == "flow":
         if not args: sys.exit("usage: bench flow sources|scan|move|open")
         request["op"] = args[0]
@@ -312,6 +330,16 @@ def main(argv):
     answer = ask(os.path.join(folder(world), "bench.sock"), request)
     if answer.get("error"):
         sys.exit("error: " + str(answer["error"]))
+    if verb == "storage" and answer.get("started"):
+        # The import runs on in Copper; the bench answers within 25 s, so ask
+        # for the report until it is done rather than holding one request.
+        import time
+        while True:
+            time.sleep(1)
+            answer = ask(os.path.join(folder(world), "bench.sock"), {"do": "storage", "op": "status"})
+            print(f"\r{answer.get('done')}/{answer.get('total')} origins", end="", file=sys.stderr, flush=True)
+            if not answer.get("running"): break
+        print(file=sys.stderr)
     if verb == "text":
         print(answer.get("text", ""))
         if answer.get("truncated"):

@@ -39,7 +39,9 @@ final class Recent: ObservableObject {
     /// tabs that remain. Closing a tab during a walk also removes it from the
     /// frozen snapshot, so the next press skips it.
     func prune(_ tabs: [Tab]) {
-        let eligible = tabs.filter { !$0.isBlank }
+        // Every window's tabs stay in the order; a walk reads its own. (Fork: windows)
+        let others = Windows.all.flatMap(\.tabs).filter { tab in !tabs.contains { $0 === tab } }
+        let eligible = (tabs + others).filter { !$0.isBlank }
         let ids = Set(eligible.map(\.id))
         order.removeAll { !ids.contains($0) }
         snapshot.removeAll { !ids.contains($0) }

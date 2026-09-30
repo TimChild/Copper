@@ -150,6 +150,8 @@ final class Spaces: ObservableObject {
     // MARK: - switching
 
     func select(_ id: UUID, in browser: Browser) {
+        // Spaces are the first window's; another window is one row of tabs.
+        guard browser.primary else { return } // Fork: windows
         guard id != current, let to = all.firstIndex(where: { $0.id == id }) else { return }
         let from = all.firstIndex { $0.id == current } ?? to
         // The column on screen is pictured before anything changes, and the
@@ -195,6 +197,7 @@ final class Spaces: ObservableObject {
     /// A new space, in a colour no other space is wearing, made current.
     @discardableResult
     func add(named name: String = "", in browser: Browser) -> UUID {
+        guard browser.primary else { return current } // Fork: windows
         let space = Space(name: name.isEmpty ? "Space \(all.count + 1)" : name, hue: SpaceColour.unused(among: all).hue)
         all.append(space)
         select(space.id, in: browser)
@@ -282,6 +285,7 @@ final class Spaces: ObservableObject {
     /// Move the active tab to another space; it lands at that row's end and
     /// this row moves on, as if the tab had been closed.
     func move(_ tab: Tab, to id: UUID, in browser: Browser) {
+        guard browser.primary else { return } // Fork: windows — a ⌘N window's tab answers to that window
         guard id != current, all.contains(where: { $0.id == id }) else { return }
         var row = parked[id] ?? ([], nil)
         row.tabs.append(tab)

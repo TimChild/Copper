@@ -73,7 +73,12 @@ struct SideBar: View {
             }
             .modifier(SpaceSlideBand())
 
-            SpaceStrip(browser: browser) { foot }
+            if browser.primary { SpaceStrip(browser: browser) { foot } } else {
+                HStack { foot; Spacer(minLength: 0) }
+                    .padding(.horizontal, 6)
+                    .padding(.top, 2)
+                    .padding(.bottom, 7)
+            }
         }
         .frame(width: prefs.sideWidth)
         .frame(maxHeight: .infinity)
@@ -288,7 +293,7 @@ struct SideBar: View {
         return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: SideBar.gap) {
-                    SpaceHeader(browser: browser)
+                    if browser.primary { SpaceHeader(browser: browser) } // Fork: windows — spaces are the first window's
                     rows(kept, homeless: true)
                     if !today.isEmpty { divider }
                     newTab

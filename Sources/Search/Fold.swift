@@ -102,10 +102,15 @@ struct Fold: View {
     /// circles drawn over them while the app is behind (see RestingLights),
     /// so hiding it hides both, and hidden buttons take no clicks.
     private func hideLights() {
-        Fold.titlebar?.isHidden = lightsOff
+        Fold.titlebar(of: browser)?.isHidden = lightsOff
     }
 
     static var titlebar: NSView? {
         Links.window?.standardWindowButton(.closeButton)?.superview
+    }
+
+    /// This browser's title bar — each window folds its own. (Fork: windows)
+    static func titlebar(of browser: Browser) -> NSView? {
+        (Windows.window(of: browser) ?? Links.window)?.standardWindowButton(.closeButton)?.superview
     }
 }

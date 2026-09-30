@@ -59,9 +59,10 @@ enum Fork {
         case "passkeys": return PasskeysBench.handle(request)
         case "agent":
             // `agent ask TEXT` / `agent chat|open|close|clear` are the pane's; the rest is the server's.
-            if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear"].contains(op) { return Agent.shared.bench(request, in: browser) }
+            if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear", "stop", "selftest"].contains(op) { return Agent.shared.bench(request, in: Windows.current) }
             if request["op"] as? String == "servers" { Task { await Servers.shared.reload() }; return ["reloading": true] }
             return MCP.shared.bench(request)
+        case "windows": return Windows.bench(request)
         case "ai":
             // `ai` reports; `ai mode off|ask|auto`; `ai lane key|claude`; `ai tier haiku|sonnet|opus`;
             // `ai last` is the grouper's last note.
@@ -71,6 +72,15 @@ enum Fork {
                 Intelligence.shared.keys.grouping = mode
             } else if op == "lane", let lane = Intelligence.Lane(rawValue: arg.lowercased()) {
                 Intelligence.shared.keys.lane = lane
+            } else if op == "router" {
+                // `ai router URL KEY MODEL`: a stand-in router for a probe world's agent tests.
+                let bits = arg.split(separator: " ").map(String.init)
+                if bits.count >= 3 {
+                    Intelligence.shared.keys.routerURL = bits[0]
+                    Intelligence.shared.keys.routerKey = bits[1]
+                    Intelligence.shared.keys.routerModel = bits[2]
+                    Intelligence.shared.keys.lane = .key
+                }
             } else if op == "tier", let tier = Intelligence.Tier(rawValue: arg.lowercased()) {
                 Intelligence.shared.keys.tier = tier
             }
@@ -401,14 +411,16 @@ enum Fork {
         case "window":
             // The whole window as the compositor shows it — sidebar, page,
             // panels — to a PNG. An app may always picture its own windows.
-            guard let window = Links.window
+            let nth = (request["index"] as? Int).flatMap { i in Windows.all.indices.contains(i) ? Windows.window(of: Windows.all[i]) : nil }
+            guard let window = nth ?? Links.window
                     ?? NSApp.windows.first(where: { $0.isVisible && $0.level == .normal && $0.sheetParent == nil })
                     ?? NSApp.keyWindow,
                   let path = request["path"] as? String else { return ["error": "window needs a path"] }
             // A probe may be behind the user's normal Copper window. Bring
             // only this isolated process forward before asking WindowServer
             // for its pixels; otherwise the PNG can be a stale surface.
-            let hasPopover = NSApp.windows.contains { $0 !== window && $0.isVisible && $0.level == .normal }
+            // With several browser windows, the one asked for alone. (Fork: windows)
+            let hasPopover = nth == nil && NSApp.windows.contains { $0 !== window && $0.isVisible && $0.level == .normal && Windows.owner(of: $0) == nil }
             if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
             // Making the main window key dismisses SwiftUI's popover. Leave
             // the already-visible door popover alone for its evidence shot.
@@ -421,7 +433,7 @@ enum Fork {
             // SwiftUI popovers are sibling windows rather than child windows;
             // include the visible one so a probe picture is the same thing a
             // person sees, not just the page beneath its door.
-            for other in NSApp.windows where other !== window && other.isVisible && other.level == .normal {
+            for other in NSApp.windows where other !== window && other.isVisible && other.level == .normal && Windows.owner(of: other) == nil {
                 ids.append(CGWindowID(other.windowNumber))
             }
             let list = ids.reversed().map { NSNumber(value: $0) } as CFArray

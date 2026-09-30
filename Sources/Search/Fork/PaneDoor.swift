@@ -69,7 +69,7 @@ enum Panes {
     /// the browser window and not in a page, where Escape means something to
     /// the page. The split's halves are pages, so Escape never ends a split.
     static func escape(_ event: NSEvent, in browser: Browser) -> Bool {
-        guard let window = event.window, window == Links.window else { return false }
+        guard let window = event.window, Windows.owner(of: window) === browser else { return false }
         // The Space page is a card over everything, the keyboard in its
         // fields or not: Escape puts it away first.
         if ExtensionManager.shared.showing {

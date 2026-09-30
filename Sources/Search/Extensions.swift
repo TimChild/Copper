@@ -165,7 +165,8 @@ final class Extensions: NSObject, ObservableObject {
     var visibleTabs: [Tab] { browser?.tabs.filter { !$0.shy } ?? [] }
 
     var activeAdapter: ExtensionTab? {
-        guard let tab = browser?.active, !tab.shy else { return nil }
+        // The window in front's page, not always the first window's. (Fork: windows)
+        guard let tab = Windows.current.active ?? browser?.active, !tab.shy else { return nil }
         return adapter(for: tab)
     }
 

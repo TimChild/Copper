@@ -264,6 +264,15 @@ final class MCP: ObservableObject {
         Task { await Servers.shared.reload() }
     }
 
+    /// Windows: agents act in the browser window in front (Fork/Windows.swift).
+    /// Only once the server has a browser at all — this never starts it.
+    func follow(_ browser: Browser) {
+        guard self.browser != nil else { return }
+        self.browser = browser
+    }
+
+    func follows(_ browser: Browser) -> Bool { self.browser === browser }
+
     private func apply() {
         stop(keepingState: true)
         guard config.enabled, browser != nil else { running = false; return }
@@ -448,7 +457,7 @@ final class MCP: ObservableObject {
         case "tools/list":
             return reply(["tools": Tools.catalogue(jev: config.jev)])
         case "tools/call":
-            guard let browser else { return fail(-32000, "Copper has no window") }
+            guard let browser = browser ?? (running ? Windows.main : nil) else { return fail(-32000, "Copper has no window") }
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
             calls += 1

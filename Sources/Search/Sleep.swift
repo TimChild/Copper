@@ -54,7 +54,7 @@ extension Browser {
         guard prefs.sleepsTabs else { return }
         let wait = given ?? Browser.sleepAfter
         let now = Date()
-        let idle = (tabs + Spaces.shared.parkedTabs)
+        let idle = (tabs + (primary ? Spaces.shared.parkedTabs : [])) // Fork: windows
             .filter { now.timeIntervalSince($0.touched) >= wait && awake(because: $0) == nil }
             .sorted { $0.touched < $1.touched }
         for tab in idle { self.sleep(tab) }

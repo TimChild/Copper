@@ -347,6 +347,12 @@ extension Spaces {
     /// Bring a tab open in another space to the front, switching to it.
     func reveal(_ id: Tab.ID, in browser: Browser) -> Bool {
         guard let space = all.first(where: { parkedRow($0.id)?.contains { $0.id == id } == true }) else { return false }
+        // Spaces are the first window's: from a ⌘N window, go there. (Fork: windows)
+        guard browser.primary else {
+            let main = Windows.main
+            Windows.window(of: main)?.makeKeyAndOrderFront(nil)
+            return reveal(id, in: main)
+        }
         select(space.id, in: browser)
         if let tab = browser.tabs.first(where: { $0.id == id }) { browser.select(tab) }
         return true

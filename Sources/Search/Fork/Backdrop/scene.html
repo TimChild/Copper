@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- The page behind an animated space column. Nothing here is interactive:
+     the Swift side refuses hit tests, and the body is only a canvas that
+     fills the view. Transparent until scene.js draws its first frame, so the
+     still gradient underneath shows through the load. -->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<script type="module" src="./scene.js"></script>
+</body>
+</html>

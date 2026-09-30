@@ -505,7 +505,13 @@ final class Flow: ObservableObject {
                     "bookmarks": haul.bookmarkCount, "places": haul.placeCount,
                     "passkeys": haul.passkeyCount, "extensions": haul.extensions.count, "notes": haul.notes]
         case "move":
-            guard Store.testing else { return ["error": "flow move only works in a test run"] }
+            // A test run moves freely; the real profile only when the script
+            // says so outright (`bench flow move … --real`) — the one way to
+            // bring cookies over without clicking through the sheet, and never
+            // by accident from a script meant for a test world.
+            guard Store.testing || (request["real"] as? Bool) == true else {
+                return ["error": "flow move only works in a test run (or with --real)"]
+            }
             guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
             if let only = request["only"] as? String {
                 choice = FlowModel.Choice()

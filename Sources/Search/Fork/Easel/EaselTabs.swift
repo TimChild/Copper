@@ -93,14 +93,28 @@ enum Easels {
             browser(of: tab).announce("That isn't an easel")
             return true
         }
+        guard !EaselStore.shared.isDeleted(wanted) else {
+            // Reopen Closed Tab on a board deleted this session: nothing
+            // opens, and the blank tab made to hold it goes too.
+            let owner = browser(of: tab)
+            owner.announce("That easel was deleted")
+            if tab.isBlank { DispatchQueue.main.async { if owner.tabs.count > 1 { owner.close(tab) } } }
+            return true
+        }
         // Its own board: loaded if the view is not showing it yet, left alone
-        // if it is — a ⌘K row for the board you are on is not a reload.
-        if here == wanted { return id(of: tab.built?.url) == wanted }
+        // if it is — a ⌘K row for the board you are on is not a reload. A
+        // board's tab loading for the first time joins Saved (EaselSidebar).
+        if here == wanted {
+            guard id(of: tab.built?.url) != wanted else { return true }
+            keep(tab)
+            return false
+        }
         show(wanted, in: browser(of: tab), replacing: tab.isBlank ? tab : nil)
         return true
     }
 
-    /// ⌘K's New Easel and File › New Easel: a board, in a new tab in front.
+    /// ⌘K's New Easel and File › New Easel: a board, in a new tab in front,
+    /// at the bottom of the space's Saved block (`keep`, from `reroute`).
     /// A blank tab in front takes the board, the way ⌘T reuses one.
     static func newEasel(in browser: Browser) {
         let easel = EaselStore.shared.create()
@@ -352,13 +366,25 @@ extension Easels {
         let store = EaselStore.shared
         func find() -> Easel? { arg.isEmpty ? nil : store.all.first { $0.id.hasPrefix(arg) } }
         func open(_ id: String) -> [[String: Any]] {
-            (Windows.all.flatMap(\.tabs) + Spaces.shared.parkedTabs).filter { showing($0) == id }.map { tab in
-                ["tab": Bench.short(tab), "title": tab.title, "asleep": tab.asleep, "active": tab.id == browser.activeID]
+            tabs(showing: id).map { tab in
+                // Where the row is: its space, its block, its place in the row.
+                let owner = Windows.owner(of: tab)
+                let space = owner === Windows.main ? Spaces.shared.space
+                    : Spaces.shared.all.first { Spaces.shared.parkedRow($0.id)?.contains { $0 === tab } == true }
+                let row = (owner?.tabs ?? space.flatMap { Spaces.shared.parkedRow($0.id) } ?? []).filter { $0.pin == nil }
+                return ["tab": Bench.short(tab), "title": tab.title, "asleep": tab.asleep, "active": tab.id == browser.activeID,
+                        "space": space?.name ?? "", "pinned": tab.pin != nil,
+                        "section": tab.pin != nil ? "favourites" : Sections.shared.isSaved(tab) ? "saved" : "today",
+                        "row": row.firstIndex { $0 === tab } ?? -1,
+                        "savedCount": row.filter { Sections.shared.isSaved($0) }.count,
+                        "lean": tab.built?.board ?? false]
             }
         }
         func describe(_ easel: Easel) -> [String: Any] {
-            ["id": easel.id, "title": easel.title, "createdAt": easel.createdAt, "updatedAt": easel.updatedAt,
-             "url": address(easel.id).absoluteString, "tabs": open(easel.id)]
+            var out: [String: Any] = ["id": easel.id, "title": easel.title, "createdAt": easel.createdAt, "updatedAt": easel.updatedAt,
+                                      "url": address(easel.id).absoluteString, "tabs": open(easel.id)]
+            if let stale = easel.renamedFrom { out["renamedFrom"] = stale }
+            return out
         }
         switch op {
         case "list":
@@ -431,14 +457,15 @@ extension Easels {
             Task { @MainActor in await stroke(web, through: points) }
             return ["drawing": points.count, "ms": points.count * 16]
         case "delete":
+            // Straight away, no sheet: the sidebar's Delete Easel… asks
+            // first (`easels ask-delete ID`, then `easels answer`).
             guard let easel = find() else { return ["error": "no easel “\(arg)” — see easels list"] }
-            for owner in Windows.all {
-                for tab in owner.tabs where showing(tab) == easel.id { owner.close(tab) }
-            }
-            store.delete(easel.id)
+            delete(easel.id)
             return ["deleted": easel.id]
         default:
-            return ["error": "easels list|new|open ID|check ID|flush ID|delete ID|path|menu [press]|click X Y [N]|draw X,Y …"]
+            return ["error": "easels list|new|open ID|check ID|flush ID|delete ID|path|menu [press]|click X Y [N]|draw X,Y …"
+                + "|scroll DX DY [STEPS] [--zoom] [--app]|scroll stats|perf start|stop|rename ID TITLE|ask-rename ID"
+                + "|ask-delete ID|answer delete|cancel|sheet|rowmenu ID PATH|lean"]
         }
     }
 

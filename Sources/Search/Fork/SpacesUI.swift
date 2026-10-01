@@ -351,12 +351,10 @@ struct SpaceStrip<Tools: View>: View {
     }
 
     /// A space, and its page open at once, so it gets a name, an icon and
-    /// a colour instead of being "Space 9".
+    /// a colour instead of being "Space 9". Right-click for the other new
+    /// things — a board, in this space's Saved block (Fork/Easel).
     private var plus: some View {
-        Button {
-            let id = spaces.add(in: browser)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id) }
-        } label: {
+        Button(action: newSpace) {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(tint.muted)
@@ -364,7 +362,18 @@ struct SpaceStrip<Tools: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("New Space")
+        .help("New Space — right-click for New Easel")
+        .contextMenu {
+            Button("New Space", action: newSpace)
+                .keyboardShortcut("n", modifiers: [.control])
+            Button("New Easel") { Easels.newEasel(in: browser) }
+                .keyboardShortcut("e", modifiers: [.control, .shift])
+        }
+    }
+
+    private func newSpace() {
+        let id = spaces.add(in: browser)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id) }
     }
 }
 
@@ -430,6 +439,10 @@ struct SpaceMenu: View {
         Button("New Tab in Space") {
             if space.id != spaces.current { spaces.select(space.id, in: browser) }
             browser.launch()
+        }
+        Button("New Easel in Space") {
+            if space.id != spaces.current { spaces.select(space.id, in: browser) }
+            Easels.newEasel(in: browser)
         }
         if let tab = browser.active, space.id != spaces.current {
             Button("Move Current Tab Here") { spaces.move(tab, to: space.id, in: browser) }

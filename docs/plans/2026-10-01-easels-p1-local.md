@@ -217,3 +217,31 @@ What the page does now that the other packages, and P4, should know.
   arrows, images})`, `perf.start({busy?})` / `perf.stop()`, `view()` / `setView(v)` / `fit()`,
   `marks` (`config`, `firstCommit`, `painted`), `counters`. Harness and numbers:
   `~/Developer/super-charles-personal/research/2026-10-01-copper-easels/perf/`.
+
+## As built (Arc tab + native lag, `feat/easels-arc`)
+
+Collin: easels must be a tab in Copper the way an Arc easel is, and the board felt laggy.
+
+- **Where a board lives.** A board's tab joins its space's **Saved** block (bottom) the first time
+  it loads, however it was opened, and is selected; the archive sweep never takes a board. New
+  Easel is also on the New Tab row's and the foot plus's right-click and on each space's menu.
+- **Its row** starts with **Rename Easel…** and **Delete Easel…** (which asks first), then Copper's
+  tab items.
+- **Native → page `rename {title}`** (**web**): sent when the board is renamed from its row while
+  its page is up, and right after `config` when it was renamed while the page was not. The page
+  sets `meta.title` (and so `document.title`) to `title`. It must not drop a `rename` that arrives
+  straight after `config`, before the board is drawn.
+- **`config.easel.renamed: true`** (**web**): present only when Copper renamed the board since the
+  page last saved; `config.easel.title` is then newer than the document's `meta.title` and wins
+  (copy it into `meta`, not only for a new board). Absent otherwise; `config.easel.title` is still
+  Copper's name for the board.
+- **The index holds the name.** `index.json` entries may carry `renamedFrom` (the name the
+  document still has) until the page saves under the new name; meanwhile a `save` whose `title` is
+  exactly `renamedFrom` keeps Copper's title, any other title replaces it and clears the marker.
+- **A deleted board's address opens nothing** for the rest of the session ("That easel was
+  deleted"); its late `save` was already ignored.
+- **An easel tab is lean** (**web**: nothing to do, but don't rely on Copper's page scripts): no
+  `Swipe.watch`/`Swipe.calm`, no sign-in watcher (`__officeForms`), no picker, no image menu
+  script, no store mender, no passkey shim, no ad-block rule list, and no back/forward swipe
+  tracking in the view. One script stays: on focus changes it tells Copper whether the caret is in
+  something that takes typing (Tab then goes to the page). `docs/easels.md` has the table.

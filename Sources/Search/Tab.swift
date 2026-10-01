@@ -279,8 +279,6 @@ final class Tab: ObservableObject, Identifiable {
         // else on a Mac. ⌘+ and ⌘- are the other thing — they lay the page out
         // again at a bigger size — and both are worth having.
         web.allowsMagnification = true
-        // Fork: an easel zooms its own board; WebKit's pinch would magnify the toolbar with it.
-        if Easels.board(of: web) != nil { web.allowsMagnification = false }
         // WebKit's own two-finger swipe stays off. It drags the page across
         // the window with a picture of the last one behind it; ours is in
         // PageView, and it moves nothing but a disc.
@@ -313,6 +311,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.add(forms, name: FormRelay.name)
         controller.addScriptMessageHandler(passkeys, contentWorld: .page, name: Passkeys.name)
         Shield.shared.protect(controller)
+        Easels.dress(web) // Fork: a board keeps only what it uses — no pinch, no swipe, no web-page handlers (Fork/Easel/EaselLean)
         built = web
         arm(hiding: veils)
 
@@ -388,6 +387,7 @@ final class Tab: ObservableObject, Identifiable {
     func arm(hiding css: String) {
         veils = css
         guard let built else { return }
+        if Easels.arm(built) { return } // Fork: a board gets one small script, not every page's
         let controller = built.configuration.userContentController
         controller.removeAllUserScripts()
         controller.addUserScript(
@@ -1237,7 +1237,11 @@ final class PageView: WKWebView {
         """
     }
 
+    /// Fork: an easel's view (Easels.dress) — its pan and zoom are the board's.
+    var board = false
+
     override func scrollWheel(with event: NSEvent) {
+        if board { return boardScroll(event) } // Fork: easels — no swipe tracking, no ask, no disc
         onTouch?()
         // The page gets every event first and scrolls as it always did. The
         // swipe is only read, never taken.

@@ -16,15 +16,27 @@ serves from its own scheme. The native half is `Sources/Search/Fork/Easel/`:
 | `EaselScheme.swift` | the `copper-easel://` handler: the bundle and the pictures |
 | `EaselBridge.swift` | the `easel` message handler: page ⇄ Copper |
 | `EaselTabs.swift` | easel tabs: their configuration, the navigation guard, ⌘K, flushing, the mark, `bench easels` |
+| `EaselSidebar.swift` | the sidebar: Saved placement, Rename Easel…, Delete Easel…, the New Easel menus |
+| `EaselLean.swift` | what an easel tab is spared of every web page's machinery |
+| `EaselBench.swift` | `bench easels scroll`, `perf`, `lean`, the row's rename/delete/menu verbs |
 
 ## Opening one
 
-- **⌘K › New Easel**, or **File › New Easel** (⌃⇧E, Arc's): a board in a new tab in front. A
-  blank tab in front takes it instead, the way ⌘T reuses one.
+- **⌘K › New Easel** (or ⌘T, typing "easel"), or **File › New Easel** (⌃⇧E, Arc's): a board in a
+  new tab in front. A blank tab in front takes it instead, the way ⌘T reuses one.
+- **From the sidebar**, where Arc keeps its new things: right-click the **New Tab** row (New Tab /
+  New Easel), right-click the **plus** at the foot (New Space / New Easel; a click on it still makes
+  a space), or **New Easel in Space** on a space's menu (its header, its chip, ⌘K's space rows).
 - **⌘K**, typing a board's title: an **Open Easel** row for each match, three at most. `easel`
   alone lists them all, newest first; `easel plan` narrows to titles with "plan" in them. An open
   board also shows up in tab search like any tab.
 - Its address, `copper-easel://easel/<id>`, typed into the field or the ⌘T card.
+
+However it is opened, a board's tab joins the current space's **Saved** block, at the bottom, and
+is selected — Arc's pinned easel. So Today's archive never takes it, and the sweep passes over a
+board even when somebody drags it down into Today. A board's tab that is already in the sidebar
+stays where it is (Open Easel… goes to it). Session restore puts each board back in its space and
+its block.
 
 A board has **one tab**. Opening one that is already open, in this space, another space or
 another window, goes to that tab. Two pages saving the whole of one document would each write over
@@ -32,8 +44,25 @@ the other.
 
 The tab is an ordinary tab in every other way. The sidebar row wears Copper's mark, an orange
 square with a white scribble, where a site wears its icon, and the title is the page's
-`document.title`. The address pill says **Easel · <title>**. It sleeps after half an hour and
-wakes from the file, comes back after a relaunch, sits in split view, and moves between spaces.
+`document.title` (a sleeping row's, and a restored one's, is the index's). The address pill says
+**Easel · <title>**. It sleeps after half an hour and wakes from the file, comes back after a
+relaunch, sits in split view, and moves between spaces.
+
+## Its row
+
+Right-click a board's row (or its square, if it is a favourite, or its pill in the top bar): the
+board's own items come first, then Copper's tab items as for any tab.
+
+- **Rename Easel…** opens a name field on the row, as a folder's Rename… does (a sheet where there
+  is no row: a favourite's square, the top bar). Return keeps it, Escape or a click away leaves
+  it. The index takes the name at once (⌘K, the address pill); an open board is told `rename` and
+  its document and tab title follow; a sleeping row says the new name now and its page hears on
+  waking (see the bridge).
+- **Delete Easel…** asks first: **Delete “<title>”?** *Its notes and pictures are removed from this
+  Mac.* Delete closes every tab showing the board — this row, a favourite, a row in another space
+  or window — and removes its folder, document and pictures. For the rest of the session its
+  address opens nothing ("That easel was deleted"), so Reopen Closed Tab cannot bring back an
+  empty board under the old id.
 
 ## Where it lives
 
@@ -42,7 +71,7 @@ Under the world's own folder, `Store.file("easels")`. That is
 `Copper (<world>)/easels/` for a `SEARCH_PROBE` run, so a test can never touch a real board:
 
 ```
-easels/index.json            {"easels":[{id,title,createdAt,updatedAt}]}   newest change first
+easels/index.json            {"easels":[{id,title,createdAt,updatedAt[,renamedFrom]}]}   newest change first
 easels/viewer.json           {"id": <uuid>}   who "you" are on every board
 easels/<id>/doc.yjs          the whole document, Y.encodeStateAsUpdate(doc)
 easels/<id>/files/<fileId>   pictures dropped on that board, <uuid>.<png|jpg|gif|webp>
@@ -50,8 +79,10 @@ easels/<id>/files/<fileId>   pictures dropped on that board, <uuid>.<png|jpg|gif
 
 Every write is atomic, on one serial queue, so a save and the read that answers the next `ready`
 never pass each other. A board whose id is not in the index (an address typed by hand, an index
-lost) opens empty and joins the index with its first save. Deleting is `bench easels delete` only,
-until there is an undo to put beside it.
+lost) opens empty and joins the index with its first save. The index is where a board's name
+lives: `renamedFrom` is there only between a Rename Easel… and the page's first save under the new
+name (it is the name the document's `meta` still carries). Deleting is the row's Delete Easel…,
+which asks, or `bench easels delete`, which does not.
 
 ## The scheme
 
@@ -83,14 +114,17 @@ in whole.
 
 | page → Copper | Copper does |
 |---|---|
-| `ready` | answers `config`: `easel {id, title, createdAt}`, `viewer {id, name, color}`, `state` (base64 of `doc.yjs`, or `null`), `mode: "local"` |
-| `save {state, title}` | writes `doc.yjs`, updates the title and `updatedAt` in the index. 64 MB at most |
+| `ready` | answers `config`: `easel {id, title, createdAt[, renamed: true]}`, `viewer {id, name, color}`, `state` (base64 of `doc.yjs`, or `null`), `mode: "local"`; when `renamed`, a `rename {title}` follows at once |
+| `save {state, title}` | writes `doc.yjs`, updates the title and `updatedAt` in the index — except that while a rename is waiting (`renamedFrom`), the stale name coming back keeps Copper's. 64 MB at most |
 | `file {reqId, name, mime, data}` | checks the bytes themselves (PNG, JPEG, GIF or WebP, 15 MB at most; a `mime` that is given must match), writes the picture, answers `file:done {reqId, url, fileId}` or `file:error {reqId, message}` |
 | `open {url, background?}` | an ordinary tab, http and https only |
 | `log {level, message}` | NSLog, `easel: [level] <id> message` |
 
 Copper sends `flush` when a board's tab closes and when the app quits; the page answers with a
-`save`. Quitting waits 300 ms at most for every awake board, then for the disk. A closing tab's
+`save`. Copper sends `rename {title}` when the board is renamed from its row and its page is up,
+and after `config` when it was renamed while the page was not: the page sets `meta.title` (and so
+its `document.title`) to it. `config.easel.title` is always Copper's name for the board; with
+`renamed: true` it is newer than the document's `meta.title`, and the page takes it. Quitting waits 300 ms at most for every awake board, then for the disk. A closing tab's
 view is kept up to a second to answer, without holding anything up.
 
 The viewer's `id` is made once and kept in `viewer.json`; `name` is `NSFullUserName()`; `color` is
@@ -120,6 +154,29 @@ Easels are Copper's own. Web pages can't reach them, and boards can't reach anyt
   never has to tell Copper's loads from a page's. An agent driving Copper (MCP `browser_tabs` new,
   `browser_navigate`) goes the same way as a typed address.
 
+## What an easel tab is spared
+
+Every tab is built for the open web. A board is Copper's own page, so its tab is built lean
+(`EaselLean.swift`; `defaults write <domain> easels.lean -bool NO` turns it off, for the bench):
+
+| every tab gets | runs | on a board |
+|---|---|---|
+| back/forward swipe in `PageView.scrollWheel`: the sideways tracker, the page asked, the disc, `onTouch` per event | every trackpad event (native) | **off**: the event goes to WebKit and nothing else; `onTouch` once per gesture |
+| `Swipe.watch` (every frame): walks up from the pointer through `getComputedStyle` on each sideways wheel event and posts to `officeScroll` | **every wheel event** (JS) | **off** |
+| `Swipe.calm`: `overscroll-behavior-y: none` on the root | once | off (the board stops its own wheel) |
+| `ScrollRelay`: scroll position → the row's reading fill | every scroll, once a frame (JS) | **off** (handler too) |
+| `FormRelay`: sign-in watcher — a `MutationObserver` over the whole document, capture listeners for scroll (rAF + post), click, keydown, input, focus | every DOM mutation, scroll, click, key (JS) | **off**; a 20-line script reports focus changes only, so Tab still goes to a sticky or a title |
+| `Veiling.picker` (hide something), `ImageRelay.watch` (Copper's image menu would replace the board's right-click), `StoreRelay` (Web Store mender, with its own `MutationObserver` there), the passkey shim | once / on demand | **off** (handlers too) |
+| the ad blocker's rule list (its cosmetic rules are a stylesheet matched on every style pass) | every style pass | **off** |
+| WebKit's pinch magnification and smart magnify | gestures | off (the board zooms itself) |
+| the first-frame fade, the picture a sleeping tab wakes behind, sleep after half an hour, the title/address/progress observers, the audio watch | one-shot / event-driven | kept |
+
+Beside it, two things every tab shared: the space swipe's monitor now takes a gesture only if it
+began over the sidebar (a pan that starts on a board is the board's wherever the pointer goes), and
+`Heat` (the CPU ember) no longer republishes every two seconds — every sidebar row observed it, so
+the whole column redrew on each tick, under a pan too; rows now redraw when the hot set changes.
+`Heat` never runs JS on a page; it reads each WebContent process's CPU time.
+
 ## For the web bundle
 
 - Keep the path `/<id>`. Use `?query`, or `history.replaceState` rather than hash history: a
@@ -137,6 +194,10 @@ Easels are Copper's own. Web pages can't reach them, and boards can't reach anyt
   navigation, and the board's tab refuses it.
 - `localStorage` and IndexedDB belong to the one origin every board shares, and to the space's
   profile. Key anything kept there by board id, or better, keep it in the document.
+- Handle `rename {title}` (set `meta.title`), whenever it comes — including straight after
+  `config` — and take `config.easel.title` into `meta` when `config.easel.renamed` is true.
+- No Copper script listens on the board's scroll, wheel, mutations or clicks; the only one is a
+  focus listener that tells Copper whether the caret is in something that takes typing.
 
 ## The bench
 
@@ -150,7 +211,23 @@ Easels are Copper's own. Web pages can't reach them, and boards can't reach anyt
 ./bench --world NAME easels menu [press]     File › New Easel as the menu bar holds it
 ./bench --world NAME easels click X Y [N]    a real click (N=2: double-click) on the board in front, page CSS px
 ./bench --world NAME easels draw X,Y X,Y …   a real press-drag-release through the points, ~16 ms apart (the laser, marquee, moves)
+./bench --world NAME easels scroll DX DY [STEPS] [--zoom] [--app]   a trackpad gesture on the board in front
+./bench --world NAME easels scroll stats     the last one: µs per event in the view, gaps, the space swipe
+./bench --world NAME easels perf start|stop  frame times (rAF) and wheel lag on the board in front
+./bench --world NAME easels lean             what the board in front was spared, read from the page
+./bench --world NAME easels rename ID TITLE  Rename Easel…, done; ask-rename ID opens the row's field
+./bench --world NAME easels ask-delete ID    the Delete Easel… sheet; answer delete|cancel, sheet
+./bench --world NAME easels rowmenu ID PATH  right-click the board's row; the window and its menu, as a PNG
 ```
+
+`easels scroll` makes each event with CGEvent (phase began, STEPS × changed carrying DX, DY points
+between them, ended; continuous pixel deltas, 8 ms apart) and gives it the board's window, so it is
+what a trackpad's is to AppKit and WebKit; `--zoom` holds ⌘ (the board zooms on ⌘/ctrl-wheel),
+`--app` sends it through `NSApp.sendEvent` so the app's monitors see it first. `easels perf` counts
+frames over 17.5 ms and 34 ms like the page's own `__easelDebug.perf`, and uses that when the page
+has it; in a windowed run it brings the window forward, since a covered window draws no frames.
+`rowmenu` needs a windowed run. Measurements and pictures: research/2026-10-01-copper-easels/arc.
+
 
 A test world, headless, off the real Copper's MCP port:
 

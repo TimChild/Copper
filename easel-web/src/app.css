@@ -441,8 +441,6 @@ button {
 .easel-frame[data-lifted] {
   z-index: 10;
   box-shadow: var(--shadow-lift);
-  /* Dragged shapes ride on their own layer: moving one repaints nothing. */
-  will-change: transform;
 }
 .easel-sticky-body {
   position: relative;

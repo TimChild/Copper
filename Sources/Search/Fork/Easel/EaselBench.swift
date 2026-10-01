@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import WebKit
 
 // `./bench easels …` for measuring a board and driving its row, beside the
@@ -67,6 +68,15 @@ extension Easels {
             answer(EaselDelete.describe)
         case "rowmenu":
             rowMenu(words, in: browser, answer: answer)
+        case "picture":
+            // The window with whatever hangs from it — the rename field's
+            // popover, the delete sheet — each drawn by its own views.
+            guard let path = words.first, let window = Windows.window(of: browser) ?? Links.window else {
+                return answer(["error": "easels picture PATH"])
+            }
+            let extras = NSApp.windows.filter { $0 !== window && $0.isVisible && ($0.sheetParent === window || $0.className.contains("Popover")) }
+            guard let image = composite(window, with: extras) else { return answer(["error": "no image"]) }
+            answer(["path": write(image, to: path) ? path : "", "size": [image.width, image.height], "extras": extras.map(\.className)])
         default:
             answer(bench(request, in: browser))
         }
@@ -191,6 +201,41 @@ extension Easels {
         }
     }
 
+    // MARK: - pictures
+
+    /// The browser window as the compositor has it, with `extras` (a popover,
+    /// a sheet, a menu) each drawn by its own views where it sits on screen.
+    /// WindowServer will not hand over those windows' pixels from a locked
+    /// screen (nor, without the screen-recording grant, a popover's), but a
+    /// window may always draw its own views.
+    static func composite(_ window: NSWindow, with extras: [NSWindow]) -> CGImage? {
+        guard let base = Fork.layered([CGWindowID(window.windowNumber)]) else { return nil }
+        let scale = CGFloat(base.width) / max(1, window.frame.width)
+        let union = extras.reduce(window.frame) { $0.union($1.frame) }
+        guard let context = CGContext(data: nil, width: Int(union.width * scale), height: Int(union.height * scale), bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        // Screen points and the context both count up from the bottom left.
+        func place(_ frame: NSRect) -> CGRect {
+            CGRect(x: (frame.minX - union.minX) * scale, y: (frame.minY - union.minY) * scale,
+                   width: frame.width * scale, height: frame.height * scale)
+        }
+        context.draw(base, in: place(window.frame))
+        for extra in extras {
+            guard let view = extra.contentView?.superview ?? extra.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            if let drawn = rep.cgImage { context.draw(drawn, in: place(extra.frame)) }
+        }
+        return context.makeImage()
+    }
+
+    @discardableResult
+    static func write(_ image: CGImage, to path: String) -> Bool {
+        guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return false }
+        return (try? png.write(to: URL(fileURLWithPath: path))) != nil
+    }
+
     // MARK: - the row's menu, pictured
 
     /// A right-click on the board's row, through the window as a real one
@@ -206,6 +251,7 @@ extension Easels {
         window.makeKeyAndOrderFront(nil)
         let shot = MenuShot(window: window, path: words[1])
         shot.out["row"] = [frame.minX, frame.minY, frame.width, frame.height]
+        shot.point = CGPoint(x: frame.minX + 60, y: frame.maxY + 2) // drawn just under the row, so the row still shows
         let watch = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
             let menu = note.object as? NSMenu
             MainActor.assumeIsolated { shot.began(menu) }
@@ -256,13 +302,70 @@ private final class MenuShot {
                 && ($0[kCGWindowLayer as String] as? Int ?? 0) >= Int(CGWindowLevelForKey(.popUpMenuWindow))
         }.compactMap { ($0[kCGWindowNumber as String] as? NSNumber).map { CGWindowID($0.uint32Value) } }
         out["menuWindows"] = menus.count
-        if let image = Fork.layered([CGWindowID(window.windowNumber)] + menus),
-           let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
-            try? png.write(to: URL(fileURLWithPath: path))
+        var image = Fork.layered([CGWindowID(window.windowNumber)] + menus)
+        if menus.isEmpty {
+            // The compositor lists no menu — a locked screen shows none — so
+            // the menu's window draws itself over the picture, and failing
+            // that its items are drawn where it opened; the answer says which.
+            let menuWindows = NSApp.windows.filter { $0.isVisible && $0.className.contains("Menu") }
+            if !menuWindows.isEmpty, let drawn = Easels.composite(window, with: menuWindows) {
+                image = drawn
+                out["menuFrom"] = "its own window's views"
+            } else if let base = image {
+                image = MenuShot.drawn(menu, over: base, at: point, in: window)
+                out["menuFrom"] = "its items, drawn"
+            }
+        }
+        if let image, Easels.write(image, to: path) {
             out["path"] = path
             out["size"] = [image.width, image.height]
         }
         menu.cancelTracking()
+    }
+
+    /// Where the right-click went, in window points from the top left.
+    var point = CGPoint.zero
+
+    /// The menu's items as a macOS menu draws them, laid over the window's
+    /// picture with its top-left corner at the click.
+    private static func drawn(_ menu: NSMenu, over base: CGImage, at point: CGPoint, in window: NSWindow) -> CGImage? {
+        let rows = menu.items.map { item in (title: item.isSeparatorItem ? "" : item.title, separator: item.isSeparatorItem) }
+        let card = VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                if row.separator {
+                    Rectangle().fill(Color.black.opacity(0.1)).frame(height: 1).padding(.horizontal, 10).padding(.vertical, 5)
+                } else {
+                    HStack(spacing: 0) {
+                        Text(row.title).font(.system(size: 13))
+                            .foregroundStyle(row.title.hasPrefix("Delete") ? Color.red : Color.black.opacity(0.85))
+                        Spacer(minLength: 24)
+                        if row.title == "Group" { Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary) }
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 22)
+                }
+            }
+        }
+        .padding(.vertical, 5)
+        .frame(width: 210, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(white: 0.97)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.22), radius: 14, y: 6)
+        .padding(20)
+        let scale = CGFloat(base.width) / max(1, window.frame.width)
+        let renderer = ImageRenderer(content: card.environment(\.colorScheme, .light))
+        renderer.scale = scale
+        guard let picture = renderer.cgImage,
+              let context = CGContext(data: nil, width: base.width, height: base.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        let whole = CGRect(x: 0, y: 0, width: base.width, height: base.height)
+        context.draw(base, in: whole)
+        // The card's 20 pt margin holds its shadow; its corner lands on the click.
+        let x = (point.x - 20) * scale, top = (point.y - 20) * scale
+        context.draw(picture, in: CGRect(x: x, y: CGFloat(base.height) - top - CGFloat(picture.height),
+                                         width: CGFloat(picture.width), height: CGFloat(picture.height)))
+        return context.makeImage()
     }
 }
 

@@ -181,7 +181,7 @@ struct CommandPalette: View {
     }
 
     /// The space's own colour, so the selected row belongs to where you are.
-    private var tint: Color { Spaces.shared.space.tint }
+    private var tint: Color { Spaces.shared.space(in: browser).tint }
 
     private struct Row: View {
         let offer: Suggestion

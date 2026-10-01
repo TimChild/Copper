@@ -58,7 +58,7 @@
     ./bench spaces [page [N]|page close|tap N|tap header]
                                        the Space page; tap is a click on chip N (another space
                                        switches, the current one opens its page) or the title icon
-    ./bench windows [new|open N URL|key N|close N|saved|quit]   ⌘N windows
+    ./bench windows [new|open N URL|key N|space N INDEX|select N TAB|close N|saved|quit]   ⌘N windows
     ./bench spaces [delete N|answer close|move|cancel]
                                        the Delete Space sheet, and its buttons
     ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|blur X

@@ -66,8 +66,7 @@ final class Split: ObservableObject {
     /// ⌘⇧D. Splits with the tab to the right of the active one (or the
     /// left, at the end of the row); a second press closes the split.
     func toggle(in browser: Browser) {
-        // One split, the first window's; a ⌘N window stays one page. (Fork: windows)
-        guard browser.primary else { browser.announce("Split View is in the first window"); return }
+        // Splits are per-window view state, while the tab pair remains shared.
         if side != nil { unpair(side); side = nil; swapped = false; return }
         guard let here = browser.tabs.firstIndex(where: { $0.id == browser.activeID }), browser.tabs.count > 1 else {
             browser.announce("Nothing to split with — open another tab")
@@ -78,7 +77,7 @@ final class Split: ObservableObject {
     }
 
     func open(with tab: Tab, in browser: Browser) {
-        guard browser.primary, tab.id != browser.activeID else { return } // Fork: windows
+        guard tab.id != browser.activeID else { return }
         if let active = browser.activeID { pair(active, tab.id) }
         side = tab.id
         if !tab.wake() { tab.revive() }
@@ -107,7 +106,7 @@ final class Split: ObservableObject {
     /// The space's colour, for the live pane's outline — the accent when the
     /// space has no colour of its own, because grey would say nothing.
     var tint: Color {
-        Spaces.shared.space.hue.map { Color(hue: $0, saturation: 0.62, brightness: 0.72) } ?? Color.accentColor
+        Spaces.shared.space(in: Windows.current).hue.map { Color(hue: $0, saturation: 0.62, brightness: 0.72) } ?? Color.accentColor
     }
 
     /// Which pane a tab is in: left (active), right (side), or nowhere.

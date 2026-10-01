@@ -216,9 +216,9 @@ final class Sections: ObservableObject {
         note["window"] = archive.rawValue
         note["oldest"] = oldestToday(in: browser)
         note["spaces"] = spaces.all.map { space -> [String: Any] in
-            var row = counts(space.id == spaces.current ? browser.tabs : (spaces.parkedRow(space.id) ?? []))
+            var row = counts(spaces.row(space.id))
             row["name"] = space.name
-            row["current"] = space.id == spaces.current
+            row["current"] = space.id == spaces.current(in: browser)
             return row
         }
         note["today"] = browser.tabs.filter { $0.pin == nil && !isSaved($0) }.map { tab -> [String: Any] in

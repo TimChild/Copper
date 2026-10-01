@@ -1,20 +1,21 @@
 import AppKit
 import SwiftUI
 
-// More than one window. ⌘N opens another browser window with its own row
-// of tabs, as many as you like; the window Copper launches with stays the
-// one that owns Spaces, the session file, the bench and the MCP server's
-// home. Every other window is a plain row of tabs — no spaces of its own —
-// sharing the one history, bookmarks, settings and hidden-element lists, so
-// nothing on disk is ever written by two owners.
+// More than one window. ⌘N opens another browser window, and every window
+// sees the same Spaces rows, pinned tabs, folders and groups. Each window
+// remembers its own current space and active tab, like Arc; selecting a tab
+// that is visible elsewhere hands that tab to this window and leaves the old
+// window on its most recent other tab. The Tab (and its WKWebView) is shared,
+// never copied, so two StageViews cannot fight over one page.
 //
-// Other windows come back at the next launch (windows.json, beside
-// session.json). Closing one with the red button lets its tabs go, the way
-// closing a window does in any browser; quitting keeps them.
+// session.json remains the source of truth for spaces and tabs. windows.json
+// contains only per-window view state. Closing a window forgets that state;
+// quitting keeps it for the next launch. A legacy row with a `tabs` array is
+// folded into its space on first load before the new shape is written.
 //
-// Agents follow the window you are in: the MCP server and the command bar
-// act on the frontmost browser window, and fall back to the first one when
-// that window closes.
+// Agents follow the window in front: the MCP server and the command bar act
+// on the frontmost browser window, and fall back to the first one when it
+// closes.
 
 @MainActor
 enum Windows {
@@ -68,6 +69,7 @@ enum Windows {
             MainActor.assumeIsolated {
                 guard let browser else { return }
                 front = browser
+                Spaces.shared.frontChanged(browser)
                 MCP.shared.follow(browser)
             }
         }
@@ -84,6 +86,7 @@ enum Windows {
         // notification above has already gone by.
         if window.isKeyWindow {
             front = browser
+            Spaces.shared.frontChanged(browser)
             MCP.shared.follow(browser)
         }
     }
@@ -106,9 +109,15 @@ enum Windows {
     /// True for a window some browser owns.
     static func isBrowserWindow(_ window: NSWindow?) -> Bool { owner(of: window) != nil }
 
-    /// The browser with this tab in its row.
+    /// The window showing a tab now. If it is not active anywhere, prefer
+    /// the frontmost window viewing its space, then the main window.
     static func owner(of tab: Tab) -> Browser? {
-        all.first { browser in browser.tabs.contains { $0 === tab } }
+        if let active = all.first(where: { $0.activeID == tab.id }) { return active }
+        if let space = Spaces.shared.spaceID(of: tab),
+           let front = all.first(where: { Spaces.shared.current(in: $0) == space && $0 === current }) { return front }
+        if let space = Spaces.shared.spaceID(of: tab),
+           let viewer = all.first(where: { Spaces.shared.current(in: $0) == space }) { return viewer }
+        return main
     }
 
     /// A ⌘N window closed. Quitting keeps it for next time; the red button
@@ -116,7 +125,10 @@ enum Windows {
     private static func closed(_ id: UUID) {
         guard !quitting, let browser = others.removeValue(forKey: id) else { return }
         order.removeAll { $0 == id }
-        if front === browser { front = nil }
+        if front === browser {
+            front = nil
+            Spaces.shared.frontChanged(main)
+        }
         if MCP.shared.follows(browser) { MCP.shared.follow(main) }
         // An agent at work in this window stops with it, rather than
         // building pages in a browser nobody can see.
@@ -130,8 +142,42 @@ enum Windows {
 
     struct Saved: Codable {
         var id: UUID
-        var tabs: [Session.Entry]
-        var active: Int
+        var space: UUID?
+        var active: UUID?
+        /// Only populated while decoding the old windows.json format.
+        var legacyTabs: [Session.Entry]?
+        var legacyActive: Int?
+
+        init(id: UUID, space: UUID?, active: UUID?) {
+            self.id = id
+            self.space = space
+            self.active = active
+            legacyTabs = nil
+            legacyActive = nil
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(UUID.self, forKey: .id)
+            space = try c.decodeIfPresent(UUID.self, forKey: .space)
+            if let value = try? c.decode(UUID.self, forKey: .active) {
+                active = value
+                legacyActive = nil
+            } else {
+                active = nil
+                legacyActive = try c.decodeIfPresent(Int.self, forKey: .active)
+            }
+            legacyTabs = try c.decodeIfPresent([Session.Entry].self, forKey: .tabs)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encodeIfPresent(space, forKey: .space)
+            try c.encodeIfPresent(active, forKey: .active)
+        }
+
+        private enum CodingKeys: String, CodingKey { case id, space, active, tabs }
     }
 
     private static var file: URL { Store.file("windows.json") }
@@ -141,8 +187,23 @@ enum Windows {
         return (try? JSONDecoder().decode([Saved].self, from: data)) ?? []
     }()
 
-    /// The row a reopened window starts with.
-    static func savedTabs(for id: UUID) -> Saved? { saved.first { $0.id == id } }
+    /// The view state a reopened window starts with. Legacy tabs are retained
+    /// until Browser folds them into the canonical space row.
+    static func savedState(for id: UUID) -> Saved? { saved.first { $0.id == id } }
+
+    /// Legacy rows are consumed by Browser when their scene is first opened.
+    static func legacy(_ id: UUID) -> ([Session.Entry], Int?)? {
+        guard let row = saved.first(where: { $0.id == id }), let tabs = row.legacyTabs else { return nil }
+        return (tabs, row.legacyActive)
+    }
+
+    static func markMigrated(_ id: UUID, space: UUID) {
+        guard let i = saved.firstIndex(where: { $0.id == id }) else { return }
+        saved[i].space = space
+        saved[i].legacyTabs = nil
+        saved[i].legacyActive = nil
+        write(now: true)
+    }
 
     /// A ⌘N window's row changed.
     static func keep(_ browser: Browser, now: Bool = false) {
@@ -154,14 +215,7 @@ enum Windows {
     @discardableResult
     private static func record(_ browser: Browser) -> Bool {
         guard let id = browser.windowID, others[id] != nil else { return false }
-        var entries: [Session.Entry] = []
-        var active = 0
-        for tab in browser.tabs {
-            guard let entry = Session.Entry(tab) else { continue }
-            if tab.id == browser.activeID { active = entries.count }
-            entries.append(entry)
-        }
-        let row = Saved(id: id, tabs: entries, active: active)
+        let row = Saved(id: id, space: Spaces.shared.current(in: browser), active: browser.activeID)
         if let i = saved.firstIndex(where: { $0.id == id }) { saved[i] = row } else { saved.append(row) }
         return true
     }
@@ -188,9 +242,7 @@ enum Windows {
     /// A scene macOS already restored is simply brought forward again.
     static func reopen() {
         guard let opener else { return }
-        for row in saved where !row.tabs.isEmpty { opener(row.id) }
-        // A window that came back empty is not worth keeping a record of.
-        saved.removeAll { $0.tabs.isEmpty }
+        for row in saved { opener(row.id) }
     }
 }
 
@@ -247,6 +299,16 @@ extension Windows {
         case "key":
             guard let browser = pick() else { return ["error": "key N"] }
             window(of: browser)?.makeKeyAndOrderFront(nil)
+        case "space":
+            guard bits.count > 1, let browser = pick(), let index = Int(bits[1]), Spaces.shared.all.indices.contains(index) else {
+                return ["error": "space N INDEX"]
+            }
+            Spaces.shared.select(Spaces.shared.all[index].id, in: browser)
+        case "select":
+            guard bits.count > 1, let browser = pick(), let tab = browser.tabs.first(where: { $0.id.uuidString.lowercased().hasPrefix(bits[1].lowercased()) }) else {
+                return ["error": "select N TAB"]
+            }
+            browser.select(tab)
         case "close":
             guard let browser = pick() else { return ["error": "close N"] }
             window(of: browser)?.performClose(nil)
@@ -255,7 +317,7 @@ extension Windows {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
             return ["quitting": true]
         case "saved":
-            return ["saved": saved.map { ["id": $0.id.uuidString, "tabs": $0.tabs.map(\.url), "active": $0.active] as [String: Any] }]
+            return ["saved": saved.map { ["id": $0.id.uuidString, "space": $0.space?.uuidString ?? "", "active": $0.active?.uuidString ?? ""] as [String: Any] }]
         default: break
         }
         return ["windows": list.enumerated().map { i, browser -> [String: Any] in
@@ -264,6 +326,8 @@ extension Windows {
                     "number": window?.windowNumber ?? 0, "key": window?.isKeyWindow ?? false,
                     "visible": window?.isVisible ?? false, "front": browser === current,
                     "mcp": MCP.shared.follows(browser),
+                    "space": Spaces.shared.current(in: browser).uuidString,
+                    "spaceName": Spaces.shared.space(in: browser).name,
                     "tabs": browser.tabs.map { $0.address?.absoluteString ?? "" },
                     "tabIDs": browser.tabs.map { String($0.id.uuidString.prefix(8)).lowercased() },
                     "active": browser.tabs.firstIndex { $0.id == browser.activeID } ?? -1]

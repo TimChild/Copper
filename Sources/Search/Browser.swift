@@ -13,15 +13,27 @@ typealias OmniboxSuggestion = Suggestion
 
 @MainActor
 final class Browser: NSObject, ObservableObject {
-    @Published var tabs: [Tab] = []
+    @Published var tabs: [Tab] = [] {
+        didSet {
+            // `tabs` is a window's projection of its current space. Keep the
+            // canonical row in Spaces in step, then publish that row to every
+            // other window looking at the same space.
+            guard oldValue.map(\.id) != tabs.map(\.id) || oldValue.count != tabs.count else { return }
+            Spaces.shared.tabsChanged(self)
+        }
+    }
     @Published var activeID: Tab.ID? {
         didSet {
             // The tab just left is the tab just looked at. Whether a tab has
             // gone unwatched long enough to sleep is counted from here, not
             // from when it was first picked.
-            guard oldValue != activeID, let old = oldValue else { return }
+            guard oldValue != activeID, let old = oldValue else {
+                Spaces.shared.activeChanged(self)
+                return
+            }
             tabs.first { $0.id == old }?.touch()
             Recent.shared.touched(activeID)
+            Spaces.shared.activeChanged(self)
         }
     }
 
@@ -767,6 +779,9 @@ final class Browser: NSObject, ObservableObject {
     private var hush: DispatchWorkItem?
     private var zoomShown = 100
     private var remembering = false
+    /// The untouched blank tab created only for a reopened/new window. It is
+    /// removed on close without affecting the shared real rows.
+    private var windowBlankID: Tab.ID?
 
     // MARK: - beginning and ending
 
@@ -935,8 +950,10 @@ final class Browser: NSObject, ObservableObject {
     }
 
     private func writeSession(now: Bool = false) {
-        guard primary else { Windows.keep(self, now: now); return } // Fork: windows
+        // Spaces owns the rows for every window; session.json is still the
+        // single canonical tab store. windows.json records view state only.
         Session.write(now: now, Spaces.shared.shape(visible: tabs, active: activeID))
+        if !primary { Windows.keep(self, now: now) }
     }
 
     private func rememberSession() {
@@ -1029,11 +1046,9 @@ final class Browser: NSObject, ObservableObject {
         floater.onClose = { [weak self] in self?.land() }
     }
 
-    /// A window opened with ⌘N (Fork/Windows.swift). The files and the
-    /// settings are the first window's; this one has its own row of tabs,
-    /// its own sleep timer, and listens to what its window is drawn from.
-    /// No spaces, no session file, no bench, no MCP server — those have one
-    /// owner, the first window.
+    /// A window opened with ⌘N shares the canonical Spaces rows. Only its
+    /// current space and active tab are private view state; settings and the
+    /// stores remain borrowed from the main browser.
     private func joinAsWindow() {
         history.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
@@ -1054,32 +1069,35 @@ final class Browser: NSObject, ObservableObject {
         watchVault()
         wireFloater()
 
-        if let id = windowID, let row = Windows.savedTabs(for: id) {
-            for entry in row.tabs {
-                guard let url = URL(string: entry.url) else { continue }
-                let tab = Tab()
-                prepare(tab)
-                tab.restore(url: url, title: entry.title)
-                tab.pin = entry.pin
-                tabs.append(tab)
-            }
-            if !tabs.isEmpty {
-                let active = tabs[min(max(0, row.active), tabs.count - 1)]
-                activeID = active.id
-                _ = active.wake()
-            }
+        let saved = windowID.flatMap { Windows.savedState(for: $0) }
+        let target = Spaces.shared.register(self, at: saved?.space)
+        if let id = windowID, let (legacy, index) = Windows.legacy(id) {
+            Spaces.shared.foldLegacy(legacy, active: index, into: self, space: target)
+            Windows.markMigrated(id, space: target)
         }
-        guard tabs.isEmpty else { return }
-        let tab = Tab()
-        adopt(tab)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak tab] in
-            guard let tab, tab.isBlank else { return }
-            _ = tab.web
+        tabs = Spaces.shared.row(target)
+        // A brand-new window gets its own untouched blank tab on the shared
+        // row. A reopened window instead resumes its saved active tab.
+        if saved == nil || tabs.isEmpty {
+            let tab = Tab()
+            prepare(tab)
+            tabs.append(tab)
+            windowBlankID = tab.id
+            activeID = tab.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak tab] in
+                guard let tab, tab.isBlank else { return }
+                _ = tab.web
+            }
+        } else {
+            let savedActive = saved?.active.flatMap { id in tabs.first { $0.id == id }?.id }
+            activeID = savedActive ?? tabs.first?.id
+            if let active { Spaces.shared.claim(active, for: self); _ = active.wake() }
         }
+        Windows.keep(self, now: true)
     }
 
-    /// A ⌘N window closed with the red button: its pages go, and so does
-    /// everything that was keeping them awake.
+    /// A ⌘N window closed with the red button forgets only its view state.
+    /// Tabs belong to the shared space rows and remain available elsewhere.
     func retire() {
         guard !primary else { return }
         dozing?.invalidate()
@@ -1087,10 +1105,16 @@ final class Browser: NSObject, ObservableObject {
         pressure?.cancel()
         pressure = nil
         if floating != nil { land() }
-        for tab in tabs {
-            Grouper.shared.forget(tab.id)
+        // Arc does not leave an untouched blank tab behind when its only
+        // owner window closes. A real page, a pin, or a shared row survives.
+        if let id = windowBlankID, let tab = tabs.first(where: { $0.id == id }), tab.isBlank {
+            Spaces.shared.dropBlank(tab)
+            tab.close()
+        } else if tabs.count == 1, let tab = tabs.first, tab.isBlank {
+            Spaces.shared.dropBlank(tab)
             tab.close()
         }
+        Spaces.shared.unregister(self)
         tabs = []
         activeID = nil
         bag.removeAll()
@@ -1147,7 +1171,14 @@ final class Browser: NSObject, ObservableObject {
         summoning = false
         launching = false
         suggesting = nil
+        if !tabs.contains(where: { $0.id == tab.id }), let space = Spaces.shared.spaceID(of: tab) {
+            Spaces.shared.select(space, in: self)
+        }
+        guard tabs.contains(where: { $0.id == tab.id }) else { return }
         guard tab.id != activeID else { return }
+        // One WKWebView cannot be mounted in two stages. Selecting it here
+        // hands it over and leaves its previous window on another tab.
+        Spaces.shared.claim(tab, for: self)
         // Fork: if this tab is the one in the side pane, the two panes trade
         // places now rather than after the stage has drawn a frame with the
         // same page in both of them. See Split.arriving.

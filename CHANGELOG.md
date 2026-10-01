@@ -11,6 +11,11 @@ in [ROADMAP.md](ROADMAP.md).
 
 ## Unreleased
 
+<!-- cloud -->
+### Added (Copper Cloud)
+
+- **Copper Cloud: sync through an instance you run.** Settings › Cloud (or ⌘K › Copper Cloud…) walks through three steps — paste the link code a copper-cloud server prints, sign in or create an account, choose what syncs — and nothing leaves the Mac until **Turn on sync**. Five switches, all off to start: spaces and their pinned/Saved tabs, the look-and-behaviour settings (an allowlist: never passwords, paths, keys or agent setup), bookmarks, this Mac's open tabs (shown under *On your other devices*, opened only by a click) and history (append-only). Changes push two seconds after they settle; another Mac's writes arrive over a server-sent event stream; when two Macs change the same thing, a three-way merge keeps both sides' changes and lets the server win a real conflict. A self-signed instance is pinned by its certificate's SHA-256 — nothing else is trusted for it — and the session token lives in `cloud.json` (0600), never the keychain. `./bench cloud …` drives it in a probe world; details in [docs/cloud.md](docs/cloud.md).
+
 ### Added (Copper)
 
 - **Spaces follow you across windows.** Copper's windows now share one live set of spaces and tab rows, while each window keeps its own place and active tab; moving, pinning, grouping or closing a tab is reflected everywhere without mounting one web view twice. Picking a tab that is on another window's stage brings it over, and that window falls back to a tab nobody is showing — or, when there is none, says *is open in another window* with **Show Here** and **New Tab**. ⌘W, a space switch and the archive sweep leave tabs another window is showing alone; the split view belongs to one window at a time; the space slide and the two-finger swipe run in the window they belong to. `windows.json` keeps each window's space and the address of its tab (a tab's id changes every launch), and folds the old per-window rows into their space on first launch.

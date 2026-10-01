@@ -265,6 +265,10 @@ final class Bench {
             }
             report(0)
 
+        case "cloud":
+            // Fork (cloud): link, sign in and sync a probe world (Fork/Cloud/CloudBench.swift).
+            CloudBench.handle(request, in: browser, answer: answer)
+
         case "backdrop":
             // Fork (backdrop): the column's scene — its process and its clock.
             BackdropWeb.bench(answer: answer)

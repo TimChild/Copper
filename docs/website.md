@@ -9,49 +9,41 @@ changes on `fork`.
 | Piece | Setting |
 |---|---|
 | Source of truth | `site/` on branch `fork` |
-| Pages source | **Deploy from a branch** → `gh-pages`, folder `/` (legacy build type) |
-| `gh-pages` | Generated. It is `git subtree split --prefix site` of `fork`, so it holds only the site's files and history. Never commit to it by hand. |
+| Pages source | **GitHub Actions** (`build_type: workflow`) — no `gh-pages` branch; each deploy is an artifact |
 | HTTPS | Enforced |
 | Jekyll | Off (`site/.nojekyll`) — files are served exactly as committed |
 
-Check the live configuration and last build:
+Check the live configuration and the last deploy:
 
 ```sh
-gh api repos/copper-browser/Copper/pages --jq '{status, html_url, build_type, source}'
-gh api repos/copper-browser/Copper/pages/builds/latest --jq '{status, commit, created_at, error: .error.message}'
+gh api repos/copper-browser/Copper/pages --jq '{status, html_url, build_type}'
+gh run list -R copper-browser/Copper --workflow site.yml --limit 3
 ```
-
-`pages/builds/latest.commit` should equal `git rev-parse origin/gh-pages`, and that should equal
-`git subtree split -q --prefix site origin/fork`.
 
 ## How it deploys (CI/CD)
 
 [`.github/workflows/site.yml`](../.github/workflows/site.yml):
 
-1. Runs on every push to `fork` that touches `site/**` (or the workflow itself), and on demand
+1. Runs on every push to `fork` that touches `site/**` (or the workflow itself), on pull
+   requests that touch them (build only, no deploy), and on demand
    (`gh workflow run site.yml -R copper-browser/Copper`).
-2. Checks out with full history, runs `git subtree split -q --prefix site HEAD`, and
-   force-pushes the result to `gh-pages` with the workflow's own `GITHUB_TOKEN`
-   (`permissions: contents: write` — no secrets, no deploy keys).
-3. GitHub's built-in `pages-build-deployment` job then publishes `gh-pages`. The new page is
-   live about a minute after the push.
+2. **build:** checks that every `assets/…` file `index.html` references exists, then
+   `actions/upload-pages-artifact` packs `site/`.
+3. **deploy** (pushes to `fork` only): `actions/configure-pages` + `actions/deploy-pages` publish
+   the artifact to the `github-pages` environment. The new page is live within a minute.
 
-The split is deterministic, so re-running on an unchanged `site/` pushes the same commit and
-changes nothing. `concurrency: site-pages` with `cancel-in-progress` means only the newest push
-deploys.
+`concurrency` keeps one Pages deploy at a time; PR builds cancel superseded runs.
 
-**Rollback:** revert the offending commit on `fork` (the workflow republishes the previous
-content), or in an emergency push an older split straight to Pages:
-`git push --force origin "$(git subtree split -q --prefix site <good-commit>):refs/heads/gh-pages"`.
+**Rollback:** revert the offending commit on `fork` (the workflow redeploys the previous
+content), or re-run an earlier successful `site` run from the Actions tab
+(`gh run rerun <run-id> -R copper-browser/Copper`).
 
-**If a deploy looks stuck:** `gh run list -R copper-browser/Copper --workflow site.yml` for our
-job, then `gh run list -R copper-browser/Copper --workflow pages-build-deployment` for GitHub's.
-Pages builds of `gh-pages` are triggered even though the push came from `GITHUB_TOKEN`.
+**If a deploy looks stuck:** `gh run view <run-id> -R copper-browser/Copper --log-failed`; a
+missing asset fails the build step with the file name.
 
-**Setting it up from scratch** (e.g. a new repo): push a `gh-pages` branch once
-(`git push origin "$(git subtree split -q --prefix site HEAD):refs/heads/gh-pages"`), enable
-Pages on it (`gh api -X POST repos/<owner>/<repo>/pages -f 'source[branch]=gh-pages' -f 'source[path]=/'`),
-and add `site.yml`.
+**Setting it up from scratch** (e.g. a new repo): set Pages to GitHub Actions
+(`gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow`, or `-X PUT` if Pages already
+exists) and add `site.yml`.
 
 ## Editing the page
 

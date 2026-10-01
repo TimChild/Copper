@@ -162,7 +162,7 @@ Copper refuses to replace a non-empty session with an empty shape while launch-t
 
 ### Website
 
-The landing page at <https://copper-browser.github.io/Copper/> is `site/` (static, no build step). Any push to `fork` that touches `site/` republishes it through `.github/workflows/site.yml` → the `gh-pages` branch → GitHub Pages. The screenshots and loops are real captures made with `site-capture/`. Hosting, CI/CD, editing rules and the capture recipe: [docs/website.md](docs/website.md).
+The landing page at <https://copper-browser.github.io/Copper/> is `site/` (static, no build step). Any push to `fork` that touches `site/` republishes it through `.github/workflows/site.yml` (GitHub Pages via Actions). The screenshots and loops are real captures made with `site-capture/`. Hosting, CI/CD, editing rules and the capture recipe: [docs/website.md](docs/website.md).
 
 ### Contributing
 

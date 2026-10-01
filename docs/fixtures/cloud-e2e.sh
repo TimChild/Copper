@@ -8,6 +8,7 @@
 # own SEARCH_PROBE world (clouda/cloudb), headless, on its own MCP port.
 set -euo pipefail
 LINK=${1:?link code}
+LINK_B=${LINK_B:-$LINK}   # directory-mode instances: a second access key for world B
 APP=${2:-"$(cd "$(dirname "$0")/../.." && pwd)/build/Copper.app"}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 STAMP=$(date +%s)
@@ -48,7 +49,7 @@ sleep 2
 set +e
 echo "== link + accounts"
 B clouda cloud link "$LINK" | json '"linked" if d.get("linked") else d'
-B cloudb cloud link "$LINK" | json '"linked" if d.get("linked") else d'
+B cloudb cloud link "$LINK_B" | json '"linked" if d.get("linked") else d'
 check "A signs up" 'B clouda cloud signup "$A_EMAIL" "$PW" "Alice" | json "d.get(\"signedIn\")" | grep -q True' 'B clouda cloud status'
 check "B signs up" 'B cloudb cloud signup "$B_EMAIL" "$PW" "Bob" | json "d.get(\"signedIn\")" | grep -q True' 'B cloudb cloud status'
 check "wrong password refused" '{ B cloudb cloud signin "$B_EMAIL" wrong-password-here 2>&1 || true; } | grep -qi "wrong email or password"' 'true'

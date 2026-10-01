@@ -19,7 +19,6 @@ import {
   useSyncExternalStore,
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
@@ -242,8 +241,11 @@ export function EaselPage({
     )
   }, [])
 
-  // Window-level keys: zoom shortcuts always (WebKit would page-zoom
-  // otherwise), Space-to-pan while the board or nothing has focus.
+  // Every key is handled at the window, not the viewport: focus is on
+  // `body` after a title or label blurs, and the shortcuts must still work.
+  // Zoom shortcuts always (WebKit would page-zoom otherwise), Space-to-pan
+  // and the board keys unless a text field has focus.
+  const boardKeys = useRef<(e: KeyboardEvent) => void>(() => {})
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey) {
@@ -267,10 +269,12 @@ export function EaselPage({
           return
         }
       }
-      if (e.code === 'Space' && !isTextField(e.target) && !e.repeat) {
+      if (e.code === 'Space' && !isTextField(e.target)) {
         e.preventDefault()
-        setSpaceDown(true)
+        if (!e.repeat) setSpaceDown(true)
+        return
       }
+      boardKeys.current(e)
     }
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') setSpaceDown(false)
@@ -641,9 +645,12 @@ export function EaselPage({
     doc.moveShapes(moves)
   }
 
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+  const onKeyDown = (e: KeyboardEvent) => {
     if (isTextField(e.target)) {
-      if (e.key === 'Escape') {
+      // Escape leaves any field; Enter finishes a one-line one (frame
+      // title, arrow label, easel title). Stickies keep Enter for new lines.
+      const oneLine = e.target instanceof HTMLInputElement
+      if (e.key === 'Escape' || (e.key === 'Enter' && oneLine)) {
         ;(e.target as HTMLElement).blur()
         viewport.current?.focus({ preventScroll: true })
       }
@@ -688,6 +695,7 @@ export function EaselPage({
     const next = TOOLS.find(t => t.key === key)
     if (next) changeTool(next.tool)
   }
+  boardKeys.current = onKeyDown
 
   /** The frame an element sits in, e.g. the title field someone pastes into. */
   const frameOf = (el: EventTarget | null) => {
@@ -861,7 +869,6 @@ export function EaselPage({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
-      onKeyDown={onKeyDown}
       onPaste={onPaste}
       onDragOver={onDragOver}
       onDrop={onDrop}

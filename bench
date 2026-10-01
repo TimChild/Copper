@@ -178,6 +178,9 @@
                                        what ⌘T's card offers for TEXT, by group, after S seconds (0.8) for
                                        Google's completions and history; --go takes the picked row (or row N);
                                        --keep leaves the card up for `window`
+    ./bench newtab TEXT --type [--every S] [--settle S]
+                                       ⌘T, then TEXT a letter every S seconds (0.08): main-thread busy time,
+                                       the longest stretch without a frame, and when the word's history landed
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, folded on|off, peek on|off,
                                        tabswitch row|recent, page general|tabs (which Settings page), focus none (the keyboard to the window itself), width N (the sidebar),
@@ -274,7 +277,7 @@ def main(argv):
     elif verb == "summon":
         request["text"] = args[0] if args else ""
     elif verb == "newtab":
-        flags = {"--go", "--keep", "--json"}
+        flags = {"--go", "--keep", "--json", "--type"}
         rest, i = [], 0
         while i < len(args):
             if args[i] == "--pick" and i + 1 < len(args):
@@ -283,6 +286,8 @@ def main(argv):
                 request["how"] = args[i + 1]; i += 2
             elif args[i] == "--settle" and i + 1 < len(args):
                 request["settle"] = float(args[i + 1]); i += 2
+            elif args[i] == "--every" and i + 1 < len(args):
+                request["every"] = float(args[i + 1]); i += 2
             elif args[i] in flags:
                 request[args[i][2:]] = True; i += 1
             else:
@@ -475,6 +480,18 @@ def main(argv):
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True))
     elif verb == "cloud":
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True, indent=2))
+    elif verb == "newtab" and request.get("type"):
+        if request.get("json"):
+            print(json.dumps(answer, ensure_ascii=False, indent=2))
+            return 0
+        keys = answer.get("keyMs", [])
+        print(f"typed “{answer.get('typed')}”, a letter every {answer.get('every', 0) * 1000:.0f} ms → {answer.get('rows')} rows")
+        print(f"open:    {answer.get('openMs', 0):.1f} ms to launch, {answer.get('openBusyMs', 0):.1f} ms busy, longest {answer.get('openLongestMs', 0):.1f} ms")
+        print(f"keys:    {', '.join(f'{k:.1f}' for k in keys)} ms (worst {answer.get('keyMaxMs', 0):.1f})")
+        print(f"main:    {answer.get('busyMs', 0):.1f} ms busy, longest {answer.get('longestMs', 0):.1f} ms, "
+              f"{answer.get('over16')} stretches over a frame, {answer.get('over50')} over 50 ms")
+        landed = answer.get("historyMs", -1)
+        print(f"history: {'%.0f ms after the last letter' % landed if landed >= 0 else 'not in before --settle ran out'}")
     elif verb == "newtab":
         if request.get("json"):
             print(json.dumps(answer, ensure_ascii=False, indent=2))

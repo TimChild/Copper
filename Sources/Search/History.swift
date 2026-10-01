@@ -54,11 +54,13 @@ private struct Visit: Codable {
 @MainActor
 final class History: ObservableObject {
     private var visits: [String: Visit] = [:] {
-        didSet { objectWillChange.send(); flat = nil } // Fork (new-tab-launcher): see `places`
+        didSet { objectWillChange.send(); generation &+= 1 } // Fork (new-tab-launcher): see `snapshot`, `recent`
     }
-    /// Fork (new-tab-launcher): `places`, built once per change to history
-    /// rather than once per keystroke.
-    private var flat: [Place]?
+    /// Fork (new-tab-launcher): bumped on every change to `visits`, so what
+    /// was worked out from history knows when it has gone stale.
+    private var generation = 0
+    /// Fork (new-tab-launcher): `recent`'s answer, and the history it was for.
+    private var lately: (generation: Int, limit: Int, traces: [Trace])?
     private var saving = false
 
     init() { load() }
@@ -181,6 +183,26 @@ final class History: ObservableObject {
             }
     }
 
+    /// Fork (new-tab-launcher): the newest `limit` lines of `everything()`,
+    /// for the History menu. SwiftUI reads the menu again whenever anything
+    /// in the browser changes — every letter typed into ⌘T among them — and
+    /// sorting the whole of a 20,000-place history for eight lines held the
+    /// main thread for a tenth of a second each time. One pass keeps the
+    /// eight, and the answer stands until history changes.
+    func recent(_ limit: Int) -> [Trace] {
+        if let lately, lately.generation == generation, lately.limit == limit { return lately.traces }
+        var kept: [Trace] = []
+        for visit in visits.values where !(visit.title.isEmpty && !visit.key.contains("/")) {
+            if kept.count == limit, let oldest = kept.last, visit.last <= oldest.last { continue }
+            guard let url = URL(string: visit.url) else { continue }
+            let trace = Trace(key: visit.key, title: visit.title, url: url, last: visit.last, count: visit.count)
+            kept.insert(trace, at: kept.firstIndex { $0.last < trace.last } ?? kept.endIndex)
+            if kept.count > limit { kept.removeLast() }
+        }
+        lately = (generation, limit, kept)
+        return kept
+    }
+
     func forget(_ key: String) {
         visits[key] = nil
         save()
@@ -201,16 +223,25 @@ final class History: ObservableObject {
         let last: Date
     }
 
-    /// Fork (new-tab-launcher): every place, flat. Rebuilt lazily after
-    /// history changes — which is a page visit, never a keystroke.
-    var places: [Place] {
-        if let flat { return flat }
-        let built = visits.values.map {
-            Place(key: $0.key, title: $0.title, lowered: $0.title.lowercased(), url: $0.url, count: $0.count, last: $0.last)
+    /// Fork (new-tab-launcher): history as it stands, for ⌘T to flatten and
+    /// rank on its own queue. Taking one costs nothing — the dictionary is
+    /// shared, and copied only if history changes while it is being read —
+    /// so no keystroke waits for twenty thousand places to be listed.
+    struct Snapshot: Sendable {
+        fileprivate let visits: [String: Visit]
+        /// Which history this is: the same number, the same places.
+        let generation: Int
+
+        /// Every place, flat, each title lowercased once here rather than
+        /// once per keystroke.
+        func places() -> [Place] {
+            visits.values.map {
+                Place(key: $0.key, title: $0.title, lowered: $0.title.lowercased(), url: $0.url, count: $0.count, last: $0.last)
+            }
         }
-        flat = built
-        return built
     }
+
+    var snapshot: Snapshot { Snapshot(visits: visits, generation: generation) }
 
     /// Best matches first. A place you have been always beats a place the app
     /// merely knows the name of, and among places you have been, one you go to

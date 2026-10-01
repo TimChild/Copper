@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import os
 
 // ⌘T, the way Arc has it.
 //
@@ -88,6 +89,8 @@ final class Launcher: ObservableObject {
         lastCompletions = []
         visited = ("", [])
         headings = [:]
+        shelved = nil
+        standing = nil
     }
 
     /// The rows for what is in the field, now — from what is at hand — with
@@ -114,9 +117,15 @@ final class Launcher: ObservableObject {
 
         let top = Launcher.top(query, in: browser)
         let needle = query.lowercased()
+        // Readied once for the tabs, the bookmarks and history's stand-ins.
+        let probe = Needle(needle)
         // Open tabs are claimed first: "github.com" typed with GitHub open
         // should still offer the switch, not only a second copy.
-        let open = tabs(matching: needle, in: browser).filter(keep).prefix(Cap.tabs).map { $0 }
+        // Every match is claimed, the rows are built for the few shown.
+        var open: [Suggestion] = []
+        for match in tabs(matching: probe, in: browser) where seen.insert(match.canonical).inserted {
+            if open.count < Cap.tabs, let row = Launcher.row(for: match.tab, current: match.current, browser: browser) { open.append(row) }
+        }
         _ = keep(top)
 
         // Google's completions — the ones for this query if they are in, the
@@ -140,7 +149,7 @@ final class Launcher: ObservableObject {
         // History, ranked away from the keystroke. Until this query's ranking
         // is in, the last one's rows that still match stand in for it.
         let hits = visited.query == needle ? visited.rows
-            : visited.rows.filter { Launcher.score(key: $0.key, lowered: $0.title.lowercased(), needle: needle) != nil }
+            : visited.rows.filter { probe?.score(key: $0.key, title: $0.title.lowercased()) != nil }
         // A site's untitled front door is the credit its deeper pages give
         // it; beside one of those pages it is the same answer said twice.
         let titledHosts = Set(hits.filter { !$0.title.isEmpty }.compactMap { URL(string: $0.url)?.host() })
@@ -158,9 +167,9 @@ final class Launcher: ObservableObject {
         groups.append(("History", been))
 
         var marks: [Suggestion] = []
-        for (title, url) in Launcher.bookmarks(browser.bookmarks.roots) {
-            let lowered = title.lowercased()
-            guard Launcher.score(key: Launcher.strip(Address.pretty(url)), lowered: lowered, needle: needle) != nil else { continue }
+        for mark in shelf(browser) {
+            guard probe?.score(key: mark.address, title: mark.lowered) != nil else { continue }
+            let (title, url) = (mark.title, mark.url)
             var row = Suggestion(key: title.isEmpty ? Address.pretty(url) : title, title: Address.pretty(url), url: url, kind: .bookmark)
             row.detail = Launcher.host(url, besides: row.key)
             row.hint = pageHint(browser)
@@ -265,21 +274,48 @@ final class Launcher: ObservableObject {
 
     // MARK: - open tabs
 
-    private func tabs(matching needle: String, in browser: Browser) -> [Suggestion] {
-        var scored: [(row: Suggestion, rank: Double, touched: Date)] = []
-        func consider(_ tab: Tab, current: Bool) {
-            guard tab.id != browser.activeID, !tab.isBlank, let url = tab.address,
-                  let match = Launcher.score(key: Launcher.strip(Address.pretty(url)), lowered: tab.label.lowercased(), needle: needle),
-                  let row = Launcher.row(for: tab, current: current, browser: browser) else { return }
-            // This space's tabs above every other space's: the one you can
-            // switch to without the column changing under you comes first.
-            scored.append((row, match + (current ? 1_000 : 0), tab.touched))
+    /// An open tab as it is matched, read once when the card opens. Reading
+    /// a tab's published properties goes through Combine and is slow enough
+    /// that two hundred tabs read afresh on every keystroke — and again on
+    /// every answer that landed — were most of what a letter cost.
+    private struct Open {
+        let tab: Tab
+        let current: Bool
+        let address: String
+        let title: String
+        let canonical: String
+        let touched: Date
+    }
+
+    private var standing: [Open]?
+
+    private func openTabs(_ browser: Browser) -> [Open] {
+        if let standing { return standing }
+        var list: [Open] = []
+        func add(_ tab: Tab, current: Bool) {
+            guard tab.id != browser.activeID, !tab.isBlank, let url = tab.address else { return }
+            list.append(Open(tab: tab, current: current, address: Launcher.strip(Address.pretty(url)),
+                             title: tab.label.lowercased(), canonical: Launcher.canonical(url), touched: tab.touched))
         }
-        browser.tabs.forEach { consider($0, current: true) }
-        Spaces.shared.parkedTabs.forEach { consider($0, current: false) }
+        browser.tabs.forEach { add($0, current: true) }
+        Spaces.shared.parkedTabs.forEach { add($0, current: false) }
+        standing = list
+        return list
+    }
+
+    /// The open tabs that match, best first. This space's tabs above every
+    /// other space's: the one you can switch to without the column changing
+    /// under you comes first.
+    private func tabs(matching needle: Needle?, in browser: Browser) -> [Open] {
+        guard let needle else { return [] }
+        var scored: [(open: Open, rank: Double)] = []
+        for open in openTabs(browser) {
+            guard let match = needle.score(key: open.address, title: open.title) else { continue }
+            scored.append((open, match + (open.current ? 1_000 : 0)))
+        }
         return scored
-            .sorted { $0.rank == $1.rank ? $0.touched > $1.touched : $0.rank > $1.rank }
-            .map(\.row)
+            .sorted { $0.rank == $1.rank ? $0.open.touched > $1.open.touched : $0.rank > $1.rank }
+            .map(\.open)
     }
 
     private static func row(for tab: Tab, current: Bool, browser: Browser) -> Suggestion? {
@@ -303,15 +339,21 @@ final class Launcher: ObservableObject {
         let url: String
     }
 
+    private let ranker = Ranker()
+
     private func rank(_ query: String, in browser: Browser) {
         let needle = query.lowercased()
         guard visited.query != needle else { return }
-        // The whole of history as plain values, handed over by reference: the
-        // array is copied only if history changes while it is being read.
-        let places = browser.history.places
+        // History as it stands, handed over by reference: flattening it and
+        // ranking it both happen on the queue, so however long the history,
+        // a keystroke costs the main thread nothing here.
+        let history = browser.history.snapshot
         let now = Date()
-        ranking.async { [weak self] in
-            let rows = Launcher.rank(places, needle: needle, now: now, limit: 8)
+        // Each keystroke calls off the ranking before it. A word typed at
+        // speed is ranked for the word, not once per letter in a line.
+        let ask = ranker.ask()
+        ranking.async { [weak self, ranker] in
+            guard let rows = ranker.rank(history, needle: needle, now: now, limit: 8, ask: ask) else { return }
             DispatchQueue.main.async {
                 guard let self else { return }
                 // A ranking for an older question is no use to this one.
@@ -322,48 +364,144 @@ final class Launcher: ObservableObject {
         }
     }
 
-    /// Where the words match first, then how often and how lately you went.
-    /// A month-old habit counts for about a third of a fresh one, as it does
-    /// for the address field's own completion.
-    nonisolated static func rank(_ places: [History.Place], needle: String, now: Date, limit: Int) -> [Hit] {
-        var scored: [(Hit, Double)] = []
-        scored.reserveCapacity(64)
-        for place in places {
-            // A bare domain with no title is a credit every deeper visit gives
-            // its front door; it is still a good answer to its own name.
-            guard let match = score(key: place.key, lowered: place.lowered, needle: needle) else { continue }
-            let days = max(0, now.timeIntervalSince(place.last) / 86_400)
-            let frecency = Double(place.count) * exp(-days / 30)
-            let door = place.key.contains("/") ? 0.0 : 4.0
-            scored.append((Hit(key: place.key, title: place.title, url: place.url), match + door + 12 * log1p(frecency)))
+    /// The ranking queue's own state: history flattened once per change to
+    /// it rather than once per keystroke, and the places the last question
+    /// matched — typing on only ever narrows them, so "gith" looks through
+    /// what "git" found rather than through all of history again.
+    private final class Ranker: @unchecked Sendable {
+        /// The newest ask. Bumped on the main thread, read on the queue.
+        private let latest = OSAllocatedUnfairLock(initialState: 0)
+        // The rest is only ever touched on the ranking queue.
+        private var generation = -1
+        private var places: [History.Place] = []
+        private var last: (needle: Needle, matched: [Int])?
+
+        func ask() -> Int { latest.withLock { $0 += 1; return $0 } }
+
+        private func stale(_ ask: Int) -> Bool { latest.withLock { $0 } != ask }
+
+        /// Where the words match first, then how often and how lately you
+        /// went. A month-old habit counts for about a third of a fresh one,
+        /// as it does for the address field's own completion. Nil when a
+        /// later keystroke has already made the question moot.
+        func rank(_ history: History.Snapshot, needle text: String, now: Date, limit: Int, ask: Int) -> [Hit]? {
+            guard !stale(ask) else { return nil }
+            if history.generation != generation {
+                places = history.places()
+                generation = history.generation
+                last = nil
+            }
+            guard let needle = Needle(text) else { return [] }
+            let candidates = last.flatMap { needle.narrows($0.needle) ? $0.matched : nil } ?? Array(places.indices)
+            var matched: [Int] = []
+            var scored: [(index: Int, score: Double)] = []
+            for (step, index) in candidates.enumerated() {
+                if step & 4095 == 4095, stale(ask) { return nil }
+                let place = places[index]
+                guard let match = needle.score(key: place.key, title: place.lowered) else { continue }
+                matched.append(index)
+                let days = max(0, now.timeIntervalSince(place.last) / 86_400)
+                let frecency = Double(place.count) * exp(-days / 30)
+                // A bare domain with no title is a credit every deeper visit
+                // gives its front door; it is still a good answer to its own name.
+                let door = place.key.utf8.contains(Needle.slash) ? 0.0 : 4.0
+                scored.append((index, match + door + 12 * log1p(frecency)))
+            }
+            last = (needle, matched)
+            return scored
+                .sorted { $0.score == $1.score ? places[$0.index].key.count < places[$1.index].key.count : $0.score > $1.score }
+                .prefix(limit)
+                .map { Hit(key: places[$0.index].key, title: places[$0.index].title, url: places[$0.index].url) }
         }
-        return scored
-            .sorted { $0.1 == $1.1 ? $0.0.key.count < $1.0.key.count : $0.1 > $1.1 }
-            .prefix(limit)
-            .map(\.0)
     }
 
-    /// How well `needle` fits a place: its address from the start, one of
-    /// its host's labels, a word of its title, and — past two letters —
-    /// anywhere in its host or title. Several words must each be found.
-    nonisolated static func score(key: String, lowered title: String, needle: String) -> Double? {
-        let needle = strip(needle)
-        guard !needle.isEmpty else { return nil }
-        if needle.contains(" ") {
-            let words = needle.split(separator: " ")
-            let haystack = title + " " + key
-            guard words.allSatisfy({ haystack.contains($0) }) else { return nil }
-            return title.hasPrefix(String(words[0])) ? 70 : 55
+    /// What was typed, made ready once for matching against thousands of
+    /// places: stripped the way addresses are, and held as UTF-8, so a match
+    /// is a run of byte comparisons rather than a string search that
+    /// allocates. Both sides are lowercased already; the one difference from
+    /// matching letter by letter is that an accent spelled as a separate
+    /// mark ("i" + "◌́") now also answers to the bare letter.
+    struct Needle: Sendable {
+        static let slash = UInt8(ascii: "/")
+        private static let dot = UInt8(ascii: ".")
+        private static let space = UInt8(ascii: " ")
+
+        private let bytes: [UInt8]
+        private let words: [[UInt8]]
+        /// In letters, not bytes: the two- and three-letter thresholds below
+        /// count what was typed.
+        private let length: Int
+        private let spaced: Bool
+        private let dotted: Bool
+
+        init?(_ typed: String) {
+            let text = Launcher.strip(typed)
+            guard !text.isEmpty else { return nil }
+            bytes = Array(text.utf8)
+            words = text.split(separator: " ").map { Array($0.utf8) }
+            length = text.count
+            spaced = text.contains(" ")
+            dotted = text.contains(".")
         }
-        if key.hasPrefix(needle) { return 100 }
-        let host = key.split(separator: "/").first.map(String.init) ?? key
-        if host.split(separator: ".").contains(where: { $0.hasPrefix(needle) }) { return 85 }
-        if title.hasPrefix(needle) || title.contains(" " + needle) { return 75 }
-        guard needle.count >= 2 else { return nil }
-        if host.contains(needle) { return 60 }
-        if title.contains(needle) { return 50 }
-        if needle.count >= 3, key.contains(needle) { return 35 }
-        return nil
+
+        /// This is `shorter` typed further, so whatever this matches, it
+        /// matched too. Not under three letters: below that a match in the
+        /// middle of a word is not allowed yet, and a longer needle can find
+        /// places the shorter one could not.
+        func narrows(_ shorter: Needle) -> Bool {
+            shorter.length >= 3 && bytes.starts(with: shorter.bytes)
+        }
+
+        /// How well this fits a place: its address from the start, one of
+        /// its host's labels, a word of its title, and — past two letters —
+        /// anywhere in its host or title. Several words must each be found.
+        func score(key: String, title: String) -> Double? {
+            var key = key, title = title
+            return key.withUTF8 { key in title.withUTF8 { title in score(key, title) } }
+        }
+
+        private func score(_ key: UnsafeBufferPointer<UInt8>, _ title: UnsafeBufferPointer<UInt8>) -> Double? {
+            if spaced {
+                for word in words where Needle.find(word, in: title) == nil && Needle.find(word, in: key) == nil { return nil }
+                return Needle.starts(title, with: words[0]) ? 70 : 55
+            }
+            if Needle.starts(key, with: bytes) { return 100 }
+            let host = key.firstIndex(of: Needle.slash) ?? key.count
+            // A label of the host: "linear" finds linear.app, "exo" finds
+            // cloud-ems.dev.exowatt.com. A label holds no dot, so a needle
+            // with one never starts a label.
+            if !dotted {
+                for start in 0..<host where (start == 0 || key[start - 1] == Needle.dot) && key[start] != Needle.dot {
+                    if Needle.starts(key, with: bytes, at: start, before: host) { return 85 }
+                }
+            }
+            if Needle.starts(title, with: bytes) { return 75 }
+            var from = 0
+            while let at = Needle.find(bytes, in: title, from: from) {
+                if at > 0, title[at - 1] == Needle.space { return 75 }
+                from = at + 1
+            }
+            guard length >= 2 else { return nil }
+            if Needle.find(bytes, in: key, before: host) != nil { return 60 }
+            if Needle.find(bytes, in: title) != nil { return 50 }
+            if length >= 3, Needle.find(bytes, in: key) != nil { return 35 }
+            return nil
+        }
+
+        private static func starts(_ hay: UnsafeBufferPointer<UInt8>, with needle: [UInt8], at start: Int = 0, before end: Int? = nil) -> Bool {
+            guard (end ?? hay.count) - start >= needle.count else { return false }
+            for offset in needle.indices where hay[start + offset] != needle[offset] { return false }
+            return true
+        }
+
+        private static func find(_ needle: [UInt8], in hay: UnsafeBufferPointer<UInt8>, from start: Int = 0, before end: Int? = nil) -> Int? {
+            let end = end ?? hay.count
+            guard let first = needle.first, end - start >= needle.count else { return nil }
+            for at in start...(end - needle.count) where hay[at] == first {
+                if starts(hay, with: needle, at: at, before: end) { return at }
+            }
+            return nil
+        }
     }
 
     // MARK: - Google's completions
@@ -561,6 +699,20 @@ final class Launcher: ObservableObject {
         return host.caseInsensitiveCompare(name) == .orderedSame ? "" : host
     }
 
+    /// Every bookmark, flat, with the address and title it is matched by.
+    /// Worked out once a card, not on every keystroke and every answer that
+    /// lands: bookmarks do not change while the card is up.
+    private var shelved: [(title: String, lowered: String, url: URL, address: String)]?
+
+    private func shelf(_ browser: Browser) -> [(title: String, lowered: String, url: URL, address: String)] {
+        if let shelved { return shelved }
+        let flat = Launcher.bookmarks(browser.bookmarks.roots).map { title, url in
+            (title: title, lowered: title.lowercased(), url: url, address: Launcher.strip(Address.pretty(url)))
+        }
+        shelved = flat
+        return flat
+    }
+
     private static func bookmarks(_ nodes: [Bookmark]) -> [(String, URL)] {
         nodes.flatMap { node -> [(String, URL)] in
             if let children = node.children { return bookmarks(children) }
@@ -576,6 +728,7 @@ final class Launcher: ObservableObject {
     /// the first row (or the row `pick` names) the way `how` says; `keep`
     /// leaves the card up for a picture.
     func bench(_ request: [String: Any], in browser: Browser, answer: @escaping ([String: Any]) -> Void) {
+        if request["type"] as? Bool == true { return typing(request, in: browser, answer: answer) }
         let started = DispatchTime.now().uptimeNanoseconds
         browser.launch()
         browser.typed = request["text"] as? String ?? ""
@@ -612,6 +765,93 @@ final class Launcher: ObservableObject {
             out["active"] = browser.active.map { ["title": $0.label, "url": $0.address?.absoluteString ?? ""] } ?? [:]
             out["space"] = Spaces.shared.space.name
             answer(out)
+        }
+    }
+
+    /// `bench newtab TEXT --type`: ⌘T, then TEXT a letter at a time, `every`
+    /// seconds apart, the way a person types it. What it reports is what
+    /// "slow" means here: how long the main thread was too busy to draw —
+    /// in all, and at worst in one go — and how long after the last letter
+    /// the history rows for the whole word were on the card.
+    private func typing(_ request: [String: Any], in browser: Browser, answer: @escaping ([String: Any]) -> Void) {
+        let text = request["text"] as? String ?? ""
+        let every = request["every"] as? Double ?? 0.08
+        let settle = request["settle"] as? Double ?? 3
+        let meter = Meter()
+        meter.start()
+        let opening = Launcher.clock { browser.launch() }
+        var keys: [Double] = []
+        var lastKey: UInt64 = 0
+        var landed: UInt64?
+        var opened: [Double] = []
+
+        func type(_ count: Int) {
+            if count == 1 { opened = meter.take() }
+            keys.append(Launcher.clock { browser.typed = String(text.prefix(count)) })
+            lastKey = DispatchTime.now().uptimeNanoseconds
+            if count >= text.count { return wait(lastKey + UInt64(settle * 1e9)) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + every) { type(count + 1) }
+        }
+        // Until this word's history is on the card and another letter's
+        // worth of time has passed, or `settle` runs out.
+        func wait(_ deadline: UInt64) {
+            let needle = text.trimmingCharacters(in: .whitespaces).lowercased()
+            let now = DispatchTime.now().uptimeNanoseconds
+            if landed == nil, visited.query == needle { landed = now }
+            guard landed == nil || now < lastKey + UInt64(every * 1e9), now < deadline else {
+                let history = landed.map { Double($0 - lastKey) / 1e6 } ?? -1
+                let stretches = meter.take()
+                meter.stop()
+                let rows = browser.offers.count
+                browser.dismiss()
+                answer(["typed": text, "every": every, "rows": rows,
+                        "openMs": opening, "openBusyMs": opened.reduce(0, +), "openLongestMs": opened.max() ?? 0,
+                        "keyMs": keys, "keyMaxMs": keys.max() ?? 0,
+                        "busyMs": stretches.reduce(0, +), "longestMs": stretches.max() ?? 0,
+                        "over16": stretches.filter { $0 > 16.7 }.count, "over50": stretches.filter { $0 > 50 }.count,
+                        "historyMs": history, "suggestAsks": sent, "suggestCancelled": dropped])
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.002) { wait(deadline) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { type(1) }
+    }
+
+    private static func clock(_ body: () -> Void) -> Double {
+        let started = DispatchTime.now().uptimeNanoseconds
+        body()
+        return Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
+    }
+
+    /// How long each turn of the main run loop kept it from sleeping — from
+    /// waking for an event to waiting for the next. A turn longer than a
+    /// frame is a frame the card did not draw.
+    private final class Meter {
+        private var observer: CFRunLoopObserver?
+        private var woke: UInt64 = 0
+        private var stretches: [Double] = []
+
+        func start() {
+            let activities = CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue
+            observer = CFRunLoopObserverCreateWithHandler(nil, activities, true, 0) { [weak self] _, activity in
+                guard let self else { return }
+                let now = DispatchTime.now().uptimeNanoseconds
+                if activity == .afterWaiting { self.woke = now; return }
+                if self.woke > 0 { self.stretches.append(Double(now - self.woke) / 1e6) }
+                self.woke = 0
+            }
+            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        }
+
+        /// The stretches so far, and a clean slate.
+        func take() -> [Double] {
+            defer { stretches = [] }
+            return stretches
+        }
+
+        func stop() {
+            if let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+            observer = nil
         }
     }
 }

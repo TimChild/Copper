@@ -9,10 +9,18 @@ struct Omnibox: View {
     @ObservedObject var browser: Browser
     /// Raised over a page by ⌘L, rather than standing on an empty tab.
     let over: Bool
+    /// Fork (new-tab-launcher): what is typed and offered; see `Browser.Field`.
+    @ObservedObject private var state: Browser.Field
 
     @State private var shake: CGFloat = 0
     @State private var refused = false
     @State private var breathing = false
+
+    init(browser: Browser, over: Bool) {
+        self.browser = browser
+        self.over = over
+        _state = ObservedObject(wrappedValue: browser.field)
+    }
 
     @ViewBuilder
     var body: some View {
@@ -195,6 +203,16 @@ struct AddressField: NSViewRepresentable {
     var literal = false
     var size: CGFloat = 15.5
     var placeholder = "Enter a web address"
+    /// Fork (new-tab-launcher): what is typed and offered; see `Browser.Field`.
+    @ObservedObject private var state: Browser.Field
+
+    init(browser: Browser, literal: Bool = false, size: CGFloat = 15.5, placeholder: String = "Enter a web address") {
+        self.browser = browser
+        self.literal = literal
+        self.size = size
+        self.placeholder = placeholder
+        _state = ObservedObject(wrappedValue: browser.field)
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(browser: browser) }
 

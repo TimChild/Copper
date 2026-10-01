@@ -302,8 +302,10 @@ struct SideBar: View {
                 .padding(.horizontal, SideBar.inset)
                 .padding(.top, 2)
                 .padding(.bottom, 12)
+                // Fork (scroll-bounce): elastic up and down, never sideways.
+                .background(SideScrollElasticity())
             }
-            .scrollBounceBehavior(.basedOnSize)
+            .scrollBounceBehavior(.always, axes: .vertical)
             .frame(maxHeight: .infinity)
             .mask(SideBar.fade)
             // Fork: the rows are only under the pointer inside the scroll —

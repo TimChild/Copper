@@ -68,6 +68,11 @@ final class Preferences: ObservableObject {
     @Published var tabSwitching: TabSwitching {
         didSet { store.set(tabSwitching.rawValue, forKey: "tabs.switching") }
     }
+    /// Fork (swipe-direction): which way two fingers across the column move
+    /// it — with them, against them, or as the Mac scrolls (the default).
+    @Published var swipeDirection: SwipeDirection {
+        didSet { store.set(swipeDirection.rawValue, forKey: "spaces.swipe") }
+    }
     /// Tabs nobody has looked at for half an hour give their page back and
     /// keep where they were. On unless turned off.
     @Published var sleepsTabs: Bool {
@@ -151,6 +156,7 @@ final class Preferences: ObservableObject {
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
         tabSwitching = store.string(forKey: "tabs.switching").flatMap(TabSwitching.init) ?? .row
+        swipeDirection = store.string(forKey: "spaces.swipe").flatMap(SwipeDirection.init) ?? .system
         sleepsTabs = store.object(forKey: "tabs.sleep") as? Bool ?? true
         shielded = store.object(forKey: "shield") as? Bool ?? true
         // Offered by default only in a build that can actually do them —

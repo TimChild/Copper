@@ -35,6 +35,19 @@ final class Drive: ObservableObject {
     @Published private(set) var stopRequested = false
     /// After Stop on an agent's run: tool calls are refused until this instant.
     @Published private(set) var refusingUntil: Date?
+    /// Every agent session with a hand on a tab right now, by `Who.key`
+    /// (Hands.swift). The run above is the one story the pane tells; these
+    /// are what the tab badges and the bar over the page show.
+    @Published var hands: [String: Hand] = [:]
+    /// Ticks once a second while any hand is out, so views that show "for
+    /// 12 s" and badges that lapse redraw without a call to prompt them.
+    @Published var heartbeat = Date()
+    var handTimer: Timer?
+    /// The bench's way to open a tab's hover card without a pointer.
+    @Published var forcedCard: UUID?
+    /// Stop is per session: one agent taken off the wheel must not refuse
+    /// every other agent's calls. Key → refused until.
+    private var refusedKeys: [String: Date] = [:]
 
     /// How long an agent's run stays live after a call, waiting for the next.
     /// Agents think between calls — ten, twenty seconds is ordinary — and the
@@ -71,6 +84,9 @@ final class Drive: ObservableObject {
     struct Run: Identifiable {
         let id: UUID
         let driver: Driver
+        /// Which session of that driver: two Claude Codes are two runs. Kept
+        /// current — a thread's title can arrive or change mid-run.
+        var who: Who
         /// Jev's goal. Empty for an agent, which never says one.
         let goal: String
         let tabID: UUID
@@ -139,16 +155,20 @@ final class Drive: ObservableObject {
 
     /// A fresh run. The pane opens itself; a stop asked for during the last
     /// one does not carry over.
-    func begin(goal: String, tab: Tab) { begin(driver: .jev, goal: goal, tab: tab) }
+    /// A Jev run wears the name of the thread whose tool call started it.
+    func begin(goal: String, tab: Tab) { begin(driver: .jev, goal: goal, tab: tab, who: .jev(for: DriveCaller.who)) }
 
-    func begin(driver: Driver, goal: String = "", tab: Tab?) {
+    func begin(driver: Driver, goal: String = "", tab: Tab?, who: Who? = nil) {
         graceTimer?.invalidate(); graceTimer = nil
-        run = Run(id: UUID(), driver: driver, goal: goal, tabID: tab?.id ?? UUID(), started: Date(), ended: nil,
+        let who = who ?? .plain(driver)
+        if let old = run, old.who.key != who.key { rest(old.who.key) }
+        run = Run(id: UUID(), driver: driver, who: who, goal: goal, tabID: tab?.id ?? UUID(), started: Date(), ended: nil,
                   status: .running, note: "", cycles: [], url: tab?.address?.absoluteString ?? "", title: tab?.title ?? "",
                   thought: nil, thoughtAt: nil)
         stopRequested = false
         live = true
         paneOpen = true
+        touch(who, driver: driver, tab: tab?.id, doing: goal.isEmpty ? nil : goal, busy: driver == .jev)
     }
 
     /// Opens a cycle and returns its id.
@@ -178,6 +198,9 @@ final class Drive: ObservableObject {
         guard let run, !run.cycles.isEmpty else { return id }
         self.run?.cycles[run.cycles.count - 1].phases.append(
             Phase(id: id, kind: kind, title: title, detail: detail, started: Date(), ended: nil))
+        // The hover card's "doing now" is the phase that just opened. A Jev
+        // loop stays busy between phases; a tool call's busy is its own.
+        if live { touch(run.who, driver: run.driver, tab: run.tabID, doing: title, busy: run.driver == .jev ? true : busy) }
         return id
     }
 
@@ -233,6 +256,7 @@ final class Drive: ObservableObject {
         self.run?.note = note
         live = false
         stopRequested = false
+        rest(run.who.key)
         if run.driver != .jev { clearTrail() }
     }
 
@@ -244,6 +268,7 @@ final class Drive: ObservableObject {
         case .jev:
             stopRequested = true
         case .agent, .bot, .pane:
+            refuse(run.who.key)
             refusingUntil = Date().addingTimeInterval(Drive.refusal)
             refusalTimer?.invalidate()
             refusalTimer = Timer.scheduledTimer(withTimeInterval: Drive.refusal, repeats: false) { [weak self] _ in
@@ -258,14 +283,26 @@ final class Drive: ObservableObject {
     func resume() {
         refusalTimer?.invalidate(); refusalTimer = nil
         refusingUntil = nil
+        refusedKeys = [:]
     }
 
-    /// Why a call must not run right now, in words for the agent — or nil.
-    var refusal: String? {
-        guard let until = refusingUntil else { return nil }
-        guard until > Date() else { refusingUntil = nil; return nil }
+    /// Turn one session's calls away for `refusal` seconds.
+    func refuse(_ key: String) {
+        refusedKeys[key] = Date().addingTimeInterval(Drive.refusal)
+    }
+
+    /// Why a call from this session must not run right now, in words for the
+    /// agent — or nil. Only the session that was stopped is refused.
+    func refusal(for key: String) -> String? {
+        let now = Date()
+        refusedKeys = refusedKeys.filter { $0.value > now }
+        if refusingUntil.map({ $0 <= now }) == true { refusingUntil = nil }
+        guard refusedKeys[key] != nil else { return nil }
         return "Stopped by the user in Copper: they took the browser back. Do not retry; tell them what you were doing and wait until they ask you to continue."
     }
+
+    /// The pane's agent, which is one session.
+    var refusal: String? { refusal(for: Who.plain(.pane).key) }
 
     /// Put the last run away. Only when nothing is running.
     func dismiss() {
@@ -279,6 +316,7 @@ final class Drive: ObservableObject {
     /// One tool call in flight, for `ended(_:)`.
     struct Ticket {
         let run: UUID
+        let who: String
         let phase: UUID
         let url: String
         let title: String
@@ -291,11 +329,17 @@ final class Drive: ObservableObject {
     /// a ticket for `ended`. Jev's own tools (jev_run, jev_step) own their run
     /// and get nothing here; a live Jev run is never interrupted by a stray
     /// call either — it is the story being told.
-    func began(call tool: String, args: [String: Any], by driver: Driver, tab: Tab?) -> Ticket? {
+    func began(call tool: String, args: [String: Any], by driver: Driver, who: Who? = nil, tab: Tab?) -> Ticket? {
         if tool == "jev_run" || tool == "jev_step" { return nil }
-        if live, let run, run.driver == .jev { return nil }
-        if !live || run?.driver != driver || run?.status != .running {
-            if let run, run.driver == driver, run.status == .ended,
+        let who = who ?? .plain(driver)
+        // Every call is a touch on its tab, whoever's story the pane is telling.
+        // A call beside a live Jev run gets no ticket, so it never rests:
+        // it is a touch, not a hold.
+        let beside = live && run?.driver == .jev
+        touch(who, driver: driver, tab: tab?.id, doing: Drive.words(for: tool, args).0, busy: !beside)
+        if beside { return nil }
+        if !live || run?.who.key != who.key || run?.status != .running {
+            if let run, run.who.key == who.key, run.status == .ended,
                let ended = run.ended, Date().timeIntervalSince(ended) < Drive.revival {
                 // The same driver, back within a few minutes: the same task.
                 self.run?.status = .running
@@ -304,9 +348,10 @@ final class Drive: ObservableObject {
                 live = true
                 paneOpen = true
             } else {
-                begin(driver: driver, tab: tab)
+                begin(driver: driver, tab: tab, who: who)
             }
         }
+        self.run?.who = who
         graceTimer?.invalidate(); graceTimer = nil
         busy = true
         if let tab { driven = tab }
@@ -317,12 +362,13 @@ final class Drive: ObservableObject {
         let (title, detail) = Drive.words(for: tool, args)
         let phase = phase(.act, title, detail: detail)
         if let tab { page(url: tab.address?.absoluteString ?? "", title: tab.title) }
-        return Ticket(run: run?.id ?? UUID(), phase: phase, url: tab?.address?.absoluteString ?? "", title: tab?.title ?? "", tool: tool, args: args)
+        return Ticket(run: run?.id ?? UUID(), who: who.key, phase: phase, url: tab?.address?.absoluteString ?? "", title: tab?.title ?? "", tool: tool, args: args)
     }
 
     /// The call returned. Closes its row with what came of it, and starts the
     /// grace clock: the run ends by itself when no call follows.
     func ended(_ ticket: Ticket, error: String?, tab: Tab?) {
+        rest(ticket.who)
         guard let run, run.id == ticket.run else { return }
         close(phase: ticket.phase)
         let url = tab?.address?.absoluteString ?? ticket.url
@@ -344,8 +390,8 @@ final class Drive: ObservableObject {
 
     /// A call the user's Stop turned away: a row in the stopped run, so it
     /// shows that the agent tried again and was refused.
-    func refused(call tool: String, args: [String: Any], by driver: Driver) {
-        guard let run, run.driver == driver else { return }
+    func refused(call tool: String, args: [String: Any], by driver: Driver, who: Who? = nil) {
+        guard let run, run.who.key == (who ?? .plain(driver)).key else { return }
         cycle()
         let (title, detail) = Drive.words(for: tool, args)
         let id = phase(.act, title, detail: detail)

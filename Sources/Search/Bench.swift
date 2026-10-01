@@ -265,6 +265,10 @@ final class Bench {
             }
             report(0)
 
+        case "backdrop":
+            // Fork (backdrop): the column's scene — its process and its clock.
+            BackdropWeb.bench(answer: answer)
+
         case "newtab":
             // Fork (new-tab-launcher): what ⌘T's card offers, by group, once
             // Google and the history ranking have had a moment to answer.

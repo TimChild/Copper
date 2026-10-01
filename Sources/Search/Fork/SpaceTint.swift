@@ -71,7 +71,11 @@ struct SpaceTint {
     }
 
     /// The column's ground, drawn: colour, gradient or picture, and grain.
-    var backdrop: ThemeBackdrop { ThemeBackdrop(theme: theme, dark: night) }
+    /// Live: this is the column itself, whose scene lasts across spaces
+    /// (anything else that wants a theme's ground uses `ThemeBackdrop`).
+    var backdrop: ThemeBackdrop { ThemeBackdrop(theme: theme, dark: night, live: true) }
+    /// The column of one window. (Fork: windows)
+    @MainActor func backdrop(in browser: Browser) -> ThemeBackdrop { ThemeBackdrop(theme: theme, dark: night, live: true, browser: browser) }
 
     /// One flat colour for the whole column, where a surface beside it has
     /// to match it: the split's gutter, a drop target.

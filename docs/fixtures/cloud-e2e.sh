@@ -56,7 +56,14 @@ B cloudb cloud signin "$B_EMAIL" "$PW" >/dev/null
 
 echo "== sync: bookmarks + spaces A → B (same account on both)"
 B cloudb cloud signout >/dev/null; B cloudb cloud signin "$A_EMAIL" "$PW" >/dev/null
+echo "== privacy: with sync off, the Personal canvas stays on this Mac"
+B clouda canvas open personal >/dev/null; sleep 2
+B clouda canvas apply "{\"id\":\"personal\",\"ops\":[{\"op\":\"add\",\"shape\":{\"type\":\"sticky\",\"text\":\"private $STAMP\"}}]}" >/dev/null; sleep 4
+B cloudb canvas open personal >/dev/null; sleep 4
+check "Personal content does not reach B while canvas sync is off" '! B cloudb canvas read personal | grep -q "private $STAMP"' 'B cloudb canvas read personal | head -c 300'
 B clouda cloud sync on all >/dev/null; B cloudb cloud sync on all >/dev/null
+sleep 6
+check "Personal content reaches B once canvas sync is on" 'B cloudb canvas read personal | grep -q "private $STAMP"' 'B cloudb canvas read personal | head -c 300'
 B clouda cloud bookmark "https://example.com/e2e-$STAMP" "E2E bookmark" >/dev/null
 B clouda cloud sync now >/dev/null; sleep 3; B cloudb cloud sync now >/dev/null; sleep 2
 check "bookmark reaches B" 'B cloudb cloud doc bookmarks | grep -q "e2e-$STAMP"' 'B cloudb cloud log | tail -5'
@@ -103,6 +110,17 @@ SEARCH_PROBE=clouda SEARCH_HEADLESS=1 SEARCH_MCP_PORT=4171 "$APP/Contents/MacOS/
 wait_bench clouda; sleep 2; B clouda canvas open personal >/dev/null; sleep 3
 check "Personal canvas survives relaunch" 'B clouda canvas read personal | grep -q "persist $STAMP"' 'B clouda canvas read personal | head -c 300'
 check "A is still signed in after relaunch" 'B clouda cloud status | json "d.get(\"signedIn\")" | grep -q True' 'B clouda cloud status'
+
+
+echo "== pairing: A mints a one-time code, a fresh world C joins with it"
+world cloudc 4173; wait_bench cloudc; sleep 2
+PAIR=$(B clouda cloud pairing-code); echo "$PAIR" | head -c 200; echo
+PLINK=$(echo "$PAIR" | json 'd.get("link") or d.get("code") or ""')
+check "A minted a pairing code" '[ -n "$PLINK" ]' 'echo "$PAIR"'
+B cloudc cloud pair "$PLINK" | head -c 200; echo
+check "C is linked and signed in as A via the pairing code" 'B cloudc cloud status | json "d.get(\"signedIn\") and d.get(\"email\")" | grep -q "$A_EMAIL"' 'B cloudc cloud status'
+check "the pairing code works only once" '{ B cloudc cloud pair "$PLINK" 2>&1 || true; } | grep -qi "error\|used\|pairing"' 'true'
+kill "$(cat /tmp/copper-cloudc.pid)" 2>/dev/null || true
 
 echo "== done: $PASS passed, $FAIL failed"
 for w in clouda cloudb; do kill "$(cat /tmp/copper-$w.pid)" 2>/dev/null || true; done

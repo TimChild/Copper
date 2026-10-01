@@ -737,10 +737,16 @@ export function EaselPage({
     }
   }
 
-  /** Double-click on empty paper: a new note right there. */
+  /**
+   * Double-click on empty paper: a new note right there. Hit-test the
+   * point, not `e.target`: pointer capture on the viewport retargets the
+   * click and dblclick to the viewport itself, so a double-click on a note
+   * used to make a second note on top of it (and edit that one).
+   */
   const onDoubleClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     if (tool !== 'select' || panning) return
-    if ((e.target as Element).closest('[data-ref], .easel-card')) return
+    const under = document.elementFromPoint(e.clientX, e.clientY)
+    if (under?.closest('[data-ref], .easel-card')) return
     const c = screenToCanvas(camera.get(), clientPoint(e))
     const { w, h } = SHAPE_SIZE.sticky
     const id = createAt('sticky', { x: c.x - w / 2, y: c.y - h / 2, w, h })

@@ -46,6 +46,7 @@ export function createCopperHost(
   const uploads = new Map<string, Pending>()
   const flushers = new Set<() => void>()
   const renamers = new Set<(title: string) => void>()
+  let pendingRename: string | null = null
 
   const post = (message: PageMessage) => handler.postMessage(message)
 
@@ -77,6 +78,9 @@ export function createCopperHost(
         return
       case 'rename':
         if (typeof message.title !== 'string') return
+        // Copper sends a rename made while the board was closed straight
+        // after `config`, before anything listens; keep it for the first.
+        if (renamers.size === 0) pendingRename = message.title
         for (const fn of renamers) fn(message.title)
         return
     }
@@ -133,6 +137,11 @@ export function createCopperHost(
     },
     onRename(fn) {
       renamers.add(fn)
+      if (pendingRename !== null) {
+        const title = pendingRename
+        pendingRename = null
+        fn(title)
+      }
       return () => renamers.delete(fn)
     },
     fileUrl(easelId, fileId) {

@@ -46,6 +46,8 @@ export async function openEaselSession(host: Host): Promise<EaselSession> {
     title: config.easel.title,
     createdAt: config.easel.createdAt,
   })
+  // Renamed from its sidebar row while the board was closed.
+  if (config.easel.renamed) doc.setTitle(config.easel.title)
   const awareness = createAwareness(doc.doc, config.viewer)
   const unwire = wireFlush(saver, fn => host.onFlush(fn))
   // Sidebar rename: the title lands in `meta` (so document.title follows)

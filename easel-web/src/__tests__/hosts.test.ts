@@ -12,6 +12,7 @@ import {
 import type { PageMessage } from '../host/types'
 import { base64ToBytes, bytesToBase64 } from '../host/base64'
 import { openEaselSession } from '../session'
+import { createEaselDoc } from '../doc/easel-doc'
 
 describe('copper host (the bridge)', () => {
   const handler = { postMessage: vi.fn<(m: PageMessage) => void>() }
@@ -175,6 +176,17 @@ describe('copper host (the bridge)', () => {
     expect(fn).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a rename that arrives before anyone listens, for the first listener', () => {
+    const host = createCopperHost(handler)
+    window.__easelHost!.receive({ v: 1, type: 'rename', title: 'Renamed while closed' })
+    const fn = vi.fn()
+    host.onRename(fn)
+    expect(fn).toHaveBeenCalledWith('Renamed while closed')
+    const later = vi.fn()
+    host.onRename(later)
+    expect(later).not.toHaveBeenCalled()
+  })
+
   it('renders file refs from the scheme', () => {
     const host = createCopperHost(handler)
     expect(host.fileUrl('abc', 'f.png')).toBe(
@@ -304,6 +316,27 @@ describe('session', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('config.easel.renamed makes Copper\'s title win over the saved one', async () => {
+    const saved = createEaselDoc()
+    saved.ensureMeta({ title: 'Old name', createdAt: 1 })
+    const state = bytesToBase64(Y.encodeStateAsUpdate(saved.doc))
+    saved.destroy()
+    const handler = { postMessage: vi.fn<(m: PageMessage) => void>() }
+    const host = createCopperHost(handler)
+    const opening = openEaselSession(host)
+    window.__easelHost!.receive({
+      v: 1,
+      type: 'config',
+      easel: { id: 'rn', title: 'New name', createdAt: 1, renamed: true },
+      viewer: { id: 'v', name: 'C', color: '#000' },
+      state,
+      mode: 'local',
+    })
+    const session = await opening
+    expect(session.doc.getMeta().title).toBe('New name')
+    session.close()
   })
 
   it('starts awareness with the contract shape', async () => {

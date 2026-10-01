@@ -22,6 +22,8 @@ export interface EaselInfo {
   title: string
   /** Unix seconds (Double), as native keeps it in `easels/index.json`. */
   createdAt: number
+  /** Copper renamed the board since the page last saved: `title` wins over `meta.title`. */
+  renamed?: boolean
 }
 
 /** Native → page `config`, the reply to `ready`. */

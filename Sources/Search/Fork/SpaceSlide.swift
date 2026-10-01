@@ -499,11 +499,12 @@ final class SpaceSlide: ObservableObject {
 
 // MARK: - the two layers
 
-/// The band that travels — the favourites, the space's name and its rows —
-/// as the real, live column: in from the side while a slide is on, and held
+/// The band that travels — the space's name and its rows; the favourites
+/// above it are the same in every space and stay put — as the real, live
+/// column: in from the side while a slide is on, and held
 /// to its own edges while it is, so the part still on its way in never draws
 /// over the page. At rest it is not clipped at all, so nothing that hangs
-/// over its edge (a favourite in the hand, its shadow) is cut.
+/// over its edge (a row in the hand, its shadow) is cut.
 struct SpaceSlideBand: ViewModifier {
     let browser: Browser
     @ObservedObject private var slide = SpaceSlide.shared

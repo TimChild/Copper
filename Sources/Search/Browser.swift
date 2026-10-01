@@ -686,20 +686,10 @@ final class Browser: NSObject, ObservableObject {
     var pinnedCount: Int { tabs.filter { $0.pin != nil }.count }
 
     func pin(_ tab: Tab) {
-        if tab.pin == nil {
-            tab.pin = tab.monogram
-            // Pinned tabs live at the head of the row, in the order they were
-            // pinned, so their letters never move under your hand.
-            if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
-                let home = max(0, pinnedCount - 1)
-                if here != home {
-                    tabs.move(
-                        fromOffsets: IndexSet(integer: here),
-                        toOffset: home > here ? home + 1 : home
-                    )
-                }
-            }
-        }
+        // Fork: global pins — one set every space shows, kept by Spaces: the
+        // tab leaves its space's row for the end of the pins, and every
+        // window, on every space, has it at once.
+        Spaces.shared.pin(tab, in: self)
         // No dialog and no waiting cursor: the letter is taken from the
         // address and applied. Changing it is a separate act, for the day it
         // matters — which is why it is not folded into this one.
@@ -718,26 +708,19 @@ final class Browser: NSObject, ObservableObject {
         guard let first = typed.trimmingCharacters(in: .whitespacesAndNewlines).first else {
             return
         }
-        tab.pin = String(first).uppercased()
+        Spaces.shared.renamePin(String(first), for: tab) // Fork: global pins — the letter is the same everywhere
     }
 
     func endPinEdit() {
-        guard editingPin != nil else { return }
-        editingPin = nil
+        Spaces.shared.endPinEdit(self)
         writeSession(now: true)
     }
 
     func unpin(_ tab: Tab) {
-        if editingPin == tab.id { editingPin = nil }
-        tab.pin = nil
-        defer { writeSession(now: true) }
-        // Back out of the pinned block, to the head of the loose tabs.
-        if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
-            let home = pinnedCount
-            if here != home {
-                tabs.move(fromOffsets: IndexSet(integer: here), toOffset: home > here ? home + 1 : home)
-            }
-        }
+        // Fork: global pins — out of every space's pins, into this window's
+        // space at the head of its loose tabs.
+        Spaces.shared.unpin(tab, in: self)
+        writeSession(now: true)
         rememberSession()
     }
 
@@ -1133,7 +1116,7 @@ final class Browser: NSObject, ObservableObject {
             Spaces.shared.foldLegacy(legacy, active: index, into: self, space: target)
             Windows.markMigrated(id, space: target)
         }
-        tabs = Spaces.shared.row(target)
+        tabs = Spaces.shared.projection(target)
         // A brand-new window gets its own untouched blank tab on the shared
         // row. A reopened window instead resumes its saved active tab.
         if saved == nil || tabs.isEmpty {
@@ -1179,10 +1162,13 @@ final class Browser: NSObject, ObservableObject {
         // pin, or a shared row survives; a window left with nothing by the
         // blank's going gets a blank of its own (Spaces.publish).
         Spaces.shared.unregister(self)
-        if let id = windowBlankID, let tab = tabs.first(where: { $0.id == id }), tab.isBlank {
+        // Fork: global pins — a blank that was pinned is every window's now,
+        // and is left alone: dropBlank would not find it in a row, and
+        // closing it would leave a dead tab in every grid.
+        if let id = windowBlankID, let tab = tabs.first(where: { $0.id == id }), tab.isBlank, tab.pin == nil {
             Spaces.shared.dropBlank(tab)
             tab.close()
-        } else if let tab = active, tab.isBlank, !Spaces.shared.shown(tab, outside: self) {
+        } else if let tab = active, tab.isBlank, tab.pin == nil, !Spaces.shared.shown(tab, outside: self) {
             // The blank this window was on — made for it when its last page
             // closed — and no other window's.
             Spaces.shared.dropBlank(tab)
@@ -1290,6 +1276,9 @@ final class Browser: NSObject, ObservableObject {
         // its place, the page is let go, and you land on whatever you were
         // looking at before. Only Unpin takes it out of the row.
         if tab.pin != nil {
+            // Fork: global pins — a pin is in every window's grid; one that
+            // is on another window's stage is not this window's to put down.
+            guard !Spaces.shared.shown(tab, outside: self) else { return }
             tab.rest()
             // Ordinary tabs first. Falling back to the most recent tab of any
             // kind meant closing one pin landed you on another pin, and ⌘W
@@ -1396,14 +1385,19 @@ final class Browser: NSObject, ObservableObject {
 
     /// Dragged from one place in the row to another.
     func move(_ tab: Tab, to index: Int) {
+        if tab.pin != nil {
+            // Fork: global pins — the pins lead every row, so a pin's index
+            // is its place in the grid, and the order is one for every space.
+            Spaces.shared.movePin(tab, to: index)
+            return
+        }
         guard let here = tabs.firstIndex(where: { $0.id == tab.id }),
               index != here, tabs.indices.contains(index)
         else { return }
         // The pinned block and the loose one don't mix: a letter that wandered
         // into the middle of the titles would stop meaning anything.
         let pinned = pinnedCount
-        if tab.pin != nil, index >= pinned { return }
-        if tab.pin == nil, index < pinned { return }
+        if index < pinned { return }
         tabs.move(fromOffsets: IndexSet(integer: here), toOffset: index > here ? index + 1 : index)
         rememberSession()
     }
@@ -1430,7 +1424,9 @@ final class Browser: NSObject, ObservableObject {
         let tab = Tab(configuration: Browser.extensionConfiguration(for: url))
         prepare(tab)
         let here = atEnd ? nil : tabs.firstIndex { $0.id == activeID }
-        tabs.insert(tab, at: here.map { $0 + 1 } ?? tabs.count)
+        // Fork: global pins — beside a pin means the head of the loose tabs;
+        // the pins are the same in every space and take no tab in among them.
+        tabs.insert(tab, at: here.map { max($0 + 1, pinnedCount) } ?? tabs.count)
         tab.go(to: url)
         Recent.shared.prune(tabs)
         if foreground {
@@ -2275,7 +2271,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         if let opener = tab.opener, let home = tabs.first(where: { $0.id == opener }) {
             select(home)
         }
-        tab.pin = nil
+        if tab.pin != nil { Spaces.shared.unpin(tab, in: self) }
         close(tab)
     }
 

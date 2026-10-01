@@ -431,7 +431,8 @@ struct SpaceMenu: View {
             if space.id != spaces.current(in: browser) { spaces.select(space.id, in: browser) }
             browser.launch()
         }
-        if let tab = browser.active, space.id != spaces.current(in: browser) {
+        // A pin is already in every space, so it has nowhere to move to.
+        if let tab = browser.active, tab.pin == nil, space.id != spaces.current(in: browser) {
             Button("Move Current Tab Here") { spaces.move(tab, to: space.id, in: browser) }
         }
         Divider()

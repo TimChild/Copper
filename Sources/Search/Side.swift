@@ -59,19 +59,19 @@ struct SideBar: View {
                 .padding(.horizontal, SideBar.inset)
                 .padding(.bottom, 10)
 
-            // Fork (space-slide): the favourites, the space's name and its
-            // rows are the part of the column that travels when the space
-            // changes; the lights, the address and the strip stay put.
-            VStack(alignment: .leading, spacing: 0) {
-                if browser.pinnedCount > 0 {
-                    pinned
-                        .padding(.horizontal, SideBar.inset)
-                        .padding(.bottom, 8)
-                }
-
-                column
+            // Fork (global-pins): the favourites are the same in every space,
+            // so they stay put when the space changes, as Arc's do.
+            if browser.pinnedCount > 0 {
+                pinned
+                    .padding(.horizontal, SideBar.inset)
+                    .padding(.bottom, 8)
             }
-            .modifier(SpaceSlideBand(browser: browser))
+
+            // Fork (space-slide): the space's name and its rows are the part
+            // of the column that travels when the space changes; the lights,
+            // the address, the favourites and the strip stay put.
+            column
+                .modifier(SpaceSlideBand(browser: browser))
 
             SpaceStrip(browser: browser) { foot }
         }

@@ -397,7 +397,10 @@ extension Windows {
                     "tabIDs": browser.tabs.map { String($0.id.uuidString.prefix(8)).lowercased() },
                     "active": browser.tabs.firstIndex { $0.id == browser.activeID } ?? -1,
                     "taken": browser.taken.map { String($0.uuidString.prefix(8)).lowercased() } ?? "",
-                    "split": Split.shared.on(in: browser)]
-        }, "opener": opener != nil]
+                    "split": Split.shared.on(in: browser),
+                    // The first `pinned` of `tabs` are the global pins, the
+                    // same in every window.
+                    "pinned": browser.pinnedCount]
+        }, "pins": Spaces.shared.pins.map { String($0.id.uuidString.prefix(8)).lowercased() }, "opener": opener != nil]
     }
 }

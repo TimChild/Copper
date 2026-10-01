@@ -208,15 +208,16 @@ final class Sections: ObservableObject {
             archive = window
         default: break
         }
+        // A space's row holds its loose tabs only; the favourites are one
+        // set every space shows, so they are counted once, on their own.
         func counts(_ tabs: [Tab]) -> [String: Any] {
-            let loose = tabs.filter { $0.pin == nil }
-            return ["saved": loose.filter { isSaved($0) }.count,
-                    "today": loose.filter { !isSaved($0) }.count,
-                    "favourites": tabs.count - loose.count]
+            ["saved": tabs.filter { isSaved($0) }.count,
+             "today": tabs.filter { !isSaved($0) }.count]
         }
         let spaces = Spaces.shared
         note["window"] = archive.rawValue
         note["oldest"] = oldestToday(in: browser)
+        note["favourites"] = spaces.pins.count
         note["spaces"] = spaces.all.map { space -> [String: Any] in
             var row = counts(spaces.row(space.id))
             row["name"] = space.name

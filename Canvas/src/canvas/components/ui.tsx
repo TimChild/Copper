@@ -8,6 +8,9 @@ export function cn(...parts: (string | false | null | undefined)[]) {
 export const isMac = () =>
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent)
 
+/** The in-place editor's "how to finish" hint, which describes it to assistive tech. */
+export const EDIT_HINT_ID = 'canvas-edit-hint'
+
 /** "⌘" on the Mac, "Ctrl" elsewhere. */
 export const MOD = isMac() ? '⌘' : 'Ctrl+'
 

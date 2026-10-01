@@ -4,17 +4,16 @@
  * memoised on its plain shape, so a change re-renders only what changed.
  */
 import { memo, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
-import { ExternalLink, Globe } from 'lucide-react'
+import { ChevronsDown, ChevronsUp, ExternalLink, Globe } from 'lucide-react'
 import type { ArrowPath } from '../arrows'
 import { hueOf, inkOn, paperOf, strokeOf } from '../colors'
 import { toggleTask } from '../markdown-lite'
+import { STICKY_PAD_Y, growFor, overflows } from '../overflow'
 import { STICKY_FONT, TEXT_FONT, isNamedColor, type Shape } from '../types'
 import { useBoard } from './context'
 import { MarkdownLite } from './MarkdownLite'
 import { TextEditor } from './TextEditor'
 import { cn, useMountFocus } from './ui'
-
-const STICKY_FONT_MIN = 9
 
 /** One-line in-place field (frame titles, arrow labels): Enter or Esc finishes. */
 function InlineField({
@@ -65,51 +64,63 @@ const place = (s: Pick<Shape, 'x' | 'y' | 'w' | 'h'>) => ({
   transform: `translate(${s.x}px, ${s.y}px)`,
 })
 
-/**
- * Shrink the rendered sticky's font until its content fits the box, like
- * FigJam's auto-size text. Refits on every text or size change, so a peer's
- * typing refits live too.
- */
-function useFitText(ref: RefObject<HTMLDivElement | null>, base: number, deps: unknown[], paused: boolean) {
-  const [size, setSize] = useState(base)
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el || paused) return
-    const content = el.firstElementChild as HTMLElement | null
-    let s = base
-    el.style.fontSize = `${s}px`
-    while (s > STICKY_FONT_MIN && content && content.scrollHeight > el.clientHeight + 1) {
-      s -= 1
-      el.style.fontSize = `${s}px`
-    }
-    setSize(s)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, paused, ...deps])
-  return size
-}
-
 interface ViewProps {
   shape: Shape
   editing: boolean
 }
 
+/** Natural height of `ref`'s first child (world px), kept current as it reflows. */
+function useContentHeight(ref: RefObject<HTMLDivElement | null>, active: boolean) {
+  const [height, setHeight] = useState(0)
+  useLayoutEffect(() => {
+    const inner = ref.current?.firstElementChild as HTMLElement | null
+    if (!active || !inner) return
+    const measure = () => setHeight(prev => (prev === inner.offsetHeight ? prev : inner.offsetHeight))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(inner)
+    return () => ro.disconnect()
+  }, [ref, active])
+  return height
+}
+
 export const StickyView = memo(function StickyView({ shape, editing }: ViewProps) {
   const board = useBoard()
-  const base = shape.fontSize ?? STICKY_FONT
-  const fitRef = useRef<HTMLDivElement>(null)
-  const fitSize = useFitText(fitRef, base, [shape.text, shape.w, shape.h], editing)
+  const font = shape.fontSize ?? STICKY_FONT
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const content = useContentHeight(bodyRef, !editing)
+  /** Read-only boards can't grow the note: show it all here, without writing. */
+  const [peek, setPeek] = useState(false)
   const empty = !shape.text.trim()
+  const paper = paperOf(shape.color)
+  const ink = inkOn(shape.color)
+  const over = !editing && content > 0 && overflows(content, shape.h)
+  const fits = growFor(shape.h, content).fits
+  const peeking = peek && board.readOnly && !editing && content > 0
+  const showMore = over && !peeking
+  const expand = () => {
+    if (board.readOnly) setPeek(p => !p)
+    else board.growSticky(shape.id, content, { open: true })
+  }
   return (
     <div
       data-id={shape.id}
       data-kind="sticky"
+      data-overflow={showMore ? (fits ? 'grow' : 'open') : undefined}
       className="absolute left-0 top-0 flex flex-col rounded-[4px] shadow-note"
-      style={{ ...place(shape), background: paperOf(shape.color), color: inkOn(shape.color) }}
+      style={{
+        ...place(shape),
+        // Room for the "Show less" pill under the last line.
+        ...(peeking ? { height: Math.max(shape.h, content + STICKY_PAD_Y + 26), zIndex: 1 } : {}),
+        background: paper,
+        color: ink,
+      }}
     >
       <div
-        ref={fitRef}
+        ref={bodyRef}
         className={cn('relative min-h-0 flex-1 overflow-hidden px-[15px] pb-[13px] pt-[14px] leading-[1.38]', editing && 'cursor-text')}
-        style={{ fontSize: editing ? fitSize : undefined }}
+        style={{ fontSize: font }}
       >
         {editing ? (
           <TextEditor
@@ -119,6 +130,7 @@ export const StickyView = memo(function StickyView({ shape, editing }: ViewProps
             onChange={text => board.store.setText(shape.id, text)}
             onDone={() => board.endEdit(shape.id)}
             onSibling={dir => board.sibling(shape.id, dir)}
+            onOverflow={px => board.growSticky(shape.id, px)}
             className="h-full overflow-y-auto leading-[1.38]"
           />
         ) : (
@@ -134,6 +146,34 @@ export const StickyView = memo(function StickyView({ shape, editing }: ViewProps
           </>
         )}
       </div>
+      {(showMore || peeking) && (
+        <>
+          {showMore && (
+            <div
+              aria-hidden="true"
+              data-part="sticky-fade"
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-12 rounded-b-[4px]"
+              style={{ background: `linear-gradient(to bottom, color-mix(in srgb, ${paper} 0%, transparent), ${paper} 72%)` }}
+            />
+          )}
+          <button
+            type="button"
+            data-part="sticky-more"
+            aria-label={peeking ? 'Show less of this note' : fits || board.readOnly ? 'Show all of this note' : 'Open this note to read all of it'}
+            className="absolute bottom-[7px] left-1/2 flex h-[22px] -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-full px-2.5 text-[11px] font-semibold leading-none opacity-80 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent"
+            style={{ background: `color-mix(in srgb, ${ink} 11%, ${paper})`, color: ink }}
+            onPointerDown={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
+            onClick={e => {
+              e.stopPropagation()
+              expand()
+            }}
+          >
+            {peeking ? <ChevronsUp className="h-3 w-3" aria-hidden="true" /> : <ChevronsDown className="h-3 w-3" aria-hidden="true" />}
+            {peeking ? 'Show less' : fits || board.readOnly ? 'Show all' : 'Read all'}
+          </button>
+        </>
+      )}
     </div>
   )
 })

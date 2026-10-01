@@ -10,6 +10,7 @@ import {
   AlignRight,
   ArrowUpRight,
   BringToFront,
+  ChevronUp,
   Copy,
   ExternalLink,
   Frame as FrameIcon,
@@ -22,6 +23,7 @@ import {
   Maximize,
   Minus,
   MousePointer2,
+  PencilLine,
   Plus,
   Redo2,
   Search,
@@ -34,10 +36,11 @@ import {
   X,
 } from 'lucide-react'
 import { COLOR_LABEL, SHAPE_COLORS, initials, swatchOf } from '../colors'
+import type { StatusView } from '../status'
 import type { CanvasAgent, NamedColor, Shape, ShapeColor } from '../types'
 import type { PeerView } from './Overlays'
 import { AgentDot } from './Overlays'
-import { Divider, IconButton, Kbd, MOD, Panel, cn } from './ui'
+import { Divider, EDIT_HINT_ID, IconButton, Kbd, MOD, Panel, Tip, cn } from './ui'
 
 export type Tool = 'select' | 'hand' | 'sticky' | 'text' | 'frame' | 'arrow' | 'image' | 'link'
 
@@ -215,9 +218,14 @@ export function ZoomBar({
   )
 }
 
-/** The compact cluster for narrow windows: history and fit only, above the tools. */
+/**
+ * The compact cluster for narrow windows, above the tools: history, and the
+ * zoom percentage, which opens − / + / 100% / fit.
+ */
 export function CompactBar({
+  onZoom,
   onFit,
+  onReset,
   canUndo,
   canRedo,
   onUndo,
@@ -225,7 +233,9 @@ export function CompactBar({
   zoom,
   readOnly,
 }: {
+  onZoom: (factor: number) => void
   onFit: () => void
+  onReset: () => void
   canUndo: boolean
   canRedo: boolean
   onUndo: () => void
@@ -233,32 +243,120 @@ export function CompactBar({
   zoom: number
   readOnly: boolean
 }) {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const first = useRef<HTMLButtonElement>(null)
+  const byKeyboard = useRef(false)
+  const pct = Math.round(zoom * 100)
+
+  useEffect(() => {
+    if (!open) return
+    if (byKeyboard.current) first.current?.focus({ preventScroll: true })
+    const away = (e: PointerEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false)
+    }
+    // Esc closes it wherever focus is (WebKit leaves clicked buttons unfocused).
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
+      if (root.current?.contains(document.activeElement)) trigger.current?.focus({ preventScroll: true })
+    }
+    window.addEventListener('pointerdown', away, true)
+    window.addEventListener('keydown', esc, true)
+    return () => {
+      window.removeEventListener('pointerdown', away, true)
+      window.removeEventListener('keydown', esc, true)
+    }
+  }, [open])
+
   return (
-    <Panel className="pointer-events-auto absolute bottom-[68px] right-3 flex items-center gap-0.5 p-1 min-[880px]:hidden">
-      {!readOnly && (
-        <>
-          <IconButton size="sm" label="Undo" keys={`${MOD}Z`} disabled={!canUndo} onClick={onUndo}>
-            <Undo2 className="h-4 w-4" />
+    <div
+      ref={root}
+      className="pointer-events-auto absolute bottom-[68px] right-3 min-[880px]:hidden"
+      onKeyDown={e => {
+        // Enter and Space on these buttons press them; they are not the board's shortcuts.
+        if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
+      }}
+    >
+      {open && (
+        <Panel
+          role="group"
+          aria-label="Zoom"
+          id="canvas-zoom-menu"
+          className="pop-in absolute bottom-[calc(100%+8px)] right-0 flex items-center gap-0.5 p-1"
+        >
+          <IconButton ref={first} size="sm" label="Zoom out" keys="−" onClick={() => onZoom(1 / 1.25)}>
+            <Minus className="h-4 w-4" />
           </IconButton>
-          <IconButton size="sm" label="Redo" keys={`⇧${MOD}Z`} disabled={!canRedo} onClick={onRedo}>
-            <Redo2 className="h-4 w-4" />
+          <IconButton size="sm" label="Zoom in" keys="+" onClick={() => onZoom(1.25)}>
+            <Plus className="h-4 w-4" />
           </IconButton>
-        </>
+          <Divider />
+          <button
+            type="button"
+            aria-label="Zoom to 100% (⇧0)"
+            className="tip-host h-7 min-w-[48px] rounded-lg px-1.5 text-center text-[12px] font-medium tabular-nums text-ink-2 outline-none hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/60"
+            onClick={onReset}
+          >
+            100%
+            <Tip label="Zoom to 100%" keys="⇧0" />
+          </button>
+          <IconButton size="sm" label="Zoom to fit" keys="⇧1" tipEnd onClick={onFit}>
+            <Maximize className="h-[15px] w-[15px]" />
+          </IconButton>
+        </Panel>
       )}
-      <IconButton size="sm" label={`Zoom to fit (${Math.round(zoom * 100)}%)`} keys="⇧1" tipEnd onClick={onFit}>
-        <Maximize className="h-[15px] w-[15px]" />
-      </IconButton>
-    </Panel>
+      <Panel className="flex items-center gap-0.5 p-1">
+        {!readOnly && (
+          <>
+            <IconButton size="sm" label="Undo" keys={`${MOD}Z`} disabled={!canUndo} onClick={onUndo}>
+              <Undo2 className="h-4 w-4" />
+            </IconButton>
+            <IconButton size="sm" label="Redo" keys={`⇧${MOD}Z`} disabled={!canRedo} onClick={onRedo}>
+              <Redo2 className="h-4 w-4" />
+            </IconButton>
+            <Divider />
+          </>
+        )}
+        <button
+          ref={trigger}
+          type="button"
+          aria-label={`Zoom ${pct}%: zoom in, out, to 100% or to fit`}
+          aria-haspopup="true"
+          aria-expanded={open}
+          aria-controls={open ? 'canvas-zoom-menu' : undefined}
+          className={cn(
+            'tip-host tip-end flex h-7 min-w-[56px] items-center justify-center gap-0.5 rounded-lg pl-2 pr-1 text-[12px] font-medium tabular-nums text-ink-2 outline-none hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/60',
+            open && 'bg-surface-2 text-ink'
+          )}
+          onPointerDown={() => {
+            byKeyboard.current = false
+          }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowUp') byKeyboard.current = true
+            if (e.key === 'ArrowUp' && !open) {
+              e.preventDefault()
+              setOpen(true)
+            }
+          }}
+          onClick={() => setOpen(o => !o)}
+        >
+          {pct}%
+          <ChevronUp className={cn('h-3.5 w-3.5 opacity-60 transition-transform', open && 'rotate-180')} aria-hidden="true" />
+          {!open && <Tip label="Zoom" />}
+        </button>
+      </Panel>
+    </div>
   )
 }
 
-export type SyncState = 'local' | 'connecting' | 'online' | 'offline'
-
-const STATUS: Record<SyncState, { label: string; dot: string; hint: string }> = {
-  local: { label: 'On this Mac', dot: 'bg-ink-4', hint: 'Saved on this Mac' },
-  connecting: { label: 'Connecting', dot: 'bg-warning', hint: 'Connecting to the cloud…' },
-  online: { label: 'Live', dot: 'bg-success', hint: 'Synced: changes appear for everyone' },
-  offline: { label: 'Offline', dot: 'bg-ink-4', hint: 'Offline: changes sync when the connection is back' },
+const TONE_DOT: Record<StatusView['tone'], string> = {
+  muted: 'bg-ink-4',
+  success: 'bg-success',
+  warning: 'bg-warning',
 }
 
 function Avatar({
@@ -305,25 +403,24 @@ export function TitleBar({
 }: {
   name: string
   kind: string
-  status: SyncState
+  status: StatusView
   readOnly: boolean
   peers: readonly PeerView[]
   agents: readonly CanvasAgent[]
   onPeer: (peer: PeerView) => void
   onAgent: (agent: CanvasAgent) => void
 }) {
-  const s = STATUS[status]
+  const s = status
+  const dot = TONE_DOT[s.tone]
   const people = dedupePeers(peers)
   const shown = people.slice(0, 5)
+  const warn = s.tone === 'warning' && !s.pulse
   return (
     <div className="pointer-events-none absolute left-3 right-[120px] top-3 flex min-w-0 items-center gap-2">
-      <Panel className="pointer-events-auto flex min-w-0 items-center gap-2.5 py-1.5 pl-3 pr-3">
-        <span className="tip-host tip-below relative flex h-2 w-2 shrink-0">
-          {status === 'connecting' && <span className={cn('pulse-ring absolute h-full w-full rounded-full', s.dot)} />}
-          <span className={cn('relative h-2 w-2 rounded-full', s.dot)} aria-hidden="true" />
-          <span className="tip tip-below rounded-lg bg-[#1d1d1f] px-2 py-1 text-[11.5px] font-medium text-white shadow-2 dark:bg-[#f2f2ef] dark:text-[#1d1d1f]">
-            {s.hint}
-          </span>
+      <Panel className="pointer-events-auto flex min-w-0 items-center gap-2.5 py-1.5 pl-3 pr-3" data-testid="canvas-status" data-status={s.key}>
+        <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+          {s.pulse && <span className={cn('pulse-ring absolute h-full w-full rounded-full', dot)} />}
+          <span className={cn('relative h-2 w-2 rounded-full', dot)} />
         </span>
         <h1 className="min-w-0 truncate text-[13.5px] font-semibold tracking-[-0.005em] text-ink">{name}</h1>
         {kind === 'personal' && (
@@ -336,8 +433,26 @@ export function TitleBar({
           </span>
         )}
         {readOnly && <span className="shrink-0 rounded-md bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-ink-3">View only</span>}
-        <span className="hidden shrink-0 text-[12px] text-ink-3 min-[560px]:inline" aria-live="polite">
-          {s.label}
+        <span
+          tabIndex={0}
+          aria-label={`${s.label}. ${s.hint}`}
+          className={cn(
+            'tip-host tip-below tip-start tip-wrap shrink-0 whitespace-nowrap rounded text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
+            warn ? 'font-medium text-[color:var(--warning-ink)]' : 'text-ink-3'
+          )}
+        >
+          <span aria-hidden="true" className="min-[640px]:hidden">
+            {s.short}
+          </span>
+          <span aria-hidden="true" className="hidden min-[640px]:inline">
+            {s.label}
+          </span>
+          <span role="status" className="sr-only">
+            {s.label}
+          </span>
+          <span className="tip rounded-lg bg-[#1d1d1f] px-2 py-1 text-[11.5px] font-medium leading-snug text-white shadow-2 dark:bg-[#f2f2ef] dark:text-[#1d1d1f]">
+            {s.hint}
+          </span>
         </span>
       </Panel>
       {(shown.length > 0 || agents.length > 0) && (
@@ -681,6 +796,24 @@ export function Toasts({ toasts }: { toasts: readonly Toast[] }) {
           {t.text}
         </div>
       ))}
+    </div>
+  )
+}
+
+/** Under (or over) a note being edited: it is markdown now, and how to finish. */
+export function EditHint({ at, above }: { at: { x: number; y: number }; above: boolean }) {
+  return (
+    <div
+      id={EDIT_HINT_ID}
+      data-testid="edit-hint"
+      className="pop-in pointer-events-none absolute z-30 flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-surface py-[3px] pl-2 pr-2.5 text-[11.5px] font-medium text-ink-3 shadow-2"
+      style={{ left: at.x, top: at.y, translate: above ? '0 -100%' : undefined }}
+    >
+      <PencilLine className="h-3 w-3 text-accent" aria-hidden="true" />
+      <span className="font-semibold text-ink-2">Markdown</span>
+      <span aria-hidden="true">·</span>
+      <Kbd>Esc</Kbd>
+      <span>or click outside to finish</span>
     </div>
   )
 }

@@ -24,6 +24,7 @@
   --danger: #d64045;
   --success: #2f9e5b;
   --warning: #e8a317;
+  --warning-ink: #8a5a00;
   --mark: rgb(255 196 0 / 0.38);
   --frame-fill: rgb(255 255 255 / 0.55);
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.06), 0 1px 1px rgb(0 0 0 / 0.03);
@@ -78,6 +79,7 @@
   --accent-ink: #1b1209;
   --accent-soft: rgb(224 144 90 / 0.18);
   --danger: #f06a6e;
+  --warning-ink: #f2b84b;
   --mark: rgb(255 196 0 / 0.32);
   --frame-fill: rgb(255 255 255 / 0.035);
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
@@ -215,6 +217,21 @@ input {
   opacity: 1;
   transform: translate(-50%, 0);
   transition-delay: 0.4s;
+}
+/* Anchored to the host's left edge (hosts near the window's left). */
+.tip-start > .tip {
+  left: 0;
+  transform: translate(0, -4px);
+}
+.tip-host.tip-start:hover > .tip,
+.tip-host.tip-start:focus-visible > .tip {
+  transform: translate(0, 0);
+}
+/* A sentence rather than a label: wraps at a readable width. */
+.tip-wrap > .tip {
+  white-space: normal;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 32px));
 }
 
 .sticky-md p,

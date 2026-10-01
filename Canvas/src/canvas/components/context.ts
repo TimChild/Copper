@@ -16,6 +16,12 @@ export interface BoardActions {
   sibling: (id: string, dir: 'right' | 'down') => void
   /** A text shape measured its content: keep its stored height in step. */
   autoHeight: (id: string, h: number) => void
+  /**
+   * A sticky's body needs `contentPx`: grow it to fit (never shrinking, up to
+   * a limit). `open` (a click on "Show all"): one undo step, and a note too
+   * long to show whole opens in its editor, which scrolls. True if it all shows.
+   */
+  growSticky: (id: string, contentPx: number, opts?: { open?: boolean }) => boolean
 }
 
 export const BoardContext = createContext<BoardActions | null>(null)

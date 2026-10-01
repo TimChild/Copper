@@ -46,6 +46,18 @@ describe('window.copperCanvas', () => {
     expect(() => api.zoomTo(['a'])).not.toThrow()
   })
 
+  it('takes the host status as JSON or a value, and logs bad ones', () => {
+    api.setStatus('{"mode":"shared-offline","pending":5}')
+    expect(c.getHostStatus()).toEqual({ mode: 'shared-offline', pending: 5 })
+    api.setStatus({ mode: 'shared-live' })
+    expect(c.getHostStatus()).toEqual({ mode: 'shared-live' })
+    expect(() => api.setStatus({ mode: 'sideways' })).not.toThrow()
+    expect(c.getHostStatus()).toEqual({ mode: 'shared-live' })
+    expect(posted.some(p => /setStatus/.test(JSON.parse(p).msg ?? ''))).toBe(true)
+    api.setStatus(null)
+    expect(c.getHostStatus()).toBeNull()
+  })
+
   it('never throws into the host', () => {
     expect(() => api.applyUpdate('!!!')).not.toThrow()
     expect(() => api.init(42)).not.toThrow()

@@ -273,37 +273,50 @@ export function markText(text: string, terms: readonly string[]): Highlighted {
   return fieldMarks(indexField('text', text), terms)
 }
 
+/** Gap a word-boundary snap may close at either end of a snippet. */
+const SNAP = 14
+
 /**
- * Cut long text down to about `max` characters around the first mark, on
- * word boundaries, with an ellipsis on each cut end.
+ * Cut text down to about `max` characters centred on the first mark, on
+ * word boundaries, with an ellipsis on each cut end. The match stays in the
+ * middle, so a row that shows less than `max` still shows it.
  */
 export function clipSnippet(h: Highlighted, max = 90): Highlighted {
   const { text, marks } = h
   if (text.length <= max) return h
-  const first = marks[0]?.[0] ?? 0
-  let start = Math.max(
-    0,
-    Math.min(first - Math.floor(max / 3), text.length - max)
-  )
-  if (start > 0) {
-    const space = text.lastIndexOf(' ', start)
-    if (space !== -1 && start - space < 16) start = space + 1
-  }
+  const [a, b] = marks[0] ?? [0, 0]
+  const mid = Math.floor((a + Math.min(b, a + max)) / 2)
+  let start = Math.max(0, Math.min(mid - Math.floor(max / 2), text.length - max))
   let end = Math.min(text.length, start + max)
-  if (end < text.length) {
-    const space = text.lastIndexOf(' ', end)
-    if (space > start + max / 2) end = space
+  // Start on a word, unless that would cut into the match.
+  if (start > 0 && text[start - 1] !== ' ') {
+    const next = text.indexOf(' ', start)
+    if (next !== -1 && next < a && next - start < SNAP) start = next + 1
   }
+  // End on a word, likewise.
+  if (end < text.length && text[end] !== ' ') {
+    const prev = text.lastIndexOf(' ', end)
+    if (prev >= b && end - prev < SNAP) end = prev
+  }
+  while (end > start && text[end - 1] === ' ') end--
   const pre = start > 0 ? '…' : ''
   const post = end < text.length ? '…' : ''
   const shift = pre.length - start
   const kept: [number, number][] = []
-  for (const [a, b] of marks) {
-    const s = Math.max(a, start)
-    const e = Math.min(b, end)
+  for (const [x, y] of marks) {
+    const s = Math.max(x, start)
+    const e = Math.min(y, end)
     if (e > s) kept.push([s + shift, e + shift])
   }
   return { text: pre + text.slice(start, end) + post, marks: kept }
+}
+
+/** About how many characters of a 13 px snippet fit in a results row `widthPx` wide. */
+export function snippetChars(widthPx: number): number {
+  // Row padding, the kind icon and its gap take ~48 px; ~6.8 px a character
+  // (on the generous side, so the cut snippet fits the row whole).
+  const chars = Math.floor((widthPx - 48) / 6.8)
+  return Math.max(24, Math.min(120, Number.isFinite(chars) ? chars : 90))
 }
 
 const KIND_ORDER: Record<SearchKind, number> = {
@@ -335,7 +348,8 @@ function compareHits(
 /** Every item that matches all terms of `query`, best first. */
 export function searchIndex(
   index: readonly IndexedItem[],
-  query: string
+  query: string,
+  { snippet = 90 }: { snippet?: number } = {}
 ): SearchResult[] {
   const terms = queryTerms(query)
   if (terms.length === 0) return []
@@ -367,11 +381,12 @@ export function searchIndex(
     const hit: SearchResult = {
       ref: item.ref,
       kind: item.kind,
-      primary: clipSnippet(fieldMarks(main!, terms)),
+      primary: clipSnippet(fieldMarks(main!, terms), snippet),
       field: best.field,
       score,
     }
-    if (url) hit.secondary = clipSnippet(fieldMarks(url, terms), 70)
+    // The address shares its (smaller) line with the author.
+    if (url) hit.secondary = clipSnippet(fieldMarks(url, terms), Math.round(snippet * 0.8))
     if (item.by) hit.by = item.by
     hits.push({ hit, at: item.at })
   }
@@ -437,21 +452,23 @@ const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z))
  * The view that shows `box` in a `width` x `height` viewport: centred, at a
  * readable zoom or the zoom that fits it, whichever is smaller, but never
  * zoomed out from where the view already is. A box too big to fit keeps its
- * top-left corner (a frame's title) in view instead of its middle. `top` is
- * how much of the viewport's top something covers (the search box); the box
- * is placed in the part below it.
+ * top-left corner (a frame's title) in view instead of its middle. `top` and
+ * `bottom` are how much of the viewport's top (the search box) and bottom
+ * (the tool bar) something covers; the box is centred in the part between.
  */
 export function revealView(
   box: Box,
   view: View,
   width: number,
   height: number,
-  { padding = 64, top = 0 }: { padding?: number; top?: number } = {}
+  { padding = 64, top = 0, bottom = 0 }: { padding?: number; top?: number; bottom?: number } = {}
 ): View {
   const inset = Math.min(Math.max(top, 0), height / 2)
+  const below = Math.min(Math.max(bottom, 0), (height - inset) / 3)
+  const room = height - inset - below
   const fits = Math.min(
     (width - padding * 2) / Math.max(box.w, 1),
-    (height - inset - padding * 2) / Math.max(box.h, 1)
+    (room - padding * 2) / Math.max(box.h, 1)
   )
   const z = clampZoom(Math.max(view.z, Math.min(READABLE_ZOOM, fits)))
   const axis = (start: number, size: number, from: number, room: number) =>
@@ -460,7 +477,7 @@ export function revealView(
       : from + room / 2 - (start + size / 2) * z
   return {
     x: axis(box.x, box.w, 0, width),
-    y: axis(box.y, box.h, inset, height - inset),
+    y: axis(box.y, box.h, inset, room),
     z,
   }
 }

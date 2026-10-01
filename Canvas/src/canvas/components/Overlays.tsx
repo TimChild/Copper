@@ -86,6 +86,28 @@ export function ResizeHandles({
   )
 }
 
+/**
+ * The shape whose text is being edited: a heavier outline with a soft halo
+ * and no handles, so editing never reads as merely selected.
+ */
+export function EditingOutline({ box, zoom }: { box: Box; zoom: number }) {
+  const pad = 3 / zoom
+  return (
+    <div
+      data-part="editing-outline"
+      className="pointer-events-none absolute left-0 top-0"
+      style={{
+        width: box.w + pad * 2,
+        height: box.h + pad * 2,
+        transform: `translate(${box.x - pad}px, ${box.y - pad}px)`,
+        border: `${2 / zoom}px solid var(--accent)`,
+        borderRadius: 7 / zoom,
+        boxShadow: `0 0 0 ${4 / zoom}px var(--accent-soft)`,
+      }}
+    />
+  )
+}
+
 /** Outline around each selected box, plus a dashed group box for several. */
 export const SelectionOutlines = memo(function SelectionOutlines({
   boxes,

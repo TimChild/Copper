@@ -168,6 +168,34 @@ describe('Controller', () => {
   })
 })
 
+describe('host status', () => {
+  it('is idempotent, outlives init, and clears on null', () => {
+    let bumps = 0
+    c.subscribe(() => bumps++)
+    expect(c.getHostStatus()).toBeNull()
+    c.setHostStatus({ mode: 'shared-offline', pending: 2 })
+    const first = c.getHostStatus()
+    expect(first).toEqual({ mode: 'shared-offline', pending: 2 })
+    expect(bumps).toBe(1)
+    // The same status again changes nothing and wakes nobody.
+    c.setHostStatus('{"mode":"shared-offline","pending":2}')
+    expect(c.getHostStatus()).toBe(first)
+    expect(bumps).toBe(1)
+    init()
+    expect(c.getHostStatus()).toEqual({ mode: 'shared-offline', pending: 2 })
+    c.setHostStatus({ mode: 'shared-live' })
+    expect(c.getHostStatus()).toEqual({ mode: 'shared-live' })
+    c.setHostStatus(null)
+    expect(c.getHostStatus()).toBeNull()
+  })
+
+  it('keeps the last good status when given a bad one', () => {
+    c.setHostStatus({ mode: 'local' })
+    expect(() => c.setHostStatus({ mode: 'nope' })).toThrow()
+    expect(c.getHostStatus()).toEqual({ mode: 'local' })
+  })
+})
+
 describe('online, through the relayed socket', () => {
   it('syncs both ways with the server and goes live', async () => {
     const relay = new DevRelay(0)

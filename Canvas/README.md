@@ -5,7 +5,7 @@ The infinite whiteboard Copper shows at `copper://canvas/<id>`: stickies (markdo
 select, multi-select, marquee, move, resize, undo/redo, search, live cursors and agent presence.
 
 It is a Vite + React 19 + TypeScript + Tailwind v4 page, built with **bun** into one self-contained
-file, **`dist/canvas.html`** (≈ 490 KB; every script and style inlined, no fonts or other requests).
+file, **`dist/canvas.html`** (≈ 500 KB; every script and style inlined, no fonts or other requests).
 That file is committed and copied into the app bundle; the app does not need bun to build.
 
 The page never talks to the network. Copper hosts it in a `WKWebView`, persists its Yjs updates,
@@ -29,12 +29,13 @@ bun run dev            # then open http://localhost:5173/?dev=1
 | `agent=1` | a simulated agent that thinks, then writes notes through `apply` |
 | `online=1` | the relayed sync socket against an in-page server (`src/dev-relay.ts`) |
 | `theme=dark\|light` | force a theme (otherwise `prefers-color-scheme`) |
+| `status=…&pending=N` | what the host would say through `setStatus` (e.g. `status=shared-offline&pending=3`) |
 | `readonly=1`, `name=…`, `kind=personal\|shared` | init options |
 
 Checks (all must pass):
 
 ```sh
-bun run test        # vitest, --maxWorkers=4
+bun run test        # vitest (4 workers, from vitest.config.ts)
 bun run typecheck   # tsc --noEmit
 bun run lint        # eslint (typescript-eslint, react-hooks)
 bun run build       # → dist/canvas.html
@@ -110,8 +111,31 @@ copperCanvas.zoomTo(["n1"])                 // animated flight to the shapes' bo
 copperCanvas.setAgent({ id: "agent:scout", name: "Scout", color: "#2b9348",
                         cursor: { x: 120, y: 40 }, status: "thinking" })   // partial patches merge
 copperCanvas.setAgent({ id: "agent:scout", remove: true })
+copperCanvas.setStatus({ mode: "shared-offline", pending: 3 })  // what the title pill says; see below
 copperCanvas.theme("dark")                  // "light" | "dark" | "system" (default: system)
 ```
+
+### Connection status
+
+`setStatus({mode, pending?})` tells the page how the host sees the board's connection, for the
+title pill (top left). It is idempotent, survives `init` (so it may come before or after one), and
+`setStatus(null)` clears it. `mode`:
+
+| Mode | Pill | Use when |
+|---|---|---|
+| `local` | gray dot, "On this Mac" | the board never leaves this Mac |
+| `personal-synced` | green dot, "Synced" | Personal, syncing to the account |
+| `shared-live` | green dot, "Live", collaborators' avatars | a shared board with its room connected |
+| `shared-offline` | amber dot, "Offline · changes saved on this Mac · N pending" | a shared board whose room is not connected (signed out, disconnected, no network) |
+
+`pending` (optional, ≥ 0) is the number of local changes not yet handed to the cloud; it shows only
+while offline. "Synced" and "Live" show only once the page's own socket has synced — before that the
+pill says "Connecting" (or "Offline" if the socket dropped). Narrow windows keep a short text
+("Offline · 3 pending"), never just a dot; the full sentence is in the pill's tooltip.
+
+Without `setStatus` the page derives the pill as before from `init` and the socket — "On this Mac",
+"Connecting", "Live", "Offline" — except that a `kind: "shared"` board initialised with
+`online: false` reads "Offline · changes saved on this Mac" rather than "On this Mac".
 
 ### Ops semantics
 
@@ -161,6 +185,11 @@ One Y.Doc per canvas (see `src/canvas/types.ts`):
 
 Undo is a `Y.UndoManager` on `shapes` tracking the page's own origins (`local`, `agent`); stored
 and relayed updates are never undone.
+
+Sticky text is never shrunk to fit. A note whose markdown is taller than its box shows a fade and a
+**Show all** pill that grows it to fit (one undo step, up to 960 px; a longer note opens in its
+editor, which scrolls). While you type, a note grows the same way. Read-only boards show it all
+locally without writing.
 
 ## Layout
 

@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: { alias: { '@': path.resolve(here, 'src') } },
   test: {
     environment: 'node',
+    maxWorkers: 4,
     execArgv: ['--disable-warning=ExperimentalWarning'],
     include: ['src/**/__tests__/**/*.test.{ts,tsx}'],
   },

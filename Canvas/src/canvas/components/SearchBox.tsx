@@ -151,7 +151,7 @@ export function SearchBox({ search, onReveal }: { search: BoardSearch; onReveal:
             id={listId}
             role="listbox"
             aria-label="Matches"
-            className="max-h-[min(320px,50vh)] overflow-y-auto overflow-x-hidden border-t border-line py-1"
+            className="@container max-h-[min(320px,50vh)] overflow-y-auto overflow-x-hidden border-t border-line py-1"
           >
             {results.slice(0, MAX_ROWS).map((hit, i) => {
               const Icon = KIND_ICON[hit.kind]
@@ -173,13 +173,21 @@ export function SearchBox({ search, onReveal }: { search: BoardSearch; onReveal:
                     <p className="truncate text-[13px] leading-5 text-ink">
                       <Marked value={hit.primary} />
                     </p>
-                    {hit.secondary && (
-                      <p className="truncate text-[11.5px] leading-4 text-ink-3">
-                        <Marked value={hit.secondary} />
+                    {(hit.secondary || hit.by) && (
+                      <p className="flex min-w-0 items-baseline gap-1 text-[11.5px] leading-4 text-ink-3">
+                        {hit.secondary && (
+                          <span className="min-w-0 truncate">
+                            <Marked value={hit.secondary} />
+                          </span>
+                        )}
+                        {hit.by && (
+                          <span data-part="by" className="min-w-0 max-w-[65%] shrink-0 truncate text-[11px] text-ink-4 @max-[340px]:hidden">
+                            {hit.secondary ? '· ' : ''}by {hit.by}
+                          </span>
+                        )}
                       </p>
                     )}
                   </div>
-                  {hit.by && <span className="mt-0.5 max-w-[30%] shrink-0 truncate text-[11px] text-ink-4">{hit.by}</span>}
                 </li>
               )
             })}

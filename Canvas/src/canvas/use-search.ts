@@ -3,8 +3,8 @@
  * which hit is highlighted, and Cmd/Ctrl+F (captured, so the browser's own
  * find never opens over the board).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { boardSearchItems, indexSearchItems, searchIndex, stepHit, type SearchResult } from './search'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { boardSearchItems, indexSearchItems, searchIndex, snippetChars, stepHit, type SearchResult } from './search'
 import type { Shape } from './types'
 
 const isMac = () =>
@@ -47,7 +47,24 @@ export function useBoardSearch({
 
   const items = useMemo(() => (open ? boardSearchItems(shapes.values()) : []), [open, shapes])
   const index = useMemo(() => indexSearchItems(items), [items])
-  const results = useMemo(() => searchIndex(index, query), [index, query])
+  // Snippets are cut to what a row shows, centred on the match, so a narrow
+  // box still shows the matched word.
+  const [width, setWidth] = useState(460)
+  useLayoutEffect(() => {
+    const el = boxRef.current
+    if (!open || !el) return
+    const measure = () => {
+      const w = Math.round(el.getBoundingClientRect().width)
+      if (w > 0) setWidth(prev => (prev === w ? prev : w))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [open])
+  const snippet = snippetChars(width)
+  const results = useMemo(() => searchIndex(index, query, { snippet }), [index, query, snippet])
 
   const found = cursor.ref ? results.findIndex(r => r.ref === cursor.ref) : -1
   const active = results.length === 0 ? -1 : Math.max(found, 0)

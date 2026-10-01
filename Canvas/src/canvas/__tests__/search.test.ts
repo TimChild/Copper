@@ -7,11 +7,15 @@ import {
   clipSnippet,
   flightView,
   fold,
+  indexSearchItems,
+  markText,
   matchQuality,
   plainText,
   queryTerms,
   revealView,
+  searchIndex,
   searchItems,
+  snippetChars,
   stepHit,
   type Highlighted,
   type SearchItem,
@@ -141,6 +145,64 @@ describe('clipSnippet', () => {
   })
 })
 
+describe('clipSnippet centring', () => {
+  const sentence =
+    'Ready to review Does the whiteboard preserve my edits while I am offline? Owner: Blair, and a few more words after that'
+
+  it('puts the first match in the middle of the snippet', () => {
+    const h = markText(sentence, ['offline'])
+    const out = clipSnippet(h, 40)
+    const [[a, b]] = out.marks as [[number, number]]
+    expect(out.text.slice(a, b)).toBe('offline')
+    const middle = (a + b) / 2 / out.text.length
+    expect(middle).toBeGreaterThan(0.3)
+    expect(middle).toBeLessThan(0.7)
+    expect(out.text.startsWith('…')).toBe(true)
+    expect(out.text.endsWith('…')).toBe(true)
+  })
+
+  it('keeps the match whole in a snippet shorter than the sentence before it', () => {
+    for (const max of [24, 30, 50, 70]) {
+      const out = clipSnippet(markText(sentence, ['offline']), max)
+      expect(marked(out)).toEqual(['offline'])
+      expect(out.text.length).toBeLessThanOrEqual(max + 2)
+    }
+  })
+
+  it('starts at the beginning for an early match and ends at the end for a late one', () => {
+    expect(clipSnippet(markText(sentence, ['ready']), 40).text.startsWith('Ready')).toBe(true)
+    const late = clipSnippet(markText(sentence, ['that']), 40)
+    expect(late.text.endsWith('that')).toBe(true)
+    expect(marked(late)).toEqual(['that'])
+  })
+
+  it('cuts on word boundaries', () => {
+    const out = clipSnippet(markText(sentence, ['offline']), 40)
+    const inner = out.text.replace(/^…|…$/g, '')
+    for (const w of inner.split(' ')) expect(sentence.split(/\s+/)).toContain(w)
+  })
+})
+
+describe('snippetChars', () => {
+  it('follows the row width, within bounds', () => {
+    expect(snippetChars(460)).toBeGreaterThan(snippetChars(300))
+    expect(snippetChars(100)).toBe(24)
+    expect(snippetChars(5000)).toBe(120)
+    expect(snippetChars(Number.NaN)).toBe(90)
+  })
+
+  it('centres a match a narrow row would otherwise truncate away', () => {
+    const [hit] = searchIndex(
+      indexSearchItems([{ ref: 'n', kind: 'sticky', text: '## Ready to review\nDoes the whiteboard preserve my edits while I am offline?' }]),
+      'offline',
+      { snippet: snippetChars(300) }
+    )
+    // The whole snippet fits the row, and the match is in it.
+    expect(hit!.primary.text.length).toBeLessThanOrEqual(snippetChars(300) + 2)
+    expect(marked(hit!.primary)).toEqual(['offline'])
+  })
+})
+
 describe('boardSearchItems', () => {
   const shape = (patch: Partial<Shape> & Pick<Shape, 'id' | 'type'>): Shape => ({
     x: 0,
@@ -218,6 +280,15 @@ describe('revealView', () => {
     expect((H / 2 + 100 - v.y) / v.z).toBe(2070)
     const huge = revealView(box, { x: 0, y: 0, z: 1 }, W, H, { top: 5000 })
     expect(huge.y).toBe(revealView(box, huge, W, H, { top: H / 2 }).y)
+  })
+
+  it('also leaves the tool bar at the bottom free', () => {
+    const v = revealView(box, { x: 0, y: 0, z: 1 }, W, H, { top: 200, bottom: 68 })
+    // Centred between 200 and H - 68.
+    expect((200 + (H - 200 - 68) / 2 - v.y) / v.z).toBe(2070)
+    // A cover too big for the room left is capped, so the box keeps a third.
+    const capped = revealView(box, { x: 0, y: 0, z: 1 }, W, H, { top: 200, bottom: 5000 })
+    expect(capped.y).toBe(revealView(box, capped, W, H, { top: 200, bottom: (H - 200) / 3 }).y)
   })
 
   it('centres an arrow on its label', () => {

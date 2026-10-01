@@ -38,9 +38,12 @@ import {
   type Side,
   type View,
 } from '../geometry'
+import { gridBackground } from '../grid'
+import { growFor } from '../overflow'
 import { imageFile, imageFromFile, imageFromUrl, imageSizeFor, isUrlText, looksLikeImageUrl, urlFrom } from '../images'
 import { MIN_SIZE, isResizable, resizeBox, resizeBoxKeepAspect, type Handle } from '../resize'
 import { arrowLabelBox, revealView, type SearchResult } from '../search'
+import { statusView } from '../status'
 import { SHAPE_SIZE, isRefEndpoint, type Endpoint, type NamedColor, type Shape, type ShapeColor } from '../types'
 import { useLiveAgents, usePeers } from '../use-presence'
 import { useBoardSearch } from '../use-search'
@@ -48,6 +51,7 @@ import { useViewFlight } from '../use-view-flight'
 import {
   AuthorChip,
   CompactBar,
+  EditHint,
   EmptyHint,
   LinkPrompt,
   SelectionBar,
@@ -67,6 +71,7 @@ import {
   AnchorDots,
   ArrowDraft,
   ArrowEndHandles,
+  EditingOutline,
   Marquee,
   PeerCursors,
   ResizeHandles,
@@ -108,6 +113,8 @@ interface ClipShape extends ShapeInput {
 
 const CLIP_TYPE = 'application/x-copper-canvas'
 const SEND_MS = 50
+/** Screen px the tool bar takes at the bottom (its panel and margin). */
+const TOOLBAR_PX = 68
 const DOUBLE_MS = 350
 
 const isTextField = (el: EventTarget | null) =>
@@ -122,7 +129,12 @@ export function Board({ session }: { session: Session }) {
   const shapes = useSyncExternalStore(store.subscribe, store.getShapes)
   const selectionList = useSyncExternalStore(controller.subscribeSelection, controller.getSelection)
   const selection = useMemo(() => new Set(selectionList), [selectionList])
-  const status = useSyncExternalStore(controller.subscribe, () => session.status)
+  const sync = useSyncExternalStore(controller.subscribe, () => session.status)
+  const hostStatus = useSyncExternalStore(controller.subscribe, controller.getHostStatus)
+  const status = useMemo(
+    () => statusView({ kind: cfg.kind, online: cfg.online, sync, host: hostStatus, readOnly }),
+    [cfg.kind, cfg.online, sync, hostStatus, readOnly]
+  )
   const peers = usePeers(awareness)
   const agents = useLiveAgents(store.agents)
 
@@ -452,9 +464,26 @@ export function Board({ session }: { session: Session }) {
     [store]
   )
 
+  const growSticky = useCallback(
+    (id: string, contentPx: number, { open = false }: { open?: boolean } = {}) => {
+      const s = store.get(id)
+      if (!s || s.type !== 'sticky' || readOnly) return false
+      const { h, fits } = growFor(s.h, contentPx)
+      if (h !== null) {
+        // Typing grows the note in the same undo step as the typing; a click is a step of its own.
+        if (open) store.undo.stopCapturing()
+        store.update(id, { h }, LOCAL, open)
+        if (open) store.undo.stopCapturing()
+      }
+      if (open && !fits) startEdit(id)
+      return fits
+    },
+    [store, readOnly, startEdit]
+  )
+
   const actions = useMemo<BoardActions>(
-    () => ({ store, me, readOnly, openUrl, endEdit, sibling, autoHeight }),
-    [store, me, readOnly, openUrl, endEdit, sibling, autoHeight]
+    () => ({ store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky }),
+    [store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky]
   )
 
   // ---- acting on the selection ------------------------------------------------
@@ -1290,7 +1319,8 @@ export function Board({ session }: { session: Session }) {
     const at = locate(hit.ref)
     if (!at) return
     const { w, h } = sizeRef.current
-    flight.fly(revealView(at.box, view, w, h, { top: search.coveredTop() }), () => select([hit.ref]))
+    // Centred in what the search box above and the tool bar below leave free.
+    flight.fly(revealView(at.box, view, w, h, { top: search.coveredTop(), bottom: TOOLBAR_PX }), () => select([hit.ref]))
   }
 
   // ---- what to draw -----------------------------------------------------------------
@@ -1311,7 +1341,9 @@ export function Board({ session }: { session: Session }) {
   const single = selected.length === 1 ? selected[0]! : null
   const busy = !!(drag || draft || frameDraft || panning)
   const resizable = tool === 'select' && single && !readOnly && isResizable(single.type) && editId !== single.id ? single : null
-  const selectedBoxes = selected.filter(s => s.type !== 'arrow')
+  const selectedBoxes = selected.filter(s => s.type !== 'arrow' && s.id !== editId)
+  const editShape = editId ? live.byId.get(editId) : undefined
+  const editBox = editShape && (editShape.type === 'sticky' || editShape.type === 'text') ? editShape : null
   const group = selected.length > 1 ? unionBox(selected.map(s => boundsOf(s.id)).filter((b): b is Box => !!b)) : null
 
   const toScreen = (p: Point) => ({ x: view.x + p.x * view.z, y: view.y + p.y * view.z })
@@ -1327,6 +1359,20 @@ export function Board({ session }: { session: Session }) {
     const below = top.y - frameLabel < 112
     const x = Math.min(Math.max(top.x, 220), Math.max(220, size.w - 220))
     return { x, y: below ? bottom.y + 14 : top.y - 14 - frameLabel, below }
+  })()
+
+  // The editing hint goes under the note, or over it when the bottom (or the
+  // selection bar) has the space below; always on screen.
+  const hintAt = (() => {
+    if (!editBox || size.w === 0) return null
+    const top = toScreen({ x: editBox.x, y: editBox.y })
+    const bottom = toScreen({ x: editBox.x, y: editBox.y + editBox.h })
+    const floor = size.h - 84
+    const roomBelow = floor - (bottom.y + 8) >= 26 && !barAt?.below
+    const above = !roomBelow && top.y - 8 - 26 >= 60
+    const y = above ? top.y - 8 : Math.min(Math.max(bottom.y + 8, 60), floor - 26)
+    const x = Math.min(Math.max(top.x, 12), Math.max(12, size.w - 330))
+    return { x, y, above }
   })()
 
   const hovered = hover && !busy ? live.byId.get(hover) : undefined
@@ -1357,8 +1403,7 @@ export function Board({ session }: { session: Session }) {
 
   const cursor =
     panning ? 'grabbing' : tool === 'hand' || space ? 'grab' : tool === 'select' ? 'default' : 'crosshair'
-  const grid = 24 * view.z
-  const showGrid = grid >= 8
+  const grid = gridBackground(view)
 
   return (
     <BoardContext.Provider value={actions}>
@@ -1371,9 +1416,7 @@ export function Board({ session }: { session: Session }) {
         style={{
           cursor,
           backgroundColor: 'var(--bg)',
-          backgroundImage: showGrid ? 'radial-gradient(var(--dot) 1px, transparent 1.2px)' : undefined,
-          backgroundSize: showGrid ? `${grid}px ${grid}px` : undefined,
-          backgroundPosition: `${view.x}px ${view.y}px`,
+          ...grid,
         }}
         onPointerDown={onPointerDown}
         onMouseDown={e => {
@@ -1418,6 +1461,7 @@ export function Board({ session }: { session: Session }) {
             <SelectionOutlines key={peer.clientId} boxes={b} group={null} zoom={view.z} color={peer.color} dashed />
           ))}
           <SelectionOutlines boxes={selectedBoxes} group={group} zoom={view.z} />
+          {editBox && <EditingOutline box={editBox} zoom={view.z} />}
           {rings.length > 0 && <SearchRings places={rings} zoom={view.z} />}
           {resizable && (
             <ResizeHandles
@@ -1449,6 +1493,7 @@ export function Board({ session }: { session: Session }) {
         </div>
 
         {shapes.size === 0 && !editId && <EmptyHint readOnly={readOnly} />}
+        {hintAt && <EditHint at={hintAt} above={hintAt.above} />}
         {chip && <AuthorChip at={{ x: chip.at.x, y: chip.at.y + 6 }} name={chip.name} agent={chip.agent} />}
 
         {barAt && (
@@ -1515,7 +1560,17 @@ export function Board({ session }: { session: Session }) {
           onRedo={redo}
           readOnly={readOnly}
         />
-        <CompactBar onFit={fitAll} canUndo={history.undo} canRedo={history.redo} onUndo={undo} onRedo={redo} zoom={view.z} readOnly={readOnly} />
+        <CompactBar
+          zoom={view.z}
+          onZoom={zoomBy}
+          onFit={fitAll}
+          onReset={zoomReset}
+          canUndo={history.undo}
+          canRedo={history.redo}
+          onUndo={undo}
+          onRedo={redo}
+          readOnly={readOnly}
+        />
         {linkAt && (
           <LinkPrompt
             onSubmit={url => {

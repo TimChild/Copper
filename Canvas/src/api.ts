@@ -19,6 +19,8 @@ export interface CopperCanvasApi {
   select(ids: unknown): void
   zoomTo(ids: unknown): void
   setAgent(agent: unknown): void
+  /** `{mode: 'local'|'personal-synced'|'shared-live'|'shared-offline', pending?}`; `null` clears. */
+  setStatus(status: unknown): void
   theme(mode: 'light' | 'dark' | string): void
   exportState(): string
 }
@@ -95,6 +97,7 @@ export function createApi(c: Controller = controller): CopperCanvasApi {
     select: guard('select', (ids: unknown) => c.setSelection(idList(ids), true), undefined),
     zoomTo: guard('zoomTo', (ids: unknown) => void c.zoomTo(idList(ids)), undefined),
     setAgent: guard('setAgent', (agent: unknown) => c.setAgent(agent), undefined),
+    setStatus: guard('setStatus', (status: unknown) => void c.setHostStatus(status), undefined),
     theme: guard('theme', (mode: string) => void setTheme(mode), undefined),
     exportState: guard('exportState', () => c.exportState(), ''),
   }

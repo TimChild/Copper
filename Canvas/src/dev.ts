@@ -6,6 +6,7 @@
  *   `&agent=1`  an agent at work (presence + ops)
  *   `&online=1` the relayed sync socket, against an in-page server
  *   `&empty=1`  start from a blank board
+ *   `&status=shared-offline&pending=3` what the host says via `setStatus`
  *   `&theme=dark|light`, `&readonly=1`
  */
 import * as Y from 'yjs'
@@ -136,6 +137,8 @@ export function startDev(params: URLSearchParams) {
     online,
     readOnly: params.get('readonly') === '1',
   })
+  const status = params.get('status')
+  if (status) window.copperCanvas!.setStatus({ mode: status, pending: Number(params.get('pending') ?? 0) })
   if (params.get('peers') === '1') simulatePeer()
   if (params.get('agent') === '1') simulateAgent()
   ;(window as unknown as { __dev: unknown }).__dev = { relay, controller }

@@ -12,6 +12,7 @@ import { CanvasStore, HOST, INIT, PRESENCE, bareId } from './canvas/doc'
 import { writeAgent, isStatus, type AgentPatch } from './canvas/agents'
 import { colorFor } from './canvas/colors'
 import { visibleWorld, type Box, type Point, type View } from './canvas/geometry'
+import { parseHostStatus, sameHostStatus, type HostStatus, type SyncStatus } from './canvas/status'
 import type { Me } from './canvas/types'
 import { hostLog, postToHost } from './host-bridge'
 import { applyOps, readCanvas, type ApplyResult, type CanvasRead } from './ops'
@@ -29,7 +30,7 @@ export interface InitConfig {
   readOnly: boolean
 }
 
-export type SyncStatus = 'local' | 'connecting' | 'online' | 'offline'
+export type { HostStatus, SyncStatus }
 
 /** How long an agent shows "writing" after its last op. */
 export const WRITING_MS = 1500
@@ -171,6 +172,8 @@ export class Controller {
   private pendingZoom: string[] | null = null
   private agentTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private version = 0
+  /** What the host last said about the board's connection; outlives `init`. */
+  private hostStatus: HostStatus | null = null
 
   subscribe = (fn: Listener) => {
     this.listeners.add(fn)
@@ -214,6 +217,22 @@ export class Controller {
   exportState(): string {
     const s = this.need()
     return toBase64(Y.encodeStateAsUpdate(s.doc))
+  }
+
+  // ---- host status --------------------------------------------------------------
+
+  getHostStatus = () => this.hostStatus
+
+  /**
+   * `copperCanvas.setStatus`: idempotent; `null` clears it. Kept across
+   * `init`, so it may come before or after one.
+   */
+  setHostStatus(raw: unknown): HostStatus | null {
+    const next = parseHostStatus(raw)
+    if (sameHostStatus(next, this.hostStatus)) return this.hostStatus
+    this.hostStatus = next
+    this.emit()
+    return next
   }
 
   // ---- viewport ----------------------------------------------------------------

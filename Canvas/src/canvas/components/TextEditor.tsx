@@ -7,7 +7,7 @@
 import { useEffect, useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent } from 'react'
 import { continueList } from '../markdown-lite'
 import { shiftCaret } from '../text-diff'
-import { cn } from './ui'
+import { EDIT_HINT_ID, cn } from './ui'
 
 export interface TextEditorProps {
   value: string
@@ -24,6 +24,8 @@ export interface TextEditorProps {
   /** Grow with the content instead of scrolling. */
   autoGrow?: boolean
   onHeight?: (px: number) => void
+  /** The content is taller than the field (px of content): the shape may grow to fit. */
+  onOverflow?: (px: number) => void
   selectAll?: boolean
 }
 
@@ -53,6 +55,7 @@ export function TextEditor({
   markdown = true,
   autoGrow = false,
   onHeight,
+  onOverflow,
   selectAll = false,
 }: TextEditorProps) {
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -95,7 +98,12 @@ export function TextEditor({
 
   useLayoutEffect(() => {
     const el = ref.current
-    if (!el || !autoGrow) return
+    if (!el) return
+    if (!autoGrow) {
+      // Scrolling fields: say when the text no longer fits, so the note can grow.
+      if (onOverflow && el.scrollHeight > el.clientHeight + 1) onOverflow(el.scrollHeight)
+      return
+    }
     el.style.height = '0px'
     const h = el.scrollHeight
     el.style.height = `${h}px`
@@ -183,6 +191,7 @@ export function TextEditor({
     <textarea
       ref={ref}
       aria-label={label}
+      aria-describedby={markdown ? EDIT_HINT_ID : undefined}
       defaultValue={value}
       placeholder={placeholder}
       spellCheck

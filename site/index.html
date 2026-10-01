@@ -484,6 +484,8 @@ footer { margin-top: clamp(96px, 12vw, 160px); border-top: 1px solid var(--line)
 footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 32px; padding-block: 32px 44px; font-size: 14px; color: var(--ink-2); }
 .foot-id { display: flex; align-items: center; gap: 12px; }
 .foot-id img { width: 28px; height: 28px; }
+.foot-id a { color: var(--ink); text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.foot-id a:hover { text-decoration-color: var(--accent); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 960px) {
@@ -874,7 +876,7 @@ Jev said <span class="ok">DONE</span>, 96% sure
 
 <footer>
   <div class="wrap">
-    <div class="foot-id"><img src="assets/icon.png" alt="" width="28" height="28"><span>Copper, by Collin and Felipe</span></div>
+    <div class="foot-id"><img src="assets/icon.png" alt="" width="28" height="28"><span>Copper, made by <a href="https://collinrijock.dev">Collin</a> and <a href="https://felipearce.dev">Felipe</a>.</span></div>
     <ul class="links">
       <li><a href="https://github.com/copper-browser/Copper">GitHub</a></li>
       <li><a href="https://github.com/copper-browser/Copper/blob/HEAD/LICENSE">MIT License</a></li>
@@ -990,7 +992,7 @@ Jev said <span class="ok">DONE</span>, 96% sure
     },
     readme: function () {
       return '<div class="scroll" tabindex="-1"><div class="pg">' + site('copper-browser / Copper', 'README') +
-        '<h3>Copper</h3><p>A small, fast, quiet web browser for the Mac, by Collin and Felipe</p>' +
+        '<h3>Copper</h3><p>A small, fast, quiet web browser for the Mac, made by Collin and Felipe.</p>' +
         '<p>Copper is a browser with nothing in the way. A row of tabs, across the top or down the left, your choice, and the page.</p>' +
         '<ul class="rows"><li><span>Language</span><span>Swift</span></li><li><span>Dependencies</span><span>None beyond macOS</span></li><li><span>License</span><span>MIT</span></li></ul></div></div>';
     },

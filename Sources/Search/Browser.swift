@@ -271,6 +271,9 @@ final class Browser: NSObject, ObservableObject {
 
     enum Suggestion: Identifiable, Hashable {
         case credential(Credential)
+        /// The current two-step code of a Bitwarden login with an
+        /// authenticator key, offered under a one-time-code box.
+        case code(Credential)
         case username(String)
         case identity(AutofillIdentity)
         case card(AutofillCard)
@@ -279,6 +282,7 @@ final class Browser: NSObject, ObservableObject {
         var id: String {
             switch self {
             case .credential(let credential): return credential.stableID
+            case .code(let credential): return "code:\(credential.stableID)"
             case .username(let name): return "user:\(name)"
             case .identity(let identity): return "id:\(identity.id)"
             case .card(let card): return "card:\(card.id)"
@@ -311,6 +315,14 @@ final class Browser: NSObject, ObservableObject {
     /// Set once you have picked, so the list doesn't come straight back for
     /// the box you are still in. Cleared when the caret leaves the boxes.
     private var pickedInto: Tab.ID?
+    /// The account last put into each tab from the list. Its two-step code
+    /// comes first on the page that asks for one, which is often on another
+    /// host than the sign-in (accounts.google.com, login.microsoftonline.com).
+    private var signedInWith: [Tab.ID: Credential] = [:]
+    /// A code went into this tab's box. A password pick does not hold back
+    /// the code list: the page that asks for the code often replaces the
+    /// sign-in without the caret ever leaving a box.
+    private var codePickedInto: Tab.ID?
     /// The list is taken down a beat after the caret leaves, not the same
     /// instant: clicking a row can take the caret out of the page first, and
     /// a list that vanished on the way down would never be clicked.
@@ -369,6 +381,7 @@ final class Browser: NSObject, ObservableObject {
                     if !worked { self.announce("Couldn't find the sign-in fields anymore") }
                 }
                 Credentials.touch(credential)
+                self.signedInWith[tab.id] = credential
                 self.suggesting = nil
             } catch {
                 self?.announce(error.localizedDescription)
@@ -385,6 +398,10 @@ final class Browser: NSObject, ObservableObject {
             choose(credential)
             return
         }
+        if case .code(let credential) = suggestion {
+            chooseCode(credential)
+            return
+        }
         lowering?.cancel()
         guard fetching == nil,
               let tab = tabs.first(where: { $0.id == suggesting?.tab }) ?? active
@@ -396,7 +413,7 @@ final class Browser: NSObject, ObservableObject {
             announce("Couldn't find the boxes anymore")
         }
         switch suggestion {
-        case .credential:
+        case .credential, .code:
             break
         case .username(let name):
             tab.fillFocused(name) { worked in
@@ -415,6 +432,43 @@ final class Browser: NSObject, ObservableObject {
                 if !worked { announceFailure() }
             }
         }
+    }
+
+    /// The code is read when the row is picked, never earlier, and goes
+    /// straight into the page — not into a log or an announcement.
+    private func chooseCode(_ credential: Credential) {
+        lowering?.cancel()
+        guard let tab = tabs.first(where: { $0.id == suggesting?.tab }) ?? active else { return }
+        guard fetching == nil else { return }
+        pickedInto = tab.id
+        codePickedInto = tab.id
+        fetching = credential.id
+        Task { [weak self, weak tab] in
+            do {
+                let code = try await Credentials.totp(credential.id)
+                guard let self, let tab else { return }
+                tab.fillOTP(code) { worked in
+                    if !worked { self.announce("Couldn't find the code box anymore") }
+                }
+                Credentials.touch(credential)
+                self.suggesting = nil
+            } catch {
+                self?.announce(error.localizedDescription)
+                self?.suggesting = nil
+            }
+            self?.fetching = nil
+        }
+    }
+
+    /// Accounts with an authenticator key for a one-time-code box: the one
+    /// just signed in with in this tab first, then the site's own.
+    private func codeCredentials(for tab: Tab, host: String) -> [Credential] {
+        var rows = Credentials.candidates(for: host, hint: tab.fieldHint).filter(\.hasTOTP)
+        if let recent = signedInWith[tab.id], recent.hasTOTP {
+            rows.removeAll { $0.id == recent.id }
+            rows.insert(recent, at: 0)
+        }
+        return rows
     }
 
     func dropChoice() { suggesting = nil }
@@ -1173,6 +1227,7 @@ final class Browser: NSObject, ObservableObject {
     func close(_ tab: Tab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         Grouper.shared.forget(tab.id) // Fork
+        signedInWith[tab.id] = nil
 
         // A tab whose page is out in the little window takes the window with
         // it. Left alone, the window would go on holding a page belonging to a
@@ -1502,6 +1557,10 @@ final class Browser: NSObject, ObservableObject {
             ? Autofill.fields(for: host, matching: tab.fieldFocus?.label ?? "").map(Suggestion.field)
             : []
         var rows: [Suggestion] = []
+        if kind == .otp, prefs.fillsPasswords {
+            let codes = codeCredentials(for: tab, host: host)
+            if !codes.isEmpty { return codes.map(Suggestion.code) + fields }
+        }
         switch group {
         case .login:
             rows += credentials.map(Suggestion.credential)
@@ -1544,6 +1603,7 @@ final class Browser: NSObject, ObservableObject {
             guard let self else { return }
             guard let spot else {
                 if pickedInto == tab.id { pickedInto = nil }
+                if codePickedInto == tab.id { codePickedInto = nil }
                 guard suggesting?.tab == tab.id else { return }
                 lowering?.cancel()
                 let work = DispatchWorkItem { [weak self] in
@@ -1555,13 +1615,16 @@ final class Browser: NSObject, ObservableObject {
                 return
             }
             lowering?.cancel()
-            guard (prefs.fillsPasswords || prefs.fillsEverything), tab.id == activeID, pickedInto != tab.id,
+            guard (prefs.fillsPasswords || prefs.fillsEverything), tab.id == activeID,
+                  pickedInto != tab.id || (tab.fieldFocus?.kind == .otp && codePickedInto != tab.id),
                   let host = curtain.host(of: tab.address)
             else { return }
             let rows = suggestions(for: tab, host: host)
             let credentials = rows.compactMap { suggestion -> Credential? in
-                guard case .credential(let credential) = suggestion else { return nil }
-                return credential
+                switch suggestion {
+                case .credential(let credential), .code(let credential): return credential
+                default: return nil
+                }
             }
             let isLogin = (tab.fieldFocus?.group ?? .login) == .login
             // Only a login box stays visible while Bitwarden is locked or

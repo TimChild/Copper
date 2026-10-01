@@ -59,7 +59,7 @@
                                        the Space page; tap is a click on chip N (another space
                                        switches, the current one opens its page) or the title icon
     ./bench windows [new|open N URL|key N|close N|saved|quit]   ⌘N windows
-    ./bench easels [new|open ID|check ID|flush ID|delete ID|path|menu [press]]
+    ./bench easels [new|open ID|check ID|flush ID|delete ID|path|menu [press]|click X Y [N]|draw X,Y X,Y …]
                                        boards (Fork/Easel): list them; new makes one and opens it the
                                        way ⌘K's New Easel does; check reads back doc.yjs, the index
                                        entry and the pictures; flush asks the board's page to save now;

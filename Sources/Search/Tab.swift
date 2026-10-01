@@ -279,6 +279,8 @@ final class Tab: ObservableObject, Identifiable {
         // else on a Mac. ⌘+ and ⌘- are the other thing — they lay the page out
         // again at a bigger size — and both are worth having.
         web.allowsMagnification = true
+        // Fork: an easel zooms its own board; WebKit's pinch would magnify the toolbar with it.
+        if Easels.board(of: web) != nil { web.allowsMagnification = false }
         // WebKit's own two-finger swipe stays off. It drags the page across
         // the window with a picture of the last one behind it; ours is in
         // PageView, and it moves nothing but a disc.

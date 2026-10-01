@@ -148,6 +148,8 @@ Easels are Copper's own. Web pages can't reach them, and boards can't reach anyt
 ./bench --world NAME easels flush ID         ask its page to save now
 ./bench --world NAME easels delete ID        close its tab and remove it, files and all
 ./bench --world NAME easels menu [press]     File › New Easel as the menu bar holds it
+./bench --world NAME easels click X Y [N]    a real click (N=2: double-click) on the board in front, page CSS px
+./bench --world NAME easels draw X,Y X,Y …   a real press-drag-release through the points, ~16 ms apart (the laser, marquee, moves)
 ```
 
 A test world, headless, off the real Copper's MCP port:

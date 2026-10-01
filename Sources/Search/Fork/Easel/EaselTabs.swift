@@ -408,6 +408,28 @@ extension Easels {
                 .filter { showing($0) == easel.id }.compactMap(\.built)
             views.forEach { EaselBridge.tell($0, ["type": "flush"]) }
             return ["flushed": views.count]
+        case "click", "draw":
+            // Real mouse input on the board in front, in the page's CSS px:
+            // `click X Y [COUNT]`, or `draw X,Y X,Y …` — one press, a drag
+            // through every point a frame apart, and a release. The laser and
+            // the board's gestures only believe trusted events, so a script's
+            // PointerEvent would prove nothing.
+            guard let tab = browser.tabs.first(where: { $0.id == browser.activeID }), showing(tab) != nil,
+                  let web = tab.built, Input.canPost(to: web)
+            else { return ["error": "the tab in front is not an easel"] }
+            let words = arg.split(separator: " ").map(String.init)
+            if op == "click" {
+                guard words.count >= 2, let x = Double(words[0]), let y = Double(words[1]) else { return ["error": "easels click X Y [COUNT]"] }
+                Input.click(web, at: CGPoint(x: x, y: y), button: "left", count: words.count > 2 ? Int(words[2]) ?? 1 : 1, modifiers: [])
+                return ["clicked": [x, y]]
+            }
+            let points = words.compactMap { word -> CGPoint? in
+                let xy = word.split(separator: ",").compactMap { Double($0) }
+                return xy.count == 2 ? CGPoint(x: xy[0], y: xy[1]) : nil
+            }
+            guard points.count >= 2 else { return ["error": "easels draw X,Y X,Y …"] }
+            Task { @MainActor in await stroke(web, through: points) }
+            return ["drawing": points.count, "ms": points.count * 16]
         case "delete":
             guard let easel = find() else { return ["error": "no easel “\(arg)” — see easels list"] }
             for owner in Windows.all {
@@ -416,7 +438,26 @@ extension Easels {
             store.delete(easel.id)
             return ["deleted": easel.id]
         default:
-            return ["error": "easels list|new|open ID|check ID|flush ID|delete ID|path|menu [press]"]
+            return ["error": "easels list|new|open ID|check ID|flush ID|delete ID|path|menu [press]|click X Y [N]|draw X,Y …"]
         }
+    }
+
+    /// A press, a drag through `points` at about 60 Hz, and a release, as the
+    /// window would deliver them. Points are the page's CSS px, top-left.
+    private static func stroke(_ web: WKWebView, through points: [CGPoint]) async {
+        guard let window = web.window, let first = points.first, let last = points.last else { return }
+        if window.firstResponder !== web { window.makeFirstResponder(web) }
+        func at(_ p: CGPoint) -> CGPoint { web.convert(web.isFlipped ? p : CGPoint(x: p.x, y: web.bounds.height - p.y), to: nil) }
+        func post(_ type: NSEvent.EventType, _ p: CGPoint, pressure: Swift.Float) -> NSEvent? {
+            NSEvent.mouseEvent(with: type, location: at(p), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: pressure)
+        }
+        Input.move(web, to: first)
+        if let e = post(.leftMouseDown, first, pressure: 1) { web.mouseDown(with: e) }
+        for p in points.dropFirst() {
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            if let e = post(.leftMouseDragged, p, pressure: 1) { web.mouseDragged(with: e) }
+        }
+        if let e = post(.leftMouseUp, last, pressure: 0) { web.mouseUp(with: e) }
     }
 }

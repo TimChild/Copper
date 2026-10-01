@@ -159,7 +159,7 @@ final class Spaces: ObservableObject {
         // not every old row leaving and every new one arriving (SpaceSlide).
         // With no column on screen — the tab bar, a folded sidebar — the
         // switch is what it always was.
-        guard SpaceSlide.shared.begin(forward: to > from, in: browser) else { return swap(to: id, in: browser) }
+        guard SpaceSlide.shared.begin(forward: to > from, to: all[to], in: browser) else { return swap(to: id, in: browser) }
         var calm = Transaction()
         calm.disablesAnimations = true
         withTransaction(calm) { swap(to: id, in: browser) }

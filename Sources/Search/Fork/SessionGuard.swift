@@ -75,6 +75,10 @@ enum SessionGuard {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tabs = object["tabs"] as? [Any]
         else { return nil }
-        return tabs.count
+        // As Session.Shape.tabCount: a file with global pins holds a copy of
+        // them in `tabs` for older builds, counted once.
+        guard let pins = object["pins"] as? [Any] else { return tabs.count }
+        let loose = tabs.filter { ($0 as? [String: Any])?["pin"] == nil }
+        return loose.count + pins.count
     }
 }

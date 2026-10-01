@@ -11,6 +11,7 @@ struct SearchApp: App {
     @NSApplicationDelegateAdaptor(Links.self) private var links
 
     init() {
+        Instance.acquireIfNeeded() // Fork: one process per world, before anything is restored (Fork/Instance.swift)
         Fork.migratePasskeysPreference()
         Bridge.runIfAsked()
     } // Fork: `--mcp-stdio` pipes to the running app and exits
@@ -102,8 +103,12 @@ struct AppCommands: Commands {
             Divider()
             Button("Reload Page") { browser.reload() }
                 .keyboardShortcut("r")
-            Button("Reading Mode") { browser.toggleReader() }
+            Button("Hard Reload") { browser.hardReload() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+            Button("Reading Mode") { browser.toggleReader() }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+            Button("Inspect Element") { browser.inspectElement() }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
             Button("Float Video") { browser.toggleFloat() }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
             Divider()
@@ -311,6 +316,8 @@ struct ContentView: View {
                                 }
                             }
                             .animation(Motion.quick, value: browser.suggesting)
+                    } else if let id = browser.taken, let tab = browser.tabs.first(where: { $0.id == id }) {
+                        TakenStage(browser: browser, tab: tab) // Fork: windows — the page is on another window's stage
                     } else {
                         Palette.ground
                     }
@@ -872,7 +879,9 @@ struct ContentView: View {
         case "r" where !shifted:
             browser.reload()
         case "r" where shifted:
-            browser.toggleReader()
+            browser.hardReload()
+        case "i" where shifted:
+            browser.inspectElement()
         case "[":
             shifted ? browser.step(-1) : browser.back()
         case "]":

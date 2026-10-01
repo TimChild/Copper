@@ -340,6 +340,9 @@ struct ThemeBackdrop: View {
     /// the one long-lived web view (`LiveScene`), kept through still spaces
     /// and driven by the slide, instead of a scene per backdrop.
     var live = false
+    /// The window whose column this is, when it is one: its own space keys
+    /// the scene, and only its own swipe mixes the next space in. (Fork: windows)
+    weak var browser: Browser? = nil
 
     var body: some View {
         ZStack {
@@ -351,7 +354,7 @@ struct ThemeBackdrop: View {
                 // and what shows while the page loads for an animated one —
                 // with the scene over it, hidden while there is nothing to draw.
                 if theme.motion == nil { still } else { colour }
-                LiveScene(theme: theme, dark: dark)
+                LiveScene(theme: theme, dark: dark, browser: browser)
             } else if let motion = theme.motion {
                 AnimatedBackdrop(style: motion.style, colors: theme.grounds(dark: dark), speed: motion.speed,
                                  blur: theme.blur, dark: dark)
@@ -416,6 +419,7 @@ struct ThemeBackdrop: View {
     private struct LiveScene: View {
         let theme: SpaceTheme
         let dark: Bool
+        weak var browser: Browser?
         @ObservedObject private var spaces = Spaces.shared
         @ObservedObject private var slide = SpaceSlide.shared
 
@@ -429,9 +433,9 @@ struct ThemeBackdrop: View {
         /// The current space's look, fading in over a slide's length; while
         /// a swipe is on, the arriving space's mixed in by the fingers.
         private var drive: BackdropScene.Drive {
-            var drive = BackdropScene.Drive(look: BackdropScene.Look(theme: theme, dark: dark, key: spaces.current.uuidString),
+            var drive = BackdropScene.Drive(look: BackdropScene.Look(theme: theme, dark: dark, key: (browser.map { spaces.current(in: $0) } ?? spaces.current).uuidString),
                                             fade: SpaceSlide.duration + 0.08)
-            if slide.dragging, slide.picture != nil, let space = slide.arriving,
+            if slide.dragging, slide.picture != nil, browser == nil || slide.owner === browser, let space = slide.arriving,
                let there = BackdropScene.Look(theme: space.look, dark: dark, key: space.id.uuidString) {
                 drive.toward = there
                 drive.x = Double(slide.phase)

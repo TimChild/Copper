@@ -28,7 +28,7 @@ struct SpacesSettingsPage: View {
     /// The space the page shows: the one a door named, else the one you are in.
     private var shown: UUID {
         if let id = editing.selected, spaces.all.contains(where: { $0.id == id }) { return id }
-        return spaces.current
+        return spaces.current(in: browser)
     }
 
     var body: some View {
@@ -83,7 +83,7 @@ struct SpacesSettingsPage: View {
                     .font(.system(size: 12, weight: on ? .medium : .regular))
                     .foregroundStyle(on ? Palette.ink : Palette.muted)
                     .lineLimit(1)
-                if space.id == spaces.current {
+                if space.id == spaces.current(in: browser) {
                     Circle().fill(Palette.muted.opacity(0.6)).frame(width: 4, height: 4)
                         .help("The space you are in")
                 }

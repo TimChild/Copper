@@ -57,15 +57,30 @@ final class SpaceSlide: ObservableObject {
     @Published private(set) var way: CGFloat = 0
 
     /// Where the column is, and where the band that travels is, in SwiftUI's
-    /// global space (the window's content, from its top left). Kept up to
-    /// date by the column as it is laid out; not published, since nothing
-    /// has to redraw when they change. Zero while no column is on screen.
-    var column: CGRect = .zero
-    var band: CGRect = .zero
+    /// global space (the window's content, from its top left) — per window,
+    /// since every browser window has a column (Fork: windows). Kept up to
+    /// date by each column as it is laid out; not published, since nothing
+    /// has to redraw when they change. Absent while no column is on screen.
+    private var columns: [ObjectIdentifier: CGRect] = [:]
+    private var bands: [ObjectIdentifier: CGRect] = [:]
+    /// The window whose switch is sliding (or last slid). The curtain and
+    /// the band move only in its column; another window's stays still.
+    private(set) weak var owner: Browser?
+
+    func place(column rect: CGRect?, in browser: Browser) { columns[ObjectIdentifier(browser)] = rect }
+    func place(band rect: CGRect, in browser: Browser) { bands[ObjectIdentifier(browser)] = rect }
+
+    /// The sliding window's column and band — the first window's between slides.
+    var column: CGRect { columns[ObjectIdentifier(owner ?? Windows.main)] ?? .zero }
+    var band: CGRect { bands[ObjectIdentifier(owner ?? Windows.main)] ?? .zero }
 
     var moving: Bool { picture != nil || dragging }
+    /// Whether it is this window's column that is sliding, or under the
+    /// fingers; another window's column stays still.
+    func moving(in browser: Browser) -> Bool { moving && owner === browser }
 
-    // The swipe's own state, all nil/false/zero outside one.
+    // The swipe's own state, all nil/false/zero outside one. One swipe at a
+    // time, in `owner`'s window.
     /// True from the first sideways movement until the fingers let go.
     @Published private(set) var dragging = false
     /// The space the swipe is heading for, and its column as last pictured.
@@ -82,8 +97,14 @@ final class SpaceSlide: ObservableObject {
     /// The column as it was when the fingers started; the curtain while the
     /// swipe is on, and the old picture of the slide if it commits.
     private var outgoing: NSImage?
-    /// The last picture of every space's column, by space.
-    private var cache: [UUID: NSImage] = [:]
+    /// The last picture of every space's column, by space — per window
+    /// (Fork: windows), since two windows' columns differ in height, and a
+    /// picture from one stretched to the other would show. A space never
+    /// shown in this window comes in as its bare ground.
+    private var caches: [ObjectIdentifier: [UUID: NSImage]] = [:]
+
+    private func cached(_ space: UUID, in browser: Browser) -> NSImage? { caches[ObjectIdentifier(browser)]?[space] }
+    private func cache(_ shot: NSImage, for space: UUID, in browser: Browser) { caches[ObjectIdentifier(browser), default: [:]][space] = shot }
 
     /// Arc's is about this: quick off the mark, a soft landing, and over
     /// before the eye has finished following it.
@@ -105,13 +126,16 @@ final class SpaceSlide: ObservableObject {
     func begin(forward: Bool, in browser: Browser) -> Bool {
         let started = CACurrentMediaTime()
         timed = browser.prefs.bench
+        // A slide already on in another window ends there, cleanly.
+        if picture != nil, owner !== browser { end() }
+        owner = browser
         guard column.width > 1, column.height > 1, band.height > 1,
-              let window = Links.window, window.isVisible,
+              let window = Windows.window(of: browser), window.isVisible,
               let shot = photograph(in: window) else { return false }
         serial += 1
         let mine = serial
         let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        cache[Spaces.shared.current] = shot
+        cache(shot, for: Spaces.shared.current(in: browser), in: browser)
         var calm = Transaction()
         calm.disablesAnimations = true
         withTransaction(calm) {
@@ -180,10 +204,10 @@ final class SpaceSlide: ObservableObject {
     private func remember() {
         let mine = serial
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self, mine == self.serial, !self.moving,
-                  let window = Links.window, window.isVisible,
+            guard let self, mine == self.serial, !self.moving, let browser = self.owner,
+                  let window = Windows.window(of: browser), window.isVisible,
                   self.column.width > 1, let shot = self.photograph(in: window) else { return }
-            self.cache[Spaces.shared.current] = shot
+            self.cache(shot, for: Spaces.shared.current(in: browser), in: browser)
         }
     }
 
@@ -197,24 +221,33 @@ final class SpaceSlide: ObservableObject {
     @discardableResult
     func drag(_ travel: CGFloat, in browser: Browser) -> Bool {
         let spaces = Spaces.shared
-        guard browser.primary, let here = spaces.all.firstIndex(where: { $0.id == spaces.current }) else { return false }
+        let current = spaces.current(in: browser)
+        guard let here = spaces.all.firstIndex(where: { $0.id == current }) else { return false }
         if !dragging {
+            // A slide or swipe still on in another window ends there, cleanly;
+            // these fingers are on this one. (Fork: windows)
+            if moving, owner !== browser { end() }
             // A settle still running from the last swipe or a click is left
             // to finish; these fingers do nothing.
             guard picture == nil else { return false }
+            owner = browser
             let started = CACurrentMediaTime()
             timed = browser.prefs.bench
             guard column.width > 1, column.height > 1, band.height > 1,
-                  let window = Links.window, window.isVisible,
+                  let window = Windows.window(of: browser), window.isVisible,
                   let shot = photograph(in: window) else { return false }
             serial += 1
             outgoing = shot
-            cache[spaces.current] = shot
+            cache(shot, for: current, in: browser)
             timing = Timing(asked: started, pictured: CACurrentMediaTime())
             var calm = Transaction()
             calm.disablesAnimations = true
             withTransaction(calm) { dragging = true }
             watch()
+        } else if owner !== browser {
+            // Fingers down on one window's column, moving over another's:
+            // not this window's swipe.
+            return false
         }
         let width = max(column.width, 1)
         // Travel to the left pushes the column left, so the space after this
@@ -229,7 +262,7 @@ final class SpaceSlide: ObservableObject {
                 let space = spaces.all[there]
                 if arriving?.id != space.id {
                     arriving = space
-                    incoming = cache[space.id]
+                    incoming = cached(space.id, in: browser)
                 }
                 picture = outgoing
                 way = forward ? 1 : -1
@@ -269,7 +302,7 @@ final class SpaceSlide: ObservableObject {
     /// live column, now the new space's, takes the incoming picture's place
     /// in the same frame.
     func release(velocity: CGFloat, cancelled: Bool, in browser: Browser) {
-        guard dragging else { return }
+        guard dragging, owner === browser else { return }
         let mine = serial
         let width = max(column.width, 1)
         guard picture != nil, let arriving else {
@@ -396,7 +429,7 @@ final class SpaceSlide: ObservableObject {
     /// A display link over the slide, while the bench is on: every frame's
     /// time, so a frame the main thread was too busy to make shows as a gap.
     private func watch() {
-        guard timed, let view = Links.window?.contentView else { return }
+        guard timed, let view = (owner.flatMap(Windows.window(of:)) ?? Links.window)?.contentView else { return }
         link?.invalidate()
         // The view's link stops while its window is covered; then the swipe
         // bench's event pacing (`spaces swipe stats`) is the measure instead.
@@ -423,9 +456,10 @@ final class SpaceSlide: ObservableObject {
         if words.first == "at", words.count > 1, let x = Double(words[1]) {
             hold = min(1, max(0, CGFloat(x)))
         } else if words.first == "dump", words.count > 1 {
-            // The pictures the swipe has, as PNGs, to see what it slides.
+            // The pictures the swipe has for the sliding (or first) window,
+            // as PNGs, to see what it slides.
             let dir = words[1]
-            for (id, image) in cache {
+            for (id, image) in caches[ObjectIdentifier(owner ?? Windows.main)] ?? [:] {
                 let name = Spaces.shared.all.first { $0.id == id }?.name ?? id.uuidString
                 if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                     try? png.write(to: URL(fileURLWithPath: "\(dir)/cache-\(name).png"))
@@ -435,14 +469,16 @@ final class SpaceSlide: ObservableObject {
             hold = nil
             if picture != nil { end() }
         }
+        let browser = owner ?? Windows.main
         var note: [String: Any] = ["moving": moving, "hold": hold.map { Double($0) } ?? -1,
                                    "dragging": dragging, "phase": (Double(phase) * 1000).rounded() / 1000,
                                    "way": Double(way), "stretch": (Double(stretch) * 10).rounded() / 10,
                                    "arriving": arriving?.name ?? "", "incoming": incoming != nil, "landing": landing,
-                                   "cached": cache.keys.compactMap { id in Spaces.shared.all.first { $0.id == id }?.name },
-                                   "space": Spaces.shared.space.name,
-                                   "window": Links.window.map { w in [Int(w.frame.minX), Int(w.frame.minY), Int(w.frame.width), Int(w.frame.height),
-                                                                      w.occlusionState.contains(.visible) ? 1 : 0] } ?? [],
+                                   "cached": (caches[ObjectIdentifier(browser)] ?? [:]).keys.compactMap { id in Spaces.shared.all.first { $0.id == id }?.name },
+                                   "space": Spaces.shared.space(in: browser).name,
+                                   "owner": Windows.all.firstIndex { $0 === browser } ?? -1,
+                                   "window": Windows.window(of: browser).map { w in [Int(w.frame.minX), Int(w.frame.minY), Int(w.frame.width), Int(w.frame.height),
+                                                                                   w.occlusionState.contains(.visible) ? 1 : 0] } ?? [],
                                    "screens": NSScreen.screens.map { [Int($0.frame.minX), Int($0.frame.minY), Int($0.frame.width), Int($0.frame.height)] },
                                    "column": [Int(column.minX), Int(column.minY), Int(column.width), Int(column.height)],
                                    "band": [Int(band.minX), Int(band.minY), Int(band.width), Int(band.height)]]
@@ -469,17 +505,23 @@ final class SpaceSlide: ObservableObject {
 /// over the page. At rest it is not clipped at all, so nothing that hangs
 /// over its edge (a favourite in the hand, its shadow) is cut.
 struct SpaceSlideBand: ViewModifier {
+    let browser: Browser
     @ObservedObject private var slide = SpaceSlide.shared
 
+    init(browser: Browser) { self.browser = browser }
+
     func body(content: Content) -> some View {
+        // Only the sliding window's column moves; another window's stays put.
+        let mine = slide.owner === browser
+        let moving = slide.moving(in: browser)
         content
-            .offset(x: slide.dragging ? slide.stretch
+            .offset(x: !mine ? 0 : slide.dragging ? slide.stretch
                 : slide.picture != nil ? slide.way * slide.column.width * (1 - slide.phase) : 0)
             // While a swipe is pictured, the curtain draws both columns and
             // this one, still the old space's, only has to keep out of sight.
-            .opacity(slide.dragging && slide.picture != nil ? 0 : 1)
-            .clipShape(BandEdge(on: slide.moving))
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slide.band = $0 }
+            .opacity(mine && slide.dragging && slide.picture != nil ? 0 : 1)
+            .clipShape(BandEdge(on: moving))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slide.place(band: $0, in: browser) }
     }
 
     /// The band's own rectangle while it moves; otherwise one so large it
@@ -497,11 +539,14 @@ struct SpaceSlideBand: ViewModifier {
 /// stands, so the theme crossfades while the rows travel. Takes no clicks:
 /// the new column under it is the real one from the first frame.
 struct SpaceSlideCurtain: View {
+    let browser: Browser
     @ObservedObject private var slide = SpaceSlide.shared
     @Environment(\.colorScheme) private var scheme
 
+    init(browser: Browser) { self.browser = browser }
+
     var body: some View {
-        if let picture = slide.picture {
+        if let picture = slide.picture, slide.owner === browser {
             let size = slide.column.size
             let top = max(0, slide.band.minY - slide.column.minY)
             let height = min(slide.band.height, size.height - top)

@@ -49,7 +49,7 @@ struct SideBar: View {
     static let rowInset: CGFloat = 10
     private static let pinGap: CGFloat = 8
 
-    private var tint: SpaceTint { SpaceTint(space: spaces.space, dark: scheme == .dark) }
+    private var tint: SpaceTint { SpaceTint(space: spaces.space(in: browser), dark: scheme == .dark) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -71,27 +71,22 @@ struct SideBar: View {
 
                 column
             }
-            .modifier(SpaceSlideBand())
+            .modifier(SpaceSlideBand(browser: browser))
 
-            if browser.primary { SpaceStrip(browser: browser) { foot } } else {
-                HStack { foot; Spacer(minLength: 0) }
-                    .padding(.horizontal, 6)
-                    .padding(.top, 2)
-                    .padding(.bottom, 7)
-            }
+            SpaceStrip(browser: browser) { foot }
         }
         .frame(width: prefs.sideWidth)
         .frame(maxHeight: .infinity)
         .background {
             ZStack {
-                tint.backdrop
+                tint.backdrop(in: browser)
                 if landing { tint.hover }
             }
         }
         // Fork (space-slide): the old column, over the new one while it goes.
-        .overlay(alignment: .topLeading) { SpaceSlideCurtain() }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SpaceSlide.shared.column = $0 }
-        .onDisappear { SpaceSlide.shared.column = .zero }
+        .overlay(alignment: .topLeading) { SpaceSlideCurtain(browser: browser) }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SpaceSlide.shared.place(column: $0, in: browser) }
+        .onDisappear { SpaceSlide.shared.place(column: nil, in: browser) }
         .overlay(alignment: .trailing) {
             Rectangle().fill(tint.hairline.opacity(0.6)).frame(width: 1)
         }
@@ -116,7 +111,7 @@ struct SideBar: View {
         // Yesterday's rows have an address and no page, so nothing has ever
         // asked their sites for a mark. Ask, once per host per launch, and
         // again when a switch brings a whole new column into view.
-        .task(id: spaces.current) { Marks.warm(browser.tabs) }
+        .task(id: spaces.current(in: browser)) { Marks.warm(browser.tabs) }
         // A row nobody has met is today's, and goes to the top of Today.
         .onChange(of: browser.tabs.map(\.id)) { _, _ in sections.arrived(in: browser) }
         .onChange(of: browser.activeID) { _, now in sections.note(now) }
@@ -293,7 +288,7 @@ struct SideBar: View {
         return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: SideBar.gap) {
-                    if browser.primary { SpaceHeader(browser: browser) } // Fork: windows — spaces are the first window's
+                    SpaceHeader(browser: browser)
                     rows(kept, homeless: true)
                     if !today.isEmpty { divider }
                     newTab
@@ -337,7 +332,7 @@ struct SideBar: View {
         // has been laid out before it is looked for. A column sliding in
         // (Fork: SpaceSlide) is already where it should be, not gliding to it.
         DispatchQueue.main.async {
-            withAnimation(gliding && !still && !SpaceSlide.shared.moving ? Motion.glide : nil) {
+            withAnimation(gliding && !still && !SpaceSlide.shared.moving(in: browser) ? Motion.glide : nil) {
                 proxy.scrollTo("tab-\(id.uuidString)", anchor: nil)
             }
         }

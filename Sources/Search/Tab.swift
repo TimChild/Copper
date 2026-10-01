@@ -37,6 +37,14 @@ enum Web {
         // page comes back.
         config.applicationNameForUserAgent = Web.userAgentName
         config.allowsAirPlayForMediaPlayback = true
+        // Keep the local inspector's keyboard path available. `isInspectable`
+        // permits WebKit inspection, while its private `show()` path also
+        // checks this preference before creating the inspector window.
+        // Private, so asked for only when this WebKit has it: an unknown KVC
+        // key would throw at launch.
+        if config.preferences.responds(to: NSSelectorFromString("_setDeveloperExtrasEnabled:")) {
+            config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        }
         // Off by default on macOS, which is why a full-screen button on a video
         // did nothing at all: the page asks, and WebKit refuses without a word.
         config.preferences.isElementFullscreenEnabled = true
@@ -951,6 +959,50 @@ final class Tab: ObservableObject, Identifiable {
             web.load(URLRequest(url: address))
         } else {
             web.reloadFromOrigin()
+        }
+    }
+
+    /// Empty this page's cache, but leave cookies, storage and sessions alone,
+    /// then fetch the document from origin. The data store comes from this
+    /// view, rather than `Store.websites`, because spaces can have profiles of
+    /// their own. `done` receives the records removed for the bench.
+    func hardReload(_ done: (([String]) -> Void)? = nil) {
+        // Match reload(): an asleep tab has no live page to clear yet, and
+        // waking it is the useful work. A hollow view likewise needs its
+        // address loaded instead of asking an empty document to reload.
+        guard !wake() else {
+            done?([])
+            return
+        }
+        if hollow, let address {
+            web.load(URLRequest(url: address))
+            done?([])
+            return
+        }
+
+        // Offline app and service-worker registrations can carry site state,
+        // not just bytes, so leave them (and every cookie/storage type) alone.
+        let types: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeFetchCache,
+        ]
+        let store = web.configuration.websiteDataStore
+        let domain = address?.host().map(Vault.registrable)
+        store.fetchDataRecords(ofTypes: types) { [weak self] records in
+            let matching = records.filter { record in
+                guard let domain else { return false }
+                let name = record.displayName.lowercased()
+                return name == domain || name.hasSuffix("." + domain)
+            }
+            let names = matching.map(\.displayName)
+            store.removeData(ofTypes: types, for: matching) {
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.web.reloadFromOrigin()
+                    done?(names)
+                }
+            }
         }
     }
     func stop() { web.stopLoading() }

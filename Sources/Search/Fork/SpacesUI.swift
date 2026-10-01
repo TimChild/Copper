@@ -70,7 +70,7 @@ final class SpaceEditing: ObservableObject {
     var space: UUID? {
         let browser = Windows.current
         guard browser.tuning, browser.settingsPage == .spaces else { return nil }
-        return selected ?? Spaces.shared.current
+        return selected ?? Spaces.shared.current(in: browser)
     }
 
     /// Settings, on Spaces, with this space picked.
@@ -98,7 +98,7 @@ final class SpaceEditing: ObservableObject {
     /// you just switched to is the way in.
     func pressed(_ id: UUID, in browser: Browser) {
         let spaces = Spaces.shared
-        if id == spaces.current { open(id, in: browser) } else { spaces.select(id, in: browser) }
+        if id == spaces.current(in: browser) { open(id, in: browser) } else { spaces.select(id, in: browser) }
     }
 
     /// Settings › Spaces for a space, drawn off screen at the page's width
@@ -126,7 +126,7 @@ struct SpaceHeader: View {
     @State private var overMark = false
 
     var body: some View {
-        let space = spaces.space
+        let space = spaces.space(in: browser)
         let tint = SpaceTint(space: space, dark: scheme == .dark)
         // Arc's: the space's icon where a row's mark goes and its name in
         // the theme's own colour, first thing under the favourites. The
@@ -162,7 +162,7 @@ struct SpaceHeader: View {
         .help("\(space.title) — click for the space menu")
         .animation(Motion.quick, value: over)
         .animation(Motion.quick, value: overMark)
-        .animation(Motion.glide, value: spaces.current)
+        .animation(Motion.glide, value: spaces.current(in: browser))
     }
 
     private func header(_ space: Space, tint: SpaceTint) -> some View {
@@ -214,7 +214,7 @@ struct SpaceStrip<Tools: View>: View {
 
     private var step: CGFloat { SpaceChip.size + SpaceChip.gap }
 
-    private var tint: SpaceTint { SpaceTint(space: spaces.space, dark: scheme == .dark) }
+    private var tint: SpaceTint { SpaceTint(space: spaces.space(in: browser), dark: scheme == .dark) }
 
     /// Every space as a chip, the current one lifted; a plus; the doors.
     /// When the chips outgrow the room, the row of them scrolls sideways
@@ -235,7 +235,7 @@ struct SpaceStrip<Tools: View>: View {
         .padding(.top, 4)
         .padding(.bottom, 8)
         .overlayPreferenceValue(ChipFrames.self) { frames in label(frames) }
-        .animation(Motion.glide, value: spaces.current)
+        .animation(Motion.glide, value: spaces.current(in: browser))
     }
 
     private var chips: some View {
@@ -257,10 +257,10 @@ struct SpaceStrip<Tools: View>: View {
             })
             .onPreferenceChange(StripRoom.self) { roomForChips = $0 }
             .mask(overflowing ? AnyView(SpaceStrip.fade) : AnyView(Rectangle()))
-            .onChange(of: spaces.current) { _, id in
+            .onChange(of: spaces.current(in: browser)) { _, id in
                 withAnimation(Motion.glide) { proxy.scrollTo(id, anchor: .center) }
             }
-            .onAppear { proxy.scrollTo(spaces.current, anchor: .center) }
+            .onAppear { proxy.scrollTo(spaces.current(in: browser), anchor: .center) }
         }
     }
 
@@ -283,7 +283,7 @@ struct SpaceStrip<Tools: View>: View {
 
     private func chip(_ space: Space, index: Int) -> some View {
         let held = dragging == space.id
-        return SpaceChip(space: space, current: space.id == spaces.current, dark: scheme == .dark,
+        return SpaceChip(space: space, current: space.id == spaces.current(in: browser), dark: scheme == .dark,
                          over: hovering == space.id, ink: tint.ink, glow: tint.hover)
             .id(space.id)
             .anchorPreference(key: ChipFrames.self, value: .bounds) { [space.id: $0] }
@@ -294,7 +294,7 @@ struct SpaceStrip<Tools: View>: View {
             .onTapGesture { SpaceEditing.shared.pressed(space.id, in: browser) }
             .gesture(reorder(space, index: index))
             .onHover { over in hovering = over ? space.id : (hovering == space.id ? nil : hovering) }
-            .help(space.id == spaces.current ? "\(space.title) — click to customize" : space.title)
+            .help(space.id == spaces.current(in: browser) ? "\(space.title) — click to customize" : space.title)
             .contextMenu { SpaceMenu(browser: browser, space: space) }
     }
 
@@ -428,10 +428,10 @@ struct SpaceMenu: View {
     var body: some View {
         Button("Edit Space…") { SpaceEditing.shared.open(space.id) }
         Button("New Tab in Space") {
-            if space.id != spaces.current { spaces.select(space.id, in: browser) }
+            if space.id != spaces.current(in: browser) { spaces.select(space.id, in: browser) }
             browser.launch()
         }
-        if let tab = browser.active, space.id != spaces.current {
+        if let tab = browser.active, space.id != spaces.current(in: browser) {
             Button("Move Current Tab Here") { spaces.move(tab, to: space.id, in: browser) }
         }
         Divider()

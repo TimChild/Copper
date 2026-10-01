@@ -78,7 +78,7 @@ struct FolderTree {
     private var inside: [UUID: [TabGroup]] = [:]
     private(set) var nodes: [TabGroup] = []
 
-    init(tabs: [Tab], homeless: [TabGroup] = [], groups: Groups = Groups.shared) {
+    init(tabs: [Tab], homeless: [TabGroup] = [], groups: Groups = Groups.shared, space: UUID? = nil) {
         var here: [TabGroup] = []
         var seen: Set<UUID> = []
         for tab in tabs {
@@ -93,7 +93,7 @@ struct FolderTree {
         let roots = here + homeless
         let empties = groups.all.filter { group in
             !held.contains(group.id) && !homeless.contains(group)
-                && (group.space == nil || group.space == Spaces.shared.current)
+                && (group.space == nil || group.space == (space ?? Spaces.shared.current))
                 && roots.contains { Folders.below(group.name, $0.name) }
         }
         nodes = here + homeless + empties
@@ -145,8 +145,8 @@ struct FolderTree {
     /// The whole block, top to bottom. `homeless` are the space's folders
     /// that hold nothing and sit inside nothing — Arc keeps an empty folder
     /// where you made it, so it goes back where its `slot` says.
-    static func plan(_ tabs: [Tab], homeless: [TabGroup] = [], groups: Groups = Groups.shared) -> [FolderRow] {
-        let tree = FolderTree(tabs: tabs, homeless: homeless, groups: groups)
+    static func plan(_ tabs: [Tab], homeless: [TabGroup] = [], groups: Groups = Groups.shared, space: UUID? = nil) -> [FolderRow] {
+        let tree = FolderTree(tabs: tabs, homeless: homeless, groups: groups, space: space)
         var out: [FolderRow] = []
         // The folders whose headers are up, outermost first. Arc lets a
         // folder's tabs sit either side of a folder inside it; a run that

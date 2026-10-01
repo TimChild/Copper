@@ -12,6 +12,8 @@
                                        ⌘ ⇧ ⌥ ⌃ hold for the next key, ⇥ is Tab, ← → ↑ ↓ ⎋ ↩ are
                                        arrows/Escape/Return; --app sends through the app's own key monitor;
                                        --hold leaves ⌃ down for the next key, and ⌃release lets go
+    ./bench hardreload [ID]            clear the active page's cache-only records and reload from origin
+    ./bench inspect [ID]               open Web Inspector's element picker and report its state
     ./bench text ID                    the page's text
     ./bench eval ID JS                 run JavaScript, print what it returns
     ./bench click ID SELECTOR
@@ -59,19 +61,28 @@
     ./bench spaces [page [N]|page close|tap N|tap header]
                                        the Space page; tap is a click on chip N (another space
                                        switches, the current one opens its page) or the title icon
-    ./bench windows [new|open N URL|key N|close N|saved|quit]   ⌘N windows
+    ./bench windows [new|open N URL|key N|space N INDEX|select N TAB|closetab N TAB|close N|saved|quit]
+                                       ⌘N windows
     ./bench spaces [delete N|answer close|move|cancel]
                                        the Delete Space sheet, and its buttons
     ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|blur X
                            |tone X|motion STYLE|none|speed X|clear]
                                        a space's own theme, as the Space page sets it
     ./bench spaces picture N PATH [light|dark]
+    ./bench spaces slide [at X|off|dump DIR]
+                                       the last space switch's slide timings (ms from the click,
+                                       frames, missed frames); `at X` holds the next slide at X;
+                                       `dump DIR` writes the swipe's cached column pictures
+    ./bench spaces swipe DX,DX,…[ end|cancel] [--hold] [--shot PATH@MS] [--window N]
+                                       a two-finger swipe over the column, one event per DX at
+                                       120 Hz; `spaces swipe stats` is the event pacing after
+    ./bench spaces scroll              the column's scroll view: elasticity each way, position
+    ./bench swipe left|right|down [--window N]
+                                       a quick whole two-finger swipe over window N's column
     ./bench backdrop                   the column's animated scenes: WebContent pid, hidden, and
                                        the page's status() (clock time, wall, key, frames, fading)
     ./bench spaces swipe direction [system|natural|inverted]
                                        which way a swipe moves the column (Settings › Tabs)
-    ./bench spaces slide [at X|off]    the last space switch's slide timings (ms from the click,
-                                       frames, missed frames); `at X` holds the next slide at X
                                        the Space page as a PNG, drawn off screen, laid out whole
                                        spaces by index or name; --keep moves a deleted space's tabs
                                        to its neighbour; colours are Graphite Copper Orange Yellow
@@ -107,9 +118,12 @@
     ./bench passkeys list|count|forget --id ID|answer yes|no|ask
                                        Copper's own test-world passkeys (no private keys in list)
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
-    ./bench mouse back|forward|middle [X Y] [--shift]
+    ./bench mouse back|forward|middle [X Y] [--shift] [--window N]
                                        a click of that mouse button at window point X Y (top-left
-                                       origin; the page's middle by default), through the app's routing
+                                       origin; the page's middle by default), through the app's routing;
+                                       over the sidebar, back/forward switches the previous/next space
+                                       (with more than one space), while over a page it navigates
+                                       the pane under the pointer
     ./bench bar TEXT [--go]          what ⌘K offers for TEXT; --go takes the first row
     ./bench newtab [TEXT] [--go [--pick N] [--how open|background|split]] [--keep] [--settle S] [--json]
                                        what ⌘T's card offers for TEXT, by group, after S seconds (0.8) for
@@ -196,8 +210,10 @@ def main(argv):
         if len(args) > 2: request["width"] = float(args[2])
     elif verb == "backdrop":
         pass
-    elif verb in ("split", "swipe"):
+    elif verb == "split":
         request["arg"] = args[0] if args else ""
+    elif verb == "swipe":
+        request["arg"] = " ".join(args) if args else "left"
     elif verb == "mouse":
         request["arg"] = " ".join(args) if args else "back"
     elif verb == "bar":
@@ -328,6 +344,9 @@ def main(argv):
         if not args: sys.exit("usage: bench ext-page ID [PATH]")
         request["id"] = args[0]
         request["path"] = args[1] if len(args) > 1 else ""
+    elif verb in ("hardreload", "inspect"):
+        if len(args) > 1: sys.exit(f"usage: bench {verb} [ID]")
+        if args: request["id"] = args[0]
     elif verb == "key":
         via_app = "--app" in args
         hold = "--hold" in args
@@ -377,7 +396,7 @@ def main(argv):
     elif verb in ("eval", "ext-popup"):
         value = answer.get("value")
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
-    elif verb in ("updates", "bw", "drive", "render"):
+    elif verb in ("updates", "bw", "drive", "render", "hardreload", "inspect"):
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True))
     elif verb == "newtab":
         if request.get("json"):

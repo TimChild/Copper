@@ -46,7 +46,7 @@ struct GroupedRows: View {
     /// run, then the run's rows — none of them, nor any folder inside it,
     /// while the folder is shut. Worked out by `FolderTree`.
     private var rows: [FolderRow] {
-        FolderTree.plan(loose, homeless: homeless ? groups.homeless(in: Spaces.shared.current) : [])
+        FolderTree.plan(loose, homeless: homeless ? groups.homeless(in: Spaces.shared.current(in: browser)) : [], space: Spaces.shared.current(in: browser))
     }
 
     /// Rows the column shows beyond one per tab: a header for each folder,

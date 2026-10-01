@@ -18,7 +18,8 @@ import WebKit
 //
 // The thumb buttons nobody handled: WebKit forwards them to the page as DOM
 // buttons 3 and 4 and does nothing else, so they did nothing. A local monitor
-// takes them before the page does and navigates the pane under the pointer.
+// takes them before the page does: over the sidebar they switch spaces, and
+// over a page they navigate the pane under the pointer.
 @MainActor
 enum MouseButtons {
     // MARK: - WebKit's numbering (a link click's button)
@@ -88,6 +89,18 @@ enum MouseButtons {
     static func route(button: Int, down: Bool, at location: CGPoint, in window: NSWindow, browser: Browser) -> Bool {
         switch button {
         case back, forward:
+            // Arc uses the thumb buttons like a sideways swipe when they are
+            // over the column. Both halves are swallowed, even with one space,
+            // so the page never sees a click meant for the browser chrome.
+            if SpaceSwipe.overSidebar(location, in: browser) {
+                guard down else { return true }
+                guard Spaces.shared.all.count > 1 else { return true }
+                let by = button == back ? -1 : 1
+                SpaceSwipe.go(by, in: browser)
+                lastAction = ["button": button, "did": by < 0 ? "space-prev" : "space-next",
+                              "space": Spaces.shared.space(in: browser).name]
+                return true
+            }
             // Chrome navigates on the press. Both halves are swallowed so the
             // page never sees half a click of a button it has no use for.
             guard down else { return true }
@@ -107,7 +120,7 @@ enum MouseButtons {
             // which is the only route that also sees links in iframes. Over
             // the column, the release closes the row under the pointer.
             if page(under: location, in: window, browser: browser) != nil { return false }
-            guard overSidebar(location, in: browser) else { return false }
+            guard SpaceSwipe.overSidebar(location, in: browser) else { return false }
             if !down {
                 // AppKit's window point is from the bottom left; SwiftUI's
                 // global frames are from the top left of the content view.
@@ -129,12 +142,6 @@ enum MouseButtons {
         return browser.tabs.first { $0.built === web }
     }
 
-    /// The same test the space swipe makes: down the left, shown, not folded.
-    private static func overSidebar(_ location: CGPoint, in browser: Browser) -> Bool {
-        guard browser.prefs.sidebar, !browser.folded, browser.active?.immersed != true else { return false }
-        return location.x <= browser.prefs.sideWidth
-    }
-
     /// `bench mouse back|forward|middle [X Y] [--shift]`: a click of that
     /// button at a point in the window (X Y from the top left, as a
     /// screenshot reads; the page's middle when none is given) — for a run
@@ -148,8 +155,17 @@ enum MouseButtons {
     /// so WebKit sees the wheel button on a link and reports it back through
     /// the navigation policy (`bench probe` → `lastLinkClick`, a moment later).
     static func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
-        guard let window = Links.window else { return ["error": "no window"] }
-        let words = (request["arg"] as? String ?? "back").split(separator: " ").map(String.init)
+        var words = (request["arg"] as? String ?? "back").split(separator: " ").map(String.init)
+        // `--window N`: the click in that browser window (as `windows` lists
+        // them) rather than the first — each window's column switches its
+        // own space. (Fork: windows)
+        var browser = browser
+        if let at = words.firstIndex(of: "--window"), at + 1 < words.count, let n = Int(words[at + 1]) {
+            guard Windows.all.indices.contains(n) else { return ["error": "no window \(n)"] }
+            browser = Windows.all[n]
+            words.removeSubrange(at...(at + 1))
+        }
+        guard let window = Windows.window(of: browser) ?? Links.window else { return ["error": "no window"] }
         let shifted = words.contains("--shift")
         let arg = words.filter { $0 != "--shift" }
         let number: Int

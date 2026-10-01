@@ -50,11 +50,36 @@ not work on this canvas because `setPointerCapture` rejects fake pointer ids).
 |---|---|
 | `src/host/` | `Host` interface, `copperHost` (the bridge), `standaloneHost`, base64 |
 | `src/doc/` | `createEaselDoc()` (shapes + meta + undo), `createSaver()` / `wireFlush()` |
-| `src/lib/` | pure canvas math, resize, tools, markdown, images, awareness |
-| `src/components/` | the board (`easel-page.tsx`), shapes, sticky editor, toolbar, title chip, cursors |
+| `src/lib/` | pure canvas math, resize, tools, markdown, images, awareness; `camera.ts`, `live-boxes.ts`, `store.ts` (board state outside React); `sticky-static.ts` (a note's HTML without an editor) |
+| `src/components/` | the board (`easel-page.tsx`), shapes, sticky editor, toolbar, title chip, cursors; `board-context.tsx` (camera, live boxes, editing, marquee), `board-overlays.tsx` (marquee, laser) |
+| `src/debug.ts` | `window.__easelDebug`: seed a board, frame times, render counts (inert until called) |
 | `src/laser/` | **stub** with the contract's exports; the laser branch replaces it |
 | `src/session.ts` | open an easel: `ready` → doc → saver → awareness |
 | `src/__tests__/` | vitest (jsdom opt-in per file) |
+
+## Staying fast
+
+The board re-renders only when the document, the selection or the tool
+changes. Everything that moves at input rate lives outside React state:
+
+- **Camera** (`lib/camera.ts`): wheel, pinch and pan move a target; once a
+  frame the camera writes the layer `transform` and the dot grid's
+  `background-position/size` to the DOM, then tells the few screen-space
+  readers (laser, cursors, selection bar, zoom %, handles, marquee). A pan or
+  zoom commits nothing in `EaselPage`.
+- **Live boxes** (`lib/live-boxes.ts`): a drag, resize or drawn box moves only
+  the shapes involved (and the arrows on them); the doc is written once on
+  release, one undo step.
+- **Shapes** are memoized; the doc snapshot keeps every untouched `Shape`
+  object, so an edit re-renders one note.
+- **Stickies** render static HTML (`lib/sticky-static.ts`: same extensions,
+  same serializer, same DOM as the editor) and mount TipTap only while being
+  edited.
+- **Awareness**: local cursor and laser updates never re-render anything.
+
+Measure with the harness in
+`~/Developer/super-charles-personal/research/2026-10-01-copper-easels/perf/`
+(`node perf.mjs --label x`, WebKit + Chrome at 2×, 60-sticky board).
 
 ## How it talks to Copper
 
@@ -69,6 +94,7 @@ not work on this canvas because `setPointerCapture` rejects fake pointer ids).
   `file:done {reqId, fileId, url}` → the frame stores `image: file:<fileId>` and
   renders `copper-easel://easel/files/<easelId>/<fileId>`.
 - `open {url}` for links clicked in an unfocused sticky (http/https only).
+- `rename {title}` from native (sidebar rename) sets `meta.title` and saves.
 - `log {level, message}` for uncaught errors and failed picture adds.
 - `document.title` always equals the easel's title (`meta.title`, default
   "Untitled Easel"); the title chip top-left edits it. A new easel takes

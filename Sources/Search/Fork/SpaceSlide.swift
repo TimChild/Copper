@@ -126,6 +126,20 @@ final class SpaceSlide: ObservableObject {
 
     /// Which previews the column keeps drawn (see SpacePreviewStack).
     let anchor = PreviewAnchor()
+    /// The slide's progress in coarse steps, for the parts that stay put:
+    /// their ink is mixed by it (SlideInk), and re-mixing the lights, the
+    /// address and the strip on every frame of a drag was the one cost of
+    /// the live ink. Twenty-four steps across a column is below what the
+    /// eye tells apart in a colour; a timed slide sets the last step inside
+    /// its animation, so the colours still glide.
+    let ink = InkSteps()
+    static let inkSteps: CGFloat = 24
+
+    private func set(phase value: CGFloat) {
+        phase = value
+        let step = Int((min(1, max(0, value)) * SpaceSlide.inkSteps).rounded())
+        if ink.step != step { ink.step = step }
+    }
 
     /// Arc's is about this: quick off the mark, a soft landing, and over
     /// before the eye has finished following it.
@@ -184,7 +198,8 @@ final class SpaceSlide: ObservableObject {
             to = space
             leaving = model
             sliding = true
-            phase = 0
+            set(phase: 0)
+            ink.objectWillChange.send()
             way = still ? 0 : (forward ? 1 : -1)
             // The neighbours kept drawn stay the old space's through the
             // slide, so nothing is built or dropped while it moves.
@@ -211,11 +226,11 @@ final class SpaceSlide: ObservableObject {
         timing?.moved = CACurrentMediaTime()
         watch()
         if let hold {
-            withTransaction(calm) { phase = hold }
+            withTransaction(calm) { set(phase: hold) }
             return
         }
         withAnimation(SpaceSlide.curve, completionCriteria: .logicallyComplete) {
-            phase = 1
+            set(phase: 1)
         } completion: { [weak self] in
             guard let self, mine == self.serial else { return }
             self.end()
@@ -226,7 +241,8 @@ final class SpaceSlide: ObservableObject {
         let mine = serial
         withTransaction(calm) {
             sliding = false
-            phase = 1
+            set(phase: 1)
+            ink.objectWillChange.send()
             dragging = false
             swiping = false
             switched = false
@@ -307,7 +323,7 @@ final class SpaceSlide: ObservableObject {
                 }
                 sliding = true
                 way = forward ? 1 : -1
-                phase = min(1, abs(travel) / width)
+                set(phase: min(1, abs(travel) / width))
                 stretch = 0
             } else {
                 // Nowhere to go this way: no preview, only the live column
@@ -315,7 +331,7 @@ final class SpaceSlide: ObservableObject {
                 sliding = false
                 to = nil
                 anchor.arriving = nil
-                phase = 0
+                set(phase: 0)
                 stretch = SpaceSlide.rubber(travel, over: width)
             }
         }
@@ -362,7 +378,7 @@ final class SpaceSlide: ObservableObject {
         timing?.moved = CACurrentMediaTime()
         withTransaction(calm) { dragging = false }
         withAnimation(SpaceSlide.spring(from: phase, to: commit ? 1 : 0, speed: speed), completionCriteria: .logicallyComplete) {
-            phase = commit ? 1 : 0
+            set(phase: commit ? 1 : 0)
         } completion: { [weak self] in
             guard let self, mine == self.serial else { return }
             if commit { self.land(to, in: browser, mine) } else { self.end() }
@@ -378,7 +394,7 @@ final class SpaceSlide: ObservableObject {
         guard mine == serial, sliding else { return }
         timing?.landed = CACurrentMediaTime()
         withTransaction(calm) {
-            phase = 1
+            set(phase: 1)
             switched = true
             landing = true
             Spaces.shared.select(space.id, in: browser, sliding: true)
@@ -573,7 +589,9 @@ struct SpaceSlideBand: ViewModifier {
 struct SlideInk<Content: View>: View {
     let browser: Browser
     @ViewBuilder let content: (SpaceTint) -> Content
-    @ObservedObject private var slide = SpaceSlide.shared
+    /// The slide's coarse steps, not the slide: the content is re-mixed a
+    /// couple of dozen times across a swipe rather than every frame.
+    @ObservedObject private var ink = SpaceSlide.shared.ink
     @ObservedObject private var spaces = Spaces.shared
     @Environment(\.colorScheme) private var scheme
 
@@ -584,9 +602,10 @@ struct SlideInk<Content: View>: View {
 
     var body: some View {
         let dark = scheme == .dark
+        let slide = SpaceSlide.shared
         let tint: SpaceTint = {
             if slide.sliding, slide.owner === browser, let from = slide.from, let to = slide.to, from.id != to.id {
-                return SpaceTint(theme: from.look.mixed(to.look, Double(min(1, max(0, slide.phase)))), dark: dark)
+                return SpaceTint(theme: from.look.mixed(to.look, Double(CGFloat(ink.step) / SpaceSlide.inkSteps)), dark: dark)
             }
             return SpaceTint(space: spaces.space(in: browser), dark: dark)
         }()
@@ -629,4 +648,10 @@ struct SpaceSlideCurtain: View {
         .offset(y: top)
         .allowsHitTesting(false)
     }
+}
+
+/// The slide's progress in coarse steps (see `SpaceSlide.ink`).
+@MainActor
+final class InkSteps: ObservableObject {
+    @Published var step = 0
 }

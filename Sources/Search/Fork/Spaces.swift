@@ -29,7 +29,7 @@ struct Space: Codable, Identifiable, Equatable {
     var theme: SpaceTheme? = nil
 
     /// What the column is washed in: the theme, or the hue made into one.
-    var look: SpaceTheme { theme ?? hue.map(SpaceTheme.hue) ?? .plain }
+    var look: SpaceTheme { theme ?? hue.map(SpaceTheme.hue) ?? .copper }
 
     var tint: Color { hue == nil ? Palette.muted : SpaceTint(hue: hue, dark: false).dot }
 
@@ -258,7 +258,9 @@ final class Spaces: ObservableObject {
     func tint(_ id: UUID, hue: Double?) {
         guard let i = all.firstIndex(where: { $0.id == id }) else { return }
         all[i].hue = hue
-        all[i].theme = nil
+        // Graphite is a choice of its own, grey; no colour at all is the
+        // copper default, which only a space never given one wears.
+        all[i].theme = hue == nil ? .plain : nil
         keep()
     }
 

@@ -126,6 +126,7 @@ enum FlowModel {
         var history = true    // via upstream Chromium.places
         var passwords = true  // via upstream Chromium.read (keychain prompt)
         var cookies = true    // signed-in state
+        var localStorage = true // what sites keep in the page (FlowLocalStorage, no prompt)
         var passkeys = true   // Google Password Manager passkeys
         var extensions = true // Web Store extensions, reinstalled from the store
     }

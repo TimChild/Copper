@@ -204,6 +204,11 @@ struct SpaceTheme: Codable, Hashable {
     /// Graphite: no colour at all.
     static let plain = SpaceTheme(colors: [Stop(r: 0.62, g: 0.62, b: 0.64)], intensity: 0.34)
 
+    /// The default a space wears until it is given a colour: Copper's own
+    /// column — the copper picture over a pale copper colour, so the ink that
+    /// suits copper is the one the rows get. Graphite stays grey (`plain`).
+    static let copper = SpaceTheme(colors: [Stop(r: 0.90, g: 0.76, b: 0.67)], intensity: 0.45, image: copperPicture)
+
     /// The hue the rest of the app knows the space by — the dot, the picker,
     /// the split's outline. Nil when the theme has no colour worth naming.
     var hue: Double? {
@@ -279,7 +284,21 @@ struct SpaceTheme: Codable, Hashable {
     }
 
     /// Where a theme's picture is kept.
-    static func file(_ name: String) -> URL { Store.file("themes").appendingPathComponent(name) }
+    /// Where a theme's picture is kept. A `builtin:` name is one of the
+    /// pictures that ship inside Copper (the default copper column), read
+    /// from the app's own resources and never copied or deleted.
+    static func file(_ name: String) -> URL {
+        if name.hasPrefix(builtin), let folder = BackdropScene.folder {
+            return folder.appendingPathComponent(String(name.dropFirst(builtin.count)) + ".jpg")
+        }
+        return Store.file("themes").appendingPathComponent(name)
+    }
+
+    static let builtin = "builtin:"
+    /// The picture a space with no colour of its own wears: the app icon's
+    /// copper plate and verdigris, lightened to a pale rose-copper with soft
+    /// patina ribbons (rendered with three.js; see copper-themes/copper-default).
+    static let copperPicture = builtin + "copper-default"
 
     /// A picture chosen in the editor, copied in so the theme owns it —
     /// taken down to at most `largest` pixels on its long side and kept as

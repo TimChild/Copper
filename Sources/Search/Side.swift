@@ -581,6 +581,8 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
 
             Spacer(minLength: 2)
 
+            if !editing { HandBadges(tab: tab.id) } // Fork: agents' hands (Hands.swift)
+
             ZStack {
                 if hovering, !editing {
                     Image(systemName: "xmark")

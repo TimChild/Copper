@@ -75,13 +75,23 @@ enum Bridge {
         }
 
         let url = URL(string: "http://127.0.0.1:\(conf.port)/mcp")!
+        // Who this bridge is speaking for: the agent that spawned it, read
+        // from the environment it was given (Hands.swift), and the name the
+        // client gives at initialize — sent on every line, so each terminal
+        // agent's calls are its own hand on the tabs, not "the last client".
+        var clientName = ""
         while let line = readLine(strippingNewline: true) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
+            if clientName.isEmpty, trimmed.contains("\"initialize\""),
+               let object = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8)) as? [String: Any],
+               let info = (object["params"] as? [String: Any])?["clientInfo"] as? [String: Any],
+               let name = info["name"] as? String { clientName = name }
             var request = URLRequest(url: url, timeoutInterval: 120)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("Bearer \(conf.token)", forHTTPHeaderField: "Authorization")
+            request.setValue(AgentEnvironment.header(client: "copper-bridge", name: clientName), forHTTPHeaderField: "X-Copper-Agent")
             request.httpBody = Data(trimmed.utf8)
             let (data, status) = send(request)
             if status == 202 || data.isEmpty { continue }

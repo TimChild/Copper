@@ -50,7 +50,7 @@ struct FlowSheet: View {
                 .buttonStyle(.plain)
                 .help("Cancel")
             }
-            Text("Everything Chrome or Arc has — open tabs, spaces, bookmarks, history, passwords, Google Password Manager passkeys, signed-in state, extensions — into Copper, in one go.")
+            Text("Everything Chrome or Arc has — open tabs, spaces, bookmarks, history, passwords, Google Password Manager passkeys, signed-in state, local storage, extensions — into Copper, in one go.")
                 .font(.system(size: 13.5))
                 .foregroundStyle(Palette.muted)
                 .lineSpacing(2)
@@ -155,7 +155,9 @@ struct FlowSheet: View {
             Rule()
             row("Passkeys", hint: passkeyHint, binding: binding(\.passkeys))
             Rule()
-            row("Signed-in state", hint: "asks macOS once", binding: binding(\.cookies))
+            row("Signed-in state", hint: "cookies — asks macOS once", binding: binding(\.cookies))
+            Rule()
+            row("Local storage", hint: "what sites keep in the page — settings, drafts, workspaces; no prompt", binding: binding(\.localStorage))
             Rule()
             row("Extensions", hint: extensionHint, binding: binding(\.extensions))
         }
@@ -254,15 +256,31 @@ struct FlowSheet: View {
             VStack(alignment: .leading, spacing: 12) {
                 if flow.choice.passwords || flow.choice.passkeys || flow.choice.cookies,
                    let source = flow.selected {
-                    Text("macOS will ask once to hand over \(source.name)'s key — say Allow.")
+                    Text("macOS will ask once for \(source.name)'s keychain key (“\(source.source.service)”) — it unlocks passwords, passkeys and signed-in state. Say Allow; the window keeps working while it asks.")
                         .font(.system(size: 11.5)).foregroundStyle(Palette.faint)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let source = flow.selected, source.isArc, let date = flow.arcMovedAt, !flow.moveAgain {
+                    // A move is one-time: once Arc is in, say when, and make
+                    // running it again a choice rather than the big button.
+                    HStack {
+                        Image(systemName: "checkmark.circle").font(.system(size: 13)).foregroundStyle(Palette.ink)
+                        Text("Moved from Arc on \(date.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.system(size: 13)).foregroundStyle(Palette.ink)
+                        Spacer()
+                        Button("Move again") { flow.moveAgain = true }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Palette.ink)
+                            .padding(.horizontal, 15).padding(.vertical, 9)
+                            .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+                    }
+                } else {
                 HStack {
                     Spacer()
                     Button("Bring it all over") {
                         guard let source = flow.selected else { return }
-                        flow.move(source, into: browser)
+                        Task { await flow.move(source, into: browser) }
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 13, weight: .medium))
@@ -270,7 +288,8 @@ struct FlowSheet: View {
                     .padding(.horizontal, 17).padding(.vertical, 10)
                     .background(Palette.ink, in: Capsule())
                     .keyboardShortcut(.defaultAction)
-                    .disabled(flow.selected == nil || flow.selected?.locked == true || flow.sources.isEmpty || flow.phase == .scanning)
+                    .disabled(flow.selected == nil || flow.selected?.locked == true || flow.sources.isEmpty || flow.phase == .scanning || flow.moving)
+                }
                 }
             }
             .padding(.top, 19)

@@ -2004,6 +2004,10 @@ final class Browser: NSObject, ObservableObject {
     /// inspector object; `Inspect` contains the defensive bridge and fallback.
     func inspectElement() {
         guard let tab = active else { return }
+        // A tab still asleep has no page to inspect: asking for its web view
+        // would build an empty one and open the inspector on about:blank.
+        // Waking it loads the page first, as reload() does.
+        tab.wake()
         let state = Inspect.element(in: tab)
         if !state.available { announce("Right-click › Inspect Element") }
     }

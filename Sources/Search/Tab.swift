@@ -40,7 +40,11 @@ enum Web {
         // Keep the local inspector's keyboard path available. `isInspectable`
         // permits WebKit inspection, while its private `show()` path also
         // checks this preference before creating the inspector window.
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // Private, so asked for only when this WebKit has it: an unknown KVC
+        // key would throw at launch.
+        if config.preferences.responds(to: NSSelectorFromString("_setDeveloperExtrasEnabled:")) {
+            config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        }
         // Off by default on macOS, which is why a full-screen button on a video
         // did nothing at all: the page asks, and WebKit refuses without a word.
         config.preferences.isElementFullscreenEnabled = true

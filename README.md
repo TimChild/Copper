@@ -158,6 +158,10 @@ Model access lives in Settings › Intelligence: choose an API-key gateway or a 
 
 Copper refuses to replace a non-empty session with an empty shape while launch-time restoration is still in progress. Writes remain atomic, and a single `session.previous.json` is rotated before a write drops the tab count below half (or to zero). If a quit or upgrade goes wrong, use the CLI recovery command above or press **⌘K → Restore previous session**; the command appears only when the backup exists.
 
+### Website
+
+The landing page at <https://copper-browser.github.io/Copper/> is `site/` (static, no build step). Any push to `fork` that touches `site/` republishes it through `.github/workflows/site.yml` → the `gh-pages` branch → GitHub Pages. The screenshots and loops are real captures made with `site-capture/`. Hosting, CI/CD, editing rules and the capture recipe: [docs/website.md](docs/website.md).
+
 ### Contributing
 
 Issues and pull requests are genuinely welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how this is reviewed and what tends to get merged. The short version: small changes, no new dependencies, nothing that phones home.

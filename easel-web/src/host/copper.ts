@@ -45,6 +45,7 @@ export function createCopperHost(
   let readyPromise: Promise<EaselConfig> | null = null
   const uploads = new Map<string, Pending>()
   const flushers = new Set<() => void>()
+  const renamers = new Set<(title: string) => void>()
 
   const post = (message: PageMessage) => handler.postMessage(message)
 
@@ -73,6 +74,10 @@ export function createCopperHost(
       }
       case 'flush':
         for (const fn of flushers) fn()
+        return
+      case 'rename':
+        if (typeof message.title !== 'string') return
+        for (const fn of renamers) fn(message.title)
         return
     }
   }
@@ -125,6 +130,10 @@ export function createCopperHost(
     onFlush(fn) {
       flushers.add(fn)
       return () => flushers.delete(fn)
+    },
+    onRename(fn) {
+      renamers.add(fn)
+      return () => renamers.delete(fn)
     },
     fileUrl(easelId, fileId) {
       return `copper-easel://easel/files/${encodeURIComponent(easelId)}/${encodeURIComponent(fileId)}`

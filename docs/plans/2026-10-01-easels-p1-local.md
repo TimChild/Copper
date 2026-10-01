@@ -70,6 +70,7 @@ Native → page
 | `config` | `easel {id, title, createdAt}`, `viewer {id, name, color}`, `state` (base64 or `null` for a new easel), `mode: "local"` |
 | `file:done` / `file:error` | as above |
 | `flush` | page sends `save` now (native sends it before a tab closes or the app quits) |
+| `rename` | `title` (string). *Added for sidebar rename.* The page sets `meta.title`, so `document.title` follows, and saves as usual (`save` ≤ 500 ms later, carrying the new title). Surrounding spaces are trimmed; an empty title reads as "Untitled Easel". Native needs no reply. |
 
 `viewer` for local mode: `id` = a UUID kept in `easels/viewer.json`, `name` = `NSFullUserName()`,
 `color` = one of the board's cursor colours picked from the id.

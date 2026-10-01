@@ -48,6 +48,9 @@ export async function openEaselSession(host: Host): Promise<EaselSession> {
   })
   const awareness = createAwareness(doc.doc, config.viewer)
   const unwire = wireFlush(saver, fn => host.onFlush(fn))
+  // Sidebar rename: the title lands in `meta` (so document.title follows)
+  // and the saver picks the change up like any edit.
+  const offRename = host.onRename(title => doc.setTitle(title))
   return {
     host,
     config,
@@ -57,6 +60,7 @@ export async function openEaselSession(host: Host): Promise<EaselSession> {
     close() {
       saver.flush()
       unwire()
+      offRename()
       saver.dispose()
       awareness.destroy()
       doc.destroy()

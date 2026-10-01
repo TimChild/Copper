@@ -124,6 +124,10 @@ export function createStandaloneHost(options: StandaloneOptions = {}): Host {
       flushers.add(fn)
       return () => flushers.delete(fn)
     },
+    // No native side to rename from; the title chip is the only way here.
+    onRename() {
+      return () => {}
+    },
     fileUrl(id, fileId) {
       return urls.get(fileId) ?? storage?.getItem(fileKey(id, fileId)) ?? ''
     },

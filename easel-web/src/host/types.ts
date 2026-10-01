@@ -49,6 +49,8 @@ export type HostMessage =
   | { v: 1; type: 'file:done'; reqId: string; url: string; fileId: string }
   | { v: 1; type: 'file:error'; reqId: string; message: string }
   | { v: 1; type: 'flush' }
+  /** Added for sidebar rename: native renamed the easel; adopt the title and save. */
+  | { v: 1; type: 'rename'; title: string }
 
 export interface UploadedFile {
   /** `<uuid>.<ext>`; the doc stores `file:<fileId>`. */
@@ -85,6 +87,8 @@ export interface Host {
   log(level: LogLevel, message: string): void
   /** Native asks for a `save` now (tab closing, app quitting). */
   onFlush(fn: () => void): () => void
+  /** Native renamed the easel (sidebar rename); the page takes the title. */
+  onRename(fn: (title: string) => void): () => void
   /** Render URL for a stored picture (`file:<fileId>` in the doc). */
   fileUrl(easelId: string, fileId: string): string
 }

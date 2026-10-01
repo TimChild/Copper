@@ -162,6 +162,19 @@ describe('copper host (the bridge)', () => {
     expect(fn).toHaveBeenCalledTimes(1)
   })
 
+  it('hands a native rename to rename listeners, ignoring a malformed one', () => {
+    const host = createCopperHost(handler)
+    const fn = vi.fn()
+    const off = host.onRename(fn)
+    window.__easelHost!.receive({ v: 1, type: 'rename', title: 'Q3 board' })
+    window.__easelHost!.receive(JSON.stringify({ v: 1, type: 'rename', title: 7 }))
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(fn).toHaveBeenCalledWith('Q3 board')
+    off()
+    window.__easelHost!.receive({ v: 1, type: 'rename', title: 'again' })
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+
   it('renders file refs from the scheme', () => {
     const host = createCopperHost(handler)
     expect(host.fileUrl('abc', 'f.png')).toBe(
@@ -259,6 +272,35 @@ describe('session', () => {
       vi.advanceTimersByTime(1000)
       expect(save2).not.toHaveBeenCalled()
       second.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a native rename sets meta.title (so document.title) and saves', async () => {
+    vi.useFakeTimers()
+    try {
+      const handler = { postMessage: vi.fn<(m: PageMessage) => void>() }
+      const host = createCopperHost(handler)
+      const opening = openEaselSession(host)
+      window.__easelHost!.receive({
+        v: 1,
+        type: 'config',
+        easel: { id: 'r1', title: 'Before', createdAt: 1 },
+        viewer: { id: 'v', name: 'C', color: '#000' },
+        state: null,
+        mode: 'local',
+      })
+      const session = await opening
+      vi.advanceTimersByTime(500)
+      handler.postMessage.mockClear()
+      window.__easelHost!.receive({ v: 1, type: 'rename', title: '  Renamed  ' })
+      expect(session.doc.getMeta().title).toBe('Renamed')
+      vi.advanceTimersByTime(500)
+      expect(handler.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ v: 1, type: 'save', title: 'Renamed' })
+      )
+      session.close()
     } finally {
       vi.useRealTimers()
     }

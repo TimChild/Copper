@@ -141,6 +141,14 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
     /// A Reduce Motion gesture that has already changed space.
     private static var fired = false
     private static var monitor: Any?
+    /// Where the fingers came down: a gesture is the column's only if it
+    /// started over the column. One that started on the page — an easel's
+    /// pan, a map — stays the page's wherever the pointer ends up, so the
+    /// column never starts sliding out of the middle of somebody's pan.
+    private static var startedOverSidebar = false
+    /// Gestures this monitor turned down because they started on the page,
+    /// for the bench (`easels scroll --app` checks a board's pan is one).
+    private(set) static var leftToPage = 0
 
     static func watch(_ browser: Browser) {
         guard monitor == nil else { return }
@@ -158,10 +166,17 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
         // Each browser window's column switches that window's space; a
         // panel's or a sheet's events are not ours. (Fork: windows)
         guard let window = event.window, let owner = Windows.owner(of: window) else { return event }
+        // Where a trackpad gesture began decides whose it is: one that began
+        // on the page — a board's two-finger pan above all — is never the
+        // column's, wherever the fingers then wander. (Fork: easels)
+        if event.type == .scrollWheel, event.momentumPhase == [], event.phase == .began || event.phase == .mayBegin {
+            startedOverSidebar = overSidebar(event.locationInWindow, in: owner)
+            if !startedOverSidebar, event.phase == .began { leftToPage += 1 }
+        }
         // Once a gesture is ours it stays ours, in the window it began in.
         let going = track.axis == .sideways || track.coasting
         let browser = going ? (gripped ?? owner) : owner
-        guard going || overSidebar(event.locationInWindow, in: owner) else { return event }
+        guard going || (event.type == .swipe || startedOverSidebar) && overSidebar(event.locationInWindow, in: owner) else { return event }
         if event.type == .swipe {
             guard event.deltaX != 0 else { return event }
             go(event.deltaX * browser.prefs.swipeDirection.sign < 0 ? 1 : -1, in: browser)

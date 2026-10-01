@@ -390,6 +390,7 @@ struct SideBar: View {
         Quiet(icon: "plus", title: "New Tab", height: SideBar.row, inset: SideBar.rowInset, glow: tint.hover, ink: tint.muted) {
             browser.launch() // Fork: the ⌘T card, as Arc's New Tab row opens it
         }
+        .contextMenu { NewItemMenu(browser: browser) } // Fork: easels — New Tab / New Easel, Arc's new-item menu
     }
 
     // MARK: - the edge and the foot
@@ -627,6 +628,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
         })
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
+        .modifier(EaselRow(tab: tab)) // Fork: easels — a board's rename field hangs from its row
         // The wheel button over a row closes it, as in Arc and Chrome. SwiftUI
         // never sees that button; the app's monitor does and says where
         // (Fork: MouseButtons). The row's own frame decides, not its hover
@@ -842,6 +844,7 @@ struct SideAddress: View {
 
     /// `https://www.calendar.google.com/x` → `calendar.google.com`.
     static func host(_ url: URL) -> String {
+        if let easel = Easels.pill(for: url) { return easel } // Fork: "Easel · <title>", not a host
         guard let host = url.host(), !host.isEmpty else { return url.absoluteString }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }

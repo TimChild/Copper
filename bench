@@ -69,6 +69,28 @@
                                        switches, the current one opens its page) or the title icon
     ./bench windows [new|open N URL|key N|space N INDEX|select N TAB|closetab N TAB|close N|saved|quit]
                                        ⌘N windows
+    ./bench easels [new|open ID|check ID|flush ID|delete ID|path|menu [press]|click X Y [N]|draw X,Y X,Y …]
+                                       boards (Fork/Easel): list them (each tab's space, section, row);
+                                       new makes one and opens it the way ⌘K's New Easel does (Saved,
+                                       at the bottom); check reads back doc.yjs, the index entry and the
+                                       pictures; flush asks the board's page to save now; menu is File ›
+                                       New Easel as the menu bar holds it (press chooses it); delete is
+                                       at once, no sheet
+    ./bench easels scroll DX DY [STEPS] [--zoom] [--app] | scroll stats
+                                       a trackpad gesture on the board in front: began, STEPS (30)
+                                       changed events carrying DX,DY points between them, ended, ~8 ms
+                                       apart; --zoom holds ⌘; --app goes through NSApp.sendEvent so the
+                                       app's monitors see it; stats: µs the view took per event, gaps,
+                                       and whether the space swipe moved
+    ./bench easels perf start|stop     frame times on the board in front (rAF): frames, p50 p95 max ms,
+                                       over16 (>17.5 ms), over33 (>34 ms), wheel lag; the page's own
+                                       __easelDebug.perf when it has one
+    ./bench easels lean                what the board in front was spared of every page's machinery
+    ./bench easels rename ID TITLE | ask-rename ID | ask-delete ID | answer delete|cancel | sheet
+                                       the row's Rename Easel… (ask-rename opens the field on the row)
+                                       and Delete Easel… sheet, and its buttons
+    ./bench easels rowmenu ID PATH     right-click the board's row; the window with its menu, as a PNG
+                                       (a windowed run)
     ./bench spaces [delete N|answer close|move|cancel]
                                        the Delete Space sheet, and its buttons
     ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|blur X
@@ -262,8 +284,10 @@ def main(argv):
         if len(args) < 2: sys.exit("usage: bench render bitwarden|drive|hands|hands-dark PATH")
         request["op"] = args[0]
         request["path"] = os.path.abspath(args[1])
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows"):
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows", "easels"):
         request["op"] = args[0] if args else ("status" if verb in ("updates", "bw", "drive") else "list")
+        if verb == "easels" and request["op"] == "rowmenu" and len(args) > 2:
+            args = args[:2] + [os.path.abspath(args[2])]  # the picture's path, from here
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "history":
         if not args or args[0] != "import" or len(args) < 2:

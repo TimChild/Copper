@@ -229,6 +229,9 @@ enum Windows {
 
     /// Every ⌘N window, to disk on the way out.
     static func flush() {
+        // Boards first: their last save is asked for and waited on (300 ms
+        // at most), so it is on disk before anything else is let go.
+        Easels.flushAll()
         quitting = true
         for browser in all where !browser.primary { record(browser) }
         write(now: true)

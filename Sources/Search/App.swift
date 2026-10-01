@@ -100,8 +100,12 @@ struct AppCommands: Commands {
             Divider()
             Button("Reload Page") { browser.reload() }
                 .keyboardShortcut("r")
-            Button("Reading Mode") { browser.toggleReader() }
+            Button("Hard Reload") { browser.hardReload() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+            Button("Reading Mode") { browser.toggleReader() }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+            Button("Inspect Element") { browser.inspectElement() }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
             Button("Float Video") { browser.toggleFloat() }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
             Divider()
@@ -872,7 +876,9 @@ struct ContentView: View {
         case "r" where !shifted:
             browser.reload()
         case "r" where shifted:
-            browser.toggleReader()
+            browser.hardReload()
+        case "i" where shifted:
+            browser.inspectElement()
         case "[":
             shifted ? browser.step(-1) : browser.back()
         case "]":

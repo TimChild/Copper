@@ -1983,13 +1983,29 @@ final class Browser: NSObject, ObservableObject {
     func zoom(by factor: CGFloat) { active?.magnify(by: factor) }
     func resetZoom() { active?.resetZoom() }
 
-    /// ⌘⇧R. The article, and nothing that was arranged around it.
+    /// ⌥⌘R. The article, and nothing that was arranged around it.
     func toggleReader() {
         guard let tab = active else { return }
         tab.toggleReader { [weak self] worked in
             guard !worked else { return }
             self?.announce("Nothing to read on this page")
         }
+    }
+
+    /// ⌘⇧R. Keep identity and saved page state, but fetch this site's page
+    /// caches from origin before displaying it again.
+    func hardReload() {
+        guard active != nil else { return }
+        announce("Cache cleared — reloading")
+        active?.hardReload()
+    }
+
+    /// ⌘⇧I. WebKit exposes the inspector picker only through its private
+    /// inspector object; `Inspect` contains the defensive bridge and fallback.
+    func inspectElement() {
+        guard let tab = active else { return }
+        let state = Inspect.element(in: tab)
+        if !state.available { announce("Right-click › Inspect Element") }
     }
 
     func reload() { active?.reload() }

@@ -355,7 +355,10 @@ final class Updates: ObservableObject {
         let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
         let bundleID = info?["CFBundleIdentifier"] as? String ?? ""
         let shortVersion = info?["CFBundleShortVersionString"] as? String ?? ""
-        guard bundleID == Fork.bundle else {
+        // A copied test app has an isolated bundle id; production still
+        // requires Copper's fixed identity.
+        let expectedBundleID = Bundle.main.bundleIdentifier ?? Fork.bundle
+        guard bundleID == expectedBundleID else {
             return .failure("The download is not Copper (bundle id \(bundleID.isEmpty ? "missing" : bundleID)).")
         }
         guard shortVersion == version else {
@@ -547,33 +550,199 @@ final class Updates: ObservableObject {
         try? files.removeItem(at: staged.deletingLastPathComponent())
     }
 
-    /// Quit, and come back as the new one. A shell waits for this process to
-    /// be gone before asking macOS to open the bundle again — `open` on a
-    /// running app only brings it forward. A test world comes back as the
-    /// same test world.
+    /// The relaunch, as a small POSIX `sh` script that outlives this process.
+    /// Every step is a dated `copper-update:` line in update.log. Arguments:
+    /// old pid, app bundle, the world's instance.lock, updates.json, the
+    /// result file, the version being installed, 1 if `--headless` was on the
+    /// command line, 1 to open in the background, the log, and the launchd
+    /// job label ("" unless launchd itself runs this Copper).
+    ///
+    /// 1. Wait (≤ 60 s) for the old pid to exit.
+    /// 2. A launchd job: let launchd bring it back (≤ 3 s, KeepAlive), else
+    ///    `launchctl kickstart` it. Anything else: wait (≤ 10 s) until
+    ///    LaunchServices stops listing the old pid, settle, then `open -n` —
+    ///    a new instance, never a reopen event to a dead or probe instance —
+    ///    with the world's environment, retried 3× on a non-zero exit.
+    /// 3. Confirm (≤ 20 s): the world's lock has a new live holder, or the
+    ///    pending marker is gone from updates.json.
+    /// 4. Not confirmed and nobody holds the lock: start the executable
+    ///    directly, detached, and confirm again (≤ 20 s).
+    /// The instance lock makes every path safe against two of one world.
+    private nonisolated static let waiterScript = #"""
+    set -u
+    pid=$1 app=$2 lock=$3 state=$4 result=$5 version=$6 headless=$7 background=$8 log=$9
+    shift 9
+    job=${1:-}
+
+    note() {
+        printf '%s copper-update: %s\n' "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$log"
+    }
+
+    finish() {
+        if [ "$1" = confirmed ]; then
+            note "relaunch confirmed"
+        else
+            note "relaunch not confirmed: $2"
+            printf 'relaunch %s %s\n' "$version" "$2" > "$result"
+        fi
+        exit 0
+    }
+
+    # The live pid written into the lock by its holder, if it is not the old one.
+    new_holder() {
+        holder=$(/usr/bin/head -n 1 "$lock" 2>/dev/null | /usr/bin/tr -cd '0-9')
+        [ -n "$holder" ] && [ "$holder" != "$pid" ] && /bin/kill -0 "$holder" 2>/dev/null
+    }
+
+    confirm() {
+        deadline=$(( $(/bin/date +%s) + $1 ))
+        while :; do
+            if new_holder; then
+                note "world lock held by new pid $holder"
+                return 0
+            fi
+            if [ -f "$state" ] && ! /usr/bin/grep -q '"pending"' "$state"; then
+                note "pending update marker cleared"
+                return 0
+            fi
+            [ "$(/bin/date +%s)" -ge "$deadline" ] && return 1
+            /bin/sleep 0.1
+        done
+    }
+
+    # Runs "$@", logging its stderr and exit status under a label.
+    logged() {
+        label=$1
+        shift
+        err=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/copper-update.XXXXXX") || err=/dev/null
+        "$@" </dev/null >/dev/null 2>"$err"
+        status=$?
+        if [ "$err" != /dev/null ]; then
+            while IFS= read -r line; do note "$label stderr: $line"; done < "$err"
+            /bin/rm -f "$err"
+        fi
+        note "$label exited $status"
+        return "$status"
+    }
+
+    note "waiter for pid $pid: $app${job:+ (launchd job $job)}"
+    ticks=0
+    while /bin/kill -0 "$pid" 2>/dev/null; do
+        [ "$ticks" -ge 600 ] && finish not-confirmed "Copper $version is installed, but the old Copper did not quit within 60 seconds"
+        /bin/sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    note "old pid $pid exited"
+
+    # How long to wait for the new Copper once something was asked to start it.
+    grace=2
+    if [ -n "$job" ]; then
+        if confirm 3; then finish confirmed; fi
+        uid=$(/usr/bin/id -u)
+        for domain in "gui/$uid" "user/$uid"; do
+            if /bin/launchctl print "$domain/$job" >/dev/null 2>&1; then
+                note "launchd did not restart $job; kickstarting $domain/$job"
+                logged "launchctl kickstart" /bin/launchctl kickstart "$domain/$job" && grace=20
+                break
+            fi
+        done
+        [ "$grace" = 20 ] || note "launchd job $job not found in gui/$uid or user/$uid"
+    else
+        ticks=0
+        while /usr/bin/lsappinfo find "pid=$pid" 2>/dev/null | /usr/bin/grep -q .; do
+            if [ "$ticks" -ge 100 ]; then
+                note "LaunchServices still lists pid $pid after 10s; opening a new instance anyway"
+                break
+            fi
+            /bin/sleep 0.1
+            ticks=$((ticks + 1))
+        done
+        /bin/sleep 0.5
+        note "LaunchServices released pid $pid"
+
+        set -- /usr/bin/open -n
+        [ "$background" = 1 ] && set -- "$@" -g
+        for key in SEARCH_PROBE SEARCH_MCP_PORT SEARCH_MEASURE SEARCH_HEADLESS SEARCH_HEADLESS_SIZE \
+                   SEARCH_HEADLESS_WINDOW SEARCH_HEADLESS_DEBUG COPPER_AGENT_PORT COPPER_MAIN_WORLD COPPER_MAIN_WORLD_PORT; do
+            eval "isset=\${$key+x} value=\${$key-}"
+            [ "$isset" = x ] && set -- "$@" --env "$key=$value"
+        done
+        set -- "$@" "$app"
+        [ "$headless" = 1 ] && set -- "$@" --args --headless
+        note "opening: $*"
+        attempt=1
+        while :; do
+            if logged "open attempt $attempt" "$@"; then grace=20; break; fi
+            [ "$attempt" -ge 3 ] && break
+            /bin/sleep "$attempt"
+            attempt=$((attempt + 1))
+        done
+    fi
+
+    if confirm "$grace"; then finish confirmed; fi
+    if /usr/sbin/lsof -t "$lock" 2>/dev/null | /usr/bin/grep -q .; then
+        finish not-confirmed "Copper $version is installed, but a Copper that never finished starting holds this world"
+    fi
+    note "no new Copper after ${grace}s and nobody holds the world lock; starting the executable directly"
+    set -- /usr/bin/env -i
+    for key in HOME USER LOGNAME SHELL TMPDIR PATH LANG \
+               SEARCH_PROBE SEARCH_MCP_PORT SEARCH_MEASURE SEARCH_HEADLESS SEARCH_HEADLESS_SIZE \
+               SEARCH_HEADLESS_WINDOW SEARCH_HEADLESS_DEBUG COPPER_AGENT_PORT COPPER_MAIN_WORLD COPPER_MAIN_WORLD_PORT; do
+        eval "isset=\${$key+x} value=\${$key-}"
+        [ "$isset" = x ] && set -- "$@" "$key=$value"
+    done
+    set -- "$@" "$app/Contents/MacOS/Copper"
+    [ "$headless" = 1 ] && set -- "$@" --headless
+    /usr/bin/nohup "$@" </dev/null >/dev/null 2>&1 &
+    note "started $app/Contents/MacOS/Copper directly as pid $!"
+    if confirm 20; then finish confirmed; fi
+    finish not-confirmed "Copper $version is installed, but it did not reopen by itself after the update"
+    """#
+
+    /// The launchd job running this process, if a LaunchAgent/LaunchDaemon
+    /// (a headless Mac mini, docs/headless.md) started it. LaunchServices
+    /// launches every app as a launchd job too — its XPC_SERVICE_NAME is
+    /// `application.<bundle id>.…` — and a shell passes its own value down,
+    /// so only a job label on a process whose parent is launchd counts.
+    nonisolated static func launchdJob(parent: pid_t = getppid(),
+                                       environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        guard parent == 1, let label = environment["XPC_SERVICE_NAME"], !label.isEmpty, label != "0",
+              !label.hasPrefix("application.")
+        else { return nil }
+        return label
+    }
+
+    /// Quit, and come back as the new one, in the same world, on the same
+    /// port, headless if this run was. See `waiterScript`.
     private func relaunch(_ target: URL) {
-        var open = ["/usr/bin/open"]
-        for key in ["SEARCH_PROBE", "SEARCH_MCP_PORT", "SEARCH_MEASURE"] {
-            if let value = ProcessInfo.processInfo.environment[key] { open += ["--env", "\(key)=\(value)"] }
-        }
-        open.append(target.path)
+        let oldPID = String(ProcessInfo.processInfo.processIdentifier)
+        let pendingVersion = saved.pending?.version ?? current
+        let job = Self.launchdJob()
         let waiter = Process()
         waiter.executableURL = URL(fileURLWithPath: "/bin/sh")
         waiter.arguments = [
-            "-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; shift; exec \"$@\"",
-            "sh", String(ProcessInfo.processInfo.processIdentifier),
-        ] + open
+            "-c", Self.waiterScript, "copper-update-waiter", oldPID, target.path,
+            Store.file("instance.lock").path, Store.file("updates.json").path,
+            Store.file("update-result.txt").path, pendingVersion,
+            CommandLine.arguments.contains("--headless") ? "1" : "0", Headless.on ? "1" : "0",
+            Self.log.path, job ?? "",
+        ]
+        waiter.standardInput = FileHandle.nullDevice
+        waiter.standardOutput = FileHandle.nullDevice
+        waiter.standardError = FileHandle.nullDevice
         do {
-            try waiter.run()
+            try waiter.run() // its own process group: a launchd job's exit does not take it down
         } catch {
-            // The swap is done; this process just cannot arrange its own
-            // return. Say so, and leave the user to open Copper again.
-            problem = "Copper \(saved.pending?.version ?? "") is installed, but the relaunch could not be started — open Copper again."
-            Self.note("relaunch could not start: \(error.localizedDescription)")
+            // The swap is done; this process cannot arrange its own return.
+            let why = "Copper \(pendingVersion) is installed, but the relaunch could not be started — open Copper again."
+            problem = why
+            record(Outcome(ok: false, detail: why, at: Date()))
+            Self.note("relaunch waiter could not start: \(error.localizedDescription)")
             state = .idle
             return
         }
-        browser?.announce("Relaunching as Copper \(saved.pending?.version ?? "")")
+        Self.note("relaunch waiter pid \(waiter.processIdentifier) started for pid \(oldPID)\(job.map { " (launchd job \($0))" } ?? "")")
+        browser?.announce("Relaunching as Copper \(pendingVersion)")
         NSApp.terminate(nil)
     }
 
@@ -597,12 +766,22 @@ final class Updates: ObservableObject {
             }
             persist()
         }
-        // An older Copper's helper left its verdict in a file; read it once.
+        // The relaunch waiter writes here only when the new Copper did not
+        // come back by itself (`relaunch <version> <why>`); an older Copper's
+        // helper left `ok …`/`failed …`. Read once.
         let legacy = Store.file("update-result.txt")
         if let text = try? String(contentsOf: legacy, encoding: .utf8) {
             try? FileManager.default.removeItem(at: legacy)
             let pieces = text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ", maxSplits: 1).map(String.init)
-            if pieces.first == "ok", pieces.count >= 2 {
+            if pieces.first == "relaunch", pieces.count >= 2 {
+                let rest = pieces[1].split(separator: " ", maxSplits: 1).map(String.init)
+                // A verdict about an older install than this one is stale.
+                if let version = rest.first, Self.compare(version, current) >= 0 {
+                    let why = rest.count > 1 ? rest[1] : "Copper \(version) is installed, but it did not reopen by itself after the update"
+                    record(Outcome(ok: false, detail: "\(why). The update log has every step.", at: Date()))
+                    Self.note("launched as \(current) after a relaunch that was not confirmed")
+                }
+            } else if pieces.first == "ok", pieces.count >= 2 {
                 let version = String(pieces[1].split(separator: " ").first ?? "")
                 record(Outcome(ok: version == current, detail: version == current ? version : "\(version) was reported installed, but this is \(current)", at: Date()))
             } else if pieces.first == "failed" {

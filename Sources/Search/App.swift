@@ -11,6 +11,7 @@ struct SearchApp: App {
     @NSApplicationDelegateAdaptor(Links.self) private var links
 
     init() {
+        Instance.acquireIfNeeded() // Fork: one process per world, before anything is restored (Fork/Instance.swift)
         Fork.migratePasskeysPreference()
         Bridge.runIfAsked()
     } // Fork: `--mcp-stdio` pipes to the running app and exits

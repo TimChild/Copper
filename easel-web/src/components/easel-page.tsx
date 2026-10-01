@@ -473,10 +473,18 @@ export function EaselPage({
     const g = gesture.current
     if (!g) return
     switch (g.kind) {
-      case 'laser':
-        trails.move(c)
+      case 'laser': {
+        // A fast circle delivers several points per frame; the coalesced
+        // ones are what keep the trail round instead of polygonal.
+        const batch = e.nativeEvent.getCoalescedEvents?.() ?? []
+        if (batch.length > 1) {
+          for (const ev of batch) trails.move(screenToCanvas(view, clientPoint(ev)))
+        } else {
+          trails.move(c)
+        }
         publishLaser()
         return
+      }
       case 'pan':
         setView({
           ...g.view,

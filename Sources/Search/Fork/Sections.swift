@@ -130,13 +130,16 @@ final class Sections: ObservableObject {
     // MARK: - the sweep
 
     /// Everything in Today nobody has looked at inside the window, closed the
-    /// ordinary way. The row you are on is never taken out from under you.
+    /// ordinary way. The row you are on is never taken out from under you,
+    /// and neither is a board (Fork/Easel): it lives in Saved, and one
+    /// dragged into Today is still a board, not a page to tidy away.
     @discardableResult
     func sweep(in browser: Browser, olderThan override: Double? = nil) -> Int {
         guard let hours = override ?? archive.hours else { lastSwept = 0; return 0 }
         let cutoff = Date().addingTimeInterval(-hours * 3600)
         let stale = browser.tabs.filter {
             $0.pin == nil && !isSaved($0) && $0.id != browser.activeID && !$0.isBlank && lastSeen($0) < cutoff
+                && Easels.showing($0) == nil
         }
         for tab in stale { browser.close(tab) }
         lastSwept = stale.count

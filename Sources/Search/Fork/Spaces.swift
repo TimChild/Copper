@@ -294,6 +294,20 @@ final class Spaces: ObservableObject {
         keep()
     }
 
+    /// A tab in a row that is not on screen, closed for good — a deleted
+    /// board's tab in another space (Fork/Easel).
+    func drop(_ tab: Tab) {
+        for (id, row) in parked where row.tabs.contains(where: { $0 === tab }) {
+            var row = row
+            row.tabs.removeAll { $0 === tab }
+            if row.active == tab.id { row.active = row.tabs.first?.id }
+            parked[id] = row
+        }
+        Sections.shared.forget(tab.id)
+        tab.close()
+        keep()
+    }
+
     /// Move the active tab to another space; it lands at that row's end and
     /// this row moves on, as if the tab had been closed.
     func move(_ tab: Tab, to id: UUID, in browser: Browser) {
@@ -467,7 +481,7 @@ final class Spaces: ObservableObject {
             // it has to be there when the view is made, long before it wakes.
             let tab = building(for: id) { Tab(configuration: Easels.configuration(for: url)) }
             browser.prepare(tab)
-            tab.restore(url: url, title: entry.title)
+            tab.restore(url: url, title: Easels.rowTitle(for: url, kept: entry.title)) // Fork: a board's name is the index's
             tab.pin = entry.pin
             // No flag at all is an upstream-shaped file: everything in it is
             // something you kept, so the whole column comes back as Saved.

@@ -63,16 +63,6 @@ final class SpaceSlide: ObservableObject {
     var column: CGRect = .zero
     var band: CGRect = .zero
 
-    /// The two spaces a slide or swipe is between: the ground (SpaceGround)
-    /// blends `from`'s look towards `to`'s by `phase`. Nil at rest; during a
-    /// swipe `to` is nil at the ends, where there is nowhere to go.
-    @Published private(set) var from: Space?
-    @Published private(set) var to: Space?
-
-    /// The ground's own view, so a picture of the column can be taken with
-    /// it hidden (see `photograph`). Set by the host as it is made.
-    weak var ground: SpaceGroundHost.Matte?
-
     var moving: Bool { picture != nil || dragging }
 
     // The swipe's own state, all nil/false/zero outside one.
@@ -112,7 +102,7 @@ final class SpaceSlide: ObservableObject {
     /// Called by `Spaces.select` before anything changes. True when there is
     /// a column on screen to slide — the caller then makes its change with
     /// animations off, since the slide is the only motion there is.
-    func begin(forward: Bool, to space: Space, in browser: Browser) -> Bool {
+    func begin(forward: Bool, in browser: Browser) -> Bool {
         let started = CACurrentMediaTime()
         timed = browser.prefs.bench
         guard column.width > 1, column.height > 1, band.height > 1,
@@ -125,8 +115,6 @@ final class SpaceSlide: ObservableObject {
         var calm = Transaction()
         calm.disablesAnimations = true
         withTransaction(calm) {
-            from = Spaces.shared.space
-            to = space
             dragging = false
             arriving = nil
             incoming = nil
@@ -180,8 +168,6 @@ final class SpaceSlide: ObservableObject {
             incoming = nil
             landing = false
             stretch = 0
-            from = nil
-            to = nil
         }
         outgoing = nil
         timing?.ended = CACurrentMediaTime()
@@ -227,10 +213,7 @@ final class SpaceSlide: ObservableObject {
             timing = Timing(asked: started, pictured: CACurrentMediaTime())
             var calm = Transaction()
             calm.disablesAnimations = true
-            withTransaction(calm) {
-                dragging = true
-                from = spaces.space
-            }
+            withTransaction(calm) { dragging = true }
             watch()
         }
         let width = max(column.width, 1)
@@ -248,7 +231,6 @@ final class SpaceSlide: ObservableObject {
                     arriving = space
                     incoming = cache[space.id]
                 }
-                to = space
                 picture = outgoing
                 way = forward ? 1 : -1
                 phase = min(1, abs(travel) / width)
@@ -259,7 +241,6 @@ final class SpaceSlide: ObservableObject {
                 picture = nil
                 arriving = nil
                 incoming = nil
-                to = nil
                 phase = 1
                 stretch = SpaceSlide.rubber(travel, over: width)
             }
@@ -349,78 +330,47 @@ final class SpaceSlide: ObservableObject {
 
     // MARK: - the picture
 
-    /// The column's pixels with the ground left out: the rows, the
-    /// favourites, the lights, the address and the strip, on clear, so a
-    /// picture that travels brings its rows and nothing behind them. The
-    /// window's own composited pixels would be a few milliseconds cheaper,
-    /// but they have the ground in them, and a ground that travels with the
-    /// rows is exactly the seam this is here to remove.
-    ///
-    /// The views are asked to draw themselves twice into bitmaps, with the
-    /// ground's view (SpaceGroundHost) showing a flat black and then a flat
-    /// white in place of the ground — all inside one call, so no frame
-    /// reaches the screen without the real ground. Over black a pixel is
-    /// its own premultiplied colour; the lift it gets over white is what
-    /// shows through, one minus its coverage. Cost is reported by `spaces
-    /// slide` as `picture`.
+    /// The column's pixels, from the window's own drawing, in points at the
+    /// screen's scale — what `SpaceEditing.picture` does for the Space page,
+    /// cut to the column's rectangle of the live window.
     private func photograph(in window: NSWindow) -> NSImage? {
-        guard let view = window.contentView, let ground else { return nil }
+        guard let view = window.contentView else { return nil }
+        // The compositor's copy first: the window's own pixels, as already
+        // on screen, cut to the column — a few milliseconds, where asking
+        // the views to draw themselves again (below) took thirty to sixty
+        // and made the slide set off late. An app may always read its own
+        // window; the drawing is only for when that comes back empty.
+        if let fast = composited(view: view, in: window) { return fast }
         // SwiftUI's global space runs down from the content's top left;
         // AppKit's, unless the view is flipped, up from its bottom left.
         let rect = view.isFlipped ? column
             : NSRect(x: column.minX, y: view.bounds.height - column.maxY, width: column.width, height: column.height)
         let inside = rect.intersection(view.bounds).integral
-        let scale = window.backingScaleFactor
-        let wide = Int(inside.width * scale), high = Int(inside.height * scale)
-        func bitmap() -> NSBitmapImageRep? {
-            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: wide, pixelsHigh: high, bitsPerSample: 8, samplesPerPixel: 4,
-                                       hasAlpha: true, isPlanar: false, colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0)
-            rep?.size = inside.size
-            return rep
-        }
-        guard wide > 1, high > 1, let dark = bitmap(), let light = bitmap() else { return nil }
-        let wasHidden = ground.inner.isHidden
-        BackdropScene.capturing = true
-        ground.inner.isHidden = true
-        ground.fill = .black
-        view.cacheDisplay(in: inside, to: dark)
-        ground.fill = .white
-        view.cacheDisplay(in: inside, to: light)
-        ground.fill = nil
-        ground.inner.isHidden = wasHidden
-        BackdropScene.capturing = false
-        SpaceSlide.matte(dark, against: light)
+        guard inside.width > 1, inside.height > 1,
+              let rep = view.bitmapImageRepForCachingDisplay(in: inside) else { return nil }
+        view.cacheDisplay(in: inside, to: rep)
         let image = NSImage(size: inside.size)
-        image.addRepresentation(dark)
+        image.addRepresentation(rep)
         return image
     }
 
-    /// `dark` was drawn over black and `light` over white; afterwards `dark`
-    /// is the same drawing on clear. Over black a pixel's bytes are its
-    /// colour times its coverage already (premultiplied, which is the
-    /// bitmap's format); over white it is lifted by the rest, so the lift
-    /// is one minus the coverage. The largest lift of the three channels
-    /// is taken, and the colour held at or under the coverage so the pixel
-    /// stays a valid premultiplied one.
-    nonisolated private static func matte(_ dark: NSBitmapImageRep, against light: NSBitmapImageRep) {
-        guard let a = dark.bitmapData, let b = light.bitmapData,
-              dark.bytesPerRow == light.bytesPerRow, dark.pixelsHigh == light.pixelsHigh,
-              dark.samplesPerPixel == 4, light.samplesPerPixel == 4 else { return }
-        let row = dark.bytesPerRow
-        for y in 0..<dark.pixelsHigh {
-            var p = a + y * row
-            var q = b + y * row
-            for _ in 0..<dark.pixelsWide {
-                let lift = max(Int(q[0]) - Int(p[0]), Int(q[1]) - Int(p[1]), Int(q[2]) - Int(p[2]))
-                let alpha = UInt8(clamping: 255 - max(0, lift))
-                p[0] = min(p[0], alpha)
-                p[1] = min(p[1], alpha)
-                p[2] = min(p[2], alpha)
-                p[3] = alpha
-                p += 4
-                q += 4
-            }
-        }
+    /// The column's rectangle of the window, from the window server: the
+    /// whole window's own pixels, cut to the column. Asking the server for a
+    /// rectangle of the screen instead came back shifted by the window's
+    /// framing (about 12 × 8 points) whenever the window was not frontmost.
+    private func composited(view: NSView, in window: NSWindow) -> NSImage? {
+        let local = view.isFlipped ? column
+            : NSRect(x: column.minX, y: view.bounds.height - column.maxY, width: column.width, height: column.height)
+        let inWindow = view.convert(local, to: nil)
+        guard let whole = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
+                                                  [.boundsIgnoreFraming, .bestResolution]),
+              whole.width > 8, window.frame.width > 1 else { return nil }
+        let scale = CGFloat(whole.width) / window.frame.width
+        // The window's picture runs down from its top left.
+        let cut = CGRect(x: inWindow.minX * scale, y: (window.frame.height - inWindow.maxY) * scale,
+                         width: inWindow.width * scale, height: inWindow.height * scale).integral
+        guard let image = whole.cropping(to: cut), image.width > 8, image.height > 8 else { return nil }
+        return NSImage(cgImage: image, size: column.size)
     }
 
     // MARK: - the bench
@@ -511,16 +461,7 @@ final class SpaceSlide: ObservableObject {
     }
 }
 
-// MARK: - the layers
-
-// Three layers, on one ground. The ground (SpaceGround, drawn behind the
-// column) is live and never pictured: it blends the outgoing theme towards
-// the incoming one by `phase`. Over it travel the bands — pictures of the
-// rows with nothing behind them, so they carry their own space's ink and
-// nothing else — and over everything the lights, the address and the strip
-// stay put while their old content fades out and their new fades in. No
-// picture holds a ground, so there is no edge where one ground meets
-// another and nothing to ghost.
+// MARK: - the two layers
 
 /// The band that travels — the favourites, the space's name and its rows —
 /// as the real, live column: in from the side while a slide is on, and held
@@ -534,20 +475,11 @@ struct SpaceSlideBand: ViewModifier {
         content
             .offset(x: slide.dragging ? slide.stretch
                 : slide.picture != nil ? slide.way * slide.column.width * (1 - slide.phase) : 0)
-            .opacity(opacity)
+            // While a swipe is pictured, the curtain draws both columns and
+            // this one, still the old space's, only has to keep out of sight.
+            .opacity(slide.dragging && slide.picture != nil ? 0 : 1)
             .clipShape(BandEdge(on: slide.moving))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slide.band = $0 }
-    }
-
-    /// While a swipe is pictured the curtain draws both bands and this one,
-    /// still the old space's, keeps out of sight. After a commit the live
-    /// band — now the new space's — comes up under the incoming picture as
-    /// that fades, so the hand-over from a slightly stale picture to the
-    /// real rows is a crossfade rather than a cut.
-    private var opacity: Double {
-        if slide.dragging, slide.picture != nil { return 0 }
-        if slide.landing, slide.picture != nil { return 1 - slide.fade }
-        return 1
     }
 
     /// The band's own rectangle while it moves; otherwise one so large it
@@ -559,30 +491,14 @@ struct SpaceSlideBand: ViewModifier {
     }
 }
 
-/// The parts of the column that stay put — the lights, the address, the
-/// strip. Their live content fades in by the slide's progress while the
-/// curtain fades the old content out over it, on the one shared ground.
-/// During a swipe the curtain draws both old and new from pictures and the
-/// live content, still the old space's, stays out of the way.
-struct SpaceSlideStatic: ViewModifier {
-    @ObservedObject private var slide = SpaceSlide.shared
-
-    func body(content: Content) -> some View {
-        content.opacity(slide.picture == nil ? 1 : slide.dragging ? 0 : Double(slide.phase))
-    }
-}
-
-extension SpaceSlide {
-    /// After a commit, how much of the incoming picture is still over the
-    /// live band: 1 where the fingers let go, 0 at home.
-    var fade: Double { landing ? Double((1 - phase) / max(0.001, 1 - landed)) : 0 }
-}
-
-/// The pictures over the column while a slide is on — rows and static parts
-/// only, on clear; the ground under them is the column's own. Takes no
-/// clicks: the column under it is the real one from the first frame.
+/// The old column, over the new one while a slide is on: its copy of the
+/// band slides out and fades; its copy of everything else — the lights, the
+/// address, the strip, and the old ground behind them — fades where it
+/// stands, so the theme crossfades while the rows travel. Takes no clicks:
+/// the new column under it is the real one from the first frame.
 struct SpaceSlideCurtain: View {
     @ObservedObject private var slide = SpaceSlide.shared
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         if let picture = slide.picture {
@@ -590,63 +506,93 @@ struct SpaceSlideCurtain: View {
             let top = max(0, slide.band.minY - slide.column.minY)
             let height = min(slide.band.height, size.height - top)
             ZStack(alignment: .topLeading) {
-                if slide.dragging {
-                    // The arriving space, pictured as it was last seen: its
-                    // lights and strip fading in, its band coming in from
-                    // the side. With no picture of it yet, the old lights
-                    // and strip stand until the switch and the band is bare.
-                    if let incoming = slide.incoming {
-                        statics(incoming, size: size, top: top, height: height)
-                            .opacity(Double(slide.phase))
-                        band(incoming, size: size, top: top, height: height, way: slide.way, at: 1 - slide.phase)
-                    }
-                    statics(picture, size: size, top: top, height: height)
-                        .opacity(slide.incoming == nil ? 1 : Double(1 - slide.phase))
-                } else {
-                    // A timed slide, or the settle after a swipe's commit:
-                    // the live column is the new space's, so only the old
-                    // content fades out over it.
-                    if slide.landing, let incoming = slide.incoming {
-                        band(incoming, size: size, top: top, height: height, way: slide.way, at: 1 - slide.phase)
-                            .opacity(slide.fade)
-                    }
-                    statics(picture, size: size, top: top, height: height)
-                        .opacity(Double(1 - slide.phase))
+                if slide.dragging { arriving(size: size, top: top, height: height, fallback: picture) }
+                if slide.landing, let incoming = slide.incoming {
+                    band(incoming, size: size, top: top, height: height)
+                        .opacity(Double((1 - slide.phase) / max(0.001, 1 - slide.landed)))
                 }
-                // The old band, on its way out and fading as it goes.
-                band(picture, size: size, top: top, height: height, way: -slide.way, at: slide.phase)
-                    .opacity(Double(1 - slide.phase))
+                outgoing(picture, size: size, top: top, height: height)
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
             .allowsHitTesting(false)
         }
     }
 
-    /// A picture's lights, address and strip: everything but the band.
-    private func statics(_ image: NSImage, size: CGSize, top: CGFloat, height: CGFloat) -> some View {
-        Image(nsImage: image)
-            .resizable()
-            .frame(width: size.width, height: size.height)
-            .mask(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    Rectangle().frame(height: top)
-                    Color.clear.frame(height: height)
-                    Rectangle()
+    /// While a swipe is on, what a slide has as its live new column: the
+    /// arriving space's ground, its picture's lights and strip in place, its
+    /// band coming in from the side. With no picture of it yet, the old
+    /// column's lights and strip stand in and the band is bare ground.
+    ///
+    /// An animated arriving space draws no ground of its own here: the
+    /// column's live scene underneath is already mixing towards it (see
+    /// `ThemeBackdrop`'s `live`), and a second scene for the curtain would be
+    /// a second WebContent process that seldom loads before the fingers lift.
+    /// Its lights and strip are not pictured in either — they would bring a
+    /// frozen frame of the scene with them — so the live column's stand until
+    /// the switch.
+    @ViewBuilder
+    private func arriving(size: CGSize, top: CGFloat, height: CGFloat, fallback: NSImage) -> some View {
+        let animated = slide.arriving?.look.motion != nil
+        if let space = slide.arriving, !animated {
+            ThemeBackdrop(theme: space.look, dark: scheme == .dark)
+                .frame(width: size.width, height: size.height)
+        }
+        if !animated {
+            Image(nsImage: slide.incoming ?? fallback)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+                .mask(alignment: .topLeading) {
+                    VStack(spacing: 0) {
+                        Rectangle().frame(height: top)
+                        Color.clear.frame(height: height)
+                        Rectangle()
+                    }
                 }
-            }
+        }
+        if let incoming = slide.incoming {
+            band(incoming, size: size, top: top, height: height)
+        }
     }
 
-    /// A picture's band, `at` of a column's width along `way`. Its last
-    /// point is the column's hairline, which stays put, so it is left out.
-    private func band(_ image: NSImage, size: CGSize, top: CGFloat, height: CGFloat, way: CGFloat, at: CGFloat) -> some View {
-        Image(nsImage: image)
+    /// The arriving space's band, pictured, where the live one would be.
+    private func band(_ incoming: NSImage, size: CGSize, top: CGFloat, height: CGFloat) -> some View {
+        Image(nsImage: incoming)
             .resizable()
             .frame(width: size.width, height: size.height)
-            .offset(x: way * size.width * at)
+            .offset(x: slide.way * size.width * (1 - slide.phase))
             .mask(alignment: .topLeading) {
                 Rectangle()
                     .frame(width: max(0, size.width - 1), height: height)
                     .offset(y: top)
             }
+    }
+
+    private func outgoing(_ picture: NSImage, size: CGSize, top: CGFloat, height: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            // Everything that stays: the picture with the band cut out.
+            Image(nsImage: picture)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+                .mask(alignment: .topLeading) {
+                    VStack(spacing: 0) {
+                        Rectangle().frame(height: top)
+                        Color.clear.frame(height: height)
+                        Rectangle()
+                    }
+                }
+            // The band, on its way out. Its last point is the column's
+            // hairline, which stays put, so it is left behind.
+            Image(nsImage: picture)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+                .offset(x: -slide.way * size.width * slide.phase)
+                .mask(alignment: .topLeading) {
+                    Rectangle()
+                        .frame(width: max(0, size.width - 1), height: height)
+                        .offset(y: top)
+                }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .opacity(1 - slide.phase)
     }
 }

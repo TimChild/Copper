@@ -54,12 +54,10 @@ struct SideBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             head
-                .modifier(SpaceSlideStatic())
 
             SideAddress(browser: browser, tint: tint)
                 .padding(.horizontal, SideBar.inset)
                 .padding(.bottom, 10)
-                .modifier(SpaceSlideStatic())
 
             // Fork (space-slide): the favourites, the space's name and its
             // rows are the part of the column that travels when the space
@@ -75,24 +73,18 @@ struct SideBar: View {
             }
             .modifier(SpaceSlideBand())
 
-            Group {
-                if browser.primary { SpaceStrip(browser: browser) { foot } } else {
-                    HStack { foot; Spacer(minLength: 0) }
-                        .padding(.horizontal, 6)
-                        .padding(.top, 2)
-                        .padding(.bottom, 7)
-                }
+            if browser.primary { SpaceStrip(browser: browser) { foot } } else {
+                HStack { foot; Spacer(minLength: 0) }
+                    .padding(.horizontal, 6)
+                    .padding(.top, 2)
+                    .padding(.bottom, 7)
             }
-            .modifier(SpaceSlideStatic())
         }
         .frame(width: prefs.sideWidth)
         .frame(maxHeight: .infinity)
-        // Fork (space-slide): the ground is one live surface that blends
-        // between the two spaces of a slide (SpaceGround) — never pictured,
-        // never slid, so there is no seam between two grounds.
         .background {
             ZStack {
-                SpaceGroundView(space: spaces.space, dark: scheme == .dark)
+                tint.backdrop
                 if landing { tint.hover }
             }
         }

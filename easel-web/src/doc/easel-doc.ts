@@ -87,6 +87,12 @@ export function readShape(id: string, m: Y.Map<unknown>): Shape | null {
   }
 }
 
+const SHAPE_KEYS = ['type', 'x', 'y', 'w', 'h', 'color', 'text', 'from', 'to', 'image', 'by'] as const
+
+/** Field-by-field equality of two reads of a shape. */
+export const sameShape = (a: Shape, b: Shape) =>
+  a.id === b.id && SHAPE_KEYS.every(k => a[k] === b[k])
+
 const roundIfNumber = (k: string, v: unknown) =>
   typeof v === 'number' && 'xywh'.includes(k) ? Math.round(v) : v
 
@@ -132,16 +138,33 @@ export function createEaselDoc(doc = new Y.Doc()): EaselDoc {
   const meta = doc.getMap<unknown>('meta')
 
   let shapesSnapshot = new Map<string, Shape>()
-  const readShapes = () => {
-    shapesSnapshot = new Map()
-    shapes.forEach((m, id) => {
-      const shape = readShape(id, m)
-      if (shape) shapesSnapshot.set(id, shape)
-    })
-  }
-  readShapes()
-  // Rebuilds every shape per change; diff by event keys if boards get big.
-  shapes.observeDeep(readShapes)
+  shapes.forEach((m, id) => {
+    const shape = readShape(id, m)
+    if (shape) shapesSnapshot.set(id, shape)
+  })
+  // Re-read only the shapes a transaction touched, and keep the old object
+  // for every other one (and for a touched one that reads the same), so
+  // memoized shape components skip everything that did not change. This
+  // observer is registered before any subscriber, so they see the update.
+  shapes.observeDeep(events => {
+    const touched = new Set<string>()
+    for (const event of events) {
+      if (event.target === shapes)
+        for (const key of (event as Y.YMapEvent<unknown>).keysChanged) touched.add(key)
+      else if (typeof event.path[0] === 'string') touched.add(event.path[0])
+    }
+    let next: Map<string, Shape> | null = null
+    for (const id of touched) {
+      const m = shapes.get(id)
+      const shape = m ? readShape(id, m) : null
+      const prev = shapesSnapshot.get(id)
+      if (shape && prev ? sameShape(prev, shape) : shape === (prev ?? null)) continue
+      next ??= new Map(shapesSnapshot)
+      if (shape) next.set(id, shape)
+      else next.delete(id)
+    }
+    if (next) shapesSnapshot = next
+  })
 
   let metaSnapshot: EaselMeta = readMeta()
   function readMeta(): EaselMeta {

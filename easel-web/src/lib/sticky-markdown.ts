@@ -166,18 +166,28 @@ const ListTweaks = Extension.create({
  * Our own marked instance, not the shared singleton: a sticky is plain text
  * with markdown sugar, so anything that looks like HTML stays literal
  * (`<Component>` is a word, not a tag). The default parser would drop it.
+ *
+ * One per extension set: every `MarkdownManager` registers its custom
+ * tokenizers (wikilink, task list/item, underline) with `marked.use`, which
+ * appends. Sharing one instance across editors stacked four more tokenizers
+ * on it for every sticky ever mounted, so each parse got slower.
  */
-const stickyMarked = new Marked({
-  tokenizer: {
-    html: () => undefined,
-    tag: () => undefined,
-  },
-  // The option is typed as the singleton; an instance has the same surface
-  // minus static defaults, which the parser never calls.
-}) as unknown as typeof marked
+export function createStickyMarked(): typeof marked {
+  return new Marked({
+    tokenizer: {
+      html: () => undefined,
+      tag: () => undefined,
+    },
+    // The option is typed as the singleton; an instance has the same surface
+    // minus static defaults, which the parser never calls.
+  }) as unknown as typeof marked
+}
 
 /** The extension set for one sticky. */
-export function stickyExtensions(placeholder = 'Type something') {
+export function stickyExtensions(
+  placeholder = 'Type something',
+  marked: typeof import('marked').marked = createStickyMarked()
+) {
   return [
     StarterKit.configure({
       // A trailing empty paragraph would round-trip as a stray blank line.
@@ -194,7 +204,7 @@ export function stickyExtensions(placeholder = 'Type something') {
     TaskList,
     TaskItem.configure({ nested: true }),
     Placeholder.configure({ placeholder }),
-    Markdown.configure({ marked: stickyMarked }),
+    Markdown.configure({ marked }),
     Wikilink,
     ListTweaks,
   ]

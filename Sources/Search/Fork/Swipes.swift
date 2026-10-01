@@ -141,6 +141,14 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
     /// A Reduce Motion gesture that has already changed space.
     private static var fired = false
     private static var monitor: Any?
+    /// Where the fingers came down: a gesture is the column's only if it
+    /// started over the column. One that started on the page — an easel's
+    /// pan, a map — stays the page's wherever the pointer ends up, so the
+    /// column never starts sliding out of the middle of somebody's pan.
+    private static var startedOverSidebar = false
+    /// Gestures this monitor turned down because they started on the page,
+    /// for the bench (`easels scroll --app` checks a board's pan is one).
+    private(set) static var leftToPage = 0
 
     static func watch(_ browser: Browser) {
         guard monitor == nil else { return }
@@ -151,8 +159,14 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
 
     private static func handle(_ event: NSEvent, in browser: Browser) -> NSEvent? {
         guard event.window != nil, event.window == Links.window else { return event }
-        // Once a gesture is ours it stays ours wherever the pointer wanders.
-        guard track.axis == .sideways || track.coasting || overSidebar(event, in: browser) else { return event }
+        if event.type == .scrollWheel, event.momentumPhase == [], event.phase == .began || event.phase == .mayBegin {
+            startedOverSidebar = overSidebar(event, in: browser)
+            if !startedOverSidebar, event.phase == .began { leftToPage += 1 }
+        }
+        // Once a gesture is ours it stays ours wherever the pointer wanders;
+        // one that began on the page is never ours.
+        guard track.axis == .sideways || track.coasting || (event.type == .swipe || startedOverSidebar) && overSidebar(event, in: browser)
+        else { return event }
         if event.type == .swipe {
             guard event.deltaX != 0 else { return event }
             go(event.deltaX * browser.prefs.swipeDirection.sign < 0 ? 1 : -1, in: browser)

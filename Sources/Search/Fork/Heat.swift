@@ -17,9 +17,19 @@ final class Heat: ObservableObject {
         let shared: Bool
     }
 
-    @Published private(set) var readings: [UUID: Reading] = [:]
+    /// Every built tab's last reading. Not published: it changes on every
+    /// tick, and every sidebar row observes this object, so publishing it
+    /// redrew the whole column every two seconds — under a board's pan, too.
+    /// Rows only draw a reading while their tab is hot, and `hot` is
+    /// published whenever that set changes.
+    private(set) var readings: [UUID: Reading] = [:]
     @Published private(set) var hot: Set<UUID> = []
-    @Published private(set) var gpu: Double?
+    /// Read on demand (the agent's probe), never drawn; not published either.
+    private(set) var gpu: Double?
+    /// Ticks sampled, and how many of them changed `hot` (and so redrew the
+    /// rows) — for `bench heat`.
+    private(set) var ticks = 0
+    private(set) var published = 0
 
     private struct ProcessSample {
         let cpu: Double
@@ -83,7 +93,7 @@ final class Heat: ObservableObject {
                 "shared": reading?.shared ?? false
             ]
         }
-        return ["tabs": tabs, "gpu": gpu.map { $0 } ?? NSNull()]
+        return ["tabs": tabs, "gpu": gpu.map { $0 } ?? NSNull(), "ticks": ticks, "published": published]
     }
 
     private func sample() {
@@ -152,7 +162,11 @@ final class Heat: ObservableObject {
         }
 
         readings = newReadings
-        hot = newHot
+        ticks += 1
+        if hot != newHot {
+            hot = newHot
+            published += 1
+        }
         sampleGPU(now: now, built: built, usage: &usage)
     }
 

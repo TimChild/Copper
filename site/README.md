@@ -14,6 +14,10 @@ served by GitHub Pages at `https://copper-browser.github.io/Copper/`.
   button, and show just the poster under `prefers-reduced-motion`.
 - `.nojekyll` — serve the files as they are.
 
+Pushing a change under `site/` to `fork` deploys it: `.github/workflows/site.yml` checks that
+every `assets/` file the page references exists, then publishes `site/` with GitHub Pages
+(Source: GitHub Actions). Pull requests that touch `site/` run the same check without deploying.
+
 Every path is relative, so the page works from the Pages URL, from any subpath, and straight
 from `file://`.
 

@@ -89,3 +89,67 @@ blank.
   400–900 ms column swap then costs no visible motion; the preview fades
   out over the live column once it is up.
 - Nothing is pictured, ever.
+
+## Status 2026-10-01 evening (commits 45f19c9 … on feat/swipe-live-columns)
+
+Built and verified on the `Copper (swipe4)` world, laptop Retina display
+(1728×1117 @ 120 Hz, 2×) — the base reproduction above was on the 1× 3440
+display earlier in the day; the external display was gone by the time the
+branch was built, so 1× for the new build and a real trackpad are unverified.
+
+### Colour curve (new build, Casual → Exowatt, 12 held steps then the lift; shots every 16 ms)
+
+Top band (static ground under the lights), G channel: 214.8 210.0 206.1
+202.5 198.8 195.1 190.6 187.5 184.2 181.0 177.7 173.8 | lift: 173.4 170.7
+166.9 164.7 155.9 148.5 144.9 144.2 143.5 142.6 142.6 … 142.4 | after the
+switch and the preview's fade (r700+): 142.6. Monotone, no spike, no reset;
+the step at the end is ≤ 0.3/255. Exowatt → Casual the same the other way
+(144.6 → 177.0 at the lift → 218.7). Full tables: `new/suite/*/` via
+`curves.sh`; strips `new/suite/casual-to-exo-strip.png`,
+`exo-to-casual-strip.png`, `first-fwd-strip.png` (Exowatt → Work, a
+picture space never visited that launch: its rows are there from the first
+frame). Flat ↔ animated (Reve ↔ Focus) and picture ↔ flat (Work ↔ Reve)
+ran both ways and committed; frames in `new/suite/`.
+
+### Main thread (12-swipe loops, Casual ⇄ Exowatt, back to back, same minutes)
+
+The machine was under a load average of 50–120 throughout (another agent's
+expo export, Unity, a second Copper build, P3), so absolute numbers are
+inflated for both builds; only the comparison and the shape are meaningful.
+
+| | base (origin/fork e418c06) | this branch |
+|---|---|---|
+| event gap while dragging, median of medians | 11.9 ms | 22.8 ms |
+| longest event gap per swipe, median | 371 ms (the picture at the first movement) | 77 ms |
+| lift → first settle frame (`turn`), median | 3381 ms (column swap before the spring) | 0 ms |
+| longest frame gap, median | 2988 ms, during the settle | 550 ms, after the spring landed (the swap under the preview) |
+| switch stall (landed → switched), median | — | 623 ms (154 ms best; the swap itself, unchanged) |
+
+Reading: the base freezes mid-motion for the whole column swap and then
+jumps; this branch moves smoothly to the landing and pays the swap while
+nothing is moving. The drag itself costs more per event here (the live band
+is a clipped `NSScrollView` platform view resized every frame; see
+`SpaceSlide.clipsBand`). `bench spaces slide clip off` was tried: no
+measurable gain under this load (medians 26 vs 60 ms with the load doubling
+between runs), and an unclipped band leaving to the right draws over the
+page, so clipping stays on. Re-measure on a quiet machine before deciding.
+`sample` over the loops: our own bodies are < 1 % of main-thread samples
+(SpaceStrip.chip 34, SpacePreview.Row 26, SlideInk 14 of ~9000); the rest
+is SwiftUI/AppKit layout of platform views.
+
+### Preview cost
+
+`bench spaces preview N` (an off-screen hosting view, so pessimistic):
+Focus 39 rows / 18 visible: plan 2 ms, build 180, layout 120, draw 96;
+Work 5 rows: plan 0.6, build 2.7, layout 176, draw 91. Far over 8 ms, so
+the two neighbours stay premounted (hidden) while idle, as designed.
+
+### Open
+
+- 1× display and a real trackpad on this build; Retina was the only screen.
+- The band's per-frame cost under no load; clip on/off decision.
+- `SpacePreviewModel.make`'s landing scroll reads the first window's scroll
+  view (`SideScrollElasticity.column`); a second window's preview lands at
+  the first's scroll.
+- The address pill's text and the strip's lifted chip change at the switch
+  (after the settle), not during; only their ink crossfades.

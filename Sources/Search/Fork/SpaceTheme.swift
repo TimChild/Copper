@@ -236,9 +236,24 @@ struct SpaceTheme: Codable, Hashable {
 
     /// The same one colour with the tone laid over it — the ground the ink
     /// has to read on.
+    /// The one colour is the gradient's mean along its run (the trapezoid
+    /// over evenly spaced stops), so a gradient resampled to more stops —
+    /// which `mixed` does to morph a flat colour into a gradient — comes to
+    /// the same ink, and a slide's end and the space at rest agree.
     func toned(dark: Bool) -> Stop {
-        let first = colors.first ?? SpaceTheme.plain.colors[0]
-        let sum = ground(colors.dropFirst().reduce(first) { $0.mixed($1, 0.5) }, dark: dark)
+        let stops = colors.isEmpty ? SpaceTheme.plain.colors : colors
+        let sum: Stop
+        if stops.count == 1 {
+            sum = ground(stops[0], dark: dark)
+        } else {
+            let n = Double(stops.count - 1)
+            var r = 0.0, g = 0.0, b = 0.0
+            for (i, stop) in stops.enumerated() {
+                let w = (i == 0 || i == stops.count - 1 ? 0.5 : 1) / n
+                r += stop.r * w; g += stop.g * w; b += stop.b * w
+            }
+            sum = ground(Stop(r: r, g: g, b: b), dark: dark)
+        }
         guard abs(tone) > 0.005 else { return sum }
         return sum.mixed(tone < 0 ? .black : .white, abs(tone) * SpaceTheme.toneReach)
     }
@@ -260,11 +275,19 @@ struct SpaceTheme: Codable, Hashable {
     /// the ink never depended on them.
     func mixed(_ other: SpaceTheme, _ t: Double) -> SpaceTheme {
         let count = max(colors.count, other.colors.count, 1)
-        func padded(_ stops: [Stop]) -> [Stop] {
+        // A gradient resampled at `count` evenly spaced points draws the
+        // same as it did (stops are joined by straight runs), so the two
+        // sides pair stop for stop and the mix at 1 is `other` exactly.
+        func resampled(_ stops: [Stop]) -> [Stop] {
             let base = stops.isEmpty ? SpaceTheme.plain.colors : stops
-            return (0..<count).map { base[min($0, base.count - 1)] }
+            guard base.count > 1, count > 1 else { return (0..<count).map { _ in base[0] } }
+            return (0..<count).map { i in
+                let at = Double(i) / Double(count - 1) * Double(base.count - 1)
+                let k = min(base.count - 2, Int(at.rounded(.down)))
+                return base[k].mixed(base[k + 1], at - Double(k))
+            }
         }
-        let stops = zip(padded(colors), padded(other.colors)).map { $0.mixed($1, t) }
+        let stops = zip(resampled(colors), resampled(other.colors)).map { $0.mixed($1, t) }
         func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * t }
         return SpaceTheme(colors: stops, intensity: mix(intensity, other.intensity), grain: mix(grain, other.grain),
                           image: nil, motion: nil, blur: 0, tone: mix(tone, other.tone))
@@ -365,6 +388,9 @@ struct ThemeBackdrop: View {
     /// The column itself is `SpaceGround`, which draws the same parts and
     /// blends two themes while a slide is on.
     var live = false
+    /// The window whose column this is, when it is one: its own space keys
+    /// the scene, and only its own swipe mixes the next space in. (Fork: windows)
+    weak var browser: Browser? = nil
 
     var body: some View {
         ZStack {
@@ -376,7 +402,7 @@ struct ThemeBackdrop: View {
                 // and what shows while the page loads for an animated one —
                 // with the scene over it, hidden while there is nothing to draw.
                 if theme.motion == nil { still } else { colour }
-                LiveScene(theme: theme, dark: dark)
+                LiveScene(theme: theme, dark: dark, browser: browser)
             } else if let motion = theme.motion {
                 AnimatedBackdrop(style: motion.style, colors: theme.grounds(dark: dark), speed: motion.speed,
                                  blur: theme.blur, dark: dark)
@@ -480,11 +506,12 @@ struct ThemeBackdrop: View {
     private struct LiveScene: View {
         let theme: SpaceTheme
         let dark: Bool
+        weak var browser: Browser?
         @ObservedObject private var spaces = Spaces.shared
 
         var body: some View {
             if BackdropScene.folder != nil, theme.motion != nil || spaces.all.contains(where: { $0.look.motion != nil }) {
-                BackdropWeb.Host(drive: BackdropScene.Drive(look: BackdropScene.Look(theme: theme, dark: dark, key: spaces.current.uuidString),
+                BackdropWeb.Host(drive: BackdropScene.Drive(look: BackdropScene.Look(theme: theme, dark: dark, key: (browser.map { spaces.current(in: $0) } ?? spaces.current).uuidString),
                                                             fade: SpaceSlide.duration + 0.08))
                     .allowsHitTesting(false)
             }

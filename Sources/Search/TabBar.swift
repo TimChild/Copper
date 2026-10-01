@@ -290,7 +290,7 @@ struct Helm: View {
                 // Reload, or stop while it is still coming.
                 Door(
                     icon: tab.loading ? "xmark" : "arrow.clockwise",
-                    help: tab.loading ? "Stop   ⌘." : "Reload   ⌘R",
+                    help: tab.loading ? "Stop   ⌘." : "Reload   ⌘R · Hard reload   ⇧⌘R",
                     size: size, ink: ink, glow: glow, glyph: glyph
                 ) {
                     if tab.loading { tab.stop() } else { browser.reload() }

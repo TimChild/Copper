@@ -104,16 +104,23 @@ struct SpaceGround: View, Animatable {
 }
 
 /// The live column's ground: the current space at rest, the slide's two
-/// spaces while one is on. One `SpaceGround` whatever the state — not one
-/// per branch — so the view keeps its identity when a slide ends and the
-/// scene's web view inside it is never made twice.
+/// spaces while one is on in this window. One `SpaceGround` whatever the
+/// state — not one per branch — so the view keeps its identity when a slide
+/// ends and the scene's web view inside it is never made twice.
 struct SpaceGroundView: View {
-    let space: Space
+    let browser: Browser
     let dark: Bool
     @ObservedObject private var slide = SpaceSlide.shared
+    @ObservedObject private var spaces = Spaces.shared
+
+    init(browser: Browser, dark: Bool) {
+        self.browser = browser
+        self.dark = dark
+    }
 
     var body: some View {
-        let on = slide.sliding
+        let space = spaces.space(in: browser)
+        let on = slide.sliding && slide.owner === browser
         let from = on ? slide.from ?? space : space
         let to = on ? slide.to ?? space : space
         SpaceGround(from: from.look, to: to.look, fromKey: from.id.uuidString, toKey: to.id.uuidString,

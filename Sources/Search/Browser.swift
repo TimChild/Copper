@@ -13,15 +13,27 @@ typealias OmniboxSuggestion = Suggestion
 
 @MainActor
 final class Browser: NSObject, ObservableObject {
-    @Published var tabs: [Tab] = []
+    @Published var tabs: [Tab] = [] {
+        didSet {
+            // `tabs` is a window's projection of its current space. Keep the
+            // canonical row in Spaces in step, then publish that row to every
+            // other window looking at the same space.
+            guard oldValue.map(\.id) != tabs.map(\.id) || oldValue.count != tabs.count else { return }
+            Spaces.shared.tabsChanged(self)
+        }
+    }
     @Published var activeID: Tab.ID? {
         didSet {
             // The tab just left is the tab just looked at. Whether a tab has
             // gone unwatched long enough to sleep is counted from here, not
             // from when it was first picked.
-            guard oldValue != activeID, let old = oldValue else { return }
+            guard oldValue != activeID, let old = oldValue else {
+                Spaces.shared.activeChanged(self)
+                return
+            }
             tabs.first { $0.id == old }?.touch()
             Recent.shared.touched(activeID)
+            Spaces.shared.activeChanged(self)
         }
     }
 
@@ -129,7 +141,7 @@ final class Browser: NSObject, ObservableObject {
     var cycling = false
 
     var active: Tab? { tabs.first { $0.id == activeID } }
-    var fieldShowing: Bool { editing || active?.isBlank ?? true }
+    var fieldShowing: Bool { editing || (active?.isBlank ?? (taken == nil)) } // Fork: windows — not over "open in another window"
 
     /// Typed plus whatever the field is quietly finishing for you.
     var completed: String {
@@ -674,20 +686,10 @@ final class Browser: NSObject, ObservableObject {
     var pinnedCount: Int { tabs.filter { $0.pin != nil }.count }
 
     func pin(_ tab: Tab) {
-        if tab.pin == nil {
-            tab.pin = tab.monogram
-            // Pinned tabs live at the head of the row, in the order they were
-            // pinned, so their letters never move under your hand.
-            if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
-                let home = max(0, pinnedCount - 1)
-                if here != home {
-                    tabs.move(
-                        fromOffsets: IndexSet(integer: here),
-                        toOffset: home > here ? home + 1 : home
-                    )
-                }
-            }
-        }
+        // Fork: global pins — one set every space shows, kept by Spaces: the
+        // tab leaves its space's row for the end of the pins, and every
+        // window, on every space, has it at once.
+        Spaces.shared.pin(tab, in: self)
         // No dialog and no waiting cursor: the letter is taken from the
         // address and applied. Changing it is a separate act, for the day it
         // matters — which is why it is not folded into this one.
@@ -706,26 +708,19 @@ final class Browser: NSObject, ObservableObject {
         guard let first = typed.trimmingCharacters(in: .whitespacesAndNewlines).first else {
             return
         }
-        tab.pin = String(first).uppercased()
+        Spaces.shared.renamePin(String(first), for: tab) // Fork: global pins — the letter is the same everywhere
     }
 
     func endPinEdit() {
-        guard editingPin != nil else { return }
-        editingPin = nil
+        Spaces.shared.endPinEdit(self)
         writeSession(now: true)
     }
 
     func unpin(_ tab: Tab) {
-        if editingPin == tab.id { editingPin = nil }
-        tab.pin = nil
-        defer { writeSession(now: true) }
-        // Back out of the pinned block, to the head of the loose tabs.
-        if let here = tabs.firstIndex(where: { $0.id == tab.id }) {
-            let home = pinnedCount
-            if here != home {
-                tabs.move(fromOffsets: IndexSet(integer: here), toOffset: home > here ? home + 1 : home)
-            }
-        }
+        // Fork: global pins — out of every space's pins, into this window's
+        // space at the head of its loose tabs.
+        Spaces.shared.unpin(tab, in: self)
+        writeSession(now: true)
         rememberSession()
     }
 
@@ -821,6 +816,13 @@ final class Browser: NSObject, ObservableObject {
     private var hush: DispatchWorkItem?
     private var zoomShown = 100
     private var remembering = false
+    /// The untouched blank tab created only for a reopened/new window. It is
+    /// removed on close without affecting the shared real rows.
+    private var windowBlankID: Tab.ID?
+    /// Fork: windows — the tab another window took off this stage while it
+    /// was the only one here. The stage says so and offers it back
+    /// (`TakenStage`); cleared the moment anything is active here again.
+    @Published var taken: Tab.ID?
 
     // MARK: - beginning and ending
 
@@ -989,8 +991,10 @@ final class Browser: NSObject, ObservableObject {
     }
 
     private func writeSession(now: Bool = false) {
-        guard primary else { Windows.keep(self, now: now); return } // Fork: windows
+        // Spaces owns the rows for every window; session.json is still the
+        // single canonical tab store. windows.json records view state only.
         Session.write(now: now, Spaces.shared.shape(visible: tabs, active: activeID))
+        if !primary { Windows.keep(self, now: now) }
     }
 
     private func rememberSession() {
@@ -1083,11 +1087,9 @@ final class Browser: NSObject, ObservableObject {
         floater.onClose = { [weak self] in self?.land() }
     }
 
-    /// A window opened with ⌘N (Fork/Windows.swift). The files and the
-    /// settings are the first window's; this one has its own row of tabs,
-    /// its own sleep timer, and listens to what its window is drawn from.
-    /// No spaces, no session file, no bench, no MCP server — those have one
-    /// owner, the first window.
+    /// A window opened with ⌘N shares the canonical Spaces rows. Only its
+    /// current space and active tab are private view state; settings and the
+    /// stores remain borrowed from the main browser.
     private func joinAsWindow() {
         history.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
@@ -1108,32 +1110,44 @@ final class Browser: NSObject, ObservableObject {
         watchVault()
         wireFloater()
 
-        if let id = windowID, let row = Windows.savedTabs(for: id) {
-            for entry in row.tabs {
-                guard let url = URL(string: entry.url) else { continue }
-                let tab = Tab()
-                prepare(tab)
-                tab.restore(url: url, title: entry.title)
-                tab.pin = entry.pin
-                tabs.append(tab)
-            }
-            if !tabs.isEmpty {
-                let active = tabs[min(max(0, row.active), tabs.count - 1)]
-                activeID = active.id
-                _ = active.wake()
-            }
+        let saved = windowID.flatMap { Windows.savedState(for: $0) }
+        let target = Spaces.shared.register(self, at: saved?.space)
+        if let id = windowID, let (legacy, index) = Windows.legacy(id) {
+            Spaces.shared.foldLegacy(legacy, active: index, into: self, space: target)
+            Windows.markMigrated(id, space: target)
         }
-        guard tabs.isEmpty else { return }
-        let tab = Tab()
-        adopt(tab)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak tab] in
-            guard let tab, tab.isBlank else { return }
-            _ = tab.web
+        tabs = Spaces.shared.projection(target)
+        // A brand-new window gets its own untouched blank tab on the shared
+        // row. A reopened window instead resumes its saved active tab.
+        if saved == nil || tabs.isEmpty {
+            let tab = Tab()
+            prepare(tab)
+            tabs.append(tab)
+            windowBlankID = tab.id
+            activeID = tab.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak tab] in
+                guard let tab, tab.isBlank else { return }
+                _ = tab.web
+            }
+        } else if let tab = Spaces.shared.pick(from: tabs, remembered: tabs.first { ($0.pending ?? $0.address)?.absoluteString == saved?.url }?.id, for: self, steal: false) {
+            // The tab it was on, unless a window already up is showing it —
+            // then another; a window coming back should not take a page off
+            // the first window's stage.
+            activeID = tab.id
+            tab.touch()
+            if !tab.wake() { tab.revive() }
+        } else {
+            let tab = Tab()
+            prepare(tab)
+            tabs.append(tab)
+            windowBlankID = tab.id
+            activeID = tab.id
         }
+        Windows.keep(self, now: true)
     }
 
-    /// A ⌘N window closed with the red button: its pages go, and so does
-    /// everything that was keeping them awake.
+    /// A ⌘N window closed with the red button forgets only its view state.
+    /// Tabs belong to the shared space rows and remain available elsewhere.
     func retire() {
         guard !primary else { return }
         dozing?.invalidate()
@@ -1141,12 +1155,28 @@ final class Browser: NSObject, ObservableObject {
         pressure?.cancel()
         pressure = nil
         if floating != nil { land() }
-        for tab in tabs {
-            Grouper.shared.forget(tab.id)
+        if Split.shared.holder === self { Split.shared.close() }
+        // Out of the shared rows first, so what follows reaches only the
+        // windows that remain. Then: Arc does not leave an untouched blank
+        // tab behind when the window that made it closes. A real page, a
+        // pin, or a shared row survives; a window left with nothing by the
+        // blank's going gets a blank of its own (Spaces.publish).
+        Spaces.shared.unregister(self)
+        // Fork: global pins — a blank that was pinned is every window's now,
+        // and is left alone: dropBlank would not find it in a row, and
+        // closing it would leave a dead tab in every grid.
+        if let id = windowBlankID, let tab = tabs.first(where: { $0.id == id }), tab.isBlank, tab.pin == nil {
+            Spaces.shared.dropBlank(tab)
+            tab.close()
+        } else if let tab = active, tab.isBlank, tab.pin == nil, !Spaces.shared.shown(tab, outside: self) {
+            // The blank this window was on — made for it when its last page
+            // closed — and no other window's.
+            Spaces.shared.dropBlank(tab)
             tab.close()
         }
         tabs = []
         activeID = nil
+        taken = nil
         bag.removeAll()
     }
 
@@ -1201,7 +1231,15 @@ final class Browser: NSObject, ObservableObject {
         summoning = false
         launching = false
         suggesting = nil
+        if !tabs.contains(where: { $0.id == tab.id }), let space = Spaces.shared.spaceID(of: tab) {
+            // Straight to this tab, not by way of the one the space last showed.
+            Spaces.shared.select(space, in: self, landing: tab.id)
+        }
+        guard tabs.contains(where: { $0.id == tab.id }) else { return }
         guard tab.id != activeID else { return }
+        // One WKWebView cannot be mounted in two stages. Selecting it here
+        // hands it over and leaves its previous window on another tab.
+        Spaces.shared.claim(tab, for: self)
         // Fork: if this tab is the one in the side pane, the two panes trade
         // places now rather than after the stage has drawn a frame with the
         // same page in both of them. See Split.arriving.
@@ -1238,13 +1276,16 @@ final class Browser: NSObject, ObservableObject {
         // its place, the page is let go, and you land on whatever you were
         // looking at before. Only Unpin takes it out of the row.
         if tab.pin != nil {
+            // Fork: global pins — a pin is in every window's grid; one that
+            // is on another window's stage is not this window's to put down.
+            guard !Spaces.shared.shown(tab, outside: self) else { return }
             tab.rest()
             // Ordinary tabs first. Falling back to the most recent tab of any
             // kind meant closing one pin landed you on another pin, and ⌘W
             // bounced between the two instead of getting you out of them.
             let others = tabs.filter { $0.id != tab.id && !$0.asleep }
             let loose = others.filter { $0.pin == nil }
-            if let back = (loose.isEmpty ? others : loose).max(by: { $0.touched < $1.touched }) {
+            if let back = landing(among: loose.isEmpty ? others : loose) { // Fork: windows — not one on another window's stage
                 select(back)
             } else if let asleepPin = tabs.first(where: { $0.id != tab.id }) {
                 select(asleepPin)
@@ -1257,7 +1298,7 @@ final class Browser: NSObject, ObservableObject {
 
         if tabs.count == 1 {
             if tab.isBlank {
-                NSApp.keyWindow?.performClose(nil)
+                (Windows.window(of: self) ?? NSApp.keyWindow)?.performClose(nil) // Fork: windows — this browser's window, not whichever is key
             } else {
                 let fresh = Tab()
                 remember(tab, at: 0)
@@ -1280,7 +1321,7 @@ final class Browser: NSObject, ObservableObject {
             // right — through select(), same as everywhere else you land on
             // a tab, so one that was never built yet actually wakes up
             // instead of sitting there blank until a manual reload.
-            select(tabs[min(index, tabs.count - 1)])
+            select(landing(after: index)) // Fork: windows — unless another window is showing that one
         }
         rememberSession()
     }
@@ -1344,14 +1385,19 @@ final class Browser: NSObject, ObservableObject {
 
     /// Dragged from one place in the row to another.
     func move(_ tab: Tab, to index: Int) {
+        if tab.pin != nil {
+            // Fork: global pins — the pins lead every row, so a pin's index
+            // is its place in the grid, and the order is one for every space.
+            Spaces.shared.movePin(tab, to: index)
+            return
+        }
         guard let here = tabs.firstIndex(where: { $0.id == tab.id }),
               index != here, tabs.indices.contains(index)
         else { return }
         // The pinned block and the loose one don't mix: a letter that wandered
         // into the middle of the titles would stop meaning anything.
         let pinned = pinnedCount
-        if tab.pin != nil, index >= pinned { return }
-        if tab.pin == nil, index < pinned { return }
+        if index < pinned { return }
         tabs.move(fromOffsets: IndexSet(integer: here), toOffset: index > here ? index + 1 : index)
         rememberSession()
     }
@@ -1378,7 +1424,9 @@ final class Browser: NSObject, ObservableObject {
         let tab = Tab(configuration: Browser.extensionConfiguration(for: url))
         prepare(tab)
         let here = atEnd ? nil : tabs.firstIndex { $0.id == activeID }
-        tabs.insert(tab, at: here.map { $0 + 1 } ?? tabs.count)
+        // Fork: global pins — beside a pin means the head of the loose tabs;
+        // the pins are the same in every space and take no tab in among them.
+        tabs.insert(tab, at: here.map { max($0 + 1, pinnedCount) } ?? tabs.count)
         tab.go(to: url)
         Recent.shared.prune(tabs)
         if foreground {
@@ -1994,13 +2042,33 @@ final class Browser: NSObject, ObservableObject {
     func zoom(by factor: CGFloat) { active?.magnify(by: factor) }
     func resetZoom() { active?.resetZoom() }
 
-    /// ⌘⇧R. The article, and nothing that was arranged around it.
+    /// ⌥⌘R. The article, and nothing that was arranged around it.
     func toggleReader() {
         guard let tab = active else { return }
         tab.toggleReader { [weak self] worked in
             guard !worked else { return }
             self?.announce("Nothing to read on this page")
         }
+    }
+
+    /// ⌘⇧R. Keep identity and saved page state, but fetch this site's page
+    /// caches from origin before displaying it again.
+    func hardReload() {
+        guard active != nil else { return }
+        announce("Cache cleared — reloading")
+        active?.hardReload()
+    }
+
+    /// ⌘⇧I. WebKit exposes the inspector picker only through its private
+    /// inspector object; `Inspect` contains the defensive bridge and fallback.
+    func inspectElement() {
+        guard let tab = active else { return }
+        // A tab still asleep has no page to inspect: asking for its web view
+        // would build an empty one and open the inspector on about:blank.
+        // Waking it loads the page first, as reload() does.
+        tab.wake()
+        let state = Inspect.element(in: tab)
+        if !state.available { announce("Right-click › Inspect Element") }
     }
 
     func reload() { active?.reload() }
@@ -2203,7 +2271,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         if let opener = tab.opener, let home = tabs.first(where: { $0.id == opener }) {
             select(home)
         }
-        tab.pin = nil
+        if tab.pin != nil { Spaces.shared.unpin(tab, in: self) }
         close(tab)
     }
 

@@ -49,7 +49,7 @@ struct SideBar: View {
     static let rowInset: CGFloat = 10
     private static let pinGap: CGFloat = 8
 
-    private var tint: SpaceTint { SpaceTint(space: spaces.space, dark: scheme == .dark) }
+    private var tint: SpaceTint { SpaceTint(space: spaces.space(in: browser), dark: scheme == .dark) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -57,36 +57,29 @@ struct SideBar: View {
             // put when the space changes; their ink is mixed between the two
             // spaces' as the slide goes (SlideInk), so they change colour
             // with the ground under them.
-            SlideInk { tint in head(tint) }
+            SlideInk(browser: browser) { tint in head(tint) }
 
-            SlideInk { tint in
+            SlideInk(browser: browser) { tint in
                 SideAddress(browser: browser, tint: tint)
                     .padding(.horizontal, SideBar.inset)
                     .padding(.bottom, 10)
             }
 
-            // Fork (space-slide): the favourites, the space's name and its
-            // rows are the part of the column that travels when the space
-            // changes; the lights, the address and the strip stay put.
-            VStack(alignment: .leading, spacing: 0) {
-                if browser.pinnedCount > 0 {
-                    pinned
-                        .padding(.horizontal, SideBar.inset)
-                        .padding(.bottom, 8)
-                }
-
-                column
+            // Fork (global-pins): the favourites are the same in every space,
+            // so they stay put when the space changes, as Arc's do.
+            if browser.pinnedCount > 0 {
+                pinned
+                    .padding(.horizontal, SideBar.inset)
+                    .padding(.bottom, 8)
             }
-            .modifier(SpaceSlideBand())
 
-            SlideInk { tint in
-                if browser.primary { SpaceStrip(browser: browser, tint: tint) { foot(tint) } } else {
-                    HStack { foot(tint); Spacer(minLength: 0) }
-                        .padding(.horizontal, 6)
-                        .padding(.top, 2)
-                        .padding(.bottom, 7)
-                }
-            }
+            // Fork (space-slide): the space's name and its rows are the part
+            // of the column that travels when the space changes; the lights,
+            // the address, the favourites and the strip stay put.
+            column
+                .modifier(SpaceSlideBand(browser: browser))
+
+            SlideInk(browser: browser) { tint in SpaceStrip(browser: browser, tint: tint) { foot(tint) } }
         }
         .frame(width: prefs.sideWidth)
         .frame(maxHeight: .infinity)
@@ -95,14 +88,14 @@ struct SideBar: View {
         // never slid, so there is no seam between two grounds.
         .background {
             ZStack {
-                SpaceGroundView(space: spaces.space, dark: scheme == .dark)
+                SpaceGroundView(browser: browser, dark: scheme == .dark)
                 if landing { tint.hover }
             }
         }
         // Fork (space-slide): the previews over the column while it goes.
-        .overlay(alignment: .topLeading) { SpaceSlideCurtain() }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SpaceSlide.shared.column = $0 }
-        .onDisappear { SpaceSlide.shared.column = .zero }
+        .overlay(alignment: .topLeading) { SpaceSlideCurtain(browser: browser) }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SpaceSlide.shared.place(column: $0, in: browser) }
+        .onDisappear { SpaceSlide.shared.place(column: nil, in: browser) }
         .overlay(alignment: .trailing) {
             Rectangle().fill(tint.hairline.opacity(0.6)).frame(width: 1)
         }
@@ -127,7 +120,7 @@ struct SideBar: View {
         // Yesterday's rows have an address and no page, so nothing has ever
         // asked their sites for a mark. Ask, once per host per launch, and
         // again when a switch brings a whole new column into view.
-        .task(id: spaces.current) { Marks.warm(browser.tabs) }
+        .task(id: spaces.current(in: browser)) { Marks.warm(browser.tabs) }
         // A row nobody has met is today's, and goes to the top of Today.
         .onChange(of: browser.tabs.map(\.id)) { _, _ in sections.arrived(in: browser) }
         .onChange(of: browser.activeID) { _, now in sections.note(now) }
@@ -304,7 +297,7 @@ struct SideBar: View {
         return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: SideBar.gap) {
-                    if browser.primary { SpaceHeader(browser: browser) } // Fork: windows — spaces are the first window's
+                    SpaceHeader(browser: browser)
                     rows(kept, homeless: true)
                     if !today.isEmpty { divider }
                     newTab
@@ -348,7 +341,7 @@ struct SideBar: View {
         // has been laid out before it is looked for. A column sliding in
         // (Fork: SpaceSlide) is already where it should be, not gliding to it.
         DispatchQueue.main.async {
-            withAnimation(gliding && !still && !SpaceSlide.shared.moving ? Motion.glide : nil) {
+            withAnimation(gliding && !still && !SpaceSlide.shared.moving(in: browser) ? Motion.glide : nil) {
                 proxy.scrollTo("tab-\(id.uuidString)", anchor: nil)
             }
         }

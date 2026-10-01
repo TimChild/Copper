@@ -1,0 +1,6 @@
+#!/bin/sh
+# The copper CLI pointed at the capture instance, with a clean environment so no
+# harness/project identity leaks into the "who is driving" pill in the frames.
+SHOOT="${COPPER_SHOOT:-/tmp/copper-shoot}"
+cd "$HOME" && exec env -i HOME="$HOME" PATH=/usr/bin:/bin SEARCH_PROBE=sitepics SEARCH_MCP_PORT=4196 \
+  ${COPPER_AGENT_LABEL:+COPPER_AGENT_LABEL="$COPPER_AGENT_LABEL"} "$SHOOT/Copper.app/Contents/Resources/bin/copper" "$@"

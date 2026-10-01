@@ -236,6 +236,35 @@ final class Bench {
         case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render", "ext-manager", "storage", "windows":
             answer(Fork.bench(verb, request, in: browser))
 
+        case "hardreload":
+            let tab = (request["id"] as? String).flatMap { find(["id": $0], in: browser) } ?? browser.active
+            guard let tab else { answer(["error": "no active tab"]); return }
+            tab.hardReload { names in
+                answer(["removed": names, "url": tab.address?.absoluteString ?? "", "hollow": tab.hollow])
+            }
+
+        case "inspect":
+            let tab = (request["id"] as? String).flatMap { find(["id": $0], in: browser) } ?? browser.active
+            guard let tab else { answer(["error": "no active tab"]); return }
+            house(tab)
+            let initial = Inspect.element(in: tab)
+            guard initial.available else {
+                answer(["available": false, "visible": false, "elementSelectionActive": false])
+                return
+            }
+            // `show` creates WebKit's inspector frontend asynchronously. Poll
+            // briefly so the hook reports the window that the user can see,
+            // rather than the pre-window state from the same event turn.
+            func report(_ tries: Int) {
+                let state = Inspect.status(in: tab)
+                if state.visible || tries >= 50 {
+                    answer(["available": state.available, "visible": state.visible, "elementSelectionActive": state.elementSelectionActive])
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { report(tries + 1) }
+                }
+            }
+            report(0)
+
         case "backdrop":
             // Fork (backdrop): the column's scene — its process and its clock.
             BackdropWeb.bench(answer: answer)
@@ -247,6 +276,23 @@ final class Bench {
 
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
+
+        case "pin", "unpin", "reorder":
+            // Fork: global pins — by the window's own door (`--window N`, the
+            // index `windows` lists), since unpinning puts the tab in that
+            // window's space.
+            let windows = Windows.all
+            let at = (request["window"] as? Int).flatMap { windows.indices.contains($0) ? windows[$0] : nil } ?? browser
+            guard let tab = find(request, in: at) else { answer(missing(request)); return }
+            if verb == "pin" {
+                at.pin(tab)
+                if let letter = request["letter"] as? String { at.letter(letter, for: tab); at.endPinEdit() }
+            } else if verb == "unpin" {
+                at.unpin(tab)
+            } else if let index = request["index"] as? Int {
+                at.move(tab, to: index)
+            }
+            answer(describe(tab))
 
         case "open":
             guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
@@ -582,7 +628,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "ui", "flow", "history", "passkeys", "downloads",
+                "tabs", "open", "pin", "unpin", "reorder", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "hardreload", "inspect", "ui", "flow", "history", "passkeys", "downloads",
             ]])
         }
     }
@@ -713,6 +759,8 @@ final class Bench {
             "view": tab.built?.url?.absoluteString ?? "",
             "bench": tab.bench,
             "active": tab.id == browser?.activeID,
+            "pin": tab.pin ?? "",
+            "space": Spaces.shared.spaceID(of: tab)?.uuidString ?? "",
             "asleep": tab.asleep,
         ]
     }

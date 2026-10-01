@@ -13,11 +13,11 @@ import SwiftUI
 // fingers started to move.
 //
 // So instead the arriving column is drawn from the parked tabs themselves:
-// the favourites, the space's name and its rows, with the same measures and
-// the same parts as the real column (RowMark, SpaceGlyph, the pill, the
-// folder glyphs — see Side.swift and GroupsUI.swift), in the arriving
-// space's own ink, on a clear ground so the one live ground (SpaceGround)
-// shows through. Only the rows that would be in view are made — the list is
+// the space's name and its rows (the favourites are the same in every space
+// and stay put), with the same measures and the same parts as the real
+// column (RowMark, SpaceGlyph, the pill, the folder glyphs — see Side.swift
+// and GroupsUI.swift), in the arriving space's own ink, on a clear ground so
+// the one live ground (SpaceGround) shows through. Only the rows that would be in view are made — the list is
 // planned once with every row's height, and the view holds the few that
 // fall inside the column — scrolled to where the real column will land, so
 // the hand-over to the real column on a commit is a crossfade between two
@@ -66,50 +66,29 @@ struct SpacePreviewModel {
     static let gap = SideBar.gap
     static let inset = SideBar.inset
     static let rowInset = SideBar.rowInset
-    static let pinGap: CGFloat = 8
     /// The rows' padding inside the scroll: 2 above, 12 below.
     static let above: CGFloat = 2
     static let below: CGFloat = 12
     /// The hairline between Saved and Today: one point and six each side.
     static let divider: CGFloat = 13
 
-    var pinned: [Tab] { tabs.filter { $0.pin != nil } }
-
-    /// The favourites' grid for a column `width` wide — `SideBar`'s sums:
-    /// three to a row, four on a wide column; cells split the width; a
-    /// cell is wide and short.
-    static func pins(width: CGFloat) -> (columns: Int, width: CGFloat, height: CGFloat) {
-        let columns = width >= 400 ? 4 : 3
-        let available = width - 2 * inset - CGFloat(columns - 1) * pinGap
-        let cell = max(20, available / CGFloat(columns))
-        return (columns, cell, min(48, max(34, cell * 0.52)))
-    }
-
-    /// How tall the favourites block is, with its gap under it; nothing
-    /// when there are none.
-    static func pinsHeight(count: Int, width: CGFloat) -> CGFloat {
-        guard count > 0 else { return 0 }
-        let grid = pins(width: width)
-        let rows = (count + grid.columns - 1) / grid.columns
-        return CGFloat(rows) * grid.height + CGFloat(rows - 1) * pinGap + 8
-    }
-
-    /// The space on screen, as its column stands: `browser.tabs`, the live
-    /// row, the scroll where it is. What slides out after a switch.
+    /// The space on screen, as its column stands: the window's loose rows,
+    /// the live row, the scroll where it is. What slides out after a click.
     @MainActor
     static func live(_ space: Space, in browser: Browser, width: CGFloat, height: CGFloat) -> SpacePreviewModel {
         let scroll = SideScrollElasticity.column?.contentView.bounds.minY ?? 0
-        return make(space: space, tabs: browser.tabs, active: browser.activeID, scroll: scroll, width: width, height: height)
+        return make(space: space, tabs: browser.tabs.filter { $0.pin == nil }, active: browser.activeID, scroll: scroll, width: width, height: height)
     }
 
-    /// A parked space, as its column would be if it came on screen now:
-    /// its parked tabs, its own live row, scrolled where the real column
-    /// will scroll to. Nil for the space on screen (its rows are not parked).
+    /// A parked space, as its column would be if it came on screen in this
+    /// window now: its parked rows, the row the window would land on
+    /// (Spaces.wouldLand), scrolled where the real column will scroll to.
+    /// Nil for the space on screen (its rows are not parked).
     @MainActor
-    static func parked(_ space: Space, width: CGFloat, height: CGFloat) -> SpacePreviewModel? {
+    static func parked(_ space: Space, in browser: Browser, width: CGFloat, height: CGFloat) -> SpacePreviewModel? {
         let spaces = Spaces.shared
-        guard space.id != spaces.current, let tabs = spaces.parkedRow(space.id) else { return nil }
-        return make(space: space, tabs: tabs, active: spaces.parkedActive(space.id), scroll: nil, width: width, height: height)
+        guard space.id != spaces.current(in: browser), let tabs = spaces.parkedRow(space.id) else { return nil }
+        return make(space: space, tabs: tabs, active: spaces.wouldLand(in: space.id, for: browser), scroll: nil, width: width, height: height)
     }
 
     /// Plan the rows and, for a parked space, where the column lands.
@@ -151,7 +130,7 @@ struct SpacePreviewModel {
         // its offset as far as the new rows allow, then brings the live row
         // into view by the least it takes (SideBar.show, with no anchor):
         // to the top edge if it is above, the bottom if it is below.
-        let viewport = max(1, height - pinsHeight(count: tabs.filter { $0.pin != nil }.count, width: width))
+        let viewport = max(1, height)
         let scroll: CGFloat
         if let given {
             scroll = given
@@ -189,8 +168,7 @@ struct SpacePreviewModel {
 
     /// The rows that fall inside a column `height` tall at this scroll.
     func visible(width: CGFloat, height: CGFloat) -> [Placed] {
-        let viewport = height - SpacePreviewModel.pinsHeight(count: pinned.count, width: width)
-        return items.filter { $0.y + $0.height > scroll && $0.y < scroll + viewport }
+        items.filter { $0.y + $0.height > scroll && $0.y < scroll + height }
     }
 }
 
@@ -213,75 +191,10 @@ struct SpacePreview: View, Equatable {
 
     var body: some View {
         let tint = SpaceTint(space: model.space, dark: dark)
-        let pinned = model.pinned
-        VStack(alignment: .leading, spacing: 0) {
-            if !pinned.isEmpty {
-                Pins(tabs: pinned, active: model.active, tint: tint, width: width)
-                    .padding(.horizontal, SpacePreviewModel.inset)
-                    .padding(.bottom, 8)
-            }
-            Rows(model: model, tint: tint, dark: dark, width: width, height: height)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .clipped()
-                .mask(SideBar.fade)
-        }
-        .frame(width: width, height: height, alignment: .topLeading)
-        .clipped()
-    }
-
-    // MARK: - the favourites
-
-    /// `SideBar.pinned`, as a grid of fixed cells left-aligned: so many to a
-    /// row, a half-empty last row holding its ground.
-    private struct Pins: View {
-        let tabs: [Tab]
-        let active: Tab.ID?
-        let tint: SpaceTint
-        let width: CGFloat
-
-        var body: some View {
-            let grid = SpacePreviewModel.pins(width: width)
-            let rows = stride(from: 0, to: tabs.count, by: grid.columns).map { Array(tabs[$0..<min($0 + grid.columns, tabs.count)]) }
-            VStack(alignment: .leading, spacing: SpacePreviewModel.pinGap) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    HStack(spacing: SpacePreviewModel.pinGap) {
-                        ForEach(row) { tab in
-                            Pin(tab: tab, live: tab.id == active, tint: tint, width: grid.width, height: grid.height)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// `PinSquare`, less its field, its clicks and its hover.
-    private struct Pin: View {
-        @ObservedObject var tab: Tab
-        let live: Bool
-        let tint: SpaceTint
-        let width: CGFloat
-        let height: CGFloat
-
-        var body: some View {
-            let radius = min(12, min(width, height) * 0.28)
-            let mark = max(14, min(20, height * 0.46))
-            RowMark(icon: tab.icon, letter: tab.pin ?? tab.monogram, tint: tint, size: mark)
-                .frame(width: width, height: height)
-                .background {
-                    if live {
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .fill(tint.pill)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                                    .strokeBorder(tint.rim, lineWidth: 1)
-                            }
-                            .shadow(color: tint.lift, radius: 5, y: 1.5)
-                    } else {
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .fill(tint.square)
-                    }
-                }
-        }
+        Rows(model: model, tint: tint, dark: dark, width: width, height: height)
+            .frame(width: width, height: height, alignment: .topLeading)
+            .clipped()
+            .mask(SideBar.fade)
     }
 
     // MARK: - the rows
@@ -513,13 +426,13 @@ struct SpacePreview: View, Equatable {
         guard let key = words.first, let id = find(key), let space = spaces.all.first(where: { $0.id == id }) else {
             return ["error": "spaces preview N|NAME | premount on|off"]
         }
-        let width = max(1, slide.column.width), height = max(1, slide.band.height)
-        guard width > 1, height > 1, let window = Links.window, let root = window.contentView else { return ["error": "no column on screen"] }
+        let width = max(1, slide.column(in: browser).width), height = max(1, slide.band(in: browser).height)
+        guard width > 1, height > 1, let window = Windows.window(of: browser), let root = window.contentView else { return ["error": "no column on screen"] }
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         let planned = CACurrentMediaTime()
-        guard let model = id == spaces.current
+        guard let model = id == spaces.current(in: browser)
             ? SpacePreviewModel.live(space, in: browser, width: width, height: height)
-            : SpacePreviewModel.parked(space, width: width, height: height) else { return ["error": "no rows for \(space.name)"] }
+            : SpacePreviewModel.parked(space, in: browser, width: width, height: height) else { return ["error": "no rows for \(space.name)"] }
         let made = CACurrentMediaTime()
         // Into the window, off its edge, so SwiftUI has the environment it
         // draws the real one with; taken out again before anything shows.
@@ -535,7 +448,7 @@ struct SpacePreview: View, Equatable {
         host.removeFromSuperview()
         func ms(_ a: CFTimeInterval, _ b: CFTimeInterval) -> Double { ((b - a) * 10000).rounded() / 10 }
         return ["space": space.name, "rows": model.items.count, "visible": model.visible(width: width, height: height).count,
-                "pinned": model.pinned.count, "scroll": Double(model.scroll), "content": Double(model.content),
+                "scroll": Double(model.scroll), "content": Double(model.content),
                 "plan": ms(planned, made), "build": ms(made, mounted), "layout": ms(mounted, laid), "draw": ms(laid, drawn),
                 "total": ms(planned, drawn), "premount": premount, "width": Double(width), "height": Double(height)]
     }
@@ -564,6 +477,7 @@ final class PreviewAnchor: ObservableObject {
 /// the one a swipe is heading for; each placed by the slide, frame by frame,
 /// without this view being asked again.
 struct SpacePreviewStack: View, Equatable {
+    let browser: Browser
     let width: CGFloat
     let height: CGFloat
     let dark: Bool
@@ -572,21 +486,22 @@ struct SpacePreviewStack: View, Equatable {
     @ObservedObject private var sections = Sections.shared
     @ObservedObject private var anchor = SpaceSlide.shared.anchor
 
-    init(width: CGFloat, height: CGFloat, dark: Bool) {
+    init(browser: Browser, width: CGFloat, height: CGFloat, dark: Bool) {
+        self.browser = browser
         self.width = width
         self.height = height
         self.dark = dark
     }
 
     static func == (a: SpacePreviewStack, b: SpacePreviewStack) -> Bool {
-        a.width == b.width && a.height == b.height && a.dark == b.dark
+        a.browser === b.browser && a.width == b.width && a.height == b.height && a.dark == b.dark
     }
 
     var body: some View {
         anchor.scrollSeen = SideScrollElasticity.column?.contentView.bounds.minY ?? 0
         return ForEach(wanted, id: \.id) { space in
-            if let model = SpacePreviewModel.parked(space, width: width, height: height) {
-                PreviewPlaced(space: space.id) {
+            if let model = SpacePreviewModel.parked(space, in: browser, width: width, height: height) {
+                PreviewPlaced(browser: browser, space: space.id) {
                     SpacePreview(model: model, width: width, height: height, dark: dark).equatable()
                 }
             }
@@ -598,7 +513,7 @@ struct SpacePreviewStack: View, Equatable {
     private var wanted: [Space] {
         _ = anchor.generation
         let all = spaces.all
-        let home = anchor.home ?? spaces.current
+        let home = anchor.home ?? spaces.current(in: browser)
         var out: [Space] = []
         if SpacePreview.premount, let i = all.firstIndex(where: { $0.id == home }) {
             if i > 0 { out.append(all[i - 1]) }
@@ -616,21 +531,21 @@ struct SpacePreviewStack: View, Equatable {
 /// live column while the fingers are down, fading out over the live column
 /// (now the same space's) after a commit, and otherwise out of sight.
 private struct PreviewPlaced<Content: View>: View {
+    let browser: Browser
     let space: UUID
     @ViewBuilder let content: () -> Content
     @ObservedObject private var slide = SpaceSlide.shared
 
-    init(space: UUID, @ViewBuilder content: @escaping () -> Content) {
+    init(browser: Browser, space: UUID, @ViewBuilder content: @escaping () -> Content) {
+        self.browser = browser
         self.space = space
         self.content = content
     }
 
     var body: some View {
-        let arriving = slide.sliding && slide.to?.id == space
-        let x = arriving ? slide.way * slide.column.width * (1 - slide.phase) : 0
-        let shown: Double = !arriving ? 0 : slide.dragging ? 1 : slide.landing ? slide.fade : 0
+        let place = slide.arrivingPlace(of: space, in: browser)
         content()
-            .offset(x: x)
-            .opacity(shown)
+            .offset(x: place.x)
+            .opacity(place.shown)
     }
 }

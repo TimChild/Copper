@@ -149,10 +149,19 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
         }
     }
 
-    private static func handle(_ event: NSEvent, in browser: Browser) -> NSEvent? {
-        guard event.window != nil, event.window == Links.window else { return event }
-        // Once a gesture is ours it stays ours wherever the pointer wanders.
-        guard track.axis == .sideways || track.coasting || overSidebar(event, in: browser) else { return event }
+    /// The window a gesture began on. Every event of it, and its momentum,
+    /// goes to that window's column, wherever the pointer wanders — and only
+    /// that column moves. (Fork: windows)
+    private static weak var gripped: Browser?
+
+    private static func handle(_ event: NSEvent, in _: Browser) -> NSEvent? {
+        // Each browser window's column switches that window's space; a
+        // panel's or a sheet's events are not ours. (Fork: windows)
+        guard let window = event.window, let owner = Windows.owner(of: window) else { return event }
+        // Once a gesture is ours it stays ours, in the window it began in.
+        let going = track.axis == .sideways || track.coasting
+        let browser = going ? (gripped ?? owner) : owner
+        guard going || overSidebar(event.locationInWindow, in: owner) else { return event }
         if event.type == .swipe {
             guard event.deltaX != 0 else { return event }
             go(event.deltaX * browser.prefs.swipeDirection.sign < 0 ? 1 : -1, in: browser)
@@ -160,6 +169,7 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
         }
         // A wheel with no phase is a mouse wheel; those scroll.
         guard event.phase != [] || event.momentumPhase != [] else { return event }
+        if !going { gripped = owner }
         let swallow = apply(phase: event.phase, momentum: event.momentumPhase,
                             dx: event.scrollingDeltaX, dy: event.scrollingDeltaY,
                             inverted: event.isDirectionInvertedFromDevice, time: event.timestamp, in: browser)
@@ -206,19 +216,27 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
     private static var held = false
     private static var ticks: [CFTimeInterval] = []
 
-    /// `spaces swipe DX,DX,…[ end|cancel] [--hold]`: a two-finger gesture as
-    /// the trackpad would send it — fingers down, one `changed` per DX (in
-    /// points the fingers move, negative to the left) every 1/120 s, then the
-    /// lift (`end`, the default), a cancel, or with `--hold` nothing: the
-    /// fingers stay down for a picture, and the next `spaces swipe` carries
-    /// on from there (`spaces swipe end` alone lets go). Answers at once; the
-    /// events play out over the next DX × 8 ms — `spaces slide` says where
-    /// it got to. Reduce Motion is the system's, as for real fingers.
-    /// `--shot PATH@MS` (any number) pictures the window MS milliseconds
-    /// after the last event, from inside the app, so a frame of the settle
-    /// can be caught without a round trip through the shell.
+    /// `spaces swipe DX,DX,…[ end|cancel] [--hold] [--window N]`: a two-finger
+    /// gesture as the trackpad would send it — fingers down, one `changed` per
+    /// DX (in points the fingers move, negative to the left) every 1/120 s,
+    /// then the lift (`end`, the default), a cancel, or with `--hold` nothing:
+    /// the fingers stay down for a picture, and the next `spaces swipe`
+    /// carries on from there (`spaces swipe end` alone lets go). Answers at
+    /// once; the events play out over the next DX × 8 ms — `spaces slide`
+    /// says where it got to. Reduce Motion is the system's, as for real
+    /// fingers. `--shot PATH@MS` (any number) pictures the window MS
+    /// milliseconds after the last event, from inside the app, so a frame of
+    /// the settle can be caught without a round trip through the shell.
+    /// `--window N` puts the fingers on that browser window's column (as
+    /// `windows` lists them) rather than the first's. (Fork: windows)
     static func script(_ arg: String, in browser: Browser) -> [String: Any] {
-        let words = arg.split(separator: " ").map(String.init)
+        var words = arg.split(separator: " ").map(String.init)
+        var browser = browser
+        if let at = words.firstIndex(of: "--window"), at + 1 < words.count, let n = Int(words[at + 1]) {
+            guard Windows.all.indices.contains(n) else { return ["error": "no window \(n)"] }
+            browser = Windows.all[n]
+            words.removeSubrange(at...(at + 1))
+        }
         if words.first == "direction" {
             // `spaces swipe direction [system|natural|inverted]`: the setting,
             // as Settings › Tabs sets it.
@@ -248,7 +266,8 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
         }
         // The window forward, as for the bench's own pictures: one behind
         // another window is not drawing, and its display link is stopped.
-        if let window = Links.window {
+        let window = Windows.window(of: browser)
+        if let window {
             if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
@@ -264,12 +283,14 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
         if lift != [] { queue.append((lift, 0)) }
         held = lift == []
         let count = queue.count
+        // The scripted fingers are on this window, as real ones would be.
+        gripped = browser
         scripted = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { timer in
             MainActor.assumeIsolated {
                 guard !queue.isEmpty else {
                     timer.invalidate()
                     for (path, ms) in shots {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000) { picture(to: path) }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000) { picture(of: window, to: path) }
                     }
                     return
                 }
@@ -279,46 +300,62 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
             }
         }
         return ["events": count, "milliseconds": Double(count) * 1000 / 120, "held": held,
-                "travel": Double(deltas.reduce(0, +)), "space": Spaces.shared.space.name]
+                "travel": Double(deltas.reduce(0, +)), "space": Spaces.shared.space(in: browser).name,
+                "window": Windows.all.firstIndex { $0 === browser } ?? -1]
     }
 
-    private static func picture(to path: String) {
-        guard let window = Links.window,
+    private static func picture(of window: NSWindow?, to path: String) {
+        guard let window,
               let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
                                                   [.boundsIgnoreFraming, .bestResolution]),
               let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
         try? png.write(to: URL(fileURLWithPath: path))
     }
 
-    /// `bench swipe left|right|down`: a quick whole gesture, scripted. `down`
-    /// must scroll, not switch.
-    static func bench(_ direction: String, in browser: Browser) -> [String: Any] {
+    /// `bench swipe left|right|down [--window N]`: a quick whole gesture,
+    /// scripted. `down` must scroll, not switch.
+    static func bench(_ arg: String, in browser: Browser) -> [String: Any] {
+        var words = arg.split(separator: " ").map(String.init)
+        var browser = browser
+        if let at = words.firstIndex(of: "--window"), at + 1 < words.count, let n = Int(words[at + 1]) {
+            guard Windows.all.indices.contains(n) else { return ["error": "no window \(n)"] }
+            browser = Windows.all[n]
+            words.removeSubrange(at...(at + 1))
+        }
+        let direction = words.first ?? "left"
         let dx = direction == "left" ? "-12" : direction == "right" ? "12" : "0"
         if direction == "down" {
             var probe = Track()
             _ = probe.feed(phase: .began, momentum: [], dx: 0, dy: 0, inverted: true, time: 0)
             let (_, swallow) = probe.feed(phase: .changed, momentum: [], dx: 0, dy: 12, inverted: true, time: 0.01)
-            return ["swallowed": swallow ? 1 : 0, "space": Spaces.shared.space.name]
+            return ["swallowed": swallow ? 1 : 0, "space": Spaces.shared.space(in: browser).name]
         }
         return script(Array(repeating: dx, count: 10).joined(separator: ",") + " end", in: browser)
     }
 
-    private static func go(_ by: Int, in browser: Browser) {
+    /// One space along, with the slide a click gives (Spaces.select →
+    /// SpaceSlide.begin), wrapping at the ends as a three-finger swipe does.
+    /// Mouse buttons (MouseButtons.swift) use this helper too, so the ways of
+    /// stepping a space cannot drift into different motions.
+    static func go(_ by: Int, in browser: Browser) {
         withAnimation(Motion.glide) { Spaces.shared.step(by, in: browser) }
     }
 
-    /// One space along, stopping at the ends — a swipe does not wrap round.
+    /// One space along, stopping at the ends — a two-finger swipe does not
+    /// wrap round.
     private static func clamped(_ by: Int, in browser: Browser) {
         let spaces = Spaces.shared
-        guard let here = spaces.all.firstIndex(where: { $0.id == spaces.current }),
+        guard let here = spaces.all.firstIndex(where: { $0.id == spaces.current(in: browser) }),
               spaces.all.indices.contains(here + by) else { return }
         spaces.select(index: here + by, in: browser)
     }
 
-    /// Whether the pointer is over the column of tabs — down the left, shown,
-    /// and not folded away (the same test App.swift makes to lay it out).
-    private static func overSidebar(_ event: NSEvent, in browser: Browser) -> Bool {
-        guard browser.prefs.sidebar, !browser.folded, browser.active?.immersed != true else { return false }
-        return event.locationInWindow.x <= browser.prefs.sideWidth
+    /// Whether a point is over the column of tabs — down the left, shown, or
+    /// briefly peeking out while folded (the same test Fold.swift uses to lay
+    /// it out).
+    static func overSidebar(_ location: CGPoint, in browser: Browser) -> Bool {
+        guard browser.prefs.sidebar, browser.active?.immersed != true,
+              !browser.folded || browser.peeking else { return false }
+        return location.x <= browser.prefs.sideWidth
     }
 }

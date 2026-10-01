@@ -322,7 +322,7 @@ final class Groups: ObservableObject {
             // and all. `groups plan today` draws the other block.
             let today = arg == "today"
             let loose = browser.tabs.filter { $0.pin == nil && Sections.shared.isSaved($0) != today }
-            let rows = FolderTree.plan(loose, homeless: today ? [] : homeless(in: Spaces.shared.current), groups: self)
+            let rows = FolderTree.plan(loose, homeless: today ? [] : homeless(in: Spaces.shared.current(in: browser)), groups: self, space: Spaces.shared.current(in: browser))
             let lines: [String] = rows.map { row in
                 switch row {
                 case .head(let g, let count, _, let depth, let label):

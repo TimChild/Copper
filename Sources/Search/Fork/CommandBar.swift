@@ -39,7 +39,9 @@ enum CommandBar {
             .init(id: "pin", name: "Pin Tab", glyph: "pin") { b in if let t = b.active { b.pin(t) } },
             .init(id: "bookmark", name: "Bookmark This Page", glyph: "bookmark") { $0.bookmarkCurrent() },
             .init(id: "sidebar", name: "Toggle Sidebar", glyph: "sidebar.left") { $0.toggleSidebar() },
+            .init(id: "hard-reload", name: "Hard Reload", glyph: "arrow.clockwise") { $0.hardReload() },
             .init(id: "reader", name: "Reading Mode", glyph: "doc.plaintext") { $0.toggleReader() },
+            .init(id: "inspect", name: "Inspect Element", glyph: "ladybug") { $0.inspectElement() },
             .init(id: "float", name: "Float the Video", glyph: "pip") { $0.toggleFloat() },
             .init(id: "hide", name: "Hide Something on This Page", glyph: "eye.slash") { $0.toggleHiding() },
             .init(id: "history", name: "History", glyph: "clock.arrow.circlepath") { $0.recalling = true },
@@ -64,7 +66,7 @@ enum CommandBar {
                 let id = Spaces.shared.add(in: b)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id) }
             },
-            .init(id: "edit-space", name: "Edit Space", glyph: "slider.horizontal.3") { _ in SpaceEditing.shared.open(Spaces.shared.current) },
+            .init(id: "edit-space", name: "Edit Space", glyph: "slider.horizontal.3") { b in SpaceEditing.shared.open(Spaces.shared.current(in: b)) },
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },
             .init(id: "prev-space", name: "Previous Space", glyph: "chevron.left") { Spaces.shared.step(-1, in: $0) },
         ]
@@ -77,9 +79,9 @@ enum CommandBar {
             list.insert(.init(id: "update", name: "Update Copper to \(Updates.shared.latest?.version ?? "")", glyph: "arrow.down.circle") { _ in Updates.shared.upgrade() }, at: 0)
         }
         if Spaces.shared.all.count > 1 {
-            list.append(.init(id: "delete-space", name: "Delete Space…", glyph: "trash") { SpaceDelete.ask(Spaces.shared.current, in: $0) })
+            list.append(.init(id: "delete-space", name: "Delete Space…", glyph: "trash") { b in SpaceDelete.ask(Spaces.shared.current(in: b), in: b) })
         }
-        for space in Spaces.shared.all where space.id != Spaces.shared.current {
+        for space in Spaces.shared.all where space.id != Spaces.shared.current(in: browser) {
             // The space's own symbol when it has one; an emoji has no place
             // in a symbol slot, so those spaces keep the generic mark.
             list.append(.init(id: "space-\(space.id)", name: "Switch to \(space.title)", glyph: space.symbol ?? "circle.grid.2x2") {
@@ -198,7 +200,8 @@ enum CommandBar {
         row.detail = shortDetail(row)
         let space = short(Spaces.shared.name(of: tab))
         if tab.pin != nil {
-            row.badge = current ? "· \(space) ✦" : "· \(space) ✦"
+            // A pin is in every space, so naming one would be wrong.
+            row.badge = "· ✦"
         } else if Sections.shared.isSaved(tab) {
             row.badge = current ? "· saved" : "· \(space) · saved"
         } else if !current {
@@ -340,19 +343,13 @@ enum CommandBar {
 
 extension Spaces {
     func name(of tab: Tab) -> String {
-        for space in all where parkedRow(space.id)?.contains { $0.id == tab.id } == true { return space.name }
-        return space.name
+        for space in all where row(space.id).contains(where: { $0.id == tab.id }) { return space.name }
+        return space(in: Windows.current).name
     }
 
     /// Bring a tab open in another space to the front, switching to it.
     func reveal(_ id: Tab.ID, in browser: Browser) -> Bool {
-        guard let space = all.first(where: { parkedRow($0.id)?.contains { $0.id == id } == true }) else { return false }
-        // Spaces are the first window's: from a ⌘N window, go there. (Fork: windows)
-        guard browser.primary else {
-            let main = Windows.main
-            Windows.window(of: main)?.makeKeyAndOrderFront(nil)
-            return reveal(id, in: main)
-        }
+        guard let space = all.first(where: { row($0.id).contains { $0.id == id } }) else { return false }
         select(space.id, in: browser)
         if let tab = browser.tabs.first(where: { $0.id == id }) { browser.select(tab) }
         return true

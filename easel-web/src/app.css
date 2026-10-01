@@ -1,0 +1,831 @@
+/*
+ * The easel's look: warm paper with a quiet dot grid, Copper's red-orange as
+ * the one accent, white hairline cards for anything that floats. Everything
+ * is a CSS variable so dark mode is one media query. Palette cues from
+ * Sources/Search/Design.swift (ink 0.09/0.93, muted 0.55/0.58, hairline
+ * 0.91/0.20) and the laser's #ff5a36 from the P1 contract.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --paper: #f8f5ef;
+  --paper-dot: rgba(70, 50, 30, 0.16);
+  --card: #ffffff;
+  --card-2: #f4f1eb;
+  --ink: #171412;
+  --ink-2: #4a4541;
+  --muted: #8c8680;
+  --faint: #d4cec6;
+  --hairline: rgba(0, 0, 0, 0.09);
+  --hover: rgba(0, 0, 0, 0.05);
+  --pressed: rgba(0, 0, 0, 0.08);
+  --accent: #ff5a36;
+  --accent-ink: #d9401f;
+  --accent-soft: rgba(255, 90, 54, 0.14);
+  --accent-faint: rgba(255, 90, 54, 0.08);
+  --danger: #d12e2e;
+  --danger-soft: rgba(209, 46, 46, 0.1);
+  --frame-border: #d9d2c7;
+  --frame-fill: rgba(255, 255, 255, 0.5);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.1);
+  --shadow-sticky: 0 1px 2px rgba(0, 0, 0, 0.07), 0 6px 16px rgba(0, 0, 0, 0.08);
+  --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.1), 0 18px 40px rgba(0, 0, 0, 0.18);
+
+  --c-yellow: #fff1a8;
+  --c-yellow-ink: #4a3b00;
+  --c-pink: #ffd6e4;
+  --c-pink-ink: #5c1030;
+  --c-blue: #d3e7ff;
+  --c-blue-ink: #0f2f57;
+  --c-green: #d4f5d9;
+  --c-green-ink: #12421d;
+  --c-purple: #e6dcff;
+  --c-purple-ink: #301a66;
+  --c-gray: #e9e9ec;
+  --c-gray-ink: #2b2b30;
+  --c-white: #ffffff;
+  --c-white-ink: #1f1f24;
+  --c-white-edge: rgba(0, 0, 0, 0.1);
+
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
+    Helvetica, Arial, system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1b1917;
+    --paper-dot: rgba(255, 236, 214, 0.1);
+    --card: #262321;
+    --card-2: #2e2a27;
+    --ink: #ede9e4;
+    --ink-2: #c9c3bb;
+    --muted: #9a948d;
+    --faint: #4a4541;
+    --hairline: rgba(255, 255, 255, 0.1);
+    --hover: rgba(255, 255, 255, 0.06);
+    --pressed: rgba(255, 255, 255, 0.1);
+    --accent: #ff6f4e;
+    --accent-ink: #ff8a6e;
+    --accent-soft: rgba(255, 111, 78, 0.2);
+    --accent-faint: rgba(255, 111, 78, 0.1);
+    --danger: #ff6b6b;
+    --danger-soft: rgba(255, 107, 107, 0.14);
+    --frame-border: #4a4541;
+    --frame-fill: rgba(255, 255, 255, 0.04);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(0, 0, 0, 0.5);
+    --shadow-sticky: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 16px rgba(0, 0, 0, 0.35);
+    --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.4), 0 18px 40px rgba(0, 0, 0, 0.6);
+
+    --c-yellow: #5a4a12;
+    --c-yellow-ink: #fff3c4;
+    --c-pink: #5c2238;
+    --c-pink-ink: #ffe0ea;
+    --c-blue: #1f3a5c;
+    --c-blue-ink: #dcebff;
+    --c-green: #1f4a2a;
+    --c-green-ink: #dcf7e1;
+    --c-purple: #3a2b66;
+    --c-purple-ink: #ebe3ff;
+    --c-gray: #3a3a40;
+    --c-gray-ink: #ececf0;
+    --c-white: #f7f7f8;
+    --c-white-ink: #1f1f24;
+    --c-white-edge: rgba(255, 255, 255, 0.25);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* ---- the board ---- */
+
+.easel-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background-color: var(--paper);
+  background-image: radial-gradient(var(--paper-dot) 1px, transparent 1.2px);
+}
+
+.easel-cursor-default {
+  cursor: default;
+}
+.easel-cursor-crosshair {
+  cursor: crosshair;
+}
+.easel-cursor-grab {
+  cursor: grab;
+}
+.easel-cursor-grab:active {
+  cursor: grabbing;
+}
+/* A small glowing dot, drawn inline so nothing is fetched. */
+.easel-cursor-laser {
+  cursor:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><defs><radialGradient id='g' cx='50%25' cy='50%25' r='50%25'><stop offset='0' stop-color='%23ff5a36' stop-opacity='0.55'/><stop offset='1' stop-color='%23ff5a36' stop-opacity='0'/></radialGradient></defs><circle cx='12' cy='12' r='12' fill='url(%23g)'/><circle cx='12' cy='12' r='3.5' fill='%23ff5a36'/><circle cx='12' cy='12' r='2' fill='white' fill-opacity='0.9'/></svg>")
+      12 12,
+    crosshair;
+}
+
+.easel-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+/* While the camera moves (set by the camera's DOM writer, cleared 150 ms
+   after it rests) the layer gets its own compositing layer, so a pan only
+   moves pixels instead of repainting every shape each frame (measured in
+   WebKit: ~4x less main-thread time on a 60-note pan). At rest it is
+   dropped again so text re-rasterises sharp at the new zoom. */
+.easel-layer[data-moving] {
+  will-change: transform;
+}
+
+.easel-laser-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+}
+.easel-laser-overlay canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.easel-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  user-select: none;
+}
+
+.easel-marquee {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  border: 1px solid var(--accent);
+  background: var(--accent-faint);
+  border-radius: 2px;
+}
+
+/* ---- floating cards (toolbar, zoom, title, selection bar) ---- */
+
+.easel-card {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  z-index: 20;
+  cursor: default;
+}
+
+.easel-toolbar {
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+}
+.easel-toolbar-slot {
+  display: contents;
+}
+
+.easel-zoom {
+  right: 16px;
+  bottom: 16px;
+}
+.easel-zoom-level {
+  min-width: 44px;
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.easel-tool,
+.easel-bar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+.easel-tool:hover,
+.easel-bar-button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.easel-tool:active,
+.easel-bar-button:active {
+  background: var(--pressed);
+}
+.easel-tool[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.easel-tool:focus-visible,
+.easel-bar-button:focus-visible,
+.easel-swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.easel-bar-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--hairline);
+  flex: none;
+}
+
+.easel-bar-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+}
+.easel-bar-danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.easel-selection-bar {
+  padding: 4px 6px;
+  border-radius: 999px;
+  transform: translate(-50%, -100%);
+}
+
+.easel-swatch {
+  width: 18px;
+  height: 18px;
+  margin: 0 2px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 999px;
+  cursor: pointer;
+  background: var(--c-gray);
+  transition: transform 0.12s ease;
+}
+.easel-swatch:hover {
+  transform: scale(1.1);
+}
+.easel-swatch[aria-pressed='true'] {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 3.5px var(--accent);
+}
+
+/* ---- title chip ---- */
+
+.easel-title {
+  left: 16px;
+  top: 14px;
+  padding: 0 6px;
+  height: 32px;
+  border-radius: 10px;
+}
+.easel-title-input {
+  height: 100%;
+  min-width: 48px;
+  max-width: 420px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  outline: none;
+  cursor: text;
+  text-overflow: ellipsis;
+}
+.easel-title-input::placeholder {
+  color: var(--muted);
+  font-weight: 500;
+}
+.easel-title-input:focus {
+  background: var(--hover);
+  border-radius: 6px;
+}
+.easel-title-mirror {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* ---- shape colours ---- */
+
+[data-color='yellow'] {
+  --shape-bg: var(--c-yellow);
+  --shape-ink: var(--c-yellow-ink);
+}
+[data-color='pink'] {
+  --shape-bg: var(--c-pink);
+  --shape-ink: var(--c-pink-ink);
+}
+[data-color='blue'] {
+  --shape-bg: var(--c-blue);
+  --shape-ink: var(--c-blue-ink);
+}
+[data-color='green'] {
+  --shape-bg: var(--c-green);
+  --shape-ink: var(--c-green-ink);
+}
+[data-color='purple'] {
+  --shape-bg: var(--c-purple);
+  --shape-ink: var(--c-purple-ink);
+}
+[data-color='gray'] {
+  --shape-bg: var(--c-gray);
+  --shape-ink: var(--c-gray-ink);
+}
+[data-color='white'] {
+  --shape-bg: var(--c-white);
+  --shape-ink: var(--c-white-ink);
+}
+.easel-swatch[data-color] {
+  background: var(--shape-bg);
+}
+.easel-swatch[data-color='white'] {
+  border-color: var(--c-white-edge);
+}
+
+/* ---- sticky ---- */
+
+.easel-sticky {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--shape-bg);
+  color: var(--shape-ink);
+  box-shadow: var(--shadow-sticky);
+  cursor: default;
+}
+.easel-sticky[data-color='white'] {
+  box-shadow:
+    inset 0 0 0 1px var(--c-white-edge),
+    var(--shadow-sticky);
+}
+.easel-sticky[data-selected] {
+  box-shadow:
+    0 0 0 2px var(--paper),
+    0 0 0 4px var(--accent),
+    var(--shadow-sticky);
+}
+.easel-sticky[data-pending] {
+  box-shadow:
+    0 0 0 2px var(--paper),
+    0 0 0 4px var(--accent-soft),
+    var(--shadow-sticky);
+}
+.easel-sticky[data-lifted],
+.easel-frame[data-lifted] {
+  z-index: 10;
+  box-shadow: var(--shadow-lift);
+}
+.easel-sticky-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  font-size: 14px;
+}
+.easel-by {
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+/* ---- sticky editor (TipTap) ---- */
+
+.sticky-editor {
+  height: 100%;
+  min-width: 0;
+  overflow-wrap: break-word;
+  line-height: 1.375;
+  /* Until focused, pointer gestures fall through to drag the sticky
+     (double-tap edits); links and task boxes stay clickable. */
+  pointer-events: none;
+  overflow: hidden;
+}
+.sticky-editor a,
+.sticky-editor input {
+  pointer-events: auto;
+}
+.sticky-editor[data-focused] {
+  pointer-events: auto;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+  overflow: auto;
+}
+.sticky-editor .tiptap {
+  outline: none;
+  min-height: 100%;
+}
+.sticky-editor .tiptap > * + * {
+  margin-top: 0.375em;
+}
+.sticky-editor .tiptap p {
+  margin: 0;
+}
+.sticky-editor .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: currentColor;
+  opacity: 0.45;
+}
+.sticky-editor h1,
+.sticky-editor h2,
+.sticky-editor h3 {
+  margin: 0;
+  line-height: 1.2;
+}
+.sticky-editor h1 {
+  font-size: 1.3em;
+  font-weight: 700;
+}
+.sticky-editor h2 {
+  font-size: 1.15em;
+  font-weight: 700;
+}
+.sticky-editor h3 {
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.sticky-editor strong,
+.markdown-lite strong,
+.markdown-lite-inline strong {
+  font-weight: 600;
+}
+.sticky-editor em,
+.markdown-lite em {
+  font-style: italic;
+}
+.sticky-editor code,
+.markdown-lite code,
+.markdown-lite-inline code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.1);
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+@media (prefers-color-scheme: dark) {
+  .sticky-editor code,
+  .markdown-lite code,
+  .markdown-lite-inline code {
+    background: rgba(255, 255, 255, 0.15);
+  }
+}
+.sticky-editor ul,
+.markdown-lite ul {
+  margin: 0;
+  padding-left: 1.1em;
+  list-style: disc;
+}
+.sticky-editor ol,
+.markdown-lite ol {
+  margin: 0;
+  padding-left: 1.4em;
+  list-style: decimal;
+}
+.sticky-editor li > p {
+  display: inline;
+}
+.sticky-editor li > ul,
+.sticky-editor li > ol {
+  margin-top: 0;
+}
+.sticky-editor a,
+.markdown-lite a,
+.easel-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 50%, transparent);
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.sticky-editor a:hover,
+.easel-link:hover {
+  text-decoration-color: currentColor;
+}
+.easel-wikilink {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.07);
+  font-weight: 500;
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
+}
+@media (prefers-color-scheme: dark) {
+  .easel-wikilink {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* Task lists: no marker, box on the left, text wraps beside it. The item
+   node view renders <li data-checked>, so style through the list. */
+.sticky-editor [data-type='taskList'] {
+  list-style: none;
+  padding-left: 0;
+}
+.sticky-editor [data-type='taskList'] > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.sticky-editor [data-type='taskList'] > li > label {
+  display: flex;
+  flex: none;
+  margin-top: 0.2em;
+}
+.sticky-editor [data-type='taskList'] > li > div {
+  flex: 1;
+  min-width: 0;
+}
+.sticky-editor [data-type='taskList'] input {
+  width: 1em;
+  height: 1em;
+  margin: 0;
+  cursor: pointer;
+  accent-color: currentColor;
+}
+.sticky-editor [data-type='taskList'] > li[data-checked='true'] > div {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.markdown-lite {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.markdown-lite > * + * {
+  margin-top: 0.375em;
+}
+.markdown-lite p,
+.markdown-lite h1,
+.markdown-lite h2,
+.markdown-lite h3 {
+  margin: 0;
+}
+.markdown-lite-inline {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- frame ---- */
+
+.easel-frame {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border: 2px solid var(--frame-border);
+  border-radius: 12px;
+  background: var(--frame-fill);
+  cursor: default;
+}
+.easel-frame[data-selected] {
+  border-color: var(--accent);
+}
+.easel-frame[data-pending] {
+  box-shadow:
+    0 0 0 2px var(--paper),
+    0 0 0 4px var(--accent-soft);
+}
+.easel-frame-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 10px 10px 0 0;
+  background: var(--shape-bg);
+  color: var(--shape-ink);
+}
+.easel-frame-title-field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+.easel-frame-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: inherit;
+  outline: none;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.easel-frame-input::placeholder {
+  color: currentColor;
+  opacity: 0.5;
+}
+.easel-frame-input[data-inert] {
+  pointer-events: none;
+}
+.easel-frame-input[data-hidden] {
+  opacity: 0;
+}
+.easel-frame-rendered {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+.easel-frame-image {
+  display: block;
+  width: 100%;
+  height: calc(100% - 32px);
+  object-fit: contain;
+  border-radius: 0 0 10px 10px;
+  pointer-events: none;
+}
+.easel-frame-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(100% - 32px);
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* ---- arrows ---- */
+
+.easel-arrows {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.easel-arrow-line {
+  stroke: var(--ink-2);
+}
+.easel-arrow-line-active {
+  stroke: var(--accent);
+}
+.easel-arrow-head {
+  fill: var(--ink-2);
+}
+.easel-arrow-head-active {
+  fill: var(--accent);
+}
+.easel-arrow-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.easel-arrow-input,
+.easel-arrow-text {
+  display: block;
+  padding: 2px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11.5px;
+  box-shadow: var(--shadow-sticky);
+}
+.easel-arrow-input {
+  width: 144px;
+  text-align: center;
+  border-color: var(--accent);
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.easel-arrow-text {
+  white-space: nowrap;
+  cursor: default;
+}
+.easel-arrow-text[data-selected] {
+  border-color: var(--accent);
+}
+
+/* ---- resize handles ---- */
+
+.easel-handles {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+.easel-handle {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+}
+.easel-handle-corner {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* ---- peers ---- */
+
+.easel-peer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 20;
+  transform-origin: 0 0;
+  pointer-events: none;
+  transition: transform 0.12s ease-out;
+}
+.easel-peer-name {
+  display: inline-block;
+  margin-left: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: white;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: var(--shadow-sticky);
+}

@@ -233,6 +233,10 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
+        case "easels":
+            // Fork (easels): some answers come from the page (`easels perf`).
+            Easels.bench(request, in: browser, answer: answer)
+
         case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render", "ext-manager", "storage", "windows":
             answer(Fork.bench(verb, request, in: browser))
 

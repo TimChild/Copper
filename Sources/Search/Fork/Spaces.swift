@@ -669,6 +669,19 @@ final class Spaces: ObservableObject {
         keep()
     }
 
+    /// A tab closed for good wherever its row is — a deleted board's tab in
+    /// a space no window is showing (Fork/Easel).
+    func drop(_ tab: Tab) {
+        for (id, row) in rows where row.contains(where: { $0 === tab }) {
+            rows[id] = row.filter { $0 !== tab }
+            publish(id)
+        }
+        Sections.shared.forget(tab.id)
+        tab.close()
+        objectWillChange.send()
+        keep()
+    }
+
     /// Move a tab to another canonical row. All windows currently viewing
     /// either row receive the same projection.
     func move(_ tab: Tab, to id: UUID, in browser: Browser) {
@@ -785,9 +798,9 @@ final class Spaces: ObservableObject {
                 made.append(known)
                 continue
             }
-            let tab = building(for: id) { Tab() }
+            let tab = building(for: id) { Tab(configuration: Easels.configuration(for: url)) } // Fork: easels
             browser.prepare(tab)
-            tab.restore(url: url, title: entry.title)
+            tab.restore(url: url, title: Easels.rowTitle(for: url, kept: entry.title))
             if let pin = entry.pin {
                 tab.pin = pin
                 pins.append(tab)
@@ -953,9 +966,9 @@ final class Spaces: ObservableObject {
                 continue
             }
             let made = home(entry.space, else: current)
-            let tab = building(for: made) { Tab() }
+            let tab = building(for: made) { Tab(configuration: Easels.configuration(for: url)) } // Fork: a pinned board
             browser.prepare(tab)
-            tab.restore(url: url, title: entry.title)
+            tab.restore(url: url, title: Easels.rowTitle(for: url, kept: entry.title))
             tab.pin = entry.pin ?? (tab.monogram.isEmpty ? "•" : tab.monogram)
             Sections.shared.restore(tab, saved: true, seen: entry.seen)
             Groups.shared.restore(tab, group: entry.group)
@@ -969,9 +982,11 @@ final class Spaces: ObservableObject {
         for (i, entry) in saved.tabs.enumerated() {
             guard entry.pin == nil, let url = URL(string: entry.url) else { continue }
             let id = entry.space.flatMap { s in all.first { $0.id == s }?.id } ?? current
-            let tab = building(for: id) { Tab() }
+            // A board's tab is built from its own configuration (Fork/Easel);
+            // it has to be there when the view is made, long before it wakes.
+            let tab = building(for: id) { Tab(configuration: Easels.configuration(for: url)) }
             browser.prepare(tab)
-            tab.restore(url: url, title: entry.title)
+            tab.restore(url: url, title: Easels.rowTitle(for: url, kept: entry.title)) // Fork: a board's name is the index's
             // No flag at all is an upstream-shaped file: everything in it is
             // something you kept, so the whole column comes back as Saved.
             Sections.shared.restore(tab, saved: entry.saved ?? true, seen: entry.seen)
@@ -1014,7 +1029,10 @@ extension Session.Entry {
         // A sleeping tab holds its address in `pending`; asking for it there
         // too means a pin can never be written out of existence by whatever
         // its web view happens to be showing.
-        guard let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true else { return nil }
+        // A board is a real page too (Fork/Easel): it comes back from its own file.
+        guard let url = tab.pending ?? tab.address,
+              url.scheme?.hasPrefix("http") == true || Easels.id(of: url) != nil
+        else { return nil }
         self.init(url: url.absoluteString, title: tab.title, pin: tab.pin)
     }
 }

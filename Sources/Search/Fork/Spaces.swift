@@ -165,6 +165,16 @@ final class Spaces: ObservableObject {
         withTransaction(calm) { swap(to: id, in: browser) }
     }
 
+    /// A swipe's commit (SpaceSlide.release): the picture of the old column
+    /// is already up and the slide under way, so only the rows change.
+    func select(_ id: UUID, in browser: Browser, pictured: Bool) {
+        guard pictured else { return select(id, in: browser) }
+        guard browser.primary, id != current, all.contains(where: { $0.id == id }) else { return }
+        var calm = Transaction()
+        calm.disablesAnimations = true
+        withTransaction(calm) { swap(to: id, in: browser) }
+    }
+
     private func swap(to id: UUID, in browser: Browser) {
         parked[current] = (browser.tabs, browser.activeID)
         let next = parked.removeValue(forKey: id) ?? ([], nil)
@@ -561,7 +571,10 @@ extension Spaces {
     /// buttons), `spaces profile NAME`, `spaces theme N|NAME colors|intensity|
     /// grain|image|blur|tone|motion|speed|clear …` (see `benchTheme`),
     /// `spaces slide [at X|off]` (the last switch's timings; hold the next
-    /// slides at X for a picture — see `SpaceSlide.bench`).
+    /// slides at X for a picture — see `SpaceSlide.bench`), `spaces swipe
+    /// DX,DX,…[ end|cancel] [--hold]` (a two-finger swipe, scripted — see
+    /// `SpaceSwipe.script`), `spaces scroll` (the column's scroll view:
+    /// its elasticity each way and where it stands).
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         func find(_ key: String) -> UUID? {
             if let n = Int(key), all.indices.contains(n) { return all[n].id }
@@ -622,6 +635,8 @@ extension Spaces {
             guard SpaceDelete.answer(arg) else { return ["error": "no sheet up, or no \(arg) button on it"] }
             return ["answered": arg, "did": SpaceDelete.last]
         case "slide": return ["slide": SpaceSlide.shared.bench(arg)]
+        case "swipe": return ["slide": SpaceSwipe.script(arg, in: browser)]
+        case "scroll": return ["slide": SideScrollElasticity.script(arg)]
         case "profile": profile(current, named: arg)
         case "theme":
             if let error = benchTheme(words, find: find) { return ["error": error] }

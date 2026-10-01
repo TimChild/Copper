@@ -24,6 +24,16 @@ import SwiftUI
 // Which way: towards a space after this one in `Spaces.all`, the old column
 // leaves to the left; before it, to the right. Reduce Motion keeps the
 // crossfade and drops the travel.
+//
+// A two-finger swipe (Swipes.swift) drives the same two layers by hand. The
+// space it is heading for is not on screen, and putting it there just to
+// take its picture would select its tab and wake the page, so every space's
+// column is pictured as it is left (and again just after it arrives), and
+// the swipe slides that picture in. It is a few seconds stale at most and
+// only in flight: when the fingers let go far enough, the real switch happens
+// under the curtain and the live column takes the picture's place; when not,
+// the pictures spring back and are dropped. A space not yet visited this
+// launch has no picture, and comes in as its bare ground until it is real.
 
 @MainActor
 final class SpaceSlide: ObservableObject {
@@ -45,7 +55,22 @@ final class SpaceSlide: ObservableObject {
     var column: CGRect = .zero
     var band: CGRect = .zero
 
-    var moving: Bool { picture != nil }
+    var moving: Bool { picture != nil || dragging }
+
+    // The swipe's own state, all nil/false/zero outside one.
+    /// True from the first sideways movement until the fingers let go.
+    @Published private(set) var dragging = false
+    /// The space the swipe is heading for, and its column as last pictured.
+    @Published private(set) var arriving: Space?
+    @Published private(set) var incoming: NSImage?
+    /// At the first or last space there is nowhere to go: the live column is
+    /// pulled this far, with resistance, and springs back.
+    @Published private(set) var stretch: CGFloat = 0
+    /// The column as it was when the fingers started; the curtain while the
+    /// swipe is on, and the old picture of the slide if it commits.
+    private var outgoing: NSImage?
+    /// The last picture of every space's column, by space.
+    private var cache: [UUID: NSImage] = [:]
 
     /// Arc's is about this: quick off the mark, a soft landing, and over
     /// before the eye has finished following it.
@@ -73,9 +98,14 @@ final class SpaceSlide: ObservableObject {
         serial += 1
         let mine = serial
         let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        cache[Spaces.shared.current] = shot
         var calm = Transaction()
         calm.disablesAnimations = true
         withTransaction(calm) {
+            dragging = false
+            arriving = nil
+            incoming = nil
+            stretch = 0
             picture = shot
             phase = 0
             way = still ? 0 : (forward ? 1 : -1)
@@ -119,9 +149,164 @@ final class SpaceSlide: ObservableObject {
         withTransaction(calm) {
             picture = nil
             phase = 1
+            dragging = false
+            arriving = nil
+            incoming = nil
+            stretch = 0
         }
+        outgoing = nil
         timing?.ended = CACurrentMediaTime()
         unwatch()
+        remember()
+    }
+
+    /// A fresh picture of the space now on screen, for the next swipe that
+    /// heads for it — a moment after it arrives, once its rows have drawn.
+    private func remember() {
+        let mine = serial
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, mine == self.serial, !self.moving,
+                  let window = Links.window, window.isVisible,
+                  self.column.width > 1, let shot = self.photograph(in: window) else { return }
+            self.cache[Spaces.shared.current] = shot
+        }
+    }
+
+    // MARK: - the swipe
+
+    /// Fingers `travel` points sideways from where they started (negative is
+    /// to the left). The first call takes the picture of the column; every
+    /// call after only moves things, with no animation — the fingers are the
+    /// animation. False when there is no column to drive.
+    @discardableResult
+    func drag(_ travel: CGFloat, in browser: Browser) -> Bool {
+        let spaces = Spaces.shared
+        guard browser.primary, let here = spaces.all.firstIndex(where: { $0.id == spaces.current }) else { return false }
+        if !dragging {
+            // A settle still running from the last swipe or a click is left
+            // to finish; these fingers do nothing.
+            guard picture == nil else { return false }
+            let started = CACurrentMediaTime()
+            timed = browser.prefs.bench
+            guard column.width > 1, column.height > 1, band.height > 1,
+                  let window = Links.window, window.isVisible,
+                  let shot = photograph(in: window) else { return false }
+            serial += 1
+            outgoing = shot
+            cache[spaces.current] = shot
+            timing = Timing(asked: started, pictured: CACurrentMediaTime())
+            var calm = Transaction()
+            calm.disablesAnimations = true
+            withTransaction(calm) { dragging = true }
+            watch()
+        }
+        let width = max(column.width, 1)
+        // Fingers to the left push the column left, so the space after this
+        // one comes in from the right — content follows the fingers.
+        let forward = travel < 0
+        let there = here + (forward ? 1 : -1)
+        var calm = Transaction()
+        calm.disablesAnimations = true
+        withTransaction(calm) {
+            if travel != 0, spaces.all.indices.contains(there) {
+                let space = spaces.all[there]
+                if arriving?.id != space.id {
+                    arriving = space
+                    incoming = cache[space.id]
+                }
+                picture = outgoing
+                way = forward ? 1 : -1
+                phase = min(1, abs(travel) / width)
+                stretch = 0
+            } else {
+                // Nowhere to go this way: no pictures, only the live column
+                // pulled against a spring that gets stiffer the further it goes.
+                picture = nil
+                arriving = nil
+                incoming = nil
+                phase = 1
+                stretch = SpaceSlide.rubber(travel, over: width)
+            }
+        }
+        return true
+    }
+
+    /// Resistance at the ends, as a scroll view has it: about a third of
+    /// the fingers' travel at first, never more than a quarter column.
+    nonisolated static func rubber(_ x: CGFloat, over width: CGFloat) -> CGFloat {
+        let limit = width * 0.25
+        let pulled = limit * (1 - 1 / (abs(x) * 0.33 / limit + 1))
+        return x < 0 ? -pulled : pulled
+    }
+
+    /// How far, and how fast, the fingers must have gone for a release to
+    /// carry on to the next space rather than spring back.
+    static let commitAt: CGFloat = 0.38
+    static let flick: CGFloat = 350 // points a second
+
+    /// Fingers up (or the gesture cancelled): carry on, or go back. `velocity`
+    /// is the fingers' in points a second, signed like `travel`. The rest of
+    /// the way is a spring that sets off at the fingers' speed, so there is
+    /// no jolt at the hand-over. On a commit the real switch happens first,
+    /// under the curtain — the picture of the old column is still up and the
+    /// live column, now the new space's, takes the incoming picture's place
+    /// in the same frame.
+    func release(velocity: CGFloat, cancelled: Bool, in browser: Browser) {
+        guard dragging else { return }
+        let mine = serial
+        let width = max(column.width, 1)
+        guard picture != nil, let arriving else {
+            // The stretch at an end, home again.
+            withAnimation(SpaceSlide.spring(from: stretch, to: 0, speed: velocity), completionCriteria: .logicallyComplete) {
+                stretch = 0
+            } completion: { [weak self] in
+                guard let self, mine == self.serial else { return }
+                self.end()
+            }
+            return
+        }
+        // In phase per second: positive is on towards `arriving`.
+        let speed = -velocity * way / width
+        let fast = SpaceSlide.flick / width
+        let commit = !cancelled && (speed > fast || (speed > -fast && phase > SpaceSlide.commitAt))
+        timing?.committed = CACurrentMediaTime()
+        if commit {
+            var calm = Transaction()
+            calm.disablesAnimations = true
+            withTransaction(calm) {
+                dragging = false
+                self.arriving = nil
+                incoming = nil
+                Spaces.shared.select(arriving.id, in: browser, pictured: true)
+            }
+            // As for a click: one turn of the run loop commits the frame with
+            // the live column where the picture of it was, and the settle
+            // sets off from there. In the same turn SwiftUI would see the
+            // band go from hidden-at-rest straight to home and not move it.
+            DispatchQueue.main.async { self.settle(to: 1, speed: speed, mine) }
+        } else {
+            settle(to: 0, speed: speed, mine)
+        }
+    }
+
+    private func settle(to goal: CGFloat, speed: CGFloat, _ mine: Int) {
+        guard mine == serial, picture != nil else { return }
+        timing?.moved = CACurrentMediaTime()
+        withAnimation(SpaceSlide.spring(from: phase, to: goal, speed: speed), completionCriteria: .logicallyComplete) {
+            phase = goal
+        } completion: { [weak self] in
+            guard let self, mine == self.serial else { return }
+            self.end()
+        }
+    }
+
+    /// A spring with no bounce whose first instant moves at `speed` (units
+    /// of the value a second). SwiftUI wants that as a fraction of the
+    /// distance still to go.
+    static func spring(from: CGFloat, to: CGFloat, speed: CGFloat) -> Animation {
+        let distance = to - from
+        let relative = abs(distance) > 0.001 ? speed / distance : 0
+        return .interpolatingSpring(duration: 0.3, bounce: 0, initialVelocity: Double(min(12, max(0, relative))))
     }
 
     // MARK: - the picture
@@ -150,20 +335,22 @@ final class SpaceSlide: ObservableObject {
         return image
     }
 
-    /// The column's rectangle of the window, from the window server.
+    /// The column's rectangle of the window, from the window server: the
+    /// whole window's own pixels, cut to the column. Asking the server for a
+    /// rectangle of the screen instead came back shifted by the window's
+    /// framing (about 12 × 8 points) whenever the window was not frontmost.
     private func composited(view: NSView, in window: NSWindow) -> NSImage? {
-        guard let screen = window.screen ?? NSScreen.screens.first,
-              let primary = NSScreen.screens.first else { return nil }
         let local = view.isFlipped ? column
             : NSRect(x: column.minX, y: view.bounds.height - column.maxY, width: column.width, height: column.height)
-        let onScreen = window.convertToScreen(view.convert(local, to: nil))
-        // Quartz counts down from the top of the primary display.
-        let quartz = CGRect(x: onScreen.minX, y: primary.frame.maxY - onScreen.maxY,
-                            width: onScreen.width, height: onScreen.height)
-        _ = screen
-        guard let image = CGWindowListCreateImage(quartz, .optionIncludingWindow, CGWindowID(window.windowNumber),
+        let inWindow = view.convert(local, to: nil)
+        guard let whole = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
                                                   [.boundsIgnoreFraming, .bestResolution]),
-              image.width > 8, image.height > 8 else { return nil }
+              whole.width > 8, window.frame.width > 1 else { return nil }
+        let scale = CGFloat(whole.width) / window.frame.width
+        // The window's picture runs down from its top left.
+        let cut = CGRect(x: inWindow.minX * scale, y: (window.frame.height - inWindow.maxY) * scale,
+                         width: inWindow.width * scale, height: inWindow.height * scale).integral
+        guard let image = whole.cropping(to: cut), image.width > 8, image.height > 8 else { return nil }
         return NSImage(cgImage: image, size: column.size)
     }
 
@@ -192,6 +379,8 @@ final class SpaceSlide: ObservableObject {
     private func watch() {
         guard timed, let view = Links.window?.contentView else { return }
         link?.invalidate()
+        // The view's link stops while its window is covered; then the swipe
+        // bench's event pacing (`spaces swipe stats`) is the measure instead.
         let link = view.displayLink(target: self, selector: #selector(tick(_:)))
         link.add(to: .main, forMode: .common)
         self.link = link
@@ -214,11 +403,28 @@ final class SpaceSlide: ObservableObject {
         let words = arg.split(separator: " ").map(String.init)
         if words.first == "at", words.count > 1, let x = Double(words[1]) {
             hold = min(1, max(0, CGFloat(x)))
+        } else if words.first == "dump", words.count > 1 {
+            // The pictures the swipe has, as PNGs, to see what it slides.
+            let dir = words[1]
+            for (id, image) in cache {
+                let name = Spaces.shared.all.first { $0.id == id }?.name ?? id.uuidString
+                if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: "\(dir)/cache-\(name).png"))
+                }
+            }
         } else if words.first == "off" {
             hold = nil
             if picture != nil { end() }
         }
         var note: [String: Any] = ["moving": moving, "hold": hold.map { Double($0) } ?? -1,
+                                   "dragging": dragging, "phase": (Double(phase) * 1000).rounded() / 1000,
+                                   "way": Double(way), "stretch": (Double(stretch) * 10).rounded() / 10,
+                                   "arriving": arriving?.name ?? "", "incoming": incoming != nil,
+                                   "cached": cache.keys.compactMap { id in Spaces.shared.all.first { $0.id == id }?.name },
+                                   "space": Spaces.shared.space.name,
+                                   "window": Links.window.map { w in [Int(w.frame.minX), Int(w.frame.minY), Int(w.frame.width), Int(w.frame.height),
+                                                                      w.occlusionState.contains(.visible) ? 1 : 0] } ?? [],
+                                   "screens": NSScreen.screens.map { [Int($0.frame.minX), Int($0.frame.minY), Int($0.frame.width), Int($0.frame.height)] },
                                    "column": [Int(column.minX), Int(column.minY), Int(column.width), Int(column.height)],
                                    "band": [Int(band.minX), Int(band.minY), Int(band.width), Int(band.height)]]
         guard let t = timing else { return note }
@@ -248,7 +454,11 @@ struct SpaceSlideBand: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .offset(x: slide.moving ? slide.way * slide.column.width * (1 - slide.phase) : 0)
+            .offset(x: slide.dragging ? slide.stretch
+                : slide.picture != nil ? slide.way * slide.column.width * (1 - slide.phase) : 0)
+            // While a swipe is pictured, the curtain draws both columns and
+            // this one, still the old space's, only has to keep out of sight.
+            .opacity(slide.dragging && slide.picture != nil ? 0 : 1)
             .clipShape(BandEdge(on: slide.moving))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slide.band = $0 }
     }
@@ -269,6 +479,7 @@ struct SpaceSlideBand: ViewModifier {
 /// the new column under it is the real one from the first frame.
 struct SpaceSlideCurtain: View {
     @ObservedObject private var slide = SpaceSlide.shared
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         if let picture = slide.picture {
@@ -276,32 +487,73 @@ struct SpaceSlideCurtain: View {
             let top = max(0, slide.band.minY - slide.column.minY)
             let height = min(slide.band.height, size.height - top)
             ZStack(alignment: .topLeading) {
-                // Everything that stays: the picture with the band cut out.
-                Image(nsImage: picture)
-                    .resizable()
-                    .frame(width: size.width, height: size.height)
-                    .mask(alignment: .topLeading) {
-                        VStack(spacing: 0) {
-                            Rectangle().frame(height: top)
-                            Color.clear.frame(height: height)
-                            Rectangle()
-                        }
-                    }
-                // The band, on its way out. Its last point is the column's
-                // hairline, which stays put, so it is left behind.
-                Image(nsImage: picture)
-                    .resizable()
-                    .frame(width: size.width, height: size.height)
-                    .offset(x: -slide.way * size.width * slide.phase)
-                    .mask(alignment: .topLeading) {
-                        Rectangle()
-                            .frame(width: max(0, size.width - 1), height: height)
-                            .offset(y: top)
-                    }
+                if slide.dragging { arriving(size: size, top: top, height: height, fallback: picture) }
+                outgoing(picture, size: size, top: top, height: height)
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
-            .opacity(1 - slide.phase)
             .allowsHitTesting(false)
         }
+    }
+
+    /// While a swipe is on, what a slide has as its live new column: the
+    /// arriving space's ground, its picture's lights and strip in place, its
+    /// band coming in from the side. With no picture of it yet, the old
+    /// column's lights and strip stand in and the band is bare ground.
+    @ViewBuilder
+    private func arriving(size: CGSize, top: CGFloat, height: CGFloat, fallback: NSImage) -> some View {
+        if let space = slide.arriving {
+            SpaceTint(space: space, dark: scheme == .dark).backdrop
+                .frame(width: size.width, height: size.height)
+        }
+        Image(nsImage: slide.incoming ?? fallback)
+            .resizable()
+            .frame(width: size.width, height: size.height)
+            .mask(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    Rectangle().frame(height: top)
+                    Color.clear.frame(height: height)
+                    Rectangle()
+                }
+            }
+        if let incoming = slide.incoming {
+            Image(nsImage: incoming)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+                .offset(x: slide.way * size.width * (1 - slide.phase))
+                .mask(alignment: .topLeading) {
+                    Rectangle()
+                        .frame(width: max(0, size.width - 1), height: height)
+                        .offset(y: top)
+                }
+        }
+    }
+
+    private func outgoing(_ picture: NSImage, size: CGSize, top: CGFloat, height: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            // Everything that stays: the picture with the band cut out.
+            Image(nsImage: picture)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+                .mask(alignment: .topLeading) {
+                    VStack(spacing: 0) {
+                        Rectangle().frame(height: top)
+                        Color.clear.frame(height: height)
+                        Rectangle()
+                    }
+                }
+            // The band, on its way out. Its last point is the column's
+            // hairline, which stays put, so it is left behind.
+            Image(nsImage: picture)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+                .offset(x: -slide.way * size.width * slide.phase)
+                .mask(alignment: .topLeading) {
+                    Rectangle()
+                        .frame(width: max(0, size.width - 1), height: height)
+                        .offset(y: top)
+                }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .opacity(1 - slide.phase)
     }
 }

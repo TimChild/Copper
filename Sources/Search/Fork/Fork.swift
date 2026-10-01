@@ -56,6 +56,7 @@ enum Fork {
         case "ext-manager": return ExtensionManager.shared.bench(request, in: browser)
         case "groups": return Groups.shared.bench(request, in: browser)
         case "sections": return Sections.shared.bench(request, in: browser)
+        case "storage": return StorageImport.shared.bench(request, in: browser)
         case "passkeys": return PasskeysBench.handle(request)
         case "agent":
             // `agent ask TEXT` / `agent chat|open|close|clear` are the pane's; the rest is the server's.

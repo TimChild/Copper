@@ -1088,6 +1088,9 @@ enum CLI {
         request.httpMethod = method
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        // The agent this command runs under, so its calls — and a Jev run it
+        // starts — wear that agent's name and thread in Copper (Hands.swift).
+        if token != nil { request.setValue(AgentEnvironment.header(client: "copper-cli"), forHTTPHeaderField: "X-Copper-Agent") }
         request.httpBody = body
 
         final class Box: @unchecked Sendable {

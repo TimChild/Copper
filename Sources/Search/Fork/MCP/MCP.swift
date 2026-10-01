@@ -112,6 +112,19 @@ final class MCP: ObservableObject {
     @Published private(set) var clientName = ""
     /// The last Jev run, in a few words, for Settings.
     @Published var jevNote = ""
+    /// What each transport session said about itself at `initialize`, by the
+    /// `Mcp-Session-Id` this server handed it — so a client that talks HTTP
+    /// directly, and says nothing else, is still one session and not "the
+    /// last client to connect".
+    private var said: [String: Drive.Who.Said] = [:]
+
+    /// Where a message came from, beyond its body: the headers that carry
+    /// the agent's identity, and the transport session.
+    struct Context {
+        var headers: [String: String] = [:]
+        /// The `Mcp-Session-Id` the client sent, or the one minted for its `initialize`.
+        var session: String?
+    }
 
     private weak var browser: Browser?
     private var listener: NWListener?
@@ -388,14 +401,22 @@ final class MCP: ObservableObject {
                     let result = await Bitwarden.shared.control(one["params"] as? [String: Any] ?? [:])
                     answer(HTTPResponse(status: 200, json: ["jsonrpc": "2.0", "id": one["id"] ?? NSNull(), "result": result]))
                 } else if let one = body as? [String: Any] {
-                    if let reply = await self.handle(one) {
-                        answer(HTTPResponse(status: 200, json: reply))
+                    var context = Context(headers: request.headers, session: request.headers["mcp-session-id"])
+                    // A session id for each `initialize` that comes without
+                    // one: the client sends it back on every request after.
+                    let minted = one["method"] as? String == "initialize" && context.session == nil
+                    if minted { context.session = UUID().uuidString.lowercased() }
+                    if let reply = await self.handle(one, context: context) {
+                        var response = HTTPResponse(status: 200, json: reply)
+                        if minted, let sid = context.session { response.extra["Mcp-Session-Id"] = sid }
+                        answer(response)
                     } else {
                         answer(HTTPResponse(status: 202, body: Data()))
                     }
                 } else if let many = body as? [[String: Any]] {
                     var replies: [[String: Any]] = []
-                    for one in many { if let reply = await self.handle(one) { replies.append(reply) } }
+                    let context = Context(headers: request.headers, session: request.headers["mcp-session-id"])
+                    for one in many { if let reply = await self.handle(one, context: context) { replies.append(reply) } }
                     answer(replies.isEmpty ? HTTPResponse(status: 202, body: Data()) : HTTPResponse(status: 200, jsonArray: replies))
                 } else {
                     answer(HTTPResponse(status: 400, jsonrpcError: nil, code: -32600, message: "Invalid request"))
@@ -423,7 +444,8 @@ final class MCP: ObservableObject {
     /// One message in, one reply out — or none, for a notification.
     /// `driver` names whose call this is for the pane beside the page; unsaid,
     /// it is the loopback client by the name it gave at `initialize`.
-    func handle(_ message: [String: Any], announce: Announce = .agent, driver: Drive.Driver? = nil) async -> [String: Any]? {
+    func handle(_ message: [String: Any], announce: Announce = .agent, driver: Drive.Driver? = nil,
+                who given: Drive.Who? = nil, context: Context = Context()) async -> [String: Any]? {
         let id = message["id"]
         let method = message["method"] as? String ?? ""
         let params = message["params"] as? [String: Any] ?? [:]
@@ -441,6 +463,10 @@ final class MCP: ObservableObject {
         case "initialize":
             if let info = params["clientInfo"] as? [String: Any], let name = info["name"] as? String {
                 clientName = MCP.pretty(client: name)
+                if let sid = context.session {
+                    var first = Drive.Who.Said(); first.name = name
+                    said[sid] = MCP.said(params, context).over(first)
+                }
             }
             let asked = params["protocolVersion"] as? String ?? ""
             let version = MCP.protocolVersions.contains(asked) ? asked : "2025-06-18"
@@ -469,12 +495,16 @@ final class MCP: ObservableObject {
             }
             // The user pressed Stop on this driver: the call is refused with
             // words the agent can act on, and nothing touches the page.
-            let who = driver ?? .agent(clientName.isEmpty ? "Agent" : clientName)
-            if let refusal = Drive.shared.refusal {
-                Drive.shared.refused(call: name, args: arguments, by: who)
+            // Which session this is, from what it says about itself (Hands.swift).
+            let saidNow = MCP.said(params, context)
+            let known = context.session.flatMap { said[$0] } ?? Drive.Who.Said()
+            let caller = given ?? Drive.Who.from(saidNow.over(known), mcpSession: context.session, fallbackName: clientName)
+            let who = driver ?? .agent(caller.agent)
+            if let refusal = Drive.shared.refusal(for: caller.key) {
+                Drive.shared.refused(call: name, args: arguments, by: who, who: caller)
                 return reply(["content": [["type": "text", "text": refusal]], "isError": true])
             }
-            let ticket = Drive.shared.began(call: name, args: arguments, by: who, tab: browser.active)
+            let ticket = Drive.shared.began(call: name, args: arguments, by: who, who: caller, tab: browser.active)
             // A tool may leave a one-line summary (jev_run / jev_step do:
             // "done · 7 actions · 12.3 s · example.com"); it rides as
             // `_meta.summary`, which the app's gateway copies into its audit.
@@ -485,8 +515,10 @@ final class MCP: ObservableObject {
                 return out
             }
             do {
-                let content = try await Tools.$summary.withValue(summary) {
-                    try await Tools.call(name, arguments, in: browser)
+                let content = try await DriveCaller.$who.withValue(caller) {
+                    try await Tools.$summary.withValue(summary) {
+                        try await Tools.call(name, arguments, in: browser)
+                    }
                 }
                 if let ticket { Drive.shared.ended(ticket, error: nil, tab: browser.active) }
                 return reply(result(content.map(\.json), isError: false))
@@ -506,6 +538,14 @@ final class MCP: ObservableObject {
         default:
             return fail(-32601, "Method not found: \(method)")
         }
+    }
+
+    /// What a message's sender says about itself: the bridge's or the CLI's
+    /// `X-Copper-Agent` header, under the request's own `_meta["copper/agent"]`.
+    static func said(_ params: [String: Any], _ context: Context) -> Drive.Who.Said {
+        let header = Drive.Who.Said.header(context.headers["x-copper-agent"])
+        guard let meta = (params["_meta"] as? [String: Any])?["copper/agent"] as? [String: Any] else { return header }
+        return Drive.Who.Said(meta).over(header)
     }
 
     // MARK: - bench
@@ -645,6 +685,8 @@ struct HTTPResponse {
     let status: Int
     let body: Data
     var contentType = "application/json"
+    /// Headers beyond the fixed few — the `Mcp-Session-Id` on an initialize.
+    var extra: [String: String] = [:]
 
     init(status: Int, body: Data) {
         self.status = status
@@ -677,6 +719,7 @@ struct HTTPResponse {
         head += "Content-Type: \(contentType)\r\n"
         head += "Content-Length: \(body.count)\r\n"
         head += "Cache-Control: no-store\r\n"
+        for (name, value) in extra { head += "\(name): \(value)\r\n" }
         head += "Connection: keep-alive\r\n\r\n"
         var out = Data(head.utf8)
         out.append(body)

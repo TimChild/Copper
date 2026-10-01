@@ -514,8 +514,14 @@ final class AgentLink: ObservableObject, Identifiable {
                 reporter = made
             }
             let who = request.caller.botHandle.isEmpty ? "bot" : request.caller.botHandle
+            // Each bot session is its own hand on the tabs, named for the bot
+            // and labelled with the app it came through.
+            let session = request.caller.sessionId ?? request.caller.runId ?? ""
+            let hand = Drive.Who(key: "bot:\(request.caller.botId):\(session)", agent: "@\(who)",
+                                 thread: request.caller.botName.isEmpty ? appName : "\(request.caller.botName) · \(appName)",
+                                 seed: "bot:\(request.caller.botId):\(session)", session: String(session.prefix(8)))
             rpc = await MCP.shared.handle(request.message, announce: config.announces ? .prefix("@\(who) · \(appName)") : .quiet,
-                                          driver: .bot("@\(who) · \(appName)"))
+                                          driver: .bot("@\(who) · \(appName)"), who: hand)
             // The last progress frame goes before the reply.
             await reporter?.finish()
             reporters[request.id] = nil

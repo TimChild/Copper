@@ -1280,6 +1280,7 @@ final class Browser: NSObject, ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         Grouper.shared.forget(tab.id) // Fork
         signedInWith[tab.id] = nil
+        if tab.pin == nil { CanvasHost.forget(tab) } // Fork (canvas): its room closes with it
 
         // A tab whose page is out in the little window takes the window with
         // it. Left alone, the window would go on holding a page belonging to a
@@ -1451,6 +1452,7 @@ final class Browser: NSObject, ObservableObject {
 
     /// The configuration for an extension's page, or nil for anything else.
     static func extensionConfiguration(for url: URL) -> WKWebViewConfiguration? {
+        if let canvas = CanvasHost.configuration(for: url) { return canvas } // Fork (canvas)
         guard #available(macOS 15.4, *) else { return nil }
         let url = Extensions.current(url)
         guard url.scheme == Extensions.scheme else { return nil }
@@ -2110,6 +2112,12 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // An extension's OAuth sign-in coming back: the address is the
         // answer, handed to the extension, and never loaded.
         if ExtensionAuth.intercept(url, browser: self) {
+            decisionHandler(.cancel)
+            return
+        }
+        // Fork (canvas): copper://canvas/<id> loads the canvas page here, and
+        // a canvas page goes nowhere else (Fork/Canvas/CanvasHost.swift).
+        if CanvasHost.decide(action, url: url, in: webView, browser: self) {
             decisionHandler(.cancel)
             return
         }

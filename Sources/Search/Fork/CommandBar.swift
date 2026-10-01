@@ -68,6 +68,8 @@ enum CommandBar {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id) }
             },
             .init(id: "edit-space", name: "Edit Space", glyph: "slider.horizontal.3") { b in SpaceEditing.shared.open(Spaces.shared.current(in: b)) },
+            .init(id: "canvas-personal", name: "Open Personal canvas", glyph: "scribble.variable") { CanvasHost.show(Canvases.personalID, in: $0) },
+            .init(id: "canvas-new", name: "New canvas…", glyph: "plus.square.on.square") { CanvasUI.shared.newCanvas(in: $0) },
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },
             .init(id: "prev-space", name: "Previous Space", glyph: "chevron.left") { Spaces.shared.step(-1, in: $0) },
         ]
@@ -81,6 +83,12 @@ enum CommandBar {
         }
         if Spaces.shared.all.count > 1 {
             list.append(.init(id: "delete-space", name: "Delete Space…", glyph: "trash") { b in SpaceDelete.ask(Spaces.shared.current(in: b), in: b) })
+        }
+        // Every other canvas by name: "Open canvas Roadmap". (Fork/Canvas/)
+        for entry in Canvases.shared.visible where !entry.isPersonal {
+            list.append(.init(id: "canvas-open-\(entry.id)", name: "Open canvas \(entry.name)", glyph: entry.isShared ? "person.2" : "scribble.variable") {
+                CanvasHost.show(entry.id, in: $0)
+            })
         }
         for space in Spaces.shared.all where space.id != Spaces.shared.current(in: browser) {
             // The space's own symbol when it has one; an emoji has no place
@@ -334,6 +342,11 @@ enum CommandBar {
 
     /// True when the URL was a command and has been run.
     @MainActor static func run(_ url: URL, in browser: Browser) -> Bool {
+        // copper://canvas/<id>: the canvas's tab, switched to or opened.
+        if let id = CanvasLinks.id(from: url) {
+            CanvasHost.show(id, in: browser)
+            return true
+        }
         guard url.scheme == "copper", url.host() == "command" else { return false }
         let id = url.lastPathComponent
         commands(browser).first { $0.id == id }?.run(browser)

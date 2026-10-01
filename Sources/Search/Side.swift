@@ -433,6 +433,7 @@ struct SideBar: View {
                 BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
             }
             ExtensionsDoor(browser: browser, tint: tint)
+            CanvasDoor(browser: browser, tint: tint) // Fork (canvas)
         }
     }
 
@@ -842,6 +843,7 @@ struct SideAddress: View {
 
     /// `https://www.calendar.google.com/x` → `calendar.google.com`.
     static func host(_ url: URL) -> String {
+        if let canvas = CanvasLinks.label(url) { return canvas } // Fork (canvas): "Canvas › Personal"
         guard let host = url.host(), !host.isEmpty else { return url.absoluteString }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }

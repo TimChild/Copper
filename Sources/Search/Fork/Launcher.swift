@@ -203,7 +203,8 @@ final class Launcher: ObservableObject {
     /// The first row: what Return does with the words as they stand.
     static func top(_ query: String, in browser: Browser) -> Suggestion {
         if let url = Address.url(from: query) {
-            var row = Suggestion(key: "Open \(Address.pretty(url))", title: "", url: url, kind: .known)
+            // Fork (canvas): a canvas address reads as its name.
+            var row = Suggestion(key: "Open \(CanvasLinks.label(url) ?? Address.pretty(url))", title: "", url: url, kind: .known)
             row.hint = pageHint(browser)
             return row
         }

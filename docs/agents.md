@@ -132,6 +132,13 @@ Each tool call is announced in the line at the bottom of the window (turn
 that off in Settings › Agents). `./bench agent` reports status; `./bench
 agent on|off|rotate`.
 
+### Canvases
+
+`canvas_list`, `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`,
+`canvas_create`, `canvas_invite`, `canvas_screenshot` read and draw on the user's whiteboards
+(`copper://canvas/<id>` tabs) — the same tools for every client and for ⌘E, each write attributed
+to the agent that made it. Read before you write. See [canvas.md](canvas.md).
+
 ## Jev mode — hand over a goal
 
 Settings › Agents › **Let the agent hand Copper a goal**. Three more tools

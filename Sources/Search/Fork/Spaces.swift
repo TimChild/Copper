@@ -729,9 +729,11 @@ final class Spaces: ObservableObject {
         for (i, entry) in saved.tabs.enumerated() {
             guard let url = URL(string: entry.url) else { continue }
             let id = entry.space.flatMap { s in all.first { $0.id == s }?.id } ?? current
-            let tab = building(for: id) { Tab() }
+            // A canvas tab gets its own configuration (Fork/Canvas/CanvasHost.swift).
+            let tab = building(for: id) { Tab(configuration: CanvasHost.configuration(for: url)) }
             browser.prepare(tab)
             tab.restore(url: url, title: entry.title)
+            if CanvasLinks.isCanvas(url) { tab.icon = CanvasPage.icon } // the board's mark before it wakes
             tab.pin = entry.pin
             // No flag at all is an upstream-shaped file: everything in it is
             // something you kept, so the whole column comes back as Saved.
@@ -768,7 +770,7 @@ extension Session.Entry {
         // A sleeping tab holds its address in `pending`; asking for it there
         // too means a pin can never be written out of existence by whatever
         // its web view happens to be showing.
-        guard let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true else { return nil }
+        guard let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true || CanvasLinks.isCanvas(url) else { return nil }
         self.init(url: url.absoluteString, title: tab.title, pin: tab.pin)
     }
 }
@@ -792,6 +794,10 @@ struct ForkCommands: Commands {
                 .keyboardShortcut("e", modifiers: [.command])
             Button("Ask About This Page") { agent.askOnPage(in: browser) }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+            // ⌘⇧C is Copy Address; O for "open the board".
+            Button("Canvas") { CanvasHost.show(Canvases.personalID, in: browser) }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("New Canvas…") { CanvasUI.shared.newCanvas(in: browser) }
             // Jev's timeline had no way back once closed; and with two or
             // three panes open there was no one move that put them all away.
             Button(trace.paneOpen ? "Close Driver Timeline" : "Driver Timeline") { trace.paneOpen.toggle() }

@@ -180,36 +180,65 @@ export interface PerfResult {
   over16: number
   /** Frames longer than two vsyncs (> 34 ms). */
   over33: number
+  /** Busy probe only: main-thread ms in blocks > 1 ms, the longest, and p95. */
+  busyMs: number
+  longest: number
+  block95: number
   pageRenders: number
   pageCommits: number
   shapeRenders: number
   ms: number
 }
 
+/**
+ * Two probes, never at once (the second perturbs the first):
+ * - frames: rAF deltas, what the spec asks for.
+ * - busy: a MessageChannel ping loop. A ping cannot run while script,
+ *   style, layout or paint hold the main thread, so every gap > 1 ms is
+ *   main-thread work. This still sees cost when headless rAF does not.
+ */
 function createPerf() {
   let raf = 0
   let last: number | null = null
   let deltas: number[] = []
   let base = { ...counters }
   let began = 0
+  let busy: { port: MessagePort; blocks: number[]; last: number; on: boolean } | null = null
   const loop = (t: number) => {
     if (last !== null) deltas.push(t - last)
     last = t
     raf = requestAnimationFrame(loop)
   }
   return {
-    start() {
+    start(opts: { busy?: boolean } = {}) {
       cancelAnimationFrame(raf)
       deltas = []
       last = null
       base = { ...counters }
       began = performance.now()
-      raf = requestAnimationFrame(loop)
+      if (opts.busy) {
+        const ch = new MessageChannel()
+        const probe = { port: ch.port2, blocks: [] as number[], last: performance.now(), on: true }
+        ch.port1.onmessage = () => {
+          const now = performance.now()
+          const gap = now - probe.last
+          if (gap > 1) probe.blocks.push(gap)
+          probe.last = now
+          if (probe.on) probe.port.postMessage(0)
+        }
+        probe.port.postMessage(0)
+        busy = probe
+      } else {
+        raf = requestAnimationFrame(loop)
+      }
     },
     stop(): PerfResult {
       cancelAnimationFrame(raf)
       raf = 0
       const sorted = [...deltas].sort((a, b) => a - b)
+      const blocks = busy ? [...busy.blocks].sort((a, b) => a - b) : []
+      if (busy) busy.on = false
+      busy = null
       return {
         frames: deltas.length,
         p50: round(percentile(sorted, 50)),
@@ -217,6 +246,9 @@ function createPerf() {
         max: round(sorted[sorted.length - 1] ?? 0),
         over16: deltas.filter(d => d > 17.5).length,
         over33: deltas.filter(d => d > 34).length,
+        busyMs: Math.round(blocks.reduce((a, b) => a + b, 0)),
+        longest: round(blocks[blocks.length - 1] ?? 0),
+        block95: round(percentile(blocks, 95)),
         pageRenders: counters.pageRenders - base.pageRenders,
         pageCommits: counters.pageCommits - base.pageCommits,
         shapeRenders: counters.shapeRenders - base.shapeRenders,

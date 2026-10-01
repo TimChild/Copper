@@ -196,3 +196,24 @@ packages need none of it except where marked **web**.
 - **Menu**: File › New Easel ⌃⇧E sits after New Private Tab in `App.swift`'s File group, not in
   `ForkCommands`.
 - `docs/easels.md` has the rest, including a list of WKWebView quirks for the web bundle.
+
+## As built (web perf, `feat/easels-perf`)
+
+What the page does now that the other packages, and P4, should know.
+
+- **`rename`** (native → page) is in the table above: added for sidebar rename.
+- **Moves and resizes write the doc once, on release**, between `undo.stopCapturing()` calls, so a
+  drag is exactly one undo step (it used to write every 50 ms and split into several steps on a
+  pause). A drawn new box still writes every 200 ms. P4 peers would see a drag land rather than
+  glide; a live drag for peers belongs in awareness, not the doc.
+- **Stickies are static HTML until edited.** Only the note being edited mounts TipTap (double-click,
+  or a new note); it goes back on blur, but not on a window blur. Links and task boxes on an
+  unfocused note still work. Anything that scripts the page (bench, agents) should look for
+  `[contenteditable]` only inside the note being edited; the others carry `[data-static]`.
+- **The camera is not React state.** The layer `transform` and the grid's
+  `background-position/size` are written straight to the DOM, once per frame. While it moves, the
+  layer has `data-moving` (and `will-change: transform`) until 150 ms after it rests.
+- **`window.__easelDebug`** is always defined and inert until called: `seed({stickies, frames,
+  arrows, images})`, `perf.start({busy?})` / `perf.stop()`, `view()` / `setView(v)` / `fit()`,
+  `marks` (`config`, `firstCommit`, `painted`), `counters`. Harness and numbers:
+  `~/Developer/super-charles-personal/research/2026-10-01-copper-easels/perf/`.

@@ -46,8 +46,9 @@
                                        the Remove sheet, and its buttons
     ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade
     ./bench downloads [open|close|cancel ID|retry ID|clear|start URL]
-    ./bench render bitwarden|drive PATH  one card drawn to a PNG on its own, no window brought forward
+    ./bench render bitwarden|drive|hands|hands-dark PATH  one card drawn to a PNG on its own, no window brought forward
     ./bench drive [status|stop|resume|clear|pane on|off]
+    ./bench drive fake NAME THREAD… [tab N|ID] [--for S] [--doing WORDS…]   a stand-in agent's hand on a tab; drive card N|off; drive unfake
                                        who is driving the page (Jev, an agent, a bot) and every row of the timeline
     ./bench bw status|server URL|login EMAIL PW [OTP] [--method N]|code OTP|cancel|unlock PW|lock|sync|candidates HOST|choose ID
               |identities|cards|fields HOST|usernames|counts|autofill card|identity ID
@@ -230,7 +231,7 @@ def main(argv):
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
     elif verb == "render":
-        if len(args) < 2: sys.exit("usage: bench render bitwarden|drive PATH")
+        if len(args) < 2: sys.exit("usage: bench render bitwarden|drive|hands|hands-dark PATH")
         request["op"] = args[0]
         request["path"] = os.path.abspath(args[1])
     elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows"):

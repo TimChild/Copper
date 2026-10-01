@@ -288,7 +288,8 @@ final class Agent: ObservableObject {
         let ticket = Drive.shared.began(call: name, args: args, by: .pane, tab: browser.active)
         if let thought = pendingThought { Drive.shared.thought(thought); pendingThought = nil }
         do {
-            let content = try await Tools.call(name, args, in: browser)
+            // A Jev run this agent starts is labelled as the pane's.
+            let content = try await DriveCaller.$who.withValue(Drive.Who.plain(.pane)) { try await Tools.call(name, args, in: browser) }
             var texts: [String] = []
             for part in content {
                 switch part {

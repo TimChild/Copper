@@ -407,6 +407,7 @@ private struct TabPill: View {
                 }
             }
             .frame(width: 16, height: 16)
+            .overlay(alignment: .topTrailing) { HandBadges(tab: tab.id, size: 9).offset(x: 5, y: -4) } // Fork: agents' hands
             .padding(.vertical, 6)
             .frame(width: span)
         } else {
@@ -443,6 +444,8 @@ private struct TabPill: View {
             }
 
             Spacer(minLength: 2)
+
+            if !editing, !compact { HandBadges(tab: tab.id, size: 13) } // Fork: agents' hands (Hands.swift)
 
             // Pinned to the right-hand end of the pill, not trailing the title.
             // One slot doing two jobs: the cross when the pointer is here, the

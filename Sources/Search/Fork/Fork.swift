@@ -367,10 +367,50 @@ enum Fork {
             case "resume": drive.resume()
             case "clear": drive.dismiss()
             case "pane": drive.paneOpen = (request["arg"] as? String ?? "on") != "off"
+            case "fake":
+                // `drive fake NAME THREAD… [tab ID|INDEX] [--for S] [--doing WORDS…]`:
+                // a stand-in agent through the same model the real ones use,
+                // so the badges, the bar and the card can be pictured.
+                var words = (request["arg"] as? String ?? "").split(separator: " ").map(String.init)
+                guard !words.isEmpty else { return ["error": "drive fake NAME THREAD [tab ID|INDEX] [--for S] [--doing WORDS]"] }
+                let name = words.removeFirst()
+                var tab = browser.active
+                var seconds: TimeInterval = 120
+                var doing = "Clicking “Search flights”"
+                var thread: [String] = []
+                var i = 0
+                while i < words.count {
+                    if words[i] == "tab", i + 1 < words.count {
+                        let pick = words[i + 1]
+                        tab = Int(pick).flatMap { browser.tabs.indices.contains($0) ? browser.tabs[$0] : nil }
+                            ?? browser.tabs.first { $0.id.uuidString.lowercased().hasPrefix(pick.lowercased()) } ?? tab
+                        i += 2
+                    } else if words[i] == "--for", i + 1 < words.count {
+                        seconds = Double(words[i + 1]) ?? seconds; i += 2
+                    } else if words[i] == "--doing" {
+                        doing = words[(i + 1)...].joined(separator: " "); i = words.count
+                    } else { thread.append(words[i]); i += 1 }
+                }
+                guard let tab else { return ["error": "no tab"] }
+                drive.fake(agent: name, thread: thread.joined(separator: " "), tab: tab.id, seconds: seconds, doing: doing)
+            case "card":
+                // Open the hover card on a tab's badges (index or id prefix), or `off`.
+                let pick = request["arg"] as? String ?? ""
+                drive.forcedCard = pick == "off" ? nil : (Int(pick).flatMap { browser.tabs.indices.contains($0) ? browser.tabs[$0].id : nil }
+                    ?? browser.tabs.first { $0.id.uuidString.lowercased().hasPrefix(pick.lowercased()) }?.id ?? browser.active?.id)
+            case "unfake":
+                for key in drive.hands.keys where key.hasPrefix("fake:") { drive.hands[key] = nil }
             default: break
             }
             var out: [String: Any] = ["live": drive.live, "busy": drive.busy, "paneOpen": drive.paneOpen,
                                       "refusing": drive.refusingUntil != nil, "stopRequested": drive.stopRequested]
+            out["hands"] = drive.hands.values.sorted { $0.last > $1.last }.map { h -> [String: Any] in
+                ["key": h.who.key, "agent": h.who.agent, "thread": h.who.thread, "via": h.who.via, "project": h.who.project,
+                 "session": h.who.session, "doing": h.doing, "busy": h.busy, "active": h.active(),
+                 "colour": Drive.swatches.firstIndex(of: Drive.colour(for: h.who)).map { $0 as Any } ?? "copper",
+                 "tab": h.tab.uuidString, "tabIndex": browser.tabs.firstIndex { $0.id == h.tab } ?? -1,
+                 "since": h.since.timeIntervalSince1970]
+            }
             if let run = drive.run {
                 out["run"] = [
                     "driver": run.driver.name, "goal": run.goal, "status": run.status.rawValue, "note": run.note,
@@ -395,7 +435,14 @@ enum Fork {
             switch which {
             case "bitwarden": view = AnyView(BitwardenCard(browser: browser).frame(width: 460).padding(12).background(Palette.wash))
             case "drive": view = AnyView(DrivePane(browser: browser).frame(height: 560))
-            default: return ["error": "render bitwarden|drive PATH"]
+            case "hands", "hands-dark":
+                // The hover card for every hand out, as the badge's popover draws it.
+                let all = Drive.shared.hands.values.sorted { $0.last > $1.last }
+                guard !all.isEmpty else { return ["error": "no hands — drive fake NAME THREAD first"] }
+                let card = HandCards(hands: Array(all)).background(Palette.ground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous)).padding(14).background(Palette.wash)
+                view = which == "hands-dark" ? AnyView(card.environment(\.colorScheme, .dark)) : AnyView(card)
+            default: return ["error": "render bitwarden|drive|hands|hands-dark PATH"]
             }
             let renderer = ImageRenderer(content: view)
             renderer.scale = 2

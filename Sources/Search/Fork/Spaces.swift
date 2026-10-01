@@ -1007,9 +1007,9 @@ extension Spaces {
 
 // Fork (cloud): the few writes Copper Cloud's spaces sync needs that the
 // rows above keep private — a space added with the id another Mac gave it,
-// and a kept tab opened into, or closed out of, a row that may be parked.
-// Everything else it does goes through the ordinary edits. See
-// Fork/Cloud/CloudApply.swift.
+// and a kept tab opened into, or closed out of, a canonical row that no
+// window may be looking at. Everything else it does goes through the
+// ordinary edits. See Fork/Cloud/CloudApply.swift.
 extension Spaces {
     /// Every space in `wanted` exists and wears its fields, in its order;
     /// spaces not in it keep theirs and go after (the caller removes them).
@@ -1018,21 +1018,30 @@ extension Spaces {
         let next = wanted + all.filter { !wantedIDs.contains($0.id) }
         guard next != all, !next.isEmpty else { return }
         all = next
+        for space in all where rows[space.id] == nil { rows[space.id] = [] }
         if !all.contains(where: { $0.id == current }) { current = all[0].id }
+        objectWillChange.send()
         keep()
     }
 
     /// The same space under another Mac's id (the first sync of two fresh
-    /// installs, each with its own "Home"): its row and its place kept.
+    /// installs, each with its own "Home"): its row, the windows on it and
+    /// their remembered active tabs all follow the new id.
     func cloudRekey(_ old: UUID, to new: UUID) {
         guard old != new, let i = all.firstIndex(where: { $0.id == old }), !all.contains(where: { $0.id == new }) else { return }
         all[i].id = new
         if current == old { current = new }
-        if let row = parked.removeValue(forKey: old) { parked[new] = row }
+        if let row = rows.removeValue(forKey: old) { rows[new] = row }
+        for (key, value) in currentByBrowser where value == old { currentByBrowser[key] = new }
+        for key in activeByBrowserSpace.keys {
+            if let active = activeByBrowserSpace[key]?.removeValue(forKey: old) { activeByBrowserSpace[key]?[new] = active }
+        }
+        objectWillChange.send()
         keep()
     }
 
-    /// A kept tab, asleep, at the end of its section in the space's row.
+    /// A kept tab, asleep, at the end of its section in the space's row;
+    /// every window looking at that space sees it at once.
     @discardableResult
     func cloudOpen(_ url: URL, title: String, pin: String?, in id: UUID, browser: Browser) -> Tab? {
         guard browser.primary, all.contains(where: { $0.id == id }) else { return nil }
@@ -1041,37 +1050,32 @@ extension Spaces {
         tab.restore(url: url, title: title)
         tab.pin = pin
         Sections.shared.restore(tab, saved: true, seen: nil)
-        func place(_ row: inout [Tab]) {
-            let at = pin == nil ? row.count : row.lastIndex(where: { $0.pin != nil }).map { $0 + 1 } ?? 0
-            row.insert(tab, at: at)
-        }
-        if id == current {
-            place(&browser.tabs)
-        } else {
-            var row = parked[id] ?? ([], nil)
-            place(&row.tabs)
-            parked[id] = row
-        }
+        var row = rows[id] ?? []
+        let at = pin == nil ? row.count : row.lastIndex(where: { $0.pin != nil }).map { $0 + 1 } ?? 0
+        row.insert(tab, at: at)
+        rows[id] = row
+        publish(id)
+        objectWillChange.send()
         keep()
         return tab
     }
 
     /// A kept tab gone from another Mac: closed here too, pinned or not,
-    /// in whichever row it is.
+    /// in whichever row it is. A window showing it closes it the ordinary
+    /// way (so it lands on another tab); a row nobody is looking at loses
+    /// it directly.
     func cloudClose(_ tab: Tab, browser: Browser) {
-        if browser.tabs.contains(where: { $0.id == tab.id }) {
-            if tab.pin != nil { browser.unpin(tab) }
-            browser.close(tab)
+        if let viewer = browsers.first(where: { $0.tabs.contains { $0.id == tab.id } }) {
+            if tab.pin != nil { viewer.unpin(tab) }
+            viewer.close(tab)
             return
         }
-        for (id, row) in parked where row.tabs.contains(where: { $0.id == tab.id }) {
-            var row = row
-            row.tabs.removeAll { $0.id == tab.id }
-            if row.active == tab.id { row.active = row.tabs.first?.id }
-            parked[id] = row
-            Sections.shared.forget(tab.id)
-            tab.close()
-        }
+        guard let from = spaceID(of: tab) else { return }
+        rows[from]?.removeAll { $0.id == tab.id }
+        Sections.shared.forget(tab.id)
+        tab.close()
+        publish(from)
+        objectWillChange.send()
         keep()
     }
 }

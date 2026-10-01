@@ -16,7 +16,7 @@
 <meta property="og:url" content="https://copper-browser.github.io/Copper/">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The Copper app icon beside the words: a browser with nothing in the way.">
+<meta property="og:image:alt" content="The Copper app icon and the words: a browser with nothing in the way, beside a Copper window on google.com.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Copper — a browser with nothing in the way">
 <meta name="twitter:description" content="A small, fast, quiet web browser for the Mac. Free and open source.">
@@ -26,6 +26,19 @@
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <script>
   try { var t = localStorage.getItem('copper-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  /* The captures come in two: on a warm light backdrop and on a dark one. Pick the one that matches. */
+  window.copperMedia = function (el) {
+    var r = document.documentElement, dark = (r.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) === 'dark';
+    var k = dark ? 'dark' : 'light';
+    if (el.tagName === 'IMG') { if (el.getAttribute('src') !== el.dataset[k]) el.src = el.dataset[k]; return; }
+    var s = el.querySelector('source'), want = s.dataset[k];
+    el.poster = el.dataset[k];
+    if (s.getAttribute('src') !== want) {
+      var t = el.currentTime, on = !el.paused;
+      s.src = want; el.load();
+      if (t) el.addEventListener('loadedmetadata', function f() { el.removeEventListener('loadedmetadata', f); try { el.currentTime = t; } catch (e) {} if (on) el.play().catch(function () {}); });
+    }
+  };
 </script>
 <style>
 :root {
@@ -180,18 +193,35 @@ kbd {
 .meta span::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--ring); opacity: .7; }
 
 .shot { margin: clamp(56px, 8vw, 88px) auto 0; }
-.shot-frame {
-  border-radius: 12px; overflow: hidden; background: #fff;
-  box-shadow: 0 0 0 1px var(--line-2), var(--shadow);
+/* Real Copper captures, each already set on its own warm backdrop with the window's shadow. */
+.shot-frame, .reel {
+  position: relative; border-radius: 18px; overflow: hidden; background: #E6C3A2;
+  box-shadow: 0 0 0 1px var(--line), var(--shadow);
 }
-.shot figcaption { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+.shot-frame img, .reel video { display: block; width: 100%; height: auto; aspect-ratio: 2240 / 1480; }
+.shot figcaption, .reel-cap { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+.reel-cap { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 18px; }
+.reel-cap > span { max-width: 52em; }
+.reel-toggle {
+  position: absolute; right: 14px; bottom: 14px; z-index: 2; display: inline-flex; align-items: center; gap: 7px;
+  height: 32px; padding: 0 12px 0 10px; border-radius: 999px; border: 0; cursor: pointer;
+  background: rgba(30, 22, 16, .62); color: #FFF7EE; font: 500 12.5px/1 var(--font);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); transition: background-color .15s ease;
+}
+.reel-toggle:hover { background: rgba(30, 22, 16, .8); }
+.reel-toggle svg { width: 12px; height: 12px; }
+.reel-toggle .i-play { display: none; }
+.reel-toggle[aria-pressed="true"] .i-play { display: block; }
+.reel-toggle[aria-pressed="true"] .i-pause { display: none; }
 
 /* ---------- sections ---------- */
 section { scroll-margin-top: 70px; }
 .sec { padding-block: clamp(88px, 11vw, 150px) 0; }
 .sec-head { display: grid; gap: 14px; max-width: 40rem; }
-.sec-head h2 { font-size: clamp(1.9rem, 1.3rem + 2vw, 2.75rem); line-height: 1.08; letter-spacing: -.028em; font-weight: 650; }
+.sec-head h2, .sec-head .h2 { font-size: clamp(1.9rem, 1.3rem + 2vw, 2.75rem); line-height: 1.08; letter-spacing: -.028em; font-weight: 650; }
 .sec-head p { color: var(--ink-2); font-size: 1.1rem; }
+.sec-head .h3 { font-size: clamp(1.45rem, 1.15rem + 1vw, 1.9rem); line-height: 1.12; letter-spacing: -.022em; font-weight: 650; }
+.jev-lead { color: var(--ink-2); font-size: 1.1rem; max-width: 34em; }
 .kicker { font: 600 12px/1 var(--font); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
 
 /* ---------- try it ---------- */
@@ -394,6 +424,31 @@ section { scroll-margin-top: 70px; }
 .term .cursor { display: inline-block; width: .55em; height: 1.1em; vertical-align: -.2em; background: var(--term-dim); }
 @media (max-width: 480px) { .term pre { font-size: 12px; padding: 16px; } }
 
+/* ---------- Jev ---------- */
+.jev { scroll-margin-top: 70px; margin-top: clamp(72px, 9vw, 120px); padding-top: clamp(48px, 6vw, 72px); border-top: 1px solid var(--line); }
+.jev-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px clamp(36px, 6vw, 80px); align-items: end; }
+.jev-head .sec-head { max-width: none; }
+.jev-facts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 clamp(28px, 4vw, 56px); margin-top: 40px; border-top: 1px solid var(--line); }
+.jev-facts li { padding: 18px 0 20px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; align-content: start; }
+.jev-facts h4 { margin: 0; font: 600 16.5px/1.3 var(--font); letter-spacing: -.01em; }
+.jev-facts p { color: var(--ink-2); font-size: 15.5px; }
+.jev-facts code, .story code, .jev-head code { font-size: .88em; padding: 1px 5px; border-radius: 4px; background: var(--sunk); color: var(--ink); overflow-wrap: anywhere; }
+.tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.tools code { font-size: 13px; }
+.scenario { margin-top: clamp(56px, 7vw, 88px); }
+.scenario > .reel { margin-top: 28px; }
+.scenario-body { display: grid; grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr); gap: clamp(28px, 5vw, 64px); align-items: start; margin-top: 36px; }
+.story { display: grid; gap: 14px; }
+.story > p { color: var(--ink-2); font-size: 16px; }
+.story > p strong { color: var(--ink); font-weight: 600; }
+.steps { list-style: none; margin: 6px 0 0; padding: 0; counter-reset: s; border-top: 1px solid var(--line); }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+.steps li::before { content: counter(s, decimal-leading-zero); font: 12px/1 var(--mono); color: var(--ink-2); }
+.steps li small { font: 12.5px/1.3 var(--mono); color: var(--ink-2); white-space: nowrap; }
+.steps .op { font: 600 11px/1 var(--mono); letter-spacing: .02em; padding: 3px 6px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); margin-right: 6px; vertical-align: 1px; }
+.steps li.done span { font-weight: 600; }
+.term .hl { color: #F0E6D8; font-weight: 600; }
+
 /* ---------- privacy ---------- */
 .never { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 44px; border-block: 1px solid var(--line); }
 .never div { padding: 22px 24px 24px 0; display: grid; gap: 6px; align-content: start; }
@@ -429,15 +484,17 @@ footer { margin-top: clamp(96px, 12vw, 160px); border-top: 1px solid var(--line)
 footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 32px; padding-block: 32px 44px; font-size: 14px; color: var(--ink-2); }
 .foot-id { display: flex; align-items: center; gap: 12px; }
 .foot-id img { width: 28px; height: 28px; }
+.foot-id a { color: var(--ink); text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.foot-id a:hover { text-decoration-color: var(--accent); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 960px) {
-  .try, .flow, .agents { grid-template-columns: minmax(0, 1fr); }
+  .try, .flow, .agents, .jev-head, .scenario-body { grid-template-columns: minmax(0, 1fr); }
   .try .sec-head { position: static; max-width: 40rem; }
 }
 @media (max-width: 760px) {
   .nav-links { display: none; }
-  .ledger { grid-template-columns: minmax(0, 1fr); }
+  .ledger, .jev-facts { grid-template-columns: minmax(0, 1fr); }
   .never { grid-template-columns: minmax(0, 1fr); }
   .never div, .never div + div { padding: 18px 0; border-left: 0; }
   .never div + div { border-top: 1px solid var(--line); }
@@ -459,7 +516,10 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
   .ptable caption { display: block; }
   .hero-actions .btn { flex: 1 1 100%; justify-content: center; }
   .hero-actions .cmd { flex: 1 1 100%; }
-  .shot-frame { border-radius: 8px; }
+  .shot-frame, .reel { border-radius: 12px; }
+  .reel-toggle { right: 8px; bottom: 8px; height: 30px; }
+  .steps li { grid-template-columns: 24px minmax(0, 1fr); }
+  .steps li small { grid-column: 2; }
 }
 @media (max-width: 480px) {
   .copy { width: 34px; padding: 0; justify-content: center; }
@@ -488,6 +548,8 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
   <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l5 5L19.5 7"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M6.5 10.5L12 16l5.5-5.5M5 20h14"/></symbol>
   <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="5" height="16" rx="1.2"/><rect x="14" y="4" width="5" height="16" rx="1.2"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></symbol>
 </svg>
@@ -500,6 +562,7 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
       <ul class="nav-links">
         <li><a href="#features">Features</a></li>
         <li><a href="#agents">Agents</a></li>
+        <li><a href="#jev">Jev</a></li>
         <li><a href="#install">Install</a></li>
         <li><a href="https://github.com/copper-browser/Copper">GitHub</a></li>
       </ul>
@@ -531,7 +594,7 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
 
   <figure class="shot wrap">
     <div class="shot-frame">
-      <img src="assets/screenshot.webp" width="1800" height="1103" alt="A Copper window: a narrow column of tabs down the left, with Office Commun, Mac Studio — Apple, a GitHub profile and Are.na, and the page taking up the rest of the window. There is no toolbar." fetchpriority="high">
+      <img src="assets/copper-google.webp" data-light="assets/copper-google.webp" data-dark="assets/copper-google-dark.webp" width="2240" height="1480" alt="A Copper window on google.com. A narrow column down the left, washed in the Personal space's warm copper, holds the address, the space's name and four tabs: Google, Copper on Wikipedia, Mac on apple.com and Hacker News. The page takes up the rest of the window. There is no toolbar." fetchpriority="high" decoding="async"><script>copperMedia(document.currentScript.previousElementSibling)</script>
     </div>
     <figcaption>Tabs down the left and the page. That is the whole window.</figcaption>
   </figure>
@@ -587,6 +650,15 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
         <h2 id="quiet-title">Quiet by default.</h2>
         <p>No toolbar, no start page, no sidebar of suggestions, no account to sign into. The things people install extensions for are already here, each one keystroke away.</p>
       </div>
+      <figure class="reel-fig">
+        <div class="reel">
+          <video class="loop" autoplay muted loop playsinline preload="metadata" width="2240" height="1480" poster="assets/copper-motion.webp" data-light="assets/copper-motion.webp" data-dark="assets/copper-motion-dark.webp" aria-label="A recording of Copper: switching from Google to a Wikipedia tab, pressing ⌘K and typing “pat” to find the Patina tab in another space, changing to the Work space, moving the tabs to the top of the window and back." aria-describedby="motion-cap">
+            <source src="assets/copper-motion.mp4" data-light="assets/copper-motion.mp4" data-dark="assets/copper-motion-dark.mp4" type="video/mp4">
+          </video><script>copperMedia(document.currentScript.previousElementSibling)</script>
+          <button class="reel-toggle" type="button" aria-pressed="false" aria-label="Pause the recording"><svg class="i-pause" aria-hidden="true"><use href="#i-pause"/></svg><svg class="i-play" aria-hidden="true"><use href="#i-play"/></svg><span>Pause</span></button>
+        </div>
+        <figcaption class="reel-cap" id="motion-cap"><span>A tab, then <kbd>⌘K</kbd> and three letters to find one in another space, then the Work space, then the tabs across the top. Recorded in Copper as it is, not a mock-up.</span></figcaption>
+      </figure>
       <ul class="ledger">
         <li><h3>One field</h3><span class="keys"><kbd>⌘L</kbd></span><p>Type an address and you go there; type words and you search. Nothing you type is sent anywhere until you press Return.</p></li>
         <li><h3>Tabs that stay out of the way</h3><span class="keys"><kbd>⇧⌘S</kbd></span><p>Across the top or down the left. Pinned tabs shrink to a letter, and last session's tabs cost nothing until you click them.</p></li>
@@ -636,7 +708,7 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
       <div class="agents-copy">
         <div class="sec-head">
           <h2 id="agents-title">Built for agents.</h2>
-          <p>Copper is an MCP server. Turn it on and Claude Code, phi or any other MCP client gets the window you already have open, with your tabs and your sign-ins, through the tool names Playwright MCP uses.</p>
+          <p>Copper is an MCP server, with Jev built in. Turn it on and Claude Code, phi or any other MCP client gets the window you already have open, with your tabs and your sign-ins, through the tool names Playwright MCP uses.</p>
         </div>
         <ul class="facts">
           <li><span><strong>One switch.</strong> Settings › Agents › Let agents drive this window. Set&nbsp;up for Claude Code and phi is one press, no token pasted into a prompt.</span></li>
@@ -646,17 +718,92 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
       </div>
       <figure class="term" aria-label="A terminal session using the copper command">
         <div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>zsh</span></div>
-<pre><code><span class="p">$</span> copper tabs
-<span class="d">### Open tabs</span>
-- 0: (current) [Releases · copper-browser/Copper] <span class="d">(https://github.com/copper-browser/Copper/releases)</span>
-- 1: [Inbox] <span class="d">(https://mail.example.com/)</span> (pinned)
-- 2: [Sunday bread] <span class="d">(https://recipes.example.com/bread)</span>
+<pre><code><span class="p">$</span> copper health
+Copper health: running: true
+Jev mode: <span class="ok">on</span>
 
-<span class="p">$</span> copper run "open the latest release notes and stop when they are visible"
-<span class="ok">DONE</span> <span class="d">The latest release notes are open in tab 0.</span>
+<span class="p">$</span> copper tabs
+<span class="d">### Open tabs</span>
+- 0: (current) [Google] <span class="d">(https://www.google.com/)</span>
+- 1: [Copper - Wikipedia] <span class="d">(https://en.wikipedia.org/wiki/Copper)</span>
+- 2: [Mac - Apple] <span class="d">(https://www.apple.com/mac/)</span>
+- 3: [Hacker News] <span class="d">(https://news.ycombinator.com/)</span>
 
 <span class="p">$</span> <span class="cursor" aria-hidden="true"></span></code></pre>
       </figure>
+    </div>
+
+    <div class="jev" id="jev">
+      <div class="jev-head">
+        <div class="sec-head">
+          <span class="kicker">Jev, built in</span>
+          <h3 class="h2" id="jev-title">Hand it a goal, not a list of clicks.</h3>
+        </div>
+        <p class="jev-lead">Copper's MCP server has Jev inside it. Instead of an agent asking for one click at a time, it hands Copper the whole goal. Every cycle Jev reads the page's controls, picks an operation and an element in about 200&nbsp;ms, and acts. A small model writes any text it has to type.</p>
+      </div>
+      <ul class="jev-facts">
+        <li>
+          <h4>Four Jev tools on the MCP server</h4>
+          <p><span class="tools"><code>jev_run</code><code>jev_step</code><code>jev_observe</code><code>jev_extract</code></span></p>
+          <p>Run a goal to the end, take one step at a time, see the page the way Jev sees it, or pull structured values out of it. The model's output never becomes a selector, a coordinate or JavaScript.</p>
+        </li>
+        <li>
+          <h4>From your agent or your shell</h4>
+          <p>Type <code>/jev&nbsp;&lt;goal&gt;</code> in Claude Code or phi, or <code>copper run "goal"</code> in a terminal. The goal goes to Jev on the first call, with no tab list or snapshot first.</p>
+        </li>
+        <li>
+          <h4>One click to set up</h4>
+          <p>Settings › Agents › Terminal agents: press Set&nbsp;up for phi or Claude Code, or Install for the CLI. Copper writes the config and the command for you, so no token is pasted into a prompt.</p>
+        </li>
+        <li>
+          <h4>You can see who is driving</h4>
+          <p>A pill on the page says <em>Jev is driving</em>, and the driver timeline (<kbd>⌥⌘J</kbd>) shows every cycle: read, ask, act, settle. Press Stop and the browser is yours again before Jev's next action.</p>
+        </li>
+      </ul>
+
+      <div class="scenario" role="group" aria-labelledby="scenario-title">
+        <div class="sec-head">
+          <h3 class="h3" id="scenario-title">One goal, start to finish.</h3>
+          <p>You are reading about copper on Wikipedia and want the article on the green that grows on old roofs. You hand Jev one sentence and watch the timeline.</p>
+        </div>
+        <figure class="reel-fig">
+          <div class="reel">
+            <video class="loop" autoplay muted loop playsinline preload="metadata" width="2240" height="1480" poster="assets/copper-jev.webp" data-light="assets/copper-jev.webp" data-dark="assets/copper-jev-dark.webp" aria-label="A recording of Jev driving Copper. On the Wikipedia article for Copper, Jev clicks Search, types “patina”, picks the Patina article from the suggestions and says DONE. The driver timeline beside the page lists each cycle as it happens." aria-describedby="jev-cap">
+              <source src="assets/copper-jev.mp4" data-light="assets/copper-jev.mp4" data-dark="assets/copper-jev-dark.mp4" type="video/mp4">
+            </video><script>copperMedia(document.currentScript.previousElementSibling)</script>
+            <button class="reel-toggle" type="button" aria-pressed="false" aria-label="Pause the recording"><svg class="i-pause" aria-hidden="true"><use href="#i-pause"/></svg><svg class="i-play" aria-hidden="true"><use href="#i-play"/></svg><span>Pause</span></button>
+          </div>
+          <figcaption class="reel-cap" id="jev-cap"><span>The real run, recorded in Copper. The driver timeline is on the right; the blue ring and the Jev pill say the page is not yours for now.</span></figcaption>
+        </figure>
+        <div class="scenario-body">
+          <div class="story">
+            <p><strong>11.4 seconds, three actions.</strong> Jev clicked Search, a small model wrote the word, and Jev picked the article from Wikipedia's own suggestions. Then it stopped, because the article was on screen.</p>
+            <ol class="steps" aria-label="What Jev did">
+              <li><span><span class="op">CLICK</span>Search</span><small>372 ms</small></li>
+              <li><span><span class="op">TYPE</span>“patina” into Search Wikipedia</span><small>290 ms + 1.3 s text</small></li>
+              <li><span><span class="op">CLICK</span>Patina, change of object's surface…</span><small>268 ms</small></li>
+              <li class="done"><span>DONE, 96% sure</span><small>verify it yourself</small></li>
+            </ol>
+            <p>DONE is Jev's claim, and the tool says so. Your agent is told to check the page before it tells you it worked.</p>
+          </div>
+          <figure class="term" aria-label="The command that started the run, and what it printed">
+            <div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>zsh</span></div>
+<pre><code><span class="p">$</span> copper run "Search Wikipedia for patina and stop when the article is visible"
+<span class="hl">### Jev run — done in 11.4 s (3 actions, 4 decisions)</span>
+Jev said <span class="ok">DONE</span>, 96% sure
+
+1. CLICK Search <span class="d">(100%, 372 ms) → page changed</span>
+2. TYPE_TEXT Search Wikipedia = "patina" <span class="d">(100%, 290 ms + 1296 ms text) → page changed</span>
+3. CLICK Patina   Change of object's surface through age and exposure <span class="d">(61%, 268 ms) → page changed</span>
+
+<span class="d">### Page</span>
+- URL: https://en.wikipedia.org/wiki/Patina
+- Title: Patina - Wikipedia
+
+<span class="p">$</span> <span class="cursor" aria-hidden="true"></span></code></pre>
+          </figure>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -729,10 +876,10 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
 
 <footer>
   <div class="wrap">
-    <div class="foot-id"><img src="assets/icon.png" alt="" width="28" height="28"><span>Copper, by Collin and Felipe. Built on Search by Office Commun.</span></div>
+    <div class="foot-id"><img src="assets/icon.png" alt="" width="28" height="28"><span>Copper, made by <a href="https://collinrijock.dev">Collin</a> and <a href="https://felipearce.dev">Felipe</a>.</span></div>
     <ul class="links">
       <li><a href="https://github.com/copper-browser/Copper">GitHub</a></li>
-      <li><a href="https://github.com/copper-browser/Copper/blob/fork/LICENSE">MIT License</a></li>
+      <li><a href="https://github.com/copper-browser/Copper/blob/HEAD/LICENSE">MIT License</a></li>
     </ul>
   </div>
 </footer>
@@ -753,6 +900,7 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
   function syncTheme() {
     var t = effective();
     themeBtn.setAttribute('aria-label', t === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance');
+    $$('[data-dark]').forEach(function (el) { if (el.tagName !== 'SOURCE') window.copperMedia(el); });
     if (root.dataset.theme) $$('meta[name="theme-color"]').forEach(function (m) { m.content = t === 'dark' ? '#1B1815' : '#F6F2EC'; });
   }
   themeBtn.addEventListener('click', function () {
@@ -795,6 +943,33 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
     });
   });
 
+  /* ---------- recordings: play in view, pause on request, never under reduced motion ---------- */
+  var calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+  $$('video.loop').forEach(function (v) {
+    var btn = v.parentNode.querySelector('.reel-toggle'), label = $('span', btn), held = false, seen = false;
+    function show(paused) {
+      btn.setAttribute('aria-pressed', String(paused));
+      btn.setAttribute('aria-label', paused ? 'Play the recording' : 'Pause the recording');
+      label.textContent = paused ? 'Play' : 'Pause';
+    }
+    function play() { var p = v.play(); if (p && p.catch) p.catch(function () { show(true); }); show(false); }
+    function stop() { v.pause(); show(true); }
+    function settle() {
+      if (calm.matches) { v.removeAttribute('autoplay'); v.autoplay = false; if (!held) stop(); return; }
+      if (!held && seen) play(); else if (!seen) v.pause();
+    }
+    btn.addEventListener('click', function () {
+      if (v.paused) { held = false; play(); } else { held = true; stop(); }
+    });
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(function (es) {
+        es.forEach(function (e) { seen = e.isIntersecting; if (!seen) v.pause(); else settle(); });
+      }, { rootMargin: '120px 0px' }).observe(v);
+    } else { seen = true; }
+    if (calm.addEventListener) calm.addEventListener('change', function () { held = false; settle(); });
+    settle();
+  });
+
   /* ---------- the little Copper window ---------- */
   var cw = $('#cw');
   if (!cw) return;
@@ -817,7 +992,7 @@ footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-cont
     },
     readme: function () {
       return '<div class="scroll" tabindex="-1"><div class="pg">' + site('copper-browser / Copper', 'README') +
-        '<h3>Copper</h3><p>A small, fast, quiet web browser for the Mac, by Collin and Felipe. Built on Search by Office Commun.</p>' +
+        '<h3>Copper</h3><p>A small, fast, quiet web browser for the Mac, made by Collin and Felipe.</p>' +
         '<p>Copper is a browser with nothing in the way. A row of tabs, across the top or down the left, your choice, and the page.</p>' +
         '<ul class="rows"><li><span>Language</span><span>Swift</span></li><li><span>Dependencies</span><span>None beyond macOS</span></li><li><span>License</span><span>MIT</span></li></ul></div></div>';
     },

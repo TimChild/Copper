@@ -46,6 +46,14 @@ BUILD="$(date +%Y%m%d%H%M)"
 # older Mac is not handed a build it can't open.
 MINIMUM="14.0"
 
+# Fork (canvas): the canvas page is built next door (Canvas/, bun + Vite) to
+# one self-contained file; a newer build of it replaces the copy the app
+# carries. No bun here is fine — the committed copy is used as it is.
+CANVAS_PAGE="Sources/Search/Fork/Canvas/Resources/canvas.html"
+if [ -f Canvas/dist/canvas.html ] && [ Canvas/dist/canvas.html -nt "$CANVAS_PAGE" ]; then
+  cp Canvas/dist/canvas.html "$CANVAS_PAGE"
+fi
+
 swift build -c "$CONFIG"
 BINARY=".build/$CONFIG/Search"
 

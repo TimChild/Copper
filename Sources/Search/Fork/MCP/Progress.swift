@@ -72,6 +72,7 @@ enum JevProgress {
             out["text"] = looksSecret(o.label) ? "•••" : cap(text, 120)
         }
         if let changed = o.pageChanged { out["pageChanged"] = changed }
+        if let result = o.result { out["result"] = result }
         return out
     }
 

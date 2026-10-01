@@ -923,6 +923,7 @@ final class Spaces: ObservableObject {
         self.browser = browser
         SessionGuard.beginRestore()
         defer { SessionGuard.finishRestore() }
+        defer { CloudSync.shared.start(for: browser) } // Fork (cloud): sync starts once yesterday's rows are back
         if let spaces = saved.spaces, !spaces.isEmpty {
             all = spaces
             rows = Dictionary(uniqueKeysWithValues: spaces.map { ($0.id, []) })
@@ -984,9 +985,10 @@ final class Spaces: ObservableObject {
             let id = entry.space.flatMap { s in all.first { $0.id == s }?.id } ?? current
             // A board's tab is built from its own configuration (Fork/Easel);
             // it has to be there when the view is made, long before it wakes.
-            let tab = building(for: id) { Tab(configuration: Easels.configuration(for: url)) }
+            let tab = building(for: id) { Tab(configuration: Easels.configuration(for: url) ?? CanvasHost.configuration(for: url)) } // Fork: a board (easel or canvas) is built from its own configuration
             browser.prepare(tab)
             tab.restore(url: url, title: Easels.rowTitle(for: url, kept: entry.title)) // Fork: a board's name is the index's
+            if CanvasLinks.isCanvas(url) { tab.icon = CanvasPage.icon } // Fork (canvas): the board's mark before it wakes
             // No flag at all is an upstream-shaped file: everything in it is
             // something you kept, so the whole column comes back as Saved.
             Sections.shared.restore(tab, saved: entry.saved ?? true, seen: entry.seen)
@@ -1056,6 +1058,10 @@ struct ForkCommands: Commands {
                 .keyboardShortcut("e", modifiers: [.command])
             Button("Ask About This Page") { agent.askOnPage(in: browser) }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+            // ⌘⇧C is Copy Address; O for "open the board".
+            Button("Canvas") { CanvasHost.show(Canvases.personalID, in: browser) }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("New Canvas…") { CanvasUI.shared.newCanvas(in: browser) }
             // Jev's timeline had no way back once closed; and with two or
             // three panes open there was no one move that put them all away.
             Button(trace.paneOpen ? "Close Driver Timeline" : "Driver Timeline") { trace.paneOpen.toggle() }
@@ -1275,5 +1281,82 @@ extension Spaces {
         }
         theme(id, look)
         return nil
+    }
+}
+
+// MARK: - Copper Cloud
+
+// Fork (cloud): the few writes Copper Cloud's spaces sync needs that the
+// rows above keep private — a space added with the id another Mac gave it,
+// and a kept tab opened into, or closed out of, a canonical row that no
+// window may be looking at. Everything else it does goes through the
+// ordinary edits. See Fork/Cloud/CloudApply.swift.
+extension Spaces {
+    /// Every space in `wanted` exists and wears its fields, in its order;
+    /// spaces not in it keep theirs and go after (the caller removes them).
+    func cloudAdopt(_ wanted: [Space]) {
+        let wantedIDs = Set(wanted.map(\.id))
+        let next = wanted + all.filter { !wantedIDs.contains($0.id) }
+        guard next != all, !next.isEmpty else { return }
+        all = next
+        for space in all where rows[space.id] == nil { rows[space.id] = [] }
+        if !all.contains(where: { $0.id == current }) { current = all[0].id }
+        objectWillChange.send()
+        keep()
+    }
+
+    /// The same space under another Mac's id (the first sync of two fresh
+    /// installs, each with its own "Home"): its row, the windows on it and
+    /// their remembered active tabs all follow the new id.
+    func cloudRekey(_ old: UUID, to new: UUID) {
+        guard old != new, let i = all.firstIndex(where: { $0.id == old }), !all.contains(where: { $0.id == new }) else { return }
+        all[i].id = new
+        if current == old { current = new }
+        if let row = rows.removeValue(forKey: old) { rows[new] = row }
+        for (key, value) in currentByBrowser where value == old { currentByBrowser[key] = new }
+        for key in activeByBrowserSpace.keys {
+            if let active = activeByBrowserSpace[key]?.removeValue(forKey: old) { activeByBrowserSpace[key]?[new] = active }
+        }
+        objectWillChange.send()
+        keep()
+    }
+
+    /// A kept tab, asleep, at the end of its section in the space's row;
+    /// every window looking at that space sees it at once.
+    @discardableResult
+    func cloudOpen(_ url: URL, title: String, pin: String?, in id: UUID, browser: Browser) -> Tab? {
+        guard browser.primary, all.contains(where: { $0.id == id }) else { return nil }
+        let tab = building(for: id) { Tab() }
+        browser.prepare(tab)
+        tab.restore(url: url, title: title)
+        tab.pin = pin
+        Sections.shared.restore(tab, saved: true, seen: nil)
+        var row = rows[id] ?? []
+        let at = pin == nil ? row.count : row.lastIndex(where: { $0.pin != nil }).map { $0 + 1 } ?? 0
+        row.insert(tab, at: at)
+        rows[id] = row
+        publish(id)
+        objectWillChange.send()
+        keep()
+        return tab
+    }
+
+    /// A kept tab gone from another Mac: closed here too, pinned or not,
+    /// in whichever row it is. A window showing it closes it the ordinary
+    /// way (so it lands on another tab); a row nobody is looking at loses
+    /// it directly.
+    func cloudClose(_ tab: Tab, browser: Browser) {
+        if let viewer = browsers.first(where: { $0.tabs.contains { $0.id == tab.id } }) {
+            if tab.pin != nil { viewer.unpin(tab) }
+            viewer.close(tab)
+            return
+        }
+        guard let from = spaceID(of: tab) else { return }
+        rows[from]?.removeAll { $0.id == tab.id }
+        Sections.shared.forget(tab.id)
+        tab.close()
+        publish(from)
+        objectWillChange.send()
+        keep()
     }
 }

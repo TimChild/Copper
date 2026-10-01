@@ -14,6 +14,8 @@ enum Address {
         let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !text.contains(" ") else { return nil }
 
+        // Fork (canvas): copper://canvas/<id> is a canvas tab (Fork/Canvas/).
+        if let canvas = CanvasLinks.typed(text) { return canvas }
         // Written with a scheme, it is taken at its word.
         if let split = text.range(of: "://") {
             let scheme = text[..<split.lowerBound].lowercased()

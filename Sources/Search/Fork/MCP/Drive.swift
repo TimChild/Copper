@@ -136,6 +136,10 @@ final class Drive: ObservableObject {
         var candidates: [String]      // up to 5 "[7] button Search" lines Jev was offered
         /// What went wrong, when the call failed. Empty when it didn't.
         var error: String?
+        /// What the tool itself said it did (`Tools.summary`): "220
+        /// operations applied", "Read 7 shapes". Said instead of whether the
+        /// page moved, which is no measure of a call that doesn't navigate.
+        var result: String?
 
         init(operation: String, label: String, text: String? = nil, probability: Double = 1, confidence: Double = 1,
              pageChanged: Bool? = nil, stale: Bool = false, candidates: [String] = [], error: String? = nil) {
@@ -367,7 +371,7 @@ final class Drive: ObservableObject {
 
     /// The call returned. Closes its row with what came of it, and starts the
     /// grace clock: the run ends by itself when no call follows.
-    func ended(_ ticket: Ticket, error: String?, tab: Tab?) {
+    func ended(_ ticket: Ticket, error: String?, summary: String? = nil, tab: Tab?) {
         rest(ticket.who)
         guard let run, run.id == ticket.run else { return }
         close(phase: ticket.phase)
@@ -379,6 +383,10 @@ final class Drive: ObservableObject {
         o.text = Drive.typed(ticket.tool, ticket.args)
         o.pageChanged = changes ? moved : nil
         o.error = error
+        if let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            o.result = summary
+            o.pageChanged = nil
+        }
         outcome(o)
         page(url: url, title: title)
         busy = false
@@ -519,6 +527,10 @@ final class Drive: ObservableObject {
         switch tool {
         case "browser_snapshot", "browser_get_text", "browser_console_messages", "browser_find", "browser_take_screenshot",
              "browser_hover", "browser_perf_probe", "jev_observe", "jev_extract", "browser_resize", "browser_groups", "browser_wait_for":
+            return false
+        // The canvas tools change a board, not the page: their result is
+        // what they say they did (`result`), never "page changed".
+        case _ where tool.hasPrefix("canvas_"):
             return false
         case "browser_tabs": return true
         default: return true

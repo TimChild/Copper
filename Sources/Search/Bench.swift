@@ -269,9 +269,17 @@ final class Bench {
             }
             report(0)
 
+        case "cloud":
+            // Fork (cloud): link, sign in and sync a probe world (Fork/Cloud/CloudBench.swift).
+            CloudBench.handle(request, in: browser, answer: answer)
+
         case "backdrop":
             // Fork (backdrop): the column's scene — its process and its clock.
             BackdropWeb.bench(answer: answer)
+
+        case "canvas":
+            // Fork (canvas): the canvas tools and the hosts behind them, async.
+            CanvasTools.bench(request, in: browser, answer: answer)
 
         case "newtab":
             // Fork (new-tab-launcher): what ⌘T's card offers, by group, once

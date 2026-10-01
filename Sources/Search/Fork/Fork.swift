@@ -429,7 +429,7 @@ enum Fork {
                     "cycles": run.cycles.map { c -> [String: Any] in
                         var row: [String: Any] = ["n": c.number, "phases": c.phases.map { ["kind": $0.kind.rawValue, "title": $0.title, "detail": $0.detail ?? "", "ms": $0.ms ?? -1] as [String: Any] }]
                         if let o = c.outcome {
-                            row["outcome"] = ["operation": o.operation, "label": o.label, "text": o.text ?? "", "pageChanged": o.pageChanged.map { $0 as Any } ?? NSNull(), "error": o.error ?? ""] as [String: Any]
+                            row["outcome"] = ["operation": o.operation, "label": o.label, "text": o.text ?? "", "pageChanged": o.pageChanged.map { $0 as Any } ?? NSNull(), "error": o.error ?? "", "result": o.result ?? ""] as [String: Any]
                         }
                         return row
                     },
@@ -454,6 +454,20 @@ enum Fork {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous)).padding(14).background(Palette.wash)
                 view = which == "hands-dark" ? AnyView(card.environment(\.colorScheme, .dark)) : AnyView(card)
             default: return ["error": "render bitwarden|drive|hands|hands-dark PATH"]
+            }
+            if which == "drive" {
+                // The pane's rows are in a ScrollView, which ImageRenderer
+                // leaves out: drawn through a hosting view instead, whole.
+                let host = NSHostingView(rootView: view.frame(width: 360).background(Palette.ground))
+                host.frame = NSRect(origin: .zero, size: NSSize(width: 360, height: 560))
+                let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                window.contentView = host
+                host.layoutSubtreeIfNeeded()
+                guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return ["error": "no image"] }
+                host.cacheDisplay(in: host.bounds, to: picture)
+                guard let png = picture.representation(using: .png, properties: [:]) else { return ["error": "no png"] }
+                do { try png.write(to: URL(fileURLWithPath: path)) } catch { return ["error": "\(error)"] }
+                return ["path": path, "size": [picture.pixelsWide, picture.pixelsHigh]]
             }
             let renderer = ImageRenderer(content: view)
             renderer.scale = 2

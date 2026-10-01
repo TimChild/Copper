@@ -51,9 +51,9 @@ enum Tools {
 
     static func instructions(jev: Bool) -> String {
         guard jev else {
-            return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. First action: call browser_snapshot with interactive: true on the current tab, then act with its refs. Call browser_tabs only when another tab is named. Take a screenshot when layout matters. Nothing is sandboxed — act as the user would. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(reasonNote)"
+            return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. First action: call browser_snapshot with interactive: true on the current tab, then act with its refs. Call browser_tabs only when another tab is named. Take a screenshot when layout matters. Nothing is sandboxed — act as the user would. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(reasonNote) \(CanvasTools.instructions)"
         }
-        return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. ANY task: the FIRST call is jev_run with the whole goal, every concrete place/date/name/filter and stop condition; no browser_tabs or snapshot first. Add url only for a named page that is not current. jev_observe = fast indexed read; jev_extract = JSON values; jev_step = one decision. BLOCKED → browser_snapshot/click/type for that part, then jev_run again. DONE is Jev's claim — verify with jev_observe/jev_extract. Screenshot when layout matters; nothing is sandboxed — act as the user. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(reasonNote)"
+        return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. ANY task: the FIRST call is jev_run with the whole goal, every concrete place/date/name/filter and stop condition; no browser_tabs or snapshot first. Add url only for a named page that is not current. jev_observe = fast indexed read; jev_extract = JSON values; jev_step = one decision. BLOCKED → browser_snapshot/click/type for that part, then jev_run again. DONE is Jev's claim — verify with jev_observe/jev_extract. Screenshot when layout matters; nothing is sandboxed — act as the user. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(reasonNote) \(CanvasTools.instructions)"
     }
 
     // MARK: - the catalogue
@@ -90,7 +90,8 @@ enum Tools {
     ]
 
     static func catalogue(jev: Bool) -> [[String: Any]] {
-        jev ? Ultrafast.catalogue + playwright : playwright
+        // The canvas tools last (Fork/Canvas/CanvasTools.swift).
+        (jev ? Ultrafast.catalogue + playwright : playwright) + CanvasTools.catalogue
     }
 
     static var playwright: [[String: Any]] {
@@ -197,6 +198,7 @@ enum Tools {
             return [.text("Window is \(Int(w.doubleValue))×\(Int(h.doubleValue))")]
         case "browser_groups": return groups(args, in: browser)
         case "jev_run", "jev_step", "jev_observe", "jev_extract": return try await Ultrafast.call(name, args, in: browser)
+        case _ where CanvasTools.names.contains(name): return try await CanvasTools.call(name, args, in: browser)
         default: break
         }
 

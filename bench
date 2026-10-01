@@ -68,6 +68,13 @@
     ./bench spaces picture N PATH [light|dark]
     ./bench backdrop                   the column's animated scenes: WebContent pid, hidden, and
                                        the page's status() (clock time, wall, key, frames, fading)
+    ./bench canvas list|open [ID]|read [ID]|apply JSON|create NAME|invites|accept|decline INVITE|hosts
+                                       canvases: the canvas_* tools, the pages behind them (ready, room,
+                                       store), the cloud invites
+    ./bench canvas rename ID -> NAME|delete ID|leave ID|members ID
+                                       what a canvas row's menu does (ID is an id or a name)
+    ./bench canvas ui open|close|mode list|new|rename ID|invite ID|members ID|delete ID|picture PATH [dark]
+                                       the sidebar's Canvas card; picture draws it off screen, whole
     ./bench spaces swipe direction [system|natural|inverted]
                                        which way a swipe moves the column (Settings › Tabs)
     ./bench spaces slide [at X|off]    the last space switch's slide timings (ms from the click,
@@ -196,6 +203,9 @@ def main(argv):
         if len(args) > 2: request["width"] = float(args[2])
     elif verb == "backdrop":
         pass
+    elif verb == "canvas":
+        request["op"] = args[0] if args else "list"
+        request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb in ("split", "swipe"):
         request["arg"] = args[0] if args else ""
     elif verb == "mouse":
@@ -377,6 +387,8 @@ def main(argv):
     elif verb in ("eval", "ext-popup"):
         value = answer.get("value")
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
+    elif verb == "canvas":
+        print(json.dumps(answer, ensure_ascii=False, indent=2, sort_keys=True))
     elif verb in ("updates", "bw", "drive", "render"):
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True))
     elif verb == "newtab":

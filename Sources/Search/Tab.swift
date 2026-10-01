@@ -327,6 +327,9 @@ final class Tab: ObservableObject, Identifiable {
                     // a pinned tab lost the only thing that could bring it
                     // back, and vanished from the session altogether.
                     guard fresh.absoluteString != "about:blank" else { return }
+                    // Fork (canvas): the canvas page's file stays behind its
+                    // copper://canvas/<id> address (Fork/Canvas/CanvasHost.swift).
+                    guard !CanvasPage.isPage(fresh) else { return }
                     let moved = fresh.host() != self.address?.host()
                     self.address = fresh
                     if moved { self.adoptIcon() }

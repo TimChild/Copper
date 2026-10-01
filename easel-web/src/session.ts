@@ -9,6 +9,7 @@ import { base64ToBytes } from './host/base64'
 import { createEaselDoc, LOAD_ORIGIN, type EaselDoc } from './doc/easel-doc'
 import { createSaver, wireFlush, type Saver } from './doc/persistence'
 import { createAwareness } from './lib/awareness'
+import { mark } from './debug'
 
 export interface EaselSession {
   host: Host
@@ -22,6 +23,7 @@ export interface EaselSession {
 
 export async function openEaselSession(host: Host): Promise<EaselSession> {
   const config = await host.ready()
+  mark('config')
   const doc = createEaselDoc()
   if (config.state) {
     try {

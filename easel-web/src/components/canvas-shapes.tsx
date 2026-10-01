@@ -15,6 +15,7 @@ import { useEasel } from './easel-context'
 import { Icon } from './icons'
 import { MarkdownLiteInline } from './markdown-lite'
 import { StickyEditor } from './sticky-editor'
+import { counters } from '../debug'
 
 /** Sticky body size; the rendered view shrinks from here to fit its box. */
 const STICKY_FONT = 14
@@ -161,6 +162,7 @@ export function StickyShape({
   lifted,
   by,
 }: ShapeProps) {
+  counters.shapeRenders++
   const { doc, host } = useEasel()
   const field = useFieldFocus()
   const fit = useFitText(
@@ -203,6 +205,7 @@ export function FrameShape({
   lifted,
   by,
 }: ShapeProps) {
+  counters.shapeRenders++
   const { doc, host, easelId } = useEasel()
   const field = useFieldFocus()
   const rendered = !field.focused && shape.text.trim() !== ''
@@ -277,6 +280,7 @@ export function ArrowLabel({
   selected: boolean
   onDone: () => void
 }) {
+  counters.shapeRenders++
   const { doc } = useEasel()
   if (!editing && !shape.text) return null
   return (

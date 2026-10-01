@@ -5,6 +5,7 @@ import type { Host } from './host/types'
 import { openEaselSession, type EaselSession } from './session'
 import { EaselContext } from './components/easel-context'
 import { EaselPage } from './components/easel-page'
+import { debug } from './debug'
 import './app.css'
 
 function App({ host }: { host: Host }) {
@@ -36,6 +37,10 @@ function App({ host }: { host: Host }) {
 function Session({ session }: { session: EaselSession }) {
   const { doc, host, config } = session
   const meta = useSyncExternalStore(doc.subscribeMeta, doc.getMeta)
+  useEffect(() => {
+    debug.attach(session)
+    return () => debug.attach(null)
+  }, [session])
   // The tab's title is document.title; keep it equal to the easel's.
   useEffect(() => {
     document.title = meta.title

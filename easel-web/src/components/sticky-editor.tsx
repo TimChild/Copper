@@ -17,6 +17,7 @@ import {
 } from 'react'
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import { normalizeMarkdown, stickyExtensions } from '../lib/sticky-markdown'
+import { counters } from '../debug'
 
 export interface StickyEditorProps {
   /** Markdown source, shared through Yjs. */
@@ -98,6 +99,13 @@ export function StickyEditor({
       onBlur?.()
     },
   })
+
+  useEffect(() => {
+    counters.editors++
+    return () => {
+      counters.editors--
+    }
+  }, [])
 
   // Remote (or programmatic) change: reload unless it is our own echo.
   useEffect(() => {

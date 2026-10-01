@@ -13,6 +13,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -53,6 +54,7 @@ import { ResizeHandles } from './resize-handles'
 import { PeerCursors } from './peer-cursors'
 import { Toolbar, ZoomCluster } from './toolbar'
 import { TitleChip } from './title-chip'
+import { counters, mark, registerBoard } from '../debug'
 
 type Gesture =
   | { kind: 'pan'; start: Point; view: View }
@@ -112,6 +114,7 @@ export function EaselPage({
   session: EaselSession
   title: string
 }) {
+  counters.pageRenders++
   const { doc, awareness, config, host } = session
   const viewer = config.viewer
   const markerId = useId()
@@ -172,6 +175,22 @@ export function EaselPage({
     )
     setView(fitBoxes(boxes, el.clientWidth, el.clientHeight))
   }, [doc])
+
+  useLayoutEffect(() => {
+    counters.pageCommits++
+  })
+  useEffect(() => {
+    registerBoard({ getView: () => viewRef.current, setView, fit })
+    return () => registerBoard(null)
+  }, [fit])
+  const viewRef = useRef(view)
+  viewRef.current = view
+  // First paint with shapes: when the board shows content after `config`.
+  useEffect(() => {
+    if (shapes.size === 0) return
+    mark('firstCommit')
+    requestAnimationFrame(() => setTimeout(() => mark('painted')))
+  }, [shapes.size])
 
   // Frame the board once on open: everything that was saved, or the origin.
   const fitted = useRef(false)

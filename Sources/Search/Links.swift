@@ -78,6 +78,7 @@ final class Links: NSObject, NSApplicationDelegate {
     /// rather than doing nothing, which is what a hidden-title-bar SwiftUI
     /// window does by default.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if Instance.reopenFromProbe(hasVisibleWindows: flag) { return false }
         if !flag, let window = NSApp.windows.first(where: { $0.contentView != nil }) {
             window.makeKeyAndOrderFront(nil)
         }

@@ -176,9 +176,25 @@ launchctl bootout gui/$(id -u)/com.example.copper          # stop (SIGTERM → c
 - `KeepAlive {SuccessfulExit: false}`: a crash is restarted; a SIGTERM quit (exit 0) is not.
 - Data: Copper's default folder, `~/Library/Application Support/Copper/`. The daemon JSON-merges
   `links: [{id, enabled, api, token, name: "copper", announces: false}]` into `agent.json` (0600).
+- Updates (Settings › Updates / `updates upgrade`): Copper sees it is this job (parent launchd,
+  `XPC_SERVICE_NAME` = the label), quits, gives launchd 3 s to restart it, then
+  `launchctl kickstart gui/<uid>/<label>` — `SuccessfulExit: false` does not restart a clean
+  quit — so the new version comes back under launchd. Every step is in
+  `~/Library/Logs/Copper/update.log` (docs/updates.md).
 - `ProcessType Background` puts the process under the system's background CPU/IO clamps; Copper
   is the process that drives WebKit and answers every tool call, so if Jev runs feel slow on a
   busy mini, `Standard` (or dropping the key) is the thing to try first.
+
+## Dock clicks and ordinary `open`
+
+LaunchServices sends a Dock click or a plain `open Copper.app` to whichever running instance it
+picks — with an agent's headless probe alive, often the probe. A probe (a named test world, or a
+headless run outside the main world) no longer swallows it: it never shows or activates itself,
+and hands the reopen to the main world — activating it when its instance lock is held, launching
+it (`open -n`, a clean environment) when not. A headless Copper that *is* the main world (the
+launchd recipe above) handles a reopen as before. One process per world is enforced by a kernel
+lock (`instance.lock`), so neither a reopen nor an update relaunch can start a second one.
+Details: docs/updates.md.
 
 ## Probing it without touching a real profile
 

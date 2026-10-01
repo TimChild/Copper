@@ -22,6 +22,14 @@ enum Session {
         var active: Int
         var spaces: [Space]? = nil
         var space: UUID? = nil
+        /// Fork: global pins — one ordered set shown in every space, not
+        /// part of any row. Optional, so a file from an older build reads.
+        var pins: [Entry]? = nil
+
+        /// How many tabs this is. With `pins`, the pinned entries in `tabs`
+        /// are only the older builds' copy of them (Spaces.shape), so they
+        /// are not counted twice.
+        var tabCount: Int { pins.map { $0.count + tabs.filter { $0.pin == nil }.count } ?? tabs.count }
     }
 
     private static var file: URL { Store.file("session.json") }
@@ -45,7 +53,7 @@ enum Session {
         let file = Session.file
         let put = {
             guard let data = try? JSONEncoder().encode(shape) else { return }
-            _ = SessionGuard.write(data, tabCount: shape.tabs.count, file: file)
+            _ = SessionGuard.write(data, tabCount: shape.tabCount, file: file)
         }
         if now {
             put()

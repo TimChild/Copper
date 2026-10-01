@@ -277,6 +277,23 @@ final class Bench {
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 
+        case "pin", "unpin", "reorder":
+            // Fork: global pins — by the window's own door (`--window N`, the
+            // index `windows` lists), since unpinning puts the tab in that
+            // window's space.
+            let windows = Windows.all
+            let at = (request["window"] as? Int).flatMap { windows.indices.contains($0) ? windows[$0] : nil } ?? browser
+            guard let tab = find(request, in: at) else { answer(missing(request)); return }
+            if verb == "pin" {
+                at.pin(tab)
+                if let letter = request["letter"] as? String { at.letter(letter, for: tab); at.endPinEdit() }
+            } else if verb == "unpin" {
+                at.unpin(tab)
+            } else if let index = request["index"] as? Int {
+                at.move(tab, to: index)
+            }
+            answer(describe(tab))
+
         case "open":
             guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
                 answer(["error": "open needs a url"])
@@ -611,7 +628,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "hardreload", "inspect", "ui", "flow", "history", "passkeys", "downloads",
+                "tabs", "open", "pin", "unpin", "reorder", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "hardreload", "inspect", "ui", "flow", "history", "passkeys", "downloads",
             ]])
         }
     }
@@ -742,6 +759,8 @@ final class Bench {
             "view": tab.built?.url?.absoluteString ?? "",
             "bench": tab.bench,
             "active": tab.id == browser?.activeID,
+            "pin": tab.pin ?? "",
+            "space": Spaces.shared.spaceID(of: tab)?.uuidString ?? "",
             "asleep": tab.asleep,
         ]
     }

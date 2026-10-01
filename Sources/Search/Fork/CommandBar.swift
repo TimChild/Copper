@@ -200,7 +200,8 @@ enum CommandBar {
         row.detail = shortDetail(row)
         let space = short(Spaces.shared.name(of: tab))
         if tab.pin != nil {
-            row.badge = current ? "· \(space) ✦" : "· \(space) ✦"
+            // A pin is in every space, so naming one would be wrong.
+            row.badge = "· ✦"
         } else if Sections.shared.isSaved(tab) {
             row.badge = current ? "· saved" : "· \(space) · saved"
         } else if !current {

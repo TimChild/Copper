@@ -3,6 +3,11 @@
 
     ./bench tabs                       every tab, yours and the bench's
     ./bench open URL                   a bench tab at the end of the row → its id
+    ./bench pin ID [LETTER] [--window N]
+                                       pin a tab: it joins the one set of pins every space shows
+    ./bench unpin ID [--window N]      a pin back to a loose tab, in window N's space (0 = first)
+    ./bench reorder ID INDEX [--window N]
+                                       move a pin to INDEX in the pin grid (every space, every window)
     ./bench go ID URL                  send a bench tab somewhere else
     ./bench wait ID [SECONDS]          until the page has loaded
     ./bench sleep ID                   put a tab to sleep now, or say what keeps it awake
@@ -57,6 +62,7 @@
               |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
                                        Bitwarden probe controls and Copper feed status
     ./bench spaces [new NAME|select N|next|prev|move N|remove N [--keep]|profile NAME]
+                                       lists global pins once and loose tabs per space
     ./bench spaces [icon N EMOJI|sf:symbol|none|colour N NAME|reorder N M]
     ./bench spaces [page [N]|page close|tap N|tap header]
                                        the Space page; tap is a click on chip N (another space
@@ -359,6 +365,21 @@ def main(argv):
         if len(args) not in (2, 3): sys.exit("usage: bench resize WIDTH HEIGHT [STEPS]")
         request["width"], request["height"] = float(args[0]), float(args[1])
         if len(args) == 3: request["steps"] = int(args[2])
+    elif verb in ("pin", "unpin", "reorder"):
+        if "--window" in args:
+            at = args.index("--window")
+            if at + 1 >= len(args) or not args[at + 1].isdigit(): sys.exit(f"usage: bench {verb} … --window N")
+            request["window"] = int(args[at + 1])
+            args = args[:at] + args[at + 2:]
+        if verb == "pin":
+            if not args or len(args) > 2: sys.exit("usage: bench pin ID [LETTER] [--window N]")
+        elif verb == "unpin":
+            if len(args) != 1: sys.exit("usage: bench unpin ID [--window N]")
+        elif len(args) != 2 or not args[1].isdigit():
+            sys.exit("usage: bench reorder ID INDEX [--window N]")
+        request["id"] = args[0]
+        if verb == "pin" and len(args) == 2: request["letter"] = args[1]
+        if verb == "reorder": request["index"] = int(args[1])
     elif verb not in ("tabs", "probe", "extensions"):
         sys.exit(f"unknown command “{verb}” — see bench help")
 
@@ -422,6 +443,10 @@ def main(argv):
             print(f"latency: {answer['milliseconds']:.2f} ms")
     elif verb == "spaces":
         if "slide" in answer: print(json.dumps(answer["slide"], ensure_ascii=False))
+        if "pinCount" in answer:
+            print(f"global pins: {answer['pinCount']}")
+            for pin in answer.get("pins", []):
+                print(f"  {pin.get('id', '')}  {pin.get('letter', '')}  {pin.get('title') or '—'}  {pin.get('url', '')}")
         if "sheet" in answer: print(json.dumps(answer["sheet"], ensure_ascii=False))
         if "path" in answer: print(answer["path"])
         if "page" in answer: print(f"page: {answer['page'] or 'closed'}" + (f"  (current: {answer['current']})" if answer.get("current") else ""))
@@ -436,15 +461,18 @@ def main(argv):
                 print(f"  nothing in Today is older than the window — oldest row is {answer.get('oldest')}h;"
                       f" `sections archive HOURS` sweeps against that age instead")
         print(f"archive window: {answer.get('window')}, oldest row in Today: {answer.get('oldest')}h")
+        # Favourites (pins) are one set shown in every space: counted once.
+        print(f"favourites: {answer.get('favourites', 0)} (every space)")
         for s in answer.get("spaces", []):
-            print(f"{'●' if s['current'] else ' '} {s['name']:22} {s['favourites']:3} favourites  {s['saved']:4} saved  {s['today']:4} today")
+            print(f"{'●' if s['current'] else ' '} {s['name']:22} {s['saved']:4} saved  {s['today']:4} today")
         for t in answer.get("today", []):
             print(f"    {t['id']}  {t['seen']}h  {t['title'] or '—'}")
     elif verb == "tabs":
         for tab in answer.get("tabs", []):
             mark = "⚗" if tab.get("bench") else ("●" if tab.get("active") else " ")
             state = " …" if tab.get("loading") else (" z" if tab.get("asleep") else "")
-            print(f"{mark} {tab['id']}  {tab.get('title') or '—'}  {tab.get('url')}{state}")
+            pin = f"[{tab['pin']}] " if tab.get("pin") else ""
+            print(f"{mark} {tab['id']}  {pin}{tab.get('title') or '—'}  {tab.get('url')}{state}")
     else:
         print(json.dumps(answer, ensure_ascii=False, indent=2))
     return 0

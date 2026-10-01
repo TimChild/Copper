@@ -9,15 +9,19 @@ struct AccountList: View {
 
     private var hasCredentialRows: Bool {
         asked.rows.contains { suggestion in
-            if case .credential = suggestion { return true }
-            return false
+            switch suggestion {
+            case .credential, .code: return true
+            default: return false
+            }
         }
     }
 
     private var hasOtherRows: Bool {
         asked.rows.contains { suggestion in
-            if case .credential = suggestion { return false }
-            return true
+            switch suggestion {
+            case .credential, .code: return false
+            default: return true
+            }
         }
     }
 
@@ -101,14 +105,23 @@ struct AccountList: View {
 
     private var footer: String {
         if hasOtherRows && !hasCredentialRows { return "From Bitwarden" }
+        let codesOnly = !asked.rows.isEmpty && asked.rows.allSatisfy { suggestion in
+            if case .code = suggestion { return true }
+            return false
+        }
+        if codesOnly { return "From Bitwarden" }
         return asked.credentials.contains { $0.source == .bitwarden } || isBitwardenLocked || isBitwardenLoading
             ? "From your keychain and Bitwarden"
             : "From your keychain"
     }
 
     private func isFetching(_ suggestion: Browser.Suggestion) -> Bool {
-        guard case .credential(let credential) = suggestion else { return false }
-        return browser.fetching == credential.id
+        switch suggestion {
+        case .credential(let credential), .code(let credential):
+            return browser.fetching == credential.id
+        default:
+            return false
+        }
     }
 
     private var isBitwardenLoading: Bool {
@@ -132,6 +145,8 @@ struct AccountList: View {
             switch suggestion {
             case .credential(let credential):
                 credentialRow(credential)
+            case .code(let credential):
+                credentialRow(credential, code: true)
             case .username(let name):
                 autofillRow(icon: "person", title: "Use \(name)", subtitle: "Most used")
             case .identity(let identity):
@@ -152,10 +167,10 @@ struct AccountList: View {
             }
         }
 
-        private func credentialRow(_ credential: Credential) -> some View {
+        private func credentialRow(_ credential: Credential, code: Bool = false) -> some View {
             Button(action: pick) {
                 HStack(spacing: 10) {
-                    Image(systemName: credential.source == .bitwarden ? "shield" : "key")
+                    Image(systemName: code ? "number" : credential.source == .bitwarden ? "shield" : "key")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Palette.muted)
                         .frame(width: 22, height: 22)
@@ -165,7 +180,7 @@ struct AccountList: View {
                             .font(.system(size: 12.5))
                             .foregroundStyle(Palette.ink)
                             .lineLimit(1)
-                        Text(credential.host)
+                        Text(code ? "Two-step code · \(credential.host)" : credential.host)
                             .font(.system(size: 10.5))
                             .foregroundStyle(Palette.muted)
                             .lineLimit(1)

@@ -50,7 +50,7 @@
     ./bench drive [status|stop|resume|clear|pane on|off]
     ./bench drive fake NAME THREAD… [tab N|ID] [--for S] [--doing WORDS…]   a stand-in agent's hand on a tab; drive card N|off; drive unfake
                                        who is driving the page (Jev, an agent, a bot) and every row of the timeline
-    ./bench bw status|server URL|login EMAIL PW [OTP] [--method N]|code OTP|cancel|unlock PW|lock|sync|candidates HOST|choose ID
+    ./bench bw status|server URL|login EMAIL PW [OTP] [--method N]|code OTP|cancel|unlock PW|lock|sync|candidates HOST|choose ID|rows|pick ROW
               |identities|cards|fields HOST|usernames|counts|autofill card|identity ID
               |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
                                        Bitwarden probe controls and Copper feed status

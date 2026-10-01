@@ -97,9 +97,9 @@ final class Updates: ObservableObject {
     @Published private(set) var outcome: Outcome?
 
     /// Bench can point this at a local HTTP server. The shipped value is the
-    /// internal feed, not a user preference and not a command-line override.
+    /// GitHub releases feed, not a user preference and not a command-line override.
     var manifestURL: URL = Updates.defaultManifestURL
-    private nonisolated static let defaultManifestURL = URL(string: Setup.feed + "/downloads/copper-version.json")!
+    private nonisolated static let defaultManifestURL = URL(string: Setup.feed + "/copper-version.json")!
     /// Everything up to the swap: verify, back up, then stop and log what
     /// would have happened instead of replacing the bundle and quitting.
     var dryRun = false

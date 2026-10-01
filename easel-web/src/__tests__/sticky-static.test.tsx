@@ -8,8 +8,8 @@ import { Editor } from '@tiptap/core'
 import { createStickyMarked, stickyExtensions } from '../lib/sticky-markdown'
 import { stickyStaticHTML, toggleTask } from '../lib/sticky-static'
 
-/** What a mounted, unfocused editor shows for this markdown. */
-function editorHTML(markdown: string) {
+/** Outline of what a mounted, unfocused editor shows for this markdown. */
+function editorOutline(markdown: string) {
   const element = document.createElement('div')
   document.body.appendChild(element)
   const editor = new Editor({
@@ -18,32 +18,38 @@ function editorHTML(markdown: string) {
     content: markdown,
     contentType: 'markdown',
   })
-  const html = editor.view.dom.innerHTML
+  // The live DOM, not innerHTML: the task node view sets `checked` as a property.
+  const out = outline(editor.view.dom)
   editor.destroy()
   element.remove()
-  return html
+  return out
 }
 
-const KEEP = ['class', 'href', 'data-wikilink', 'data-checked', 'checked', 'contenteditable', 'data-placeholder', 'type']
+function staticOutline(markdown: string) {
+  const root = document.createElement('div')
+  root.innerHTML = stickyStaticHTML(markdown)
+  return outline(root)
+}
+
+const KEEP = ['class', 'href', 'data-wikilink', 'data-checked', 'data-placeholder', 'type', 'aria-label', 'style']
 
 /**
- * A comparable outline of a DOM: tags, text, and the attributes that change
- * how it looks or behaves. Ignored: attribute order, `data-type` (the task
- * node view leaves it off), and the zero-size separator <img> ProseMirror
- * adds only for Safari and Chrome (jsdom is neither).
+ * A comparable outline of a DOM: tags, text, the attributes that change how
+ * it looks, reads or behaves, and each box's checked state. Ignored:
+ * attribute order, how an inline style is spelled (only whether there is
+ * one), and `contenteditable` (ProseMirror sets the property, which browsers
+ * reflect to the attribute and jsdom does not; checked on its own below).
  */
-function outline(html: string) {
-  const root = document.createElement('div')
-  root.innerHTML = html
+function outline(root: Element) {
   const walk = (node: Node): string => {
     if (node.nodeType === Node.TEXT_NODE) return JSON.stringify(node.textContent)
     const el = node as HTMLElement
-    if (el.tagName === 'IMG' && el.classList.contains('ProseMirror-separator')) return ''
-    const attrs = KEEP.filter(a => el.hasAttribute(a))
-      .map(a => `${a}=${a === 'checked' ? 'on' : el.getAttribute(a)}`)
-      .join(' ')
-    const kids = [...el.childNodes].map(walk).filter(Boolean).join('')
-    return `<${el.tagName.toLowerCase()}${attrs ? ' ' + attrs : ''}>${kids}</>`
+    const attrs = KEEP.filter(a => el.hasAttribute(a)).map(a =>
+      a === 'style' ? 'style' : `${a}=${el.getAttribute(a)}`
+    )
+    if (el instanceof HTMLInputElement) attrs.push(`checked=${el.checked}`)
+    const kids = [...el.childNodes].map(walk).join('')
+    return `<${el.tagName.toLowerCase()}${attrs.length ? ' ' + attrs.join(' ') : ''}>${kids}</>`
   }
   return [...root.childNodes].map(walk).join('')
 }
@@ -63,11 +69,20 @@ const SAMPLES = [
 
 describe('static sticky HTML', () => {
   it.each(SAMPLES)('matches what TipTap renders for %j', markdown => {
-    expect(outline(stickyStaticHTML(markdown))).toBe(outline(editorHTML(markdown)))
+    expect(staticOutline(markdown)).toBe(editorOutline(markdown))
+  })
+
+  it('marks wikilink atoms contenteditable=false, as the editor view does in a browser', () => {
+    const root = document.createElement('div')
+    root.innerHTML = stickyStaticHTML('see [[Roadmap]] and **[[Q3|plan]]**')
+    const chips = [...root.querySelectorAll('[data-wikilink]')]
+    expect(chips.map(c => c.getAttribute('contenteditable'))).toEqual(['false', 'false'])
+    // An atom at the end of a line gets the separator + trailing break.
+    expect(root.querySelector('p')?.lastElementChild?.className).toBe('ProseMirror-trailingBreak')
   })
 
   it('shows the placeholder paragraph for an empty note, like the editor', () => {
-    expect(outline(stickyStaticHTML(''))).toBe(outline(editorHTML('')))
+    expect(staticOutline('')).toBe(editorOutline(''))
     expect(stickyStaticHTML('')).toContain('data-placeholder="Type something"')
   })
 

@@ -9,7 +9,7 @@
  */
 import { getSchema, type JSONContent } from '@tiptap/core'
 import { MarkdownManager } from '@tiptap/markdown'
-import { DOMSerializer, type Schema } from '@tiptap/pm/model'
+import { DOMSerializer, type Node as PMNode, type Schema } from '@tiptap/pm/model'
 import { createStickyMarked, normalizeMarkdown, stickyExtensions } from './sticky-markdown'
 
 interface Kit {
@@ -46,16 +46,40 @@ export function stickyMarkdown(json: JSONContent): string {
 
 const TEXTBLOCKS = 'p, h1, h2, h3, h4, h5, h6'
 
+/** TaskItem's node view (extension-list): a visually hidden label for the box. */
+const VISUALLY_HIDDEN =
+  'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0'
+
 /**
- * What prosemirror-view adds on top of `toDOM` (ViewDesc.addTextblockHacks
- * and NodeViewDesc.create): leaf nodes are `contenteditable=false`, and a
- * textblock that is empty or ends in a non-text node gets a trailing <br>
- * (plus a zero-size <img> separator after an atom, in Safari and Chrome).
- * The <br> is what gives an empty paragraph its line of height.
+ * What the editor view draws differently from plain `toDOM`:
+ * - prosemirror-view (NodeViewDesc.create, ViewDesc.addTextblockHacks): leaf
+ *   nodes are `contenteditable=false`, and a textblock that is empty or ends
+ *   in a non-text node gets a trailing <br> (plus a zero-size <img>
+ *   separator after an atom, in Safari and Chrome). The <br> is what gives
+ *   an empty paragraph its line of height.
+ * - TaskItem's node view: `<li data-checked>` without `data-type`, a
+ *   non-editable label, and an accessible name on the box ("Task item
+ *   checkbox for …"), mirrored in a visually hidden span.
  */
-function addEditorHacks(root: HTMLElement) {
+function addEditorHacks(root: HTMLElement, doc: PMNode | null) {
   for (const el of root.querySelectorAll('[data-wikilink]'))
     el.setAttribute('contenteditable', 'false')
+  const tasks: PMNode[] = []
+  doc?.descendants(node => {
+    if (node.type.name === 'taskItem') tasks.push(node)
+  })
+  root.querySelectorAll('li[data-type="taskItem"]').forEach((li, i) => {
+    li.removeAttribute('data-type')
+    const label = li.querySelector(':scope > label')
+    label?.setAttribute('contenteditable', 'false')
+    const name = `Task item checkbox for ${tasks[i]?.textContent || 'empty task item'}`
+    label?.querySelector('input')?.setAttribute('aria-label', name)
+    const span = label?.querySelector('span')
+    if (span) {
+      span.setAttribute('style', VISUALLY_HIDDEN)
+      span.textContent = name
+    }
+  })
   for (const block of root.querySelectorAll(TEXTBLOCKS)) {
     let parent: Element = block
     let last = block.lastChild
@@ -94,8 +118,9 @@ export function stickyStaticHTML(markdown: string, placeholder = 'Type something
   const { schema, serializer } = getKit()
   const container = document.createElement('div')
   const json = markdown.trim() ? safeJSON(markdown) : null
-  if (json?.content?.length) {
-    container.appendChild(serializer.serializeFragment(schema.nodeFromJSON(json).content))
+  const doc = json?.content?.length ? schema.nodeFromJSON(json) : null
+  if (doc) {
+    container.appendChild(serializer.serializeFragment(doc.content))
   } else {
     // The editor's empty state: one paragraph carrying the placeholder.
     const p = document.createElement('p')
@@ -103,7 +128,7 @@ export function stickyStaticHTML(markdown: string, placeholder = 'Type something
     p.setAttribute('data-placeholder', placeholder)
     container.appendChild(p)
   }
-  addEditorHacks(container)
+  addEditorHacks(container, doc)
   const html = container.innerHTML
   if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!)
   cache.set(key, html)

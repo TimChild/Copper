@@ -216,8 +216,13 @@ export const StickyShape = memo(function StickyShape({
             onFocus={() => setFocused(true)}
             onBlur={() => {
               setFocused(false)
-              // Leaving the note (not the window): back to static HTML.
-              if (document.hasFocus() && editing.get() === shape.id) editing.set(null)
+              // Leaving the note goes back to static HTML; leaving the window
+              // does not (focus comes back to the note). A window blur keeps
+              // activeElement inside the note, an in-page blur moves it.
+              setTimeout(() => {
+                const inside = fit.current?.contains(document.activeElement) ?? false
+                if (!inside && editing.get() === shape.id) editing.set(null)
+              })
             }}
           />
         ) : (
@@ -328,7 +333,6 @@ export const ArrowLine = memo(function ArrowLine({
   selected,
   markerId,
 }: ArrowProps & { markerId: string }) {
-  counters.shapeRenders++
   const seg = useArrowSegment(from, to)
   if (!seg) return null
   return (

@@ -60,6 +60,8 @@ const NOTES = [
   '- one\n- two\n  - two and a half\n- three',
 ]
 const LABELS = ['then', 'depends on', 'feeds', 'blocks']
+/** Every note different, like a real board (no free hits for any cache). */
+const note = (i: number) => `${NOTES[i % NOTES.length]} · ${i + 1}`
 
 /** A small picture as a File, drawn on a canvas (no network, no fixtures). */
 async function makePicture(i: number): Promise<File> {
@@ -123,7 +125,7 @@ async function seed(session: EaselSession, opts: SeedOptions = {}) {
             y: fy + 52 + Math.floor(k / 3) * (STICKY.h + 24),
             ...STICKY,
             color: colors[placed % colors.length],
-            text: NOTES[placed % NOTES.length],
+            text: note(placed),
             by: config.viewer.name,
           })
         )
@@ -139,7 +141,7 @@ async function seed(session: EaselSession, opts: SeedOptions = {}) {
           y: rowsTop + Math.floor(k / 14) * (STICKY.h + 40),
           ...STICKY,
           color: colors[placed % colors.length],
-          text: NOTES[placed % NOTES.length],
+          text: note(placed),
           by: config.viewer.name,
         })
       )

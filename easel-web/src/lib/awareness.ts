@@ -7,7 +7,7 @@
  * `usePeers` reads the other clients' cursors (empty with no provider);
  * `useRemoteLasers` feeds their laser wires into the trails.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type * as Y from 'yjs'
 import { Awareness } from 'y-protocols/awareness'
 import type { Point } from './canvas-geometry'
@@ -99,13 +99,16 @@ export function samePeers(a: readonly Peer[], b: readonly Peer[]): boolean {
  */
 export function usePeers(awareness: Awareness): Peer[] {
   const [peers, setPeers] = useState<Peer[]>(() => readPeers(awareness))
+  // Compared here, not in a setState updater: an updater that returns the
+  // previous array still costs React a render.
+  const shown = useRef(peers)
   useEffect(() => {
     const update = (changes?: AwarenessChanges) => {
       if (changes && !involvesOthers(changes, awareness.clientID)) return
-      setPeers(prev => {
-        const next = readPeers(awareness)
-        return samePeers(prev, next) ? prev : next
-      })
+      const next = readPeers(awareness)
+      if (samePeers(shown.current, next)) return
+      shown.current = next
+      setPeers(next)
     }
     awareness.on('change', update)
     update()

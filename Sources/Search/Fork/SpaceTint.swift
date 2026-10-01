@@ -51,7 +51,7 @@ struct SpaceTint {
     }
 
     /// The same space's tint for a surface that is not the column — a card
-    /// on the app's own ground, like ⌘K's rows or the Space page's tiles —
+    /// on the app's own ground, like ⌘K's rows or Settings › Spaces' tiles —
     /// where the ink has to follow the window, not the column's tone.
     var offColumn: SpaceTint { SpaceTint(theme: theme, night: night, column: night) }
 

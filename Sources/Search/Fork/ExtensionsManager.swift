@@ -2,33 +2,39 @@ import AppKit
 import SwiftUI
 import WebKit
 
-// The Extensions page: every extension, and everything about each, on one
-// card over the window — what chrome://extensions is in Chrome.
+// Settings › Extensions: every extension, and everything about each — what
+// chrome://extensions is in Chrome.
 //
 // The only way in used to be Settings › Extensions: a row per extension, a
 // switch, a line of small print, and the actions only under the pointer.
 // Nothing said what an extension could read, which sites it ran on, what it
 // had complained about or where an unpacked one lived, and the only door to
 // it was a puzzle piece that comes out of the address pill under the pointer.
-// So there is a door at the column's foot that is always there, and this card
-// behind it — the same kind the Space page is (SpacePage.swift). Every
-// "Manage Extensions…" comes here too: `Browser.openSettings(.extensions)`
-// opens this instead of Settings.
+// So there is a door at the column's foot that is always there, and for a
+// while a card of its own over the window behind it. Collin wanted it back
+// where the rest of the settings are, so the manager is that Settings page
+// now, and every door — the foot's, the pill's puzzle piece, every "Manage
+// Extensions…" — opens Settings on it (`Browser.openSettings(.extensions)`).
 //
 // Everything reads `Extensions.shared` as it is, so a switch here moves the
 // pill, and a pin from the pill's menu moves the switch here.
 
-/// Whether the page is up, which extension is opened out, and the filter.
+/// Which extension is opened out, and the filter, on Settings › Extensions.
 @MainActor
 final class ExtensionManager: ObservableObject {
     static let shared = ExtensionManager()
-    @Published private(set) var showing = false
     @Published var expanded: String?
     @Published var query = ""
     /// Bumped when WebKit changes what an extension may do or has said —
     /// a grant from a prompt, a revoke here, a new error — none of which
     /// `Extensions` publishes.
     @Published private(set) var changed = 0
+
+    /// Whether the page is up: Settings open on Extensions in the window in front.
+    var showing: Bool {
+        let browser = Windows.current
+        return browser.tuning && browser.settingsPage == .extensions
+    }
 
     private var watchers: [NSObjectProtocol] = []
 
@@ -52,17 +58,17 @@ final class ExtensionManager: ObservableObject {
 
     func noteChange() { changed += 1 }
 
-    /// Up, with one extension opened out if asked. Settings and the Space
-    /// page go down first — one card over the window at a time.
+    /// Settings on Extensions, with one extension opened out if asked.
     func open(_ id: String? = nil, in browser: Browser? = nil) {
-        let browser: Browser? = if #available(macOS 15.4, *) { browser ?? Extensions.shared.browser } else { browser }
-        browser?.tuning = false
-        SpaceEditing.shared.close()
+        let browser: Browser = if #available(macOS 15.4, *) { browser ?? Extensions.shared.browser ?? Windows.current } else { browser ?? Windows.current }
         if let id { expanded = id }
-        showing = true
+        browser.openSettings(.extensions)
     }
 
-    func close() { showing = false }
+    /// Settings put away, if it is on Extensions.
+    func close() {
+        if showing { Windows.current.tuning = false }
+    }
 
     func toggle(in browser: Browser? = nil) {
         if showing { close() } else { open(in: browser) }
@@ -71,8 +77,8 @@ final class ExtensionManager: ObservableObject {
 
 // MARK: - the door at the foot
 
-/// The puzzle door at the column's foot, beside the library: the Extensions
-/// page, one click away whatever the pointer is doing — the pill's puzzle
+/// The puzzle door at the column's foot, beside the library: Settings ›
+/// Extensions, one click away whatever the pointer is doing — the pill's puzzle
 /// piece only comes out under it. The foot rather than the top row: the top
 /// row already holds the lights, the fold door and back / forward / reload,
 /// and has no room left at the column's narrowest; the foot is where Arc
@@ -167,58 +173,23 @@ final class ExtensionFacts: ObservableObject {
 
 // MARK: - the page
 
-/// Over the window while `ExtensionManager` is showing. Mounted once, from
-/// the window's root view, beside the Space page.
-struct ExtensionsPageLayer: View {
-    @ObservedObject var browser: Browser
-    @ObservedObject private var manager = ExtensionManager.shared
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                if manager.showing, #available(macOS 15.4, *) {
-                    Color.black.opacity(0.16)
-                        .ignoresSafeArea()
-                        .onTapGesture { manager.close() }
-                        .transition(.opacity)
-                    ExtensionsCard(browser: browser, extensions: .shared,
-                                   height: min(ExtensionsCard.size.height, geo.size.height - 48))
-                        .transition(.scale(scale: 0.97).combined(with: .opacity))
-                }
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
-        }
-        .ignoresSafeArea()
-        .animation(Motion.settle, value: manager.showing)
-    }
-
-    /// The page drawn off screen, laid out whole — for the bench, which gets
-    /// every row this way rather than the top of a scroll.
-    static func picture(of browser: Browser, dark: Bool? = nil) -> NSBitmapImageRep? {
+/// Settings › Extensions drawn off screen at the page's width, laid out
+/// whole — for the bench, which gets every row this way rather than the top
+/// of a scroll.
+enum ExtensionsPicture {
+    @MainActor
+    static func draw(of browser: Browser, dark: Bool? = nil) -> NSBitmapImageRep? {
         guard #available(macOS 15.4, *) else { return nil }
         let dark = dark ?? (NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
-        let host = NSHostingView(rootView: ExtensionsCard(browser: browser, extensions: .shared, unrolled: true)
-            .padding(40)
-            .background(Color(nsColor: dark ? NSColor(white: 0.08, alpha: 1) : NSColor(white: 0.9, alpha: 1)))
-            .environment(\.colorScheme, dark ? .dark : .light))
-        host.frame = NSRect(origin: .zero, size: host.fittingSize)
-        let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        window.contentView = host
-        host.layoutSubtreeIfNeeded()
-        guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
-        host.cacheDisplay(in: host.bounds, to: picture)
-        return picture
+        return SettingsPicture.draw(ExtensionsSettings(browser: browser, extensions: .shared), dark: dark)
     }
 }
 
+/// The page itself, inside Settings' own scroll.
 @available(macOS 15.4, *)
-struct ExtensionsCard: View {
+struct ExtensionsSettings: View {
     @ObservedObject var browser: Browser
     @ObservedObject var extensions: Extensions
-    var height: CGFloat = ExtensionsCard.size.height
-    /// Laid out whole, without the scroll, for the bench's picture.
-    var unrolled = false
 
     @ObservedObject private var manager = ExtensionManager.shared
     @ObservedObject private var facts = ExtensionFacts.shared
@@ -226,9 +197,7 @@ struct ExtensionsCard: View {
     @FocusState private var hunting: Bool
     @State private var link = ""
 
-    static let size = CGSize(width: 680, height: 780)
-
-    /// The column's own colour on the header's tile, as the Space page wears it.
+    /// The column's own colour on the header's tile, as Settings › Spaces wears it.
     private var tint: SpaceTint { SpaceTint(space: Spaces.shared.space, dark: scheme == .dark).offColumn }
 
     /// Installed ones matching the filter — by name, id or what they say
@@ -243,70 +212,29 @@ struct ExtensionsCard: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 14) {
             header
-            Rectangle().fill(Palette.hairline).frame(height: 1)
             tools
-            if unrolled {
-                list
-            } else {
-                // An extension opened out — from its Details, or by a door
-                // that names it — is brought up to the top of the view.
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) { list }
-                        .scrollIndicators(.automatic)
-                        .onChange(of: manager.expanded) { _, id in
-                            guard let id else { return }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                withAnimation(Motion.settle) { proxy.scrollTo(id, anchor: .top) }
-                            }
-                        }
-                        .onAppear {
-                            if let id = manager.expanded { proxy.scrollTo(id, anchor: .top) }
-                        }
-                }
-            }
-            Rectangle().fill(Palette.hairline).frame(height: 1)
-            footer
+            list
+            adder
         }
-        .frame(width: ExtensionsCard.size.width, height: unrolled ? nil : height)
-        .background(Palette.ground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 34, y: 12)
         .onAppear { facts.warm(extensions) }
     }
 
+    /// What is installed, in a line, beside the puzzle piece.
     private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "puzzlepiece.extension.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(tint.mark)
-                .frame(width: 34, height: 34)
+                .frame(width: 32, height: 32)
                 .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(tint.ground))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Extensions")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
-                Text(summary)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Palette.muted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Button { manager.close() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Palette.muted)
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Palette.wash))
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help("Close   esc")
+            Text(summary)
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.muted)
+                .lineLimit(1)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20)
-        .frame(height: 64)
     }
 
     private var summary: String {
@@ -331,8 +259,6 @@ struct ExtensionsCard: View {
                 DispatchQueue.main.async { extensions.installFolder() }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
     }
 
     private var list: some View {
@@ -350,40 +276,34 @@ struct ExtensionsCard: View {
                     .id(item.id)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 2)
-        .padding(.bottom, 20)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// A store link or an id straight in, as Settings takes it; and Done.
-    private var footer: some View {
-        HStack(spacing: 8) {
-            ZStack(alignment: .leading) {
-                if link.isEmpty {
-                    Text("Paste a Chrome Web Store link or an id").foregroundStyle(Palette.muted.opacity(0.8))
+    /// A store link or an id straight in, as Settings always took it.
+    private var adder: some View {
+        Card {
+            HStack(spacing: 8) {
+                ZStack(alignment: .leading) {
+                    if link.isEmpty {
+                        Text("Paste a Chrome Web Store link or an id").foregroundStyle(Palette.muted.opacity(0.8))
+                    }
+                    TextField("", text: $link)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(Palette.ink)
+                        .onSubmit(add)
                 }
-                TextField("", text: $link)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(Palette.ink)
-                    .onSubmit(add)
+                .font(.system(size: 12.5))
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                if extensions.busy != nil {
+                    Ring(size: 12)
+                } else {
+                    Pill("Add", action: add).disabled(Crx.id(in: link) == nil)
+                }
             }
-            .font(.system(size: 12.5))
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .frame(maxWidth: 300)
-            .background(Palette.wash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            if extensions.busy != nil {
-                Ring(size: 12)
-            } else {
-                Pill("Add", action: add).disabled(Crx.id(in: link) == nil)
-            }
-            Spacer()
-            Button("Done") { manager.close() }
-                .keyboardShortcut(.defaultAction)
+            .padding(12)
         }
-        .padding(.horizontal, 20)
-        .frame(height: 52)
     }
 
     private func add() {
@@ -466,6 +386,9 @@ private struct ExtensionCardRow: View {
                     Quick("Reload") { extensions.reload(item.id) }
                     Quick("Remove", tint: .red.opacity(0.8)) { ExtensionRemoval.ask(item.id, name: item.name, icon: found?.icon(for: CGSize(width: 64, height: 64))) }
                 }
+                // Each pill one line: Settings' page is narrower than the
+                // card this row was drawn for.
+                .fixedSize()
                 .padding(.top, 2)
             }
             Spacer(minLength: 8)
@@ -1024,7 +947,7 @@ extension ExtensionManager {
             guard let path = words.first else { return ["error": "ext-manager picture needs a path"] }
             let dark = words.count > 1 ? words[1] == "dark" : nil
             ExtensionFacts.shared.warm(extensions)
-            guard let png = ExtensionsPageLayer.picture(of: browser, dark: dark)?.representation(using: .png, properties: [:]) else {
+            guard let png = ExtensionsPicture.draw(of: browser, dark: dark)?.representation(using: .png, properties: [:]) else {
                 return ["error": "couldn't draw the page"]
             }
             do { try png.write(to: URL(fileURLWithPath: path)) } catch { return ["error": error.localizedDescription] }

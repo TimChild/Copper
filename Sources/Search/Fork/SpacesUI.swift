@@ -11,14 +11,14 @@ import SwiftUI
 // the management two clicks away at most:
 //
 // - `SpaceHeader`: a title row under the traffic lights — the space's mark,
-//   its name in full, a chevron. Click the mark for the Space page, the
+//   its name in full, a chevron. Click the mark for Settings › Spaces, the
 //   rest for the space menu; hover shows how many tabs it holds.
 // - `SpaceStrip`: every space a chip at the foot — emoji, symbol or a dot,
 //   the current one in colour. Click another space's chip to go there, the
-//   current one's for its Space page (Arc's two clicks); hover names it at
+//   current one's for Settings › Spaces (Arc's two clicks); hover names it at
 //   once; drag reorders; a plus makes a space and opens its page at once.
-// - `SpacePage` (SpacePage.swift): name, icon, look, profile — and Delete,
-//   which asks first, and can keep the tabs.
+// - Settings › Spaces (SpacePage.swift): name, icon, look, profile — and
+//   Delete, which asks first, and can keep the tabs.
 
 // MARK: - the mark
 
@@ -57,15 +57,40 @@ struct SpaceGlyph: View {
     }
 }
 
-/// Which space has its Space page open, if any.
+/// Which space Settings › Spaces shows, and the door every "edit this
+/// space" click goes through.
 @MainActor
 final class SpaceEditing: ObservableObject {
     static let shared = SpaceEditing()
-    @Published var space: UUID?
+    /// The space picked on the page; nil is the one you are in.
+    @Published var selected: UUID?
 
-    func open(_ id: UUID) { space = id }
+    /// The space whose page is up: Settings open on Spaces in the window in
+    /// front, or nil. What the bench reads back as `page`.
+    var space: UUID? {
+        let browser = Windows.current
+        guard browser.tuning, browser.settingsPage == .spaces else { return nil }
+        return selected ?? Spaces.shared.current
+    }
 
-    func close() { space = nil }
+    /// Settings, on Spaces, with this space picked.
+    func open(_ id: UUID, in browser: Browser? = nil) {
+        selected = id
+        (browser ?? Windows.current).openSettings(.spaces)
+    }
+
+    /// Settings put away, if it is on Spaces.
+    func close() {
+        let browser = Windows.current
+        if browser.tuning, browser.settingsPage == .spaces { browser.tuning = false }
+        selected = nil
+    }
+
+    /// A space deleted: the page goes back to the one you are in rather
+    /// than closing under you.
+    func forget(_ id: UUID) {
+        if selected == id { selected = nil }
+    }
 
     /// A chip at the foot, clicked — and `bench spaces tap`, by the same
     /// door. Arc's rule: another space's icon takes you there; the icon of
@@ -73,26 +98,19 @@ final class SpaceEditing: ObservableObject {
     /// you just switched to is the way in.
     func pressed(_ id: UUID, in browser: Browser) {
         let spaces = Spaces.shared
-        if id == spaces.current { open(id) } else { spaces.select(id, in: browser) }
+        if id == spaces.current { open(id, in: browser) } else { spaces.select(id, in: browser) }
     }
 
-    /// The Space page for a space, drawn off screen on its own — for the
-    /// bench, which gets the whole controls at once this way rather than
-    /// the top of a scroll. `dark` nil is the app's own appearance.
+    /// Settings › Spaces for a space, drawn off screen at the page's width
+    /// and laid out whole — for the bench, which gets the whole page at once
+    /// this way rather than the top of a scroll. `dark` nil is the app's own
+    /// appearance.
     static func picture(of id: UUID, in browser: Browser, dark: Bool? = nil) -> NSBitmapImageRep? {
         let dark = dark ?? (NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
-        let host = NSHostingView(rootView: SpacePage(browser: browser, id: id, unrolled: true)
-            .padding(40)
-            .background(Color(nsColor: dark ? NSColor(white: 0.08, alpha: 1) : NSColor(white: 0.9, alpha: 1)))
-            .environment(\.colorScheme, dark ? .dark : .light))
-        host.frame = NSRect(origin: .zero, size: host.fittingSize)
-        let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        window.contentView = host
-        host.layoutSubtreeIfNeeded()
-        guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
-        host.cacheDisplay(in: host.bounds, to: picture)
-        return picture
+        let was = shared.selected
+        shared.selected = id
+        defer { shared.selected = was }
+        return SettingsPicture.draw(SpacesSettingsPage(browser: browser), dark: dark)
     }
 }
 
@@ -112,7 +130,7 @@ struct SpaceHeader: View {
         let tint = SpaceTint(space: space, dark: scheme == .dark)
         // Arc's: the space's icon where a row's mark goes and its name in
         // the theme's own colour, first thing under the favourites. The
-        // icon is its own door, to the Space page; the rest is the menu.
+        // icon is its own door, to Settings › Spaces; the rest is the menu.
         HStack(spacing: 0) {
             Button { SpaceEditing.shared.open(space.id) } label: {
                 SpaceGlyph(space: space, size: 16, dark: scheme == .dark, ink: tint.muted, bare: true)
@@ -491,8 +509,8 @@ enum SpaceDelete {
         guard spaces.all.count > 1, let space = spaces.all.first(where: { $0.id == id }) else { return }
         let count = spaces.count(of: id, in: browser)
         let neighbour = spaces.neighbour(of: id)
-        // The Space page stays up under the sheet: Cancel goes back to it,
-        // and a delete takes it down with the space.
+        // Settings › Spaces stays up under the sheet: Cancel goes back to it,
+        // and after a delete it shows the space you are in.
 
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -518,11 +536,11 @@ enum SpaceDelete {
             case .alertFirstButtonReturn:
                 spaces.remove(id, in: browser)
                 last = "deleted"
-                if SpaceEditing.shared.space == id { SpaceEditing.shared.close() }
+                SpaceEditing.shared.forget(id)
             case .alertSecondButtonReturn where count > 0 && neighbour != nil:
                 spaces.remove(id, in: browser, movingTabsTo: neighbour?.id)
                 last = "moved"
-                if SpaceEditing.shared.space == id { SpaceEditing.shared.close() }
+                SpaceEditing.shared.forget(id)
             default:
                 last = "cancelled"
             }

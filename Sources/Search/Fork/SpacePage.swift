@@ -3,53 +3,136 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
-// The Space page: everything about one space on one card over the window.
+// Settings › Spaces: every space, and everything about the one picked.
 //
-// The editor used to be a 296pt popover off the header or a chip: name,
-// icon, a row of swatches, a compact theme strip, profile. It had no room
-// for what a theme had grown into — a picture to pick again, a scene, blur,
-// a tone — and the column behind it was the only preview, which is no
-// preview at all for a space you are not in. So a click on the current
-// space's icon (at the foot, or in the title row) opens this instead, the
-// same kind of card the Settings and History panels are: a live column on
-// the left, drawn with the space's real `SpaceTint`, and the controls on
-// the right. Every change lands as it is made, as the popover's did.
+// The editor used to be a 296pt popover off the header or a chip, then a
+// 660pt card of its own over the window. Collin wanted it where every other
+// setting is, so it is a page of Settings now: the spaces across the top to
+// pick one (drag to reorder), and under it the one picked — a live column
+// drawn with the space's real `SpaceTint` beside its name, look and profile,
+// then the icon, colours, picture or scene, the sliders and Delete. Settings
+// is narrower than the card was, so the preview sits beside the few short
+// controls rather than down the whole height. A click on the current
+// space's icon (at the foot, or in the title row), Edit Space… and ⌘K's Edit
+// Space all land here with that space picked (`SpaceEditing.open`). Every
+// change lands as it is made.
 
-/// The page over the browser window, while `SpaceEditing` names a space.
-/// Mounted once, over everything, from the window's root view.
-struct SpacePageLayer: View {
+/// The page: the spaces to pick from, and the picked one's controls.
+struct SpacesSettingsPage: View {
     @ObservedObject var browser: Browser
     @ObservedObject private var editing = SpaceEditing.shared
     @ObservedObject private var spaces = Spaces.shared
+    @Environment(\.colorScheme) private var scheme
+    @State private var dragging: UUID?
+
+    /// The space the page shows: the one a door named, else the one you are in.
+    private var shown: UUID {
+        if let id = editing.selected, spaces.all.contains(where: { $0.id == id }) { return id }
+        return spaces.current
+    }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                if let id = editing.space, spaces.all.contains(where: { $0.id == id }) {
-                    Color.black.opacity(0.16)
-                        .ignoresSafeArea()
-                        .onTapGesture { editing.close() }
-                        .transition(.opacity)
-                    SpacePage(browser: browser, id: id,
-                              height: min(SpacePage.size.height, geo.size.height - 48))
-                        .id(id)
-                        .transition(.scale(scale: 0.97).combined(with: .opacity))
+        VStack(alignment: .leading, spacing: 18) {
+            picker
+            SpacePage(browser: browser, id: shown)
+                .id(shown)
+        }
+    }
+
+    /// Every space as a chip with its name, the picked one lifted out the
+    /// way Settings' own rail lifts the page you are on. Drag one along to
+    /// reorder; the column's foot follows.
+    private var picker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(spaces.all) { space in
+                    chip(space)
+                        .onDrag {
+                            dragging = space.id
+                            return NSItemProvider(object: space.id.uuidString as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: SpaceChipDrop(target: space.id, dragging: $dragging))
+                }
+                Button {
+                    let id = spaces.add(in: browser)
+                    editing.selected = id
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.muted)
+                        .frame(width: 30, height: 30)
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.wash.opacity(0.7)))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("New Space")
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func chip(_ space: Space) -> some View {
+        let on = space.id == shown
+        let tint = SpaceTint(space: space, dark: scheme == .dark).offColumn
+        return Button { editing.selected = space.id } label: {
+            HStack(spacing: 7) {
+                SpaceGlyph(space: space, size: 14, dark: scheme == .dark, ink: tint.mark, bare: true)
+                    .frame(width: 20, height: 20)
+                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(tint.ground))
+                Text(space.title)
+                    .font(.system(size: 12, weight: on ? .medium : .regular))
+                    .foregroundStyle(on ? Palette.ink : Palette.muted)
+                    .lineLimit(1)
+                if space.id == spaces.current {
+                    Circle().fill(Palette.muted.opacity(0.6)).frame(width: 4, height: 4)
+                        .help("The space you are in")
                 }
             }
-            .frame(width: geo.size.width, height: geo.size.height)
+            .padding(.leading, 5)
+            .padding(.trailing, 10)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(on ? Palette.ground : Palette.wash.opacity(0.7))
+                    .shadow(color: .black.opacity(on ? 0.08 : 0), radius: 3, y: 1)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(on ? Palette.hairline : .clear, lineWidth: 1)
+            }
+            .opacity(dragging == space.id ? 0.5 : 1)
+            .contentShape(Rectangle())
         }
-        .ignoresSafeArea()
-        .animation(Motion.settle, value: editing.space)
+        .buttonStyle(.plain)
+        .contextMenu { SpaceMenu(browser: browser, space: space) }
     }
 }
 
+/// A chip dragged over another takes its place at once, so the row makes
+/// way as the pointer moves rather than on the drop.
+private struct SpaceChipDrop: DropDelegate {
+    let target: UUID
+    @Binding var dragging: UUID?
+
+    func dropEntered(info: DropInfo) {
+        let spaces = Spaces.shared
+        guard let moving = dragging, moving != target,
+              let to = spaces.all.firstIndex(where: { $0.id == target }) else { return }
+        withAnimation(Motion.settle) { spaces.move(moving, to: to) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        return true
+    }
+}
+
+/// One space's controls, as Settings › Spaces shows them under the picker.
 struct SpacePage: View {
     @ObservedObject var browser: Browser
     let id: UUID
-    var height: CGFloat = SpacePage.size.height
-    /// Laid out whole, without the scroll — for the bench's picture, which
-    /// would otherwise only ever show the top of the controls.
-    var unrolled = false
 
     @ObservedObject private var spaces = Spaces.shared
     @Environment(\.colorScheme) private var scheme
@@ -67,8 +150,9 @@ struct SpacePage: View {
 
     private enum Field { case name, emoji, profile }
 
-    static let size = CGSize(width: 660, height: 780)
-    private static let rail: CGFloat = 236
+    /// Settings' page column, less its padding: what the page is laid out in.
+    static let width: CGFloat = 446
+    private static let rail: CGFloat = 144
 
     /// The symbols on offer: enough for the spaces people make; anything
     /// else is an emoji away.
@@ -104,27 +188,27 @@ struct SpacePage: View {
 
     var body: some View {
         if let space {
-            HStack(spacing: 0) {
-                preview(space)
-                Rectangle().fill(Palette.hairline).frame(width: 1)
-                VStack(spacing: 0) {
-                    header(space)
-                    Rectangle().fill(Palette.hairline).frame(height: 1)
-                    if unrolled {
-                        controls(space)
-                    } else {
-                        ScrollView(.vertical) { controls(space) }
-                            .scrollIndicators(.automatic)
+            VStack(alignment: .leading, spacing: 18) {
+                // The preview beside the short controls: Settings has the
+                // width for one or the other down the page, not both.
+                HStack(alignment: .top, spacing: 16) {
+                    preview(space)
+                    VStack(alignment: .leading, spacing: 16) {
+                        header(space)
+                        section("Name") { name }
+                        section("Look", trailing: kind == Kind(look) ? nil : "pick a picture below") {
+                            // Settings' own segmented control, so the page reads
+                            // as one with the rest of Settings.
+                            Segmented(options: Kind.allCases.map { ($0, $0.title) },
+                                      selection: Binding(get: { kind }, set: choose(kind:)), wide: true)
+                        }
+                        section("Profile") { profile(space) }
                     }
-                    Rectangle().fill(Palette.hairline).frame(height: 1)
-                    footer
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                controls(space)
+                footer
             }
-            .frame(width: SpacePage.size.width, height: unrolled ? nil : height)
-            .background(Palette.ground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .shadow(color: .black.opacity(0.18), radius: 34, y: 12)
             .onAppear { draft = space.name }
         }
     }
@@ -135,9 +219,13 @@ struct SpacePage: View {
     /// a few rows standing in for tabs, with Light / Dark under it.
     private func preview(_ space: Space) -> some View {
         let shown = previewNight ?? night
-        return VStack(spacing: 12) {
+        return VStack(spacing: 10) {
+            // Laid out at a real column's width and shrunk to fit beside
+            // the controls: squeezed instead, its rows would spill over.
             SpaceColumnPreview(space: space, all: spaces.all, night: shown)
-                .frame(maxHeight: unrolled ? 520 : .infinity)
+                .frame(width: SpacePage.rail / 0.72, height: 330 / 0.72)
+                .scaleEffect(0.72)
+                .frame(width: SpacePage.rail, height: 330)
             Picker("", selection: Binding(get: { shown }, set: { previewNight = $0 == night ? nil : $0 })) {
                 Text("Light").tag(false)
                 Text("Dark").tag(true)
@@ -145,66 +233,52 @@ struct SpacePage: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .controlSize(.small)
-            .frame(width: 140)
+            .frame(width: 120)
         }
-        .padding(16)
         .frame(width: SpacePage.rail)
-        .frame(maxHeight: .infinity)
-        .background(Palette.wash.opacity(0.5))
     }
 
     // MARK: - the controls
 
     private func header(_ space: Space) -> some View {
-        HStack(spacing: 12) {
-            SpaceGlyph(space: space, size: 22, dark: night, ink: tint.mark, bare: true)
-                .frame(width: 34, height: 34)
+        HStack(spacing: 10) {
+            SpaceGlyph(space: space, size: 20, dark: night, ink: tint.mark, bare: true)
+                .frame(width: 32, height: 32)
                 .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(tint.ground))
             VStack(alignment: .leading, spacing: 1) {
                 Text(space.title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Palette.ink)
                     .lineLimit(1)
                 let n = spaces.count(of: id, in: browser)
-                Text("\(n) tab\(n == 1 ? "" : "s") · \(space.profile ?? "Shared profile") · \(look.kind)")
+                Text("\(n) tab\(n == 1 ? "" : "s") · \(look.kind)")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Palette.muted)
                     .lineLimit(1)
             }
-            Spacer(minLength: 8)
-            Button { SpaceEditing.shared.close() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Palette.muted)
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Palette.wash))
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help("Close   esc")
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20)
-        .frame(height: 64)
     }
 
+    /// What is too wide to sit beside the preview, in cards down the page.
     private func controls(_ space: Space) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            section("Name") { name }
-            section("Icon", trailing: space.symbol ?? (space.icon == nil ? (space.emoji == nil ? "None" : "From the name") : "Emoji")) { icons(space) }
-            section("Look", trailing: kind == Kind(look) ? nil : "pick a picture below") {
-                Picker("", selection: Binding(get: { kind }, set: choose(kind:))) {
-                    ForEach(Kind.allCases) { Text($0.title).tag($0) }
+        VStack(alignment: .leading, spacing: 12) {
+            group { section("Icon", trailing: space.symbol ?? (space.icon == nil ? (space.emoji == nil ? "None" : "From the name") : "Emoji")) { icons(space) } }
+            group {
+                VStack(alignment: .leading, spacing: 18) {
+                    section(kind == .picture ? "Tint" : "Colours", trailing: colourName(space)) { colours }
+                    if kind == .picture { section("Picture") { pictures } }
+                    if kind == .animated { section("Scene", trailing: AnimatedBackdrop.styles.first { $0.id == look.motion?.style }?.name) { scenes } }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
             }
-            section(kind == .picture ? "Tint" : "Colours", trailing: colourName(space)) { colours }
-            if kind == .picture { section("Picture") { pictures } }
-            if kind == .animated { section("Scene", trailing: AnimatedBackdrop.styles.first { $0.id == look.motion?.style }?.name) { scenes } }
-            section("Adjust") { adjust }
-            section("Profile") { profile(space) }
+            group { section("Adjust") { adjust } }
         }
-        .padding(20)
+    }
+
+    /// One of Settings' hairline cards around a section or two.
+    private func group<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        let inside = content()
+        return Card { inside.padding(14) }
     }
 
     /// A caption over its content; `trailing` names the current choice.
@@ -234,7 +308,7 @@ struct SpacePage: View {
                 let trimmed = now.trimmingCharacters(in: .whitespaces)
                 if !trimmed.isEmpty { spaces.rename(id, to: trimmed) }
             }
-            .onSubmit { SpaceEditing.shared.close() }
+            .onSubmit { focus = nil }
     }
 
     // MARK: icon
@@ -592,20 +666,16 @@ struct SpacePage: View {
         }
     }
 
+    /// Delete, which asks first. Done is Settings' own close.
+    @ViewBuilder
     private var footer: some View {
-        HStack {
-            if spaces.all.count > 1 {
-                Button("Delete Space…") { SpaceDelete.ask(id, in: browser) }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.red)
+        if spaces.all.count > 1 {
+            Card {
+                Line("Delete this space", "Asks first, and can move its tabs to the space beside it") {
+                    Pill("Delete Space…", tint: .red) { SpaceDelete.ask(id, in: browser) }
+                }
             }
-            Spacer()
-            Button("Done") { SpaceEditing.shared.close() }
-                .keyboardShortcut(.defaultAction)
         }
-        .padding(.horizontal, 20)
-        .frame(height: 52)
     }
 }
 

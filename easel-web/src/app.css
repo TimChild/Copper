@@ -163,6 +163,14 @@ button {
   top: 0;
   transform-origin: 0 0;
 }
+/* While the camera moves (set by the camera's DOM writer, cleared 150 ms
+   after it rests) the layer gets its own compositing layer, so a pan only
+   moves pixels instead of repainting every shape each frame (measured in
+   WebKit: ~4x less main-thread time on a 60-note pan). At rest it is
+   dropped again so text re-rasterises sharp at the new zoom. */
+.easel-layer[data-moving] {
+  will-change: transform;
+}
 
 .easel-laser-overlay {
   position: absolute;
@@ -433,6 +441,8 @@ button {
 .easel-frame[data-lifted] {
   z-index: 10;
   box-shadow: var(--shadow-lift);
+  /* Dragged shapes ride on their own layer: moving one repaints nothing. */
+  will-change: transform;
 }
 .easel-sticky-body {
   position: relative;

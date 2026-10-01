@@ -18,7 +18,8 @@ import WebKit
 //
 // The thumb buttons nobody handled: WebKit forwards them to the page as DOM
 // buttons 3 and 4 and does nothing else, so they did nothing. A local monitor
-// takes them before the page does and navigates the pane under the pointer.
+// takes them before the page does: over the sidebar they switch spaces, and
+// over a page they navigate the pane under the pointer.
 @MainActor
 enum MouseButtons {
     // MARK: - WebKit's numbering (a link click's button)
@@ -88,6 +89,18 @@ enum MouseButtons {
     static func route(button: Int, down: Bool, at location: CGPoint, in window: NSWindow, browser: Browser) -> Bool {
         switch button {
         case back, forward:
+            // Arc uses the thumb buttons like a sideways swipe when they are
+            // over the column. Both halves are swallowed, even with one space,
+            // so the page never sees a click meant for the browser chrome.
+            if SpaceSwipe.overSidebar(location, in: browser) {
+                guard down else { return true }
+                guard Spaces.shared.all.count > 1 else { return true }
+                let by = button == back ? -1 : 1
+                SpaceSwipe.go(by, in: browser)
+                lastAction = ["button": button, "did": by < 0 ? "space-prev" : "space-next",
+                              "space": Spaces.shared.space.name]
+                return true
+            }
             // Chrome navigates on the press. Both halves are swallowed so the
             // page never sees half a click of a button it has no use for.
             guard down else { return true }
@@ -107,7 +120,7 @@ enum MouseButtons {
             // which is the only route that also sees links in iframes. Over
             // the column, the release closes the row under the pointer.
             if page(under: location, in: window, browser: browser) != nil { return false }
-            guard overSidebar(location, in: browser) else { return false }
+            guard SpaceSwipe.overSidebar(location, in: browser) else { return false }
             if !down {
                 // AppKit's window point is from the bottom left; SwiftUI's
                 // global frames are from the top left of the content view.
@@ -127,12 +140,6 @@ enum MouseButtons {
     static func page(under location: CGPoint, in window: NSWindow, browser: Browser) -> Tab? {
         guard let hit = window.contentView?.hitTest(location), let web = LineKeys.page(of: hit) else { return nil }
         return browser.tabs.first { $0.built === web }
-    }
-
-    /// The same test the space swipe makes: down the left, shown, not folded.
-    private static func overSidebar(_ location: CGPoint, in browser: Browser) -> Bool {
-        guard browser.prefs.sidebar, !browser.folded, browser.active?.immersed != true else { return false }
-        return location.x <= browser.prefs.sideWidth
     }
 
     /// `bench mouse back|forward|middle [X Y] [--shift]`: a click of that

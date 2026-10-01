@@ -30,6 +30,13 @@ struct Easel: Codable, Identifiable, Equatable {
     /// Unix seconds.
     let createdAt: Double
     var updatedAt: Double
+    /// Set when Copper renamed the board (the sidebar's Rename Easel…) and
+    /// its page has not yet saved under the new name: the title the
+    /// document itself still carries in `meta`. While it is set, a `save`
+    /// carrying exactly this title is the stale document talking, and
+    /// Copper's name stands; any other title is news and clears it. Absent
+    /// from index.json the rest of the time.
+    var renamedFrom: String? = nil
 }
 
 @MainActor
@@ -92,9 +99,14 @@ final class EaselStore: ObservableObject {
     func save(_ id: String, state: Data, title: String, then done: (() -> Void)? = nil) {
         guard !deleted.contains(id) else { return }
         let now = Date().timeIntervalSince1970
-        let title = EaselStore.tidy(title)
+        var title = EaselStore.tidy(title)
         if let i = all.firstIndex(where: { $0.id == id }) {
             var easel = all.remove(at: i)
+            // Renamed in the sidebar while the page held the old name: the
+            // old name coming back is the page not having caught up yet.
+            if let stale = easel.renamedFrom {
+                if title == stale { title = easel.title } else { easel.renamedFrom = nil }
+            }
             easel.title = title
             easel.updatedAt = now
             all.insert(easel, at: 0)
@@ -141,8 +153,40 @@ final class EaselStore: ObservableObject {
         }
     }
 
-    /// Gone, document, pictures and all. Not on any menu yet: the bench is
-    /// the only way to it until there is an undo to put beside it.
+    /// Copper's name for the board: the sidebar's Rename Easel…. The index
+    /// takes it at once — ⌘K, the address pill and the next `config` say it
+    /// — and `renamedFrom` keeps the name the document still carries until
+    /// the page saves under the new one. False when nothing changed.
+    @discardableResult
+    func rename(_ id: String, to title: String) -> Bool {
+        guard !deleted.contains(id) else { return false }
+        let title = EaselStore.tidy(title)
+        let now = Date().timeIntervalSince1970
+        if let i = all.firstIndex(where: { $0.id == id }) {
+            guard all[i].title != title else { return false }
+            var easel = all.remove(at: i)
+            if easel.renamedFrom == title {
+                easel.renamedFrom = nil // back to what the document says
+            } else if easel.renamedFrom == nil {
+                easel.renamedFrom = easel.title
+            }
+            easel.title = title
+            easel.updatedAt = now
+            all.insert(easel, at: 0)
+        } else {
+            // A board the index lost: the document's own name is unknown, so
+            // the likeliest one stands in for it.
+            all.insert(Easel(id: id, title: title, createdAt: now, updatedAt: now, renamedFrom: EaselStore.untitled), at: 0)
+        }
+        keepIndex()
+        return true
+    }
+
+    /// Deleted this session; its address opens nothing until relaunch.
+    func isDeleted(_ id: String) -> Bool { deleted.contains(id) }
+
+    /// Gone, document, pictures and all. The sidebar's Delete Easel… asks
+    /// first (EaselSidebar.swift); the bench's `easels delete` does not.
     func delete(_ id: String) {
         deleted.insert(id)
         all.removeAll { $0.id == id }

@@ -61,15 +61,24 @@ final class EaselBridge: NSObject, WKScriptMessageHandler {
 
     /// The page is up and listening: what the board is, who is looking, and
     /// the document as last saved.
+    ///
+    /// A board renamed in the sidebar while its page was not loaded has a
+    /// document whose `meta.title` is the old name. Its `config` says
+    /// `renamed: true` beside Copper's title, and a `rename` follows it at
+    /// once — either one is enough for the page to take Copper's name, and
+    /// until it does, a `save` of the old name does not undo the rename
+    /// (EaselStore.save).
     @MainActor
     private static func ready(_ web: WKWebView, _ easel: String) {
         let store = EaselStore.shared
         let known = store.easel(easel)
-        let info: [String: Any] = [
+        var info: [String: Any] = [
             "id": easel,
             "title": known?.title ?? EaselStore.untitled,
             "createdAt": known?.createdAt ?? Date().timeIntervalSince1970,
         ]
+        let renamed = known?.renamedFrom != nil
+        if renamed { info["renamed"] = true }
         store.state(easel) { [weak web] data in
             guard let web else { return }
             tell(web, [
@@ -79,6 +88,7 @@ final class EaselBridge: NSObject, WKScriptMessageHandler {
                 "state": data.map { $0.base64EncodedString() as Any } ?? NSNull(),
                 "mode": "local",
             ])
+            if renamed, let title = store.easel(easel)?.title { tell(web, ["type": "rename", "title": title]) }
         }
     }
 

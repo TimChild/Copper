@@ -266,6 +266,16 @@ enum Fork {
                 }
                 browser.choose(credential)
                 return ["started": true, "id": id]
+            case "rows":
+                // The list hanging from the focused box, as the picker draws it.
+                return ["rows": (browser.suggesting?.rows ?? []).map(\.id)]
+            case "pick":
+                guard let id = words.first else { return ["error": "bw pick ROW"] }
+                guard let row = browser.suggesting?.rows.first(where: { $0.id == id }) else {
+                    return ["error": "no row \(id) in the list"]
+                }
+                browser.choose(row)
+                return ["started": true, "id": id]
             case "offer":
                 guard words.first == "keep" else { return ["error": "bw offer keep"] }
                 guard browser.offering != nil else { return ["error": "no save offer"] }

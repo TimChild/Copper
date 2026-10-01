@@ -233,7 +233,7 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
-        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render", "ext-manager", "storage":
+        case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render", "ext-manager", "storage", "windows":
             answer(Fork.bench(verb, request, in: browser))
 
         case "newtab":
@@ -691,6 +691,8 @@ final class Bench {
     private func find(_ request: [String: Any], in browser: Browser) -> Tab? {
         guard let ref = (request["id"] as? String)?.lowercased(), !ref.isEmpty else { return nil }
         return browser.tabs.first { $0.id.uuidString.lowercased().hasPrefix(ref) }
+            // Fork: windows — a tab in a ⌘N window answers to its id too.
+            ?? Windows.all.flatMap(\.tabs).first { $0.id.uuidString.lowercased().hasPrefix(ref) }
     }
 
     private func missing(_ request: [String: Any]) -> [String: Any] {

@@ -60,6 +60,12 @@ final class Agent: ObservableObject {
     /// The model's side of the conversation, in the wire shape.
     private var messages: [[String: Any]] = []
     private var task: Task<Void, Never>?
+    /// Which run owns the transcript. Stop and Clear move it on, so a run
+    /// that is still unwinding (a tool that ignores cancellation, a request
+    /// already in flight) can never write into the next question's history.
+    private var generation = 0
+    /// The window the run in progress is working in (Fork/Windows.swift).
+    private weak var runningIn: Browser?
 
     private static var file: URL { Store.file("chat.json") }
 
@@ -97,6 +103,7 @@ final class Agent: ObservableObject {
     }
 
     func clear() {
+        generation += 1
         task?.cancel()
         task = nil
         busy = false
@@ -105,9 +112,21 @@ final class Agent: ObservableObject {
         messages = []
     }
 
+    /// A ⌘N window closing takes its run with it.
+    func stop(ifIn browser: Browser) {
+        guard busy, runningIn === browser else { return }
+        stop()
+    }
+
     func stop() {
+        generation += 1
         task?.cancel()
         task = nil
+        messages = Agent.sealed(messages)
+        // The driver timeline ends with the run instead of "Thinking…" for
+        // its thirty-second grace.
+        let drive = Drive.shared
+        if drive.live, drive.run?.driver == .pane { drive.finish(.stopped, note: "Stopped by you") }
         busy = false
         status = "Stopped"
         items.append(Item(kind: .note, text: "Stopped"))
@@ -132,15 +151,23 @@ final class Agent: ObservableObject {
         items.append(Item(kind: .user, text: text))
         busy = true
         status = "Thinking…"
+        generation += 1
+        runningIn = browser
+        let ticket = generation
         task = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.run(text, in: browser)
+            await self.run(text, in: browser, ticket: ticket)
+            guard ticket == self.generation else { return }
+            self.messages = Agent.sealed(self.messages)
             self.busy = false
             self.task = nil
         }
     }
 
-    private func run(_ text: String, in browser: Browser) async {
+    private func run(_ text: String, in browser: Browser, ticket: Int) async {
+        // Stopped or cleared since this started: hands off the transcript.
+        func live() -> Bool { ticket == generation && !Task.isCancelled }
+        messages = Agent.sealed(messages)
         let keys = Intelligence.shared.keys
         var user: [String: Any] = ["role": "user"]
         if config.pageContext, let tab = browser.active, !tab.isBlank {
@@ -152,6 +179,8 @@ final class Agent: ObservableObject {
         } else {
             user["content"] = text
         }
+        guard live() else { return }
+        let asked = messages.count
         messages.append(user)
 
         let jev = MCP.shared.config.jev && Intelligence.shared.jevReady
@@ -166,21 +195,32 @@ final class Agent: ObservableObject {
         }
 
         for turn in 0..<max(1, config.maxTurns) {
-            if Task.isCancelled { return }
+            if !live() { return }
             status = turn == 0 ? "Thinking…" : "Thinking… (\(turn + 1))"
             let reply: [String: Any]
             do {
-                reply = try await Agent.complete(messages: messages, tools: tools, keys: keys, model: modelName)
+                reply = try await Agent.complete(messages: Agent.sealed(messages), tools: tools, keys: keys, model: modelName)
             } catch {
+                // Stopped mid-request: stop() already wrote the transcript.
+                guard live() else { return }
                 items.append(Item(kind: .note, text: Servers.text(error), ok: false))
-                messages.removeLast() // the question stays unanswered; the model never saw it
+                // On the first turn the model never saw the question, so it
+                // goes. After that the tool results stay: dropping the last
+                // message would orphan a tool call and every later question
+                // would fail with "tool_use ids without tool_result".
+                if turn == 0, messages.count > asked { messages.removeSubrange(asked...) }
+                messages = Agent.sealed(messages)
                 status = ""
                 return
             }
+            guard live() else { return }
             var assistant: [String: Any] = ["role": "assistant"]
             let content = Agent.text(of: reply["content"])
             if !content.isEmpty { assistant["content"] = content }
-            let calls = (reply["tool_calls"] as? [[String: Any]]) ?? []
+            var calls = (reply["tool_calls"] as? [[String: Any]]) ?? []
+            // A call with no id gets one here, where the history can keep it —
+            // otherwise its result would never match and read as cancelled.
+            for i in calls.indices where ((calls[i]["id"] as? String) ?? "").isEmpty { calls[i]["id"] = "call_" + UUID().uuidString }
             if !calls.isEmpty { assistant["tool_calls"] = calls }
             if let blocks = reply["_blocks"] { assistant["_blocks"] = blocks }
             messages.append(assistant)
@@ -192,7 +232,7 @@ final class Agent: ObservableObject {
 
             var pictures: [Data] = []
             for call in calls {
-                if Task.isCancelled { return }
+                if !live() { return }
                 let id = (call["id"] as? String) ?? UUID().uuidString
                 let function = call["function"] as? [String: Any] ?? [:]
                 let name = (function["name"] as? String) ?? ""
@@ -202,6 +242,7 @@ final class Agent: ObservableObject {
                 let started = Date()
                 var item = Item(kind: .tool, text: "", tool: name)
                 let result = await execute(name, args, in: browser, pictures: &pictures)
+                guard live() else { return }
                 item.ok = !result.isError
                 item.ms = Date().timeIntervalSince(started) * 1000
                 item.text = Agent.summary(args, result.text)
@@ -320,6 +361,58 @@ final class Agent: ObservableObject {
         return message
     }
 
+    /// The history with every tool call answered, the shape every provider
+    /// insists on: an assistant turn's tool calls are each followed, before
+    /// anything else, by a tool result with the same id. A call cut off by
+    /// Stop gets a result saying so; a result with no call before it goes.
+    static func sealed(_ messages: [[String: Any]]) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        var i = 0
+        while i < messages.count {
+            let message = messages[i]
+            i += 1
+            let role = message["role"] as? String ?? ""
+            if role == "tool" { continue } // orphaned: its call is not right before it
+            out.append(message)
+            guard role == "assistant", let calls = message["tool_calls"] as? [[String: Any]], !calls.isEmpty else { continue }
+            let ids = calls.map { ($0["id"] as? String) ?? "" }
+            var answered = Set<String>()
+            while i < messages.count, messages[i]["role"] as? String == "tool" {
+                let id = messages[i]["tool_call_id"] as? String ?? ""
+                if ids.contains(id), !answered.contains(id) {
+                    out.append(messages[i])
+                    answered.insert(id)
+                }
+                i += 1
+            }
+            for id in ids where !answered.contains(id) {
+                out.append(["role": "tool", "tool_call_id": id,
+                            "content": "Cancelled: the user pressed Stop before this tool call finished. It may or may not have taken effect; check the page before relying on it."])
+                answered.insert(id)
+            }
+        }
+        return out
+    }
+
+    static func sealedSelfTest() -> [String] {
+        var failures: [String] = []
+        func call(_ id: String) -> [String: Any] { ["id": id, "type": "function", "function": ["name": "x", "arguments": "{}"]] }
+        let dangling: [[String: Any]] = [
+            ["role": "user", "content": "q"],
+            ["role": "assistant", "tool_calls": [call("a"), call("b")]],
+            ["role": "tool", "tool_call_id": "a", "content": "ok"],
+            ["role": "user", "content": "next"],
+        ]
+        let s = sealed(dangling)
+        if s.count != 5 || s[3]["tool_call_id"] as? String != "b" || s[4]["role"] as? String != "user" { failures.append("sealed answers a dangling call") }
+        let orphan: [[String: Any]] = [["role": "user", "content": "q"], ["role": "tool", "tool_call_id": "z", "content": "?"]]
+        if sealed(orphan).count != 1 { failures.append("sealed drops an orphan result") }
+        let fine: [[String: Any]] = [["role": "assistant", "tool_calls": [call("a")]], ["role": "tool", "tool_call_id": "a", "content": "ok"],
+                                     ["role": "user", "content": [["type": "text", "text": "pic"]]]]
+        if sealed(fine).count != 3 { failures.append("sealed keeps a complete history") }
+        return failures
+    }
+
     static func text(of content: Any?) -> String {
         if let s = content as? String { return s }
         if let parts = content as? [[String: Any]] { return parts.compactMap { $0["text"] as? String }.joined() }
@@ -356,6 +449,8 @@ final class Agent: ObservableObject {
         case "open": open = true
         case "close": open = false
         case "clear": clear()
+        case "stop": stop()
+        case "selftest": return ["failures": Agent.sealedSelfTest() + Claude.selfTest()]
         default: break
         }
         let rows = items.map { ["kind": "\($0.kind)", "tool": $0.tool, "text": $0.text, "ok": $0.ok] as [String: Any] }

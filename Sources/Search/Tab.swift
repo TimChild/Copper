@@ -1044,7 +1044,7 @@ final class PageView: WKWebView {
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)
         guard #available(macOS 15.4, *),
-              let tab = Extensions.shared.browser?.tabs.first(where: { $0.built === self })
+              let tab = Windows.all.flatMap(\.tabs).first(where: { $0.built === self }) // Fork: windows
         else { return }
         let items = Extensions.shared.menuItems(for: tab)
         guard !items.isEmpty else { return }

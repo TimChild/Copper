@@ -37,7 +37,7 @@ final class Browser: NSObject, ObservableObject {
 
     /// Everything there is to set. Held here so the whole window redraws when
     /// one of them changes.
-    let prefs = Preferences()
+    let prefs: Preferences // Fork: windows — one set, shared by every window
     /// The settings panel.
     @Published var tuning = false
     /// The page the settings panel should open on. Bench uses this to land on
@@ -49,7 +49,7 @@ final class Browser: NSObject, ObservableObject {
 
     // MARK: - bookmarks
 
-    let bookmarks = Bookmarks()
+    let bookmarks: Bookmarks
     /// The full list, for taking things out.
     @Published var bookmarking = false
     /// The dropdown off the button.
@@ -104,7 +104,7 @@ final class Browser: NSObject, ObservableObject {
     /// answers to this string.
     @Published var typed = "" { didSet { guess() } }
 
-    let history = History()
+    let history: History
     /// What the field is offering, best first.
     @Published private(set) var offers: [OmniboxSuggestion] = []
     /// The rest of the best match, drawn grey after the caret. Tab takes it.
@@ -184,8 +184,8 @@ final class Browser: NSObject, ObservableObject {
 
     // MARK: - taking things off pages
 
-    let curtain = Curtain()
-    let loot = Loot()
+    let curtain: Curtain
+    let loot: Loot
     let floater = Float()
     /// True while the pointer is picking things to hide.
     @Published private(set) var veiling = false
@@ -770,8 +770,25 @@ final class Browser: NSObject, ObservableObject {
 
     // MARK: - beginning and ending
 
-    override init() {
+    /// Fork: windows — nil for the window Copper launches with; the scene id
+    /// of a window opened with ⌘N (Fork/Windows.swift).
+    let windowID: UUID?
+    var primary: Bool { windowID == nil }
+
+    override convenience init() { self.init(window: nil) }
+
+    init(window: UUID?) {
+        windowID = window
+        // Another window shares the first one's files instead of opening
+        // its own copies of them, which would each write over the other.
+        let first = window == nil ? nil : Windows.main
+        prefs = first?.prefs ?? Preferences()
+        bookmarks = first?.bookmarks ?? Bookmarks()
+        history = first?.history ?? History()
+        curtain = first?.curtain ?? Curtain()
+        loot = first?.loot ?? Loot()
         super.init()
+        guard primary else { joinAsWindow(); return }
         Shield.shared.enabled = prefs.shielded
         Shield.shared.compile()
         if #available(macOS 15.4, *) { Extensions.shared.start(for: self) }
@@ -791,78 +808,15 @@ final class Browser: NSObject, ObservableObject {
         bookmarks.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &bag)
-        // The vault's index arriving a moment after unlock: an account list
-        // that is already open redraws with what came.
-        Bitwarden.shared.$cacheVersion
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self, let open = suggesting, let tab = tabs.first(where: { $0.id == open.tab }),
-                      let host = curtain.host(of: tab.address) else { return }
-                let rows = suggestions(for: tab, host: host)
-                let credentials = rows.compactMap { suggestion -> Credential? in
-                    guard case .credential(let credential) = suggestion else { return nil }
-                    return credential
-                }
-                let isLogin = (tab.fieldFocus?.group ?? .login) == .login
-                let pending = isLogin && (Self.bitwardenLocked || Bitwarden.shared.isLoadingCache)
-                suggesting = rows.isEmpty && !pending
-                    ? nil
-                    : Suggesting(tab: tab.id, spot: open.spot, credentials: credentials, rows: rows)
-            }
-            .store(in: &bag)
-
+        watchVault()
         // An icon that arrives is put on every tab showing that site, not only
         // the one that happened to ask for it.
-        Favicons.shared.arrived = { [weak self] host, image in
-            guard let self else { return }
-            for tab in tabs where tab.address?.host()?.lowercased() == host {
+        Favicons.shared.arrived = { host, image in
+            for tab in Windows.all.flatMap(\.tabs) where tab.address?.host()?.lowercased() == host {
                 tab.icon = image
             }
         }
-        // The little window's own three buttons.
-        floater.onReturn = { [weak self] in
-            guard let self else { return }
-            // The window closes first, and unconditionally. Hanging that on
-            // finding the tab again is how a little window survives the button
-            // meant to dismiss it.
-            let came = self.floating
-            self.land()
-            if let came, let tab = self.tabs.first(where: { $0.id == came }) {
-                self.select(tab)
-            }
-            NSApp.activate(ignoringOtherApps: true)
-            NSApp.windows.first { $0.contentView != nil }?.makeKeyAndOrderFront(nil)
-        }
-        floater.onSkip = { [weak self] seconds in
-            guard let self, let id = self.floating,
-                  let tab = self.tabs.first(where: { $0.id == id })
-            else { return }
-            tab.web.evaluateJavaScript(Isolate.skip(seconds))
-        }
-        floater.onProgress = { [weak self] answer in
-            guard let self, let id = self.floating,
-                  let tab = self.tabs.first(where: { $0.id == id })
-            else { return }
-            tab.web.evaluateJavaScript(Isolate.where_) { found, _ in
-                MainActor.assumeIsolated {
-                    guard let pair = found as? [Any], pair.count == 2,
-                          let through = pair[0] as? Double,
-                          let playing = pair[1] as? Bool
-                    else { return }
-                    answer(through, playing)
-                }
-            }
-        }
-        floater.onPlayPause = { [weak self] answer in
-            guard let self, let id = self.floating,
-                  let tab = self.tabs.first(where: { $0.id == id })
-            else { return }
-            tab.web.evaluateJavaScript(Isolate.toggle) { playing, _ in
-                MainActor.assumeIsolated { answer((playing as? Bool) ?? true) }
-            }
-        }
-        floater.onClose = { [weak self] in self?.land() }
+        wireFloater()
 
         // Yesterday's tabs, or one empty one. Either way a web view is built
         // now, which starts a content process while the window is still being
@@ -871,7 +825,7 @@ final class Browser: NSObject, ObservableObject {
         defer {
             follow()
             watchForSleep()
-            Tab.touched = { [weak self] tab in if let self { Split.shared.touched(tab, in: self) } }
+            Tab.touched = { [weak self] tab in if let owner = Windows.owner(of: tab) ?? self { Split.shared.touched(tab, in: owner) } }
             SpaceSwipe.watch(self)
             MouseButtons.watch(self) // Fork: thumb buttons back/forward, wheel click on the column
             Heat.shared.start(for: self)
@@ -904,7 +858,7 @@ final class Browser: NSObject, ObservableObject {
             .sink { [weak self] on in
                 guard let self else { return }
                 Shield.shared.enabled = on
-                Shield.shared.apply(to: tabs.compactMap { $0.built?.configuration.userContentController })
+                Shield.shared.apply(to: Windows.all.flatMap(\.tabs).compactMap { $0.built?.configuration.userContentController }) // Fork: windows
                 announce(on ? "Ads and trackers blocked" : "Blocking off — reload to see the difference")
             }
             .store(in: &bag)
@@ -943,7 +897,7 @@ final class Browser: NSObject, ObservableObject {
                 // Each tab keeps whatever is hidden on the site it is showing:
                 // re-arming with nothing would quietly restore every element
                 // this person had taken off, everywhere.
-                for tab in tabs {
+                for tab in Windows.all.flatMap(\.tabs) { // Fork: windows
                     tab.arm(hiding: curtain.css(on: curtain.host(of: tab.address)))
                 }
                 announce(on ? "Passkeys offered again — reload the page" : "Sites will ask for a password instead")
@@ -981,6 +935,7 @@ final class Browser: NSObject, ObservableObject {
     }
 
     private func writeSession(now: Bool = false) {
+        guard primary else { Windows.keep(self, now: now); return } // Fork: windows
         Session.write(now: now, Spaces.shared.shape(visible: tabs, active: activeID))
     }
 
@@ -999,6 +954,146 @@ final class Browser: NSObject, ObservableObject {
     /// quit, before there is a process left to finish the wait on its behalf.
     func flushSession() {
         writeSession(now: true)
+    }
+
+    // MARK: - Fork: windows
+
+    /// The vault's index arriving a moment after unlock: an account list
+    /// that is already open redraws with what came. (Fork: windows — every window)
+    private func watchVault() {
+        Bitwarden.shared.$cacheVersion
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, let open = suggesting, let tab = tabs.first(where: { $0.id == open.tab }),
+                      let host = curtain.host(of: tab.address) else { return }
+                let rows = suggestions(for: tab, host: host)
+                let credentials = rows.compactMap { suggestion -> Credential? in
+                    guard case .credential(let credential) = suggestion else { return nil }
+                    return credential
+                }
+                let isLogin = (tab.fieldFocus?.group ?? .login) == .login
+                let pending = isLogin && (Self.bitwardenLocked || Bitwarden.shared.isLoadingCache)
+                suggesting = rows.isEmpty && !pending
+                    ? nil
+                    : Suggesting(tab: tab.id, spot: open.spot, credentials: credentials, rows: rows)
+            }
+            .store(in: &bag)
+
+    }
+
+    /// The little window's own buttons, in every window. (Fork: windows)
+    private func wireFloater() {
+        // The little window's own three buttons.
+        floater.onReturn = { [weak self] in
+            guard let self else { return }
+            // The window closes first, and unconditionally. Hanging that on
+            // finding the tab again is how a little window survives the button
+            // meant to dismiss it.
+            let came = self.floating
+            self.land()
+            if let came, let tab = self.tabs.first(where: { $0.id == came }) {
+                self.select(tab)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            (Windows.window(of: self) ?? NSApp.windows.first { $0.contentView != nil })?.makeKeyAndOrderFront(nil) // Fork: windows
+        }
+        floater.onSkip = { [weak self] seconds in
+            guard let self, let id = self.floating,
+                  let tab = self.tabs.first(where: { $0.id == id })
+            else { return }
+            tab.web.evaluateJavaScript(Isolate.skip(seconds))
+        }
+        floater.onProgress = { [weak self] answer in
+            guard let self, let id = self.floating,
+                  let tab = self.tabs.first(where: { $0.id == id })
+            else { return }
+            tab.web.evaluateJavaScript(Isolate.where_) { found, _ in
+                MainActor.assumeIsolated {
+                    guard let pair = found as? [Any], pair.count == 2,
+                          let through = pair[0] as? Double,
+                          let playing = pair[1] as? Bool
+                    else { return }
+                    answer(through, playing)
+                }
+            }
+        }
+        floater.onPlayPause = { [weak self] answer in
+            guard let self, let id = self.floating,
+                  let tab = self.tabs.first(where: { $0.id == id })
+            else { return }
+            tab.web.evaluateJavaScript(Isolate.toggle) { playing, _ in
+                MainActor.assumeIsolated { answer((playing as? Bool) ?? true) }
+            }
+        }
+        floater.onClose = { [weak self] in self?.land() }
+    }
+
+    /// A window opened with ⌘N (Fork/Windows.swift). The files and the
+    /// settings are the first window's; this one has its own row of tabs,
+    /// its own sleep timer, and listens to what its window is drawn from.
+    /// No spaces, no session file, no bench, no MCP server — those have one
+    /// owner, the first window.
+    private func joinAsWindow() {
+        history.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &bag)
+        bookmarks.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &bag)
+        prefs.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &bag)
+        prefs.$look
+            .dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.relook() }
+            }
+            .store(in: &bag)
+        watchForSleep()
+        watchVault()
+        wireFloater()
+
+        if let id = windowID, let row = Windows.savedTabs(for: id) {
+            for entry in row.tabs {
+                guard let url = URL(string: entry.url) else { continue }
+                let tab = Tab()
+                prepare(tab)
+                tab.restore(url: url, title: entry.title)
+                tab.pin = entry.pin
+                tabs.append(tab)
+            }
+            if !tabs.isEmpty {
+                let active = tabs[min(max(0, row.active), tabs.count - 1)]
+                activeID = active.id
+                _ = active.wake()
+            }
+        }
+        guard tabs.isEmpty else { return }
+        let tab = Tab()
+        adopt(tab)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak tab] in
+            guard let tab, tab.isBlank else { return }
+            _ = tab.web
+        }
+    }
+
+    /// A ⌘N window closed with the red button: its pages go, and so does
+    /// everything that was keeping them awake.
+    func retire() {
+        guard !primary else { return }
+        dozing?.invalidate()
+        dozing = nil
+        pressure?.cancel()
+        pressure = nil
+        if floating != nil { land() }
+        for tab in tabs {
+            Grouper.shared.forget(tab.id)
+            tab.close()
+        }
+        tabs = []
+        activeID = nil
+        bag.removeAll()
     }
 
     // MARK: - tabs

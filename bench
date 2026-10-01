@@ -58,6 +58,7 @@
     ./bench spaces [page [N]|page close|tap N|tap header]
                                        the Space page; tap is a click on chip N (another space
                                        switches, the current one opens its page) or the title icon
+    ./bench windows [new|open N URL|key N|close N|saved|quit]   ⌘N windows
     ./bench spaces [delete N|answer close|move|cancel]
                                        the Delete Space sheet, and its buttons
     ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|blur X
@@ -210,8 +211,9 @@ def main(argv):
                 rest.append(args[i]); i += 1
         request["text"] = rest[0] if rest else ""
     elif verb == "window":
-        if not args: sys.exit("usage: bench window PATH")
+        if not args: sys.exit("usage: bench window PATH [N]")
         request["path"] = os.path.abspath(args[0])
+        if len(args) > 1: request["index"] = int(args[1])  # the Nth browser window (bench windows)
     elif verb == "passkeys":
         if not args: sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
         request["op"] = args[0]
@@ -228,7 +230,7 @@ def main(argv):
         if len(args) < 2: sys.exit("usage: bench render bitwarden|drive PATH")
         request["op"] = args[0]
         request["path"] = os.path.abspath(args[1])
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager"):
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows"):
         request["op"] = args[0] if args else ("status" if verb in ("updates", "bw", "drive") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "history":

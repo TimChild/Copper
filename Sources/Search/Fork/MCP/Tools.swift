@@ -190,7 +190,7 @@ enum Tools {
             return [.text("Closed. \(tabList(browser))")]
         case "browser_resize":
             guard let w = args["width"] as? NSNumber, let h = args["height"] as? NSNumber else { throw Failure(text: "width and height") }
-            guard let window = Links.window ?? NSApp.windows.first(where: { $0.isVisible }) else { throw Failure(text: "no window") }
+            guard let window = Windows.window(of: browser) ?? Links.window ?? NSApp.windows.first(where: { $0.isVisible }) else { throw Failure(text: "no window") }
             var frame = window.frame
             frame.size = CGSize(width: w.doubleValue, height: h.doubleValue)
             window.setFrame(frame, display: true, animate: false)

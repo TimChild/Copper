@@ -23,6 +23,7 @@ final class Links: NSObject, NSApplicationDelegate {
     private static var flush: (() -> Void)?
 
     func applicationWillTerminate(_ notification: Notification) {
+        Windows.flush() // Fork: windows — the ⌘N windows' rows, kept for next launch
         Links.flush?()
     }
 

@@ -77,9 +77,10 @@ enum MouseButtons {
     /// True when the app took the event and the window must not see it.
     private static func handle(_ event: NSEvent, in browser: Browser) -> Bool {
         // Only the browser window; a settings panel or a sheet keeps its own.
-        guard let window = event.window, window == Links.window else { return false }
+        // Each browser window moves its own pages. (Fork: windows)
+        guard let window = event.window, let owner = Windows.owner(of: window) else { return false }
         return route(button: event.buttonNumber, down: event.type == .otherMouseDown,
-                     at: event.locationInWindow, in: window, browser: browser)
+                     at: event.locationInWindow, in: window, browser: owner)
     }
 
     /// One half of a click of one of the other buttons, at a point in the

@@ -1162,10 +1162,13 @@ final class Browser: NSObject, ObservableObject {
         // pin, or a shared row survives; a window left with nothing by the
         // blank's going gets a blank of its own (Spaces.publish).
         Spaces.shared.unregister(self)
-        if let id = windowBlankID, let tab = tabs.first(where: { $0.id == id }), tab.isBlank {
+        // Fork: global pins — a blank that was pinned is every window's now,
+        // and is left alone: dropBlank would not find it in a row, and
+        // closing it would leave a dead tab in every grid.
+        if let id = windowBlankID, let tab = tabs.first(where: { $0.id == id }), tab.isBlank, tab.pin == nil {
             Spaces.shared.dropBlank(tab)
             tab.close()
-        } else if let tab = active, tab.isBlank, !Spaces.shared.shown(tab, outside: self) {
+        } else if let tab = active, tab.isBlank, tab.pin == nil, !Spaces.shared.shown(tab, outside: self) {
             // The blank this window was on — made for it when its last page
             // closed — and no other window's.
             Spaces.shared.dropBlank(tab)

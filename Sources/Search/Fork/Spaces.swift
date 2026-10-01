@@ -454,7 +454,13 @@ final class Spaces: ObservableObject {
         // that is free; with none free (or none at all), a new tab, as Arc
         // gives rather than taking a page off another window's stage.
         let asked = landing.flatMap { id in next.first { $0.id == id } }
-        if let active = asked ?? pick(from: next, remembered: activeByBrowserSpace[key]?[id], for: browser, steal: false) {
+        let remembered = activeByBrowserSpace[key]?[id]
+        // A space with no tabs of its own that this window has not looked
+        // at before (a new one, say) opens on a new tab, as it did before
+        // the pins were in every projection — not on whichever pin was
+        // touched last.
+        let pool = remembered == nil && row(id).isEmpty ? [] : next
+        if let active = asked ?? pick(from: pool, remembered: remembered, for: browser, steal: false) {
             browser.activeID = nil
             browser.select(active)
         } else {
@@ -930,7 +936,10 @@ final class Spaces: ObservableObject {
             let key = pinKey(url) ?? url.absoluteString
             // Upstream's file has no `active` flag — its `active` index does.
             let wasActive = entry.active == true || (legacy && entry.space == nil && i == saved.active)
-            if let pin = kept[key] {
+            // Only the merge folds two addresses into one: a `pins` list is
+            // what this build wrote, and a page pinned twice on purpose
+            // there comes back twice.
+            if legacy, let pin = kept[key] {
                 if wasActive { activePin = pin.id }
                 continue
             }

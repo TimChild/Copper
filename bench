@@ -65,6 +65,10 @@
                            |tone X|motion STYLE|none|speed X|clear]
                                        a space's own theme, as the Space page sets it
     ./bench spaces picture N PATH [light|dark]
+    ./bench backdrop                   the column's animated scenes: WebContent pid, hidden, and
+                                       the page's status() (clock time, wall, key, frames, fading)
+    ./bench spaces swipe direction [system|natural|inverted]
+                                       which way a swipe moves the column (Settings › Tabs)
     ./bench spaces slide [at X|off]    the last space switch's slide timings (ms from the click,
                                        frames, missed frames); `at X` holds the next slide at X
                                        the Space page as a PNG, drawn off screen, laid out whole
@@ -189,6 +193,8 @@ def main(argv):
         request["id"] = args[0]
         if len(args) > 1: request["path"] = os.path.abspath(args[1])
         if len(args) > 2: request["width"] = float(args[2])
+    elif verb == "backdrop":
+        pass
     elif verb in ("split", "swipe"):
         request["arg"] = args[0] if args else ""
     elif verb == "mouse":

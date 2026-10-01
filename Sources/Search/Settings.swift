@@ -232,6 +232,13 @@ struct SettingsPanel: View {
                 Segmented(options: TabSwitching.allCases.map { ($0, $0.title) }, selection: $prefs.tabSwitching)
             }
             Rule()
+            // Fork (swipe-direction): here rather than on the Spaces page,
+            // which is the editor for one space at a time; this is how the
+            // column itself answers the trackpad, like ⌃Tab above it.
+            Line("Swipe between spaces", "Two fingers across the tabs. Natural moves them with your fingers, Inverted the other way; Like scrolling follows the Mac's Natural scrolling") {
+                Segmented(options: SwipeDirection.allCases.map { ($0, $0.title) }, selection: $prefs.swipeDirection)
+            }
+            Rule()
             Line("Sleep tabs you aren't using",  "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
                 Switch(on: $prefs.sleepsTabs)
             }

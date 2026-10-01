@@ -34,6 +34,14 @@ import SwiftUI
 // under the curtain and the live column takes the picture's place; when not,
 // the pictures spring back and are dropped. A space not yet visited this
 // launch has no picture, and comes in as its bare ground until it is real.
+//
+// An animated space's scene is not pictured into the ground the swipe
+// draws: the column's one live scene (AnimatedBackdrop) stays under the
+// curtain, mixing towards the arriving space as the fingers go, and only
+// the band's picture travels over it. That picture still holds the frame
+// of the scene it was taken on, so on a commit it does not vanish when the
+// live column takes its place but fades out over it as the band settles —
+// the frozen frame gives way to the moving one instead of jumping to it.
 
 @MainActor
 final class SpaceSlide: ObservableObject {
@@ -66,6 +74,11 @@ final class SpaceSlide: ObservableObject {
     /// At the first or last space there is nowhere to go: the live column is
     /// pulled this far, with resistance, and springs back.
     @Published private(set) var stretch: CGFloat = 0
+    /// After a swipe commits, while the band settles: the incoming picture
+    /// stays over the live band and fades out, from the phase the fingers
+    /// let go at (`landed`) to home.
+    @Published private(set) var landing = false
+    private(set) var landed: CGFloat = 0
     /// The column as it was when the fingers started; the curtain while the
     /// swipe is on, and the old picture of the slide if it commits.
     private var outgoing: NSImage?
@@ -105,6 +118,7 @@ final class SpaceSlide: ObservableObject {
             dragging = false
             arriving = nil
             incoming = nil
+            landing = false
             stretch = 0
             picture = shot
             phase = 0
@@ -152,6 +166,7 @@ final class SpaceSlide: ObservableObject {
             dragging = false
             arriving = nil
             incoming = nil
+            landing = false
             stretch = 0
         }
         outgoing = nil
@@ -174,8 +189,9 @@ final class SpaceSlide: ObservableObject {
 
     // MARK: - the swipe
 
-    /// Fingers `travel` points sideways from where they started (negative is
-    /// to the left). The first call takes the picture of the column; every
+    /// The column `travel` points sideways from where it started (negative is
+    /// to the left) — the fingers' travel, turned round if the swipe
+    /// direction setting says so. The first call takes the picture of the column; every
     /// call after only moves things, with no animation — the fingers are the
     /// animation. False when there is no column to drive.
     @discardableResult
@@ -201,8 +217,9 @@ final class SpaceSlide: ObservableObject {
             watch()
         }
         let width = max(column.width, 1)
-        // Fingers to the left push the column left, so the space after this
-        // one comes in from the right — content follows the fingers.
+        // Travel to the left pushes the column left, so the space after this
+        // one comes in from the right. `travel` is already the column's way,
+        // not the fingers' — Swipes.swift turns it round for Inverted.
         let forward = travel < 0
         let there = here + (forward ? 1 : -1)
         var calm = Transaction()
@@ -276,7 +293,9 @@ final class SpaceSlide: ObservableObject {
             withTransaction(calm) {
                 dragging = false
                 self.arriving = nil
-                incoming = nil
+                landed = phase
+                landing = incoming != nil
+                if !landing { incoming = nil }
                 Spaces.shared.select(arriving.id, in: browser, pictured: true)
             }
             // As for a click: one turn of the run loop commits the frame with
@@ -419,7 +438,7 @@ final class SpaceSlide: ObservableObject {
         var note: [String: Any] = ["moving": moving, "hold": hold.map { Double($0) } ?? -1,
                                    "dragging": dragging, "phase": (Double(phase) * 1000).rounded() / 1000,
                                    "way": Double(way), "stretch": (Double(stretch) * 10).rounded() / 10,
-                                   "arriving": arriving?.name ?? "", "incoming": incoming != nil,
+                                   "arriving": arriving?.name ?? "", "incoming": incoming != nil, "landing": landing,
                                    "cached": cache.keys.compactMap { id in Spaces.shared.all.first { $0.id == id }?.name },
                                    "space": Spaces.shared.space.name,
                                    "window": Links.window.map { w in [Int(w.frame.minX), Int(w.frame.minY), Int(w.frame.width), Int(w.frame.height),
@@ -488,6 +507,10 @@ struct SpaceSlideCurtain: View {
             let height = min(slide.band.height, size.height - top)
             ZStack(alignment: .topLeading) {
                 if slide.dragging { arriving(size: size, top: top, height: height, fallback: picture) }
+                if slide.landing, let incoming = slide.incoming {
+                    band(incoming, size: size, top: top, height: height)
+                        .opacity(Double((1 - slide.phase) / max(0.001, 1 - slide.landed)))
+                }
                 outgoing(picture, size: size, top: top, height: height)
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
@@ -499,33 +522,49 @@ struct SpaceSlideCurtain: View {
     /// arriving space's ground, its picture's lights and strip in place, its
     /// band coming in from the side. With no picture of it yet, the old
     /// column's lights and strip stand in and the band is bare ground.
+    ///
+    /// An animated arriving space draws no ground of its own here: the
+    /// column's live scene underneath is already mixing towards it (see
+    /// `ThemeBackdrop`'s `live`), and a second scene for the curtain would be
+    /// a second WebContent process that seldom loads before the fingers lift.
+    /// Its lights and strip are not pictured in either — they would bring a
+    /// frozen frame of the scene with them — so the live column's stand until
+    /// the switch.
     @ViewBuilder
     private func arriving(size: CGSize, top: CGFloat, height: CGFloat, fallback: NSImage) -> some View {
-        if let space = slide.arriving {
-            SpaceTint(space: space, dark: scheme == .dark).backdrop
+        let animated = slide.arriving?.look.motion != nil
+        if let space = slide.arriving, !animated {
+            ThemeBackdrop(theme: space.look, dark: scheme == .dark)
                 .frame(width: size.width, height: size.height)
         }
-        Image(nsImage: slide.incoming ?? fallback)
-            .resizable()
-            .frame(width: size.width, height: size.height)
-            .mask(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    Rectangle().frame(height: top)
-                    Color.clear.frame(height: height)
-                    Rectangle()
-                }
-            }
-        if let incoming = slide.incoming {
-            Image(nsImage: incoming)
+        if !animated {
+            Image(nsImage: slide.incoming ?? fallback)
                 .resizable()
                 .frame(width: size.width, height: size.height)
-                .offset(x: slide.way * size.width * (1 - slide.phase))
                 .mask(alignment: .topLeading) {
-                    Rectangle()
-                        .frame(width: max(0, size.width - 1), height: height)
-                        .offset(y: top)
+                    VStack(spacing: 0) {
+                        Rectangle().frame(height: top)
+                        Color.clear.frame(height: height)
+                        Rectangle()
+                    }
                 }
         }
+        if let incoming = slide.incoming {
+            band(incoming, size: size, top: top, height: height)
+        }
+    }
+
+    /// The arriving space's band, pictured, where the live one would be.
+    private func band(_ incoming: NSImage, size: CGSize, top: CGFloat, height: CGFloat) -> some View {
+        Image(nsImage: incoming)
+            .resizable()
+            .frame(width: size.width, height: size.height)
+            .offset(x: slide.way * size.width * (1 - slide.phase))
+            .mask(alignment: .topLeading) {
+                Rectangle()
+                    .frame(width: max(0, size.width - 1), height: height)
+                    .offset(y: top)
+            }
     }
 
     private func outgoing(_ picture: NSImage, size: CGSize, top: CGFloat, height: CGFloat) -> some View {

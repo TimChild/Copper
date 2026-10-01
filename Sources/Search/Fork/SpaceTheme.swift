@@ -246,6 +246,30 @@ struct SpaceTheme: Codable, Hashable {
     /// The colours the backdrop runs through.
     func grounds(dark: Bool) -> [Color] { colors.map { ground($0, dark: dark).color } }
 
+    /// A still theme with no picture and no scene: one the column can draw
+    /// as a colour or gradient alone, and so morph into another such.
+    var simple: Bool { image == nil && motion == nil }
+
+    /// This theme `t` of the way to `other`, stop by stop — what the ground
+    /// is part-way through a slide between two simple themes, and what the
+    /// ink of the parts that stay put is mixed from on the way. A flat
+    /// colour against a gradient is given the gradient's number of stops,
+    /// all the one colour, so each stop has a partner to move towards and
+    /// the morph is one surface changing colour rather than two crossfading.
+    /// The picture and the scene are left out: they cannot be mixed, and
+    /// the ink never depended on them.
+    func mixed(_ other: SpaceTheme, _ t: Double) -> SpaceTheme {
+        let count = max(colors.count, other.colors.count, 1)
+        func padded(_ stops: [Stop]) -> [Stop] {
+            let base = stops.isEmpty ? SpaceTheme.plain.colors : stops
+            return (0..<count).map { base[min($0, base.count - 1)] }
+        }
+        let stops = zip(padded(colors), padded(other.colors)).map { $0.mixed($1, t) }
+        func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * t }
+        return SpaceTheme(colors: stops, intensity: mix(intensity, other.intensity), grain: mix(grain, other.grain),
+                          image: nil, motion: nil, blur: 0, tone: mix(tone, other.tone))
+    }
+
     /// Arc's theme for a space — `customInfo.windowTheme` in its sidebar
     /// file: a single colour or a gradient's colours, the intensity and the
     /// grain. Nil for a space Arc left on its default.
@@ -336,9 +360,10 @@ struct SpaceTheme: Codable, Hashable {
 struct ThemeBackdrop: View {
     let theme: SpaceTheme
     let dark: Bool
-    /// The column's own ground, rather than a picture of one: its scene is
-    /// the one long-lived web view (`LiveScene`), kept through still spaces
-    /// and driven by the slide, instead of a scene per backdrop.
+    /// A ground that keeps one web view through theme changes (`LiveScene`)
+    /// instead of a scene per backdrop — the Space page's preview column.
+    /// The column itself is `SpaceGround`, which draws the same parts and
+    /// blends two themes while a slide is on.
     var live = false
 
     var body: some View {
@@ -359,94 +384,110 @@ struct ThemeBackdrop: View {
                 still
             }
             // The tone over everything but the grain, so a dark column is
-            // still grainy rather than grain under a black sheet.
-            if abs(theme.tone) > 0.005 {
-                (theme.tone < 0 ? Color.black : Color.white)
-                    .opacity(abs(theme.tone) * SpaceTheme.toneReach)
-                    .allowsHitTesting(false)
-            }
-            if theme.grain > 0.01 {
-                Image(nsImage: ThemeBackdrop.noise)
-                    .resizable(resizingMode: .tile)
-                    // Overlay, round a middle grey: the grain lightens and
-                    // darkens by the same amount, so it is grain on a dark
-                    // column too rather than a lift (plus-lighter) or a
-                    // shadow (multiply). At full strength it is still the
-                    // column you see, not the noise.
-                    .opacity(min(1, theme.grain) * 0.45)
-                    .blendMode(.overlay)
-                    .allowsHitTesting(false)
-            }
+            // still grainy rather than grain under a black sheet. The grain
+            // is an overlay round a middle grey: it lightens and darkens by
+            // the same amount, so it is grain on a dark column too rather
+            // than a lift or a shadow.
+            Veil(tone: theme.tone, grain: theme.grain)
         }
         .clipped()
     }
 
     /// The colour or gradient, and the picture over it when there is one.
-    @ViewBuilder
-    private var still: some View {
-        colour
-        if let name = theme.image, let picture = ThemeBackdrop.picture(name, blur: theme.blur) {
-            GeometryReader { geo in
-                Image(nsImage: picture)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFill()
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .clipped()
+    private var still: some View { Still(theme: theme, dark: dark) }
+
+    private var colour: some View { Colour(theme: theme, dark: dark) }
+
+    /// The colour or gradient alone. A flat colour is the one stop's ground
+    /// — not `flat`, which has the tone in it already: the tone is laid over
+    /// every ground once (`Veil`), so a toned flat column and a toned
+    /// gradient come out the same, and a morph from one to the other
+    /// (`SpaceGround`) has nothing to jump over.
+    struct Colour: View {
+        let theme: SpaceTheme
+        let dark: Bool
+
+        var body: some View {
+            let stops = theme.grounds(dark: dark)
+            if stops.count > 1 {
+                LinearGradient(colors: stops, startPoint: .topLeading, endPoint: .bottomTrailing)
+            } else {
+                stops.first ?? Palette.ground
             }
-            // A neutral veil first — white in the light, black in the
-            // dark — so the picture's own darks (or lights) are pulled
-            // towards the ground the ink was chosen for: over a photo's
-            // shadowed band the brown titles were going under. It greys
-            // the picture less than more colour would.
-            (dark ? Color.black.opacity(0.3) : Color.white.opacity(0.22))
-            // The colour stays on the picture, thinly, so the ink that is
-            // right for the colour stays right over it — thin enough that
-            // a vivid picture keeps its colour; deeper in the dark, where
-            // light ink needs the picture held down.
-            colour.opacity(dark ? 0.35 : 0.15)
         }
     }
 
-    /// The column's scene. One for the column's whole life — the same view
-    /// in the same place whatever space is current — so the WebContent
-    /// process and the scene's clock carry on through every switch. Made
-    /// only once some space is animated; a still space hides it, which also
-    /// pauses it.
+    /// The colour or gradient and the picture over it, for a still theme;
+    /// the colour alone for an animated one, whose scene is drawn by whoever
+    /// owns it (`SpaceGround`'s one live scene, or `AnimatedBackdrop`).
+    struct Still: View {
+        let theme: SpaceTheme
+        let dark: Bool
+
+        var body: some View {
+            Colour(theme: theme, dark: dark)
+            if theme.motion == nil, let name = theme.image, let picture = ThemeBackdrop.picture(name, blur: theme.blur) {
+                GeometryReader { geo in
+                    Image(nsImage: picture)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                }
+                // A neutral veil first — white in the light, black in the
+                // dark — so the picture's own darks (or lights) are pulled
+                // towards the ground the ink was chosen for: over a photo's
+                // shadowed band the brown titles were going under. It greys
+                // the picture less than more colour would.
+                (dark ? Color.black.opacity(0.3) : Color.white.opacity(0.22))
+                // The colour stays on the picture, thinly, so the ink that is
+                // right for the colour stays right over it — thin enough that
+                // a vivid picture keeps its colour; deeper in the dark, where
+                // light ink needs the picture held down.
+                Colour(theme: theme, dark: dark).opacity(dark ? 0.35 : 0.15)
+            }
+        }
+    }
+
+    /// The tone and the grain over a ground.
+    struct Veil: View {
+        let tone: Double
+        let grain: Double
+
+        var body: some View {
+            if abs(tone) > 0.005 {
+                (tone < 0 ? Color.black : Color.white)
+                    .opacity(abs(tone) * SpaceTheme.toneReach)
+                    .allowsHitTesting(false)
+            }
+            if grain > 0.01 {
+                Image(nsImage: ThemeBackdrop.noise)
+                    .resizable(resizingMode: .tile)
+                    .opacity(min(1, grain) * 0.45)
+                    .blendMode(.overlay)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// A scene of its own for a `live` backdrop that is not the column —
+    /// the Space page's preview column (`SpaceTint.backdrop`). The column
+    /// itself draws its one long-lived scene in `SpaceGround`, which blends
+    /// it towards the arriving space while a slide is on; this one only
+    /// shows the theme it is given, fading as that changes. Made only once
+    /// some space is animated; a still theme hides it, which also pauses it.
     private struct LiveScene: View {
         let theme: SpaceTheme
         let dark: Bool
         @ObservedObject private var spaces = Spaces.shared
-        @ObservedObject private var slide = SpaceSlide.shared
 
         var body: some View {
             if BackdropScene.folder != nil, theme.motion != nil || spaces.all.contains(where: { $0.look.motion != nil }) {
-                BackdropWeb.Host(drive: drive)
+                BackdropWeb.Host(drive: BackdropScene.Drive(look: BackdropScene.Look(theme: theme, dark: dark, key: spaces.current.uuidString),
+                                                            fade: SpaceSlide.duration + 0.08))
                     .allowsHitTesting(false)
             }
-        }
-
-        /// The current space's look, fading in over a slide's length; while
-        /// a swipe is on, the arriving space's mixed in by the fingers.
-        private var drive: BackdropScene.Drive {
-            var drive = BackdropScene.Drive(look: BackdropScene.Look(theme: theme, dark: dark, key: spaces.current.uuidString),
-                                            fade: SpaceSlide.duration + 0.08)
-            if slide.dragging, slide.picture != nil, let space = slide.arriving,
-               let there = BackdropScene.Look(theme: space.look, dark: dark, key: space.id.uuidString) {
-                drive.toward = there
-                drive.x = Double(slide.phase)
-            }
-            return drive
-        }
-    }
-
-    @ViewBuilder
-    private var colour: some View {
-        let stops = theme.grounds(dark: dark)
-        if stops.count > 1 {
-            LinearGradient(colors: stops, startPoint: .topLeading, endPoint: .bottomTrailing)
-        } else {
-            theme.flat(dark: dark)
         }
     }
 

@@ -117,6 +117,9 @@ final class Spaces: ObservableObject {
     private var parked: [UUID: (tabs: [Tab], active: Tab.ID?)] = [:]
     var parkedTabs: [Tab] { parked.values.flatMap(\.tabs) }
     func parkedRow(_ id: UUID) -> [Tab]? { parked[id]?.tabs }
+    /// The row a parked space would come back to — what its preview
+    /// (SpacePreview) draws as the live one.
+    func parkedActive(_ id: UUID) -> Tab.ID? { parked[id]?.active }
 
     private init() {
         let home = Space(name: "Home")
@@ -154,21 +157,21 @@ final class Spaces: ObservableObject {
         guard browser.primary else { return } // Fork: windows
         guard id != current, let to = all.firstIndex(where: { $0.id == id }) else { return }
         let from = all.firstIndex { $0.id == current } ?? to
-        // The column on screen is pictured before anything changes, and the
-        // new row goes in with animations off: the slide is the one motion,
-        // not every old row leaving and every new one arriving (SpaceSlide).
-        // With no column on screen — the tab bar, a folded sidebar — the
-        // switch is what it always was.
-        guard SpaceSlide.shared.begin(forward: to > from, in: browser) else { return swap(to: id, in: browser) }
+        // The column on screen is planned for its preview before anything
+        // changes, and the new row goes in with animations off: the slide is
+        // the one motion, not every old row leaving and every new one
+        // arriving (SpaceSlide). With no column on screen — the tab bar, a
+        // folded sidebar — the switch is what it always was.
+        guard SpaceSlide.shared.begin(forward: to > from, to: all[to], in: browser) else { return swap(to: id, in: browser) }
         var calm = Transaction()
         calm.disablesAnimations = true
         withTransaction(calm) { swap(to: id, in: browser) }
     }
 
-    /// A swipe's commit (SpaceSlide.release): the picture of the old column
-    /// is already up and the slide under way, so only the rows change.
-    func select(_ id: UUID, in browser: Browser, pictured: Bool) {
-        guard pictured else { return select(id, in: browser) }
+    /// A swipe's commit (SpaceSlide.release): the slide is already under
+    /// way with its previews up, so only the rows change.
+    func select(_ id: UUID, in browser: Browser, sliding: Bool) {
+        guard sliding else { return select(id, in: browser) }
         guard browser.primary, id != current, all.contains(where: { $0.id == id }) else { return }
         var calm = Transaction()
         calm.disablesAnimations = true
@@ -576,7 +579,9 @@ extension Spaces {
     /// slides at X for a picture — see `SpaceSlide.bench`), `spaces swipe
     /// DX,DX,…[ end|cancel] [--hold]` (a two-finger swipe, scripted — see
     /// `SpaceSwipe.script`), `spaces scroll` (the column's scroll view:
-    /// its elasticity each way and where it stands).
+    /// its elasticity each way and where it stands), `spaces preview N|NAME
+    /// | premount on|off` (what a space's preview costs to make — see
+    /// `SpacePreview.bench`).
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         func find(_ key: String) -> UUID? {
             if let n = Int(key), all.indices.contains(n) { return all[n].id }
@@ -639,6 +644,7 @@ extension Spaces {
         case "slide": return ["slide": SpaceSlide.shared.bench(arg)]
         case "swipe": return ["slide": SpaceSwipe.script(arg, in: browser)]
         case "scroll": return ["slide": SideScrollElasticity.script(arg)]
+        case "preview": return ["preview": SpacePreview.bench(words, find: find, in: browser)]
         case "profile": profile(current, named: arg)
         case "theme":
             if let error = benchTheme(words, find: find) { return ["error": error] }

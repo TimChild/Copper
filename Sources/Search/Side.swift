@@ -71,7 +71,7 @@ struct SideBar: View {
 
                 column
             }
-            .modifier(SpaceSlideBand())
+            .modifier(SpaceSlideBand(browser: browser))
 
             SpaceStrip(browser: browser) { foot }
         }
@@ -84,9 +84,9 @@ struct SideBar: View {
             }
         }
         // Fork (space-slide): the old column, over the new one while it goes.
-        .overlay(alignment: .topLeading) { SpaceSlideCurtain() }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SpaceSlide.shared.column = $0 }
-        .onDisappear { SpaceSlide.shared.column = .zero }
+        .overlay(alignment: .topLeading) { SpaceSlideCurtain(browser: browser) }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SpaceSlide.shared.place(column: $0, in: browser) }
+        .onDisappear { SpaceSlide.shared.place(column: nil, in: browser) }
         .overlay(alignment: .trailing) {
             Rectangle().fill(tint.hairline.opacity(0.6)).frame(width: 1)
         }
@@ -330,7 +330,7 @@ struct SideBar: View {
         // has been laid out before it is looked for. A column sliding in
         // (Fork: SpaceSlide) is already where it should be, not gliding to it.
         DispatchQueue.main.async {
-            withAnimation(gliding && !still && !SpaceSlide.shared.moving ? Motion.glide : nil) {
+            withAnimation(gliding && !still && !SpaceSlide.shared.moving(in: browser) ? Motion.glide : nil) {
                 proxy.scrollTo("tab-\(id.uuidString)", anchor: nil)
             }
         }

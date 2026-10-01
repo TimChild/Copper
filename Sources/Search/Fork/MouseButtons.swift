@@ -98,7 +98,7 @@ enum MouseButtons {
                 let by = button == back ? -1 : 1
                 SpaceSwipe.go(by, in: browser)
                 lastAction = ["button": button, "did": by < 0 ? "space-prev" : "space-next",
-                              "space": Spaces.shared.space.name]
+                              "space": Spaces.shared.space(in: browser).name]
                 return true
             }
             // Chrome navigates on the press. Both halves are swallowed so the
@@ -155,8 +155,17 @@ enum MouseButtons {
     /// so WebKit sees the wheel button on a link and reports it back through
     /// the navigation policy (`bench probe` → `lastLinkClick`, a moment later).
     static func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
-        guard let window = Links.window else { return ["error": "no window"] }
-        let words = (request["arg"] as? String ?? "back").split(separator: " ").map(String.init)
+        var words = (request["arg"] as? String ?? "back").split(separator: " ").map(String.init)
+        // `--window N`: the click in that browser window (as `windows` lists
+        // them) rather than the first — each window's column switches its
+        // own space. (Fork: windows)
+        var browser = browser
+        if let at = words.firstIndex(of: "--window"), at + 1 < words.count, let n = Int(words[at + 1]) {
+            guard Windows.all.indices.contains(n) else { return ["error": "no window \(n)"] }
+            browser = Windows.all[n]
+            words.removeSubrange(at...(at + 1))
+        }
+        guard let window = Windows.window(of: browser) ?? Links.window else { return ["error": "no window"] }
         let shifted = words.contains("--shift")
         let arg = words.filter { $0 != "--shift" }
         let number: Int

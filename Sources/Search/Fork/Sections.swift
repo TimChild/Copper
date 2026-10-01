@@ -135,8 +135,10 @@ final class Sections: ObservableObject {
     func sweep(in browser: Browser, olderThan override: Double? = nil) -> Int {
         guard let hours = override ?? archive.hours else { lastSwept = 0; return 0 }
         let cutoff = Date().addingTimeInterval(-hours * 3600)
+        // Nor a row on another window's stage (Fork: windows — the row is shared).
         let stale = browser.tabs.filter {
             $0.pin == nil && !isSaved($0) && $0.id != browser.activeID && !$0.isBlank && lastSeen($0) < cutoff
+                && !Spaces.shared.shown($0, outside: browser)
         }
         for tab in stale { browser.close(tab) }
         lastSwept = stale.count

@@ -39,13 +39,25 @@ final class SpaceSlide: ObservableObject {
     @Published private(set) var way: CGFloat = 0
 
     /// Where the column is, and where the band that travels is, in SwiftUI's
-    /// global space (the window's content, from its top left). Kept up to
-    /// date by the column as it is laid out; not published, since nothing
-    /// has to redraw when they change. Zero while no column is on screen.
-    var column: CGRect = .zero
-    var band: CGRect = .zero
+    /// global space (the window's content, from its top left) — per window,
+    /// since every browser window has a column (Fork: windows). Kept up to
+    /// date by each column as it is laid out; not published, since nothing
+    /// has to redraw when they change. Absent while no column is on screen.
+    private var columns: [ObjectIdentifier: CGRect] = [:]
+    private var bands: [ObjectIdentifier: CGRect] = [:]
+    /// The window whose switch is sliding (or last slid). The curtain and
+    /// the band move only in its column; another window's stays still.
+    private(set) weak var owner: Browser?
+
+    func place(column rect: CGRect?, in browser: Browser) { columns[ObjectIdentifier(browser)] = rect }
+    func place(band rect: CGRect, in browser: Browser) { bands[ObjectIdentifier(browser)] = rect }
+
+    /// The sliding window's column and band — the first window's between slides.
+    var column: CGRect { columns[ObjectIdentifier(owner ?? Windows.main)] ?? .zero }
+    var band: CGRect { bands[ObjectIdentifier(owner ?? Windows.main)] ?? .zero }
 
     var moving: Bool { picture != nil }
+    func moving(in browser: Browser) -> Bool { picture != nil && owner === browser }
 
     /// Arc's is about this: quick off the mark, a soft landing, and over
     /// before the eye has finished following it.
@@ -67,8 +79,11 @@ final class SpaceSlide: ObservableObject {
     func begin(forward: Bool, in browser: Browser) -> Bool {
         let started = CACurrentMediaTime()
         timed = browser.prefs.bench
+        // A slide already on in another window ends there, cleanly.
+        if picture != nil, owner !== browser { end() }
+        owner = browser
         guard column.width > 1, column.height > 1, band.height > 1,
-              let window = Links.window, window.isVisible,
+              let window = Windows.window(of: browser), window.isVisible,
               let shot = photograph(in: window) else { return false }
         serial += 1
         let mine = serial
@@ -190,7 +205,7 @@ final class SpaceSlide: ObservableObject {
     /// A display link over the slide, while the bench is on: every frame's
     /// time, so a frame the main thread was too busy to make shows as a gap.
     private func watch() {
-        guard timed, let view = Links.window?.contentView else { return }
+        guard timed, let view = (owner.flatMap(Windows.window(of:)) ?? Links.window)?.contentView else { return }
         link?.invalidate()
         let link = view.displayLink(target: self, selector: #selector(tick(_:)))
         link.add(to: .main, forMode: .common)
@@ -244,13 +259,17 @@ final class SpaceSlide: ObservableObject {
 /// over the page. At rest it is not clipped at all, so nothing that hangs
 /// over its edge (a favourite in the hand, its shadow) is cut.
 struct SpaceSlideBand: ViewModifier {
+    let browser: Browser
     @ObservedObject private var slide = SpaceSlide.shared
 
+    init(browser: Browser) { self.browser = browser }
+
     func body(content: Content) -> some View {
+        let moving = slide.moving(in: browser)
         content
-            .offset(x: slide.moving ? slide.way * slide.column.width * (1 - slide.phase) : 0)
-            .clipShape(BandEdge(on: slide.moving))
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slide.band = $0 }
+            .offset(x: moving ? slide.way * slide.column.width * (1 - slide.phase) : 0)
+            .clipShape(BandEdge(on: moving))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slide.place(band: $0, in: browser) }
     }
 
     /// The band's own rectangle while it moves; otherwise one so large it
@@ -268,10 +287,13 @@ struct SpaceSlideBand: ViewModifier {
 /// stands, so the theme crossfades while the rows travel. Takes no clicks:
 /// the new column under it is the real one from the first frame.
 struct SpaceSlideCurtain: View {
+    let browser: Browser
     @ObservedObject private var slide = SpaceSlide.shared
 
+    init(browser: Browser) { self.browser = browser }
+
     var body: some View {
-        if let picture = slide.picture {
+        if let picture = slide.picture, slide.owner === browser {
             let size = slide.column.size
             let top = max(0, slide.band.minY - slide.column.minY)
             let height = min(slide.band.height, size.height - top)

@@ -141,7 +141,7 @@ final class Browser: NSObject, ObservableObject {
     var cycling = false
 
     var active: Tab? { tabs.first { $0.id == activeID } }
-    var fieldShowing: Bool { editing || active?.isBlank ?? true }
+    var fieldShowing: Bool { editing || (active?.isBlank ?? (taken == nil)) } // Fork: windows — not over "open in another window"
 
     /// Typed plus whatever the field is quietly finishing for you.
     var completed: String {
@@ -782,6 +782,10 @@ final class Browser: NSObject, ObservableObject {
     /// The untouched blank tab created only for a reopened/new window. It is
     /// removed on close without affecting the shared real rows.
     private var windowBlankID: Tab.ID?
+    /// Fork: windows — the tab another window took off this stage while it
+    /// was the only one here. The stage says so and offers it back
+    /// (`TakenStage`); cleared the moment anything is active here again.
+    @Published var taken: Tab.ID?
 
     // MARK: - beginning and ending
 
@@ -1088,10 +1092,19 @@ final class Browser: NSObject, ObservableObject {
                 guard let tab, tab.isBlank else { return }
                 _ = tab.web
             }
+        } else if let tab = Spaces.shared.pick(from: tabs, remembered: tabs.first { ($0.pending ?? $0.address)?.absoluteString == saved?.url }?.id, for: self, steal: false) {
+            // The tab it was on, unless a window already up is showing it —
+            // then another; a window coming back should not take a page off
+            // the first window's stage.
+            activeID = tab.id
+            tab.touch()
+            if !tab.wake() { tab.revive() }
         } else {
-            let savedActive = saved?.active.flatMap { id in tabs.first { $0.id == id }?.id }
-            activeID = savedActive ?? tabs.first?.id
-            if let active { Spaces.shared.claim(active, for: self); _ = active.wake() }
+            let tab = Tab()
+            prepare(tab)
+            tabs.append(tab)
+            windowBlankID = tab.id
+            activeID = tab.id
         }
         Windows.keep(self, now: true)
     }
@@ -1105,18 +1118,25 @@ final class Browser: NSObject, ObservableObject {
         pressure?.cancel()
         pressure = nil
         if floating != nil { land() }
-        // Arc does not leave an untouched blank tab behind when its only
-        // owner window closes. A real page, a pin, or a shared row survives.
+        if Split.shared.holder === self { Split.shared.close() }
+        // Out of the shared rows first, so what follows reaches only the
+        // windows that remain. Then: Arc does not leave an untouched blank
+        // tab behind when the window that made it closes. A real page, a
+        // pin, or a shared row survives; a window left with nothing by the
+        // blank's going gets a blank of its own (Spaces.publish).
+        Spaces.shared.unregister(self)
         if let id = windowBlankID, let tab = tabs.first(where: { $0.id == id }), tab.isBlank {
             Spaces.shared.dropBlank(tab)
             tab.close()
-        } else if tabs.count == 1, let tab = tabs.first, tab.isBlank {
+        } else if let tab = active, tab.isBlank, !Spaces.shared.shown(tab, outside: self) {
+            // The blank this window was on — made for it when its last page
+            // closed — and no other window's.
             Spaces.shared.dropBlank(tab)
             tab.close()
         }
-        Spaces.shared.unregister(self)
         tabs = []
         activeID = nil
+        taken = nil
         bag.removeAll()
     }
 
@@ -1172,7 +1192,8 @@ final class Browser: NSObject, ObservableObject {
         launching = false
         suggesting = nil
         if !tabs.contains(where: { $0.id == tab.id }), let space = Spaces.shared.spaceID(of: tab) {
-            Spaces.shared.select(space, in: self)
+            // Straight to this tab, not by way of the one the space last showed.
+            Spaces.shared.select(space, in: self, landing: tab.id)
         }
         guard tabs.contains(where: { $0.id == tab.id }) else { return }
         guard tab.id != activeID else { return }
@@ -1220,7 +1241,7 @@ final class Browser: NSObject, ObservableObject {
             // bounced between the two instead of getting you out of them.
             let others = tabs.filter { $0.id != tab.id && !$0.asleep }
             let loose = others.filter { $0.pin == nil }
-            if let back = (loose.isEmpty ? others : loose).max(by: { $0.touched < $1.touched }) {
+            if let back = landing(among: loose.isEmpty ? others : loose) { // Fork: windows — not one on another window's stage
                 select(back)
             } else if let asleepPin = tabs.first(where: { $0.id != tab.id }) {
                 select(asleepPin)
@@ -1233,7 +1254,7 @@ final class Browser: NSObject, ObservableObject {
 
         if tabs.count == 1 {
             if tab.isBlank {
-                NSApp.keyWindow?.performClose(nil)
+                (Windows.window(of: self) ?? NSApp.keyWindow)?.performClose(nil) // Fork: windows — this browser's window, not whichever is key
             } else {
                 let fresh = Tab()
                 remember(tab, at: 0)
@@ -1256,7 +1277,7 @@ final class Browser: NSObject, ObservableObject {
             // right — through select(), same as everywhere else you land on
             // a tab, so one that was never built yet actually wakes up
             // instead of sitting there blank until a manual reload.
-            select(tabs[min(index, tabs.count - 1)])
+            select(landing(after: index)) // Fork: windows — unless another window is showing that one
         }
         rememberSession()
     }

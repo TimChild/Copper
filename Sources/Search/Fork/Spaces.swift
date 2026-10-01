@@ -170,6 +170,70 @@ final class Spaces: ObservableObject {
         publish(id)
     }
 
+    /// Is this tab on screen in a window other than `browser` — as its active
+    /// tab, or in its split's side pane? A web view has one superview, so a
+    /// tab shown elsewhere is one to avoid landing on without meaning to.
+    func shown(_ tab: Tab, outside browser: Browser) -> Bool {
+        browsers.contains { other in
+            other !== browser && (other.activeID == tab.id || (Split.shared.holder === other && Split.shared.side == tab.id))
+        }
+    }
+
+    /// The tab a window should land on from `row`: the remembered one, else
+    /// the most recently looked at — preferring, both times, a tab no other
+    /// window is showing. Nil only for an empty row, or when every tab is
+    /// on screen elsewhere and `steal` is off.
+    func pick(from row: [Tab], remembered: Tab.ID?, for browser: Browser, steal: Bool = true) -> Tab? {
+        let free = row.filter { !shown($0, outside: browser) }
+        if let id = remembered, let tab = free.first(where: { $0.id == id }) { return tab }
+        if let tab = free.max(by: { $0.touched < $1.touched }) { return tab }
+        guard steal else { return nil }
+        if let id = remembered, let tab = row.first(where: { $0.id == id }) { return tab }
+        return row.max { $0.touched < $1.touched }
+    }
+
+    /// Make `tab` the one on this window's stage without going through
+    /// `Browser.select` (which claims, splits and writes): the shared shape
+    /// of a fallback after a close, a move or a space switch elsewhere.
+    private func land(_ tab: Tab?, in browser: Browser) {
+        browser.activeID = tab?.id
+        guard let tab else { return }
+        tab.touch()
+        if !tab.wake() { tab.revive() }
+    }
+
+    /// A landing made while another window's change is still under way is
+    /// provisional: `Browser.open`, `newTab` and `close` put a tab in the
+    /// row (which reaches every window at once) and only then make it
+    /// active, so the tab a window landed on may be the very one the other
+    /// window is about to show. A turn of the run loop later, once that
+    /// change has finished, this looks again and yields if so.
+    private var settling: Set<ObjectIdentifier> = []
+
+    private func settleLater(_ browser: Browser) {
+        let key = ObjectIdentifier(browser)
+        guard settling.insert(key).inserted else { return }
+        DispatchQueue.main.async { [weak self, weak browser] in
+            guard let self else { return }
+            settling.remove(key)
+            guard let browser, currentByBrowser[key] != nil else { return }
+            settle(browser)
+        }
+    }
+
+    private func settle(_ browser: Browser) {
+        guard let active = browser.active, shown(active, outside: browser) else { return }
+        let rest = browser.tabs.filter { $0.id != active.id }
+        if let tab = pick(from: rest, remembered: nil, for: browser, steal: false) {
+            land(tab, in: browser)
+        } else {
+            browser.activeID = nil
+            // "New Tab is open in another window" would be absurd; a blank
+            // of this window's own is what closing the last tab gives.
+            if active.isBlank { browser.newTab() } else { browser.taken = active.id }
+        }
+    }
+
     func frontChanged(_ browser: Browser) {
         guard currentByBrowser[ObjectIdentifier(browser)] != nil else { return }
         current = current(in: browser)
@@ -180,6 +244,8 @@ final class Spaces: ObservableObject {
         guard let space = currentByBrowser[ObjectIdentifier(browser)] else { return }
         if let active = browser.activeID {
             activeByBrowserSpace[ObjectIdentifier(browser), default: [:]][space] = active
+            // Something is on the stage again, so nothing is "elsewhere".
+            if browser.taken != nil { browser.taken = nil }
         } else {
             activeByBrowserSpace[ObjectIdentifier(browser)]?.removeValue(forKey: space)
         }
@@ -193,19 +259,45 @@ final class Spaces: ObservableObject {
         rows[id] = browser.tabs
         objectWillChange.send()
         publish(id, except: browser)
-        Session.write(now: false, shape(visible: browser.tabs, active: browser.activeID))
+        // The browser's own debounced writer (rememberSession) follows most
+        // changes; this catches the rest without a write per keystroke.
+        keep()
         if !browser.primary { Windows.keep(browser) }
     }
 
+    /// Hand a row to every window looking at that space. A window whose
+    /// active tab left the row lands on another (woken, as select would);
+    /// one left with nothing gets a blank tab, as closing the last tab does.
     private func publish(_ id: UUID, except source: Browser? = nil) {
         let row = rows[id] ?? []
+        let viewers = browsers.filter { $0 !== source && current(in: $0) == id }
         updating += 1
-        defer { updating -= 1 }
-        for browser in browsers where browser !== source && current(in: browser) == id {
-            if !row.contains(where: { $0.id == browser.activeID }) {
-                browser.activeID = row.first?.id
+        for browser in viewers {
+            // A window needs somewhere to land when its tab left the row,
+            // or when the tab it was told is elsewhere has gone. One already
+            // saying "open in another window" about a tab still there waits.
+            let lost = browser.activeID != nil && !row.contains(where: { $0.id == browser.activeID })
+            let gone = browser.taken != nil && !row.contains(where: { $0.id == browser.taken })
+            if gone { browser.taken = nil }
+            if lost || gone {
+                let remembered = activeByBrowserSpace[ObjectIdentifier(browser)]?[id]
+                if let tab = pick(from: row, remembered: remembered, for: browser, steal: false) {
+                    land(tab, in: browser)
+                    settleLater(browser)
+                } else {
+                    // Every tab left is on another window's stage: say so
+                    // rather than take one from under it.
+                    browser.activeID = nil
+                    browser.taken = row.max { $0.touched < $1.touched }?.id
+                }
             }
             browser.tabs = row
+        }
+        updating -= 1
+        // Outside the guard, so the new tab goes back through tabsChanged
+        // and reaches the other windows on this space too.
+        for browser in viewers where browser.tabs.isEmpty && currentByBrowser[ObjectIdentifier(browser)] == id {
+            browser.newTab()
         }
     }
 
@@ -216,11 +308,21 @@ final class Spaces: ObservableObject {
     }
 
     /// A tab may have only one visible StageView. When another window selects
-    /// it, the old window falls back to its most recent other tab in that row.
+    /// it, the old window falls back to its most recent other tab in that row
+    /// — or, with no other tab, shows that the page is open elsewhere
+    /// (`Browser.taken`), with a way to bring it back. A tab in another
+    /// window's side pane leaves that pane for the same reason.
     func claim(_ tab: Tab, for browser: Browser) {
-        for other in browsers where other !== browser && other.activeID == tab.id {
-            let fallback = other.tabs.filter { $0.id != tab.id }.max { $0.touched < $1.touched }
-            other.activeID = fallback?.id
+        for other in browsers where other !== browser {
+            if Split.shared.holder === other, Split.shared.side == tab.id { Split.shared.release(tab.id) }
+            guard other.activeID == tab.id else { continue }
+            let rest = other.tabs.filter { $0.id != tab.id }
+            if let fallback = pick(from: rest, remembered: nil, for: other, steal: false) {
+                land(fallback, in: other)
+            } else {
+                other.activeID = nil
+                other.taken = tab.id
+            }
         }
     }
 
@@ -238,7 +340,7 @@ final class Spaces: ObservableObject {
     private func keep() {
         keeping?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, let browser else { return }
+            guard let self, let browser = browser ?? mainBrowser else { return }
             Session.write(now: false, shape(visible: browser.tabs, active: browser.activeID))
         }
         keeping = work
@@ -247,7 +349,10 @@ final class Spaces: ObservableObject {
 
     // MARK: - switching
 
-    func select(_ id: UUID, in browser: Browser) {
+    /// `landing` names the tab to arrive on, when the switch is on the way
+    /// to one (Browser.select on a tab of another space); otherwise the one
+    /// this window last looked at there.
+    func select(_ id: UUID, in browser: Browser, landing: Tab.ID? = nil) {
         guard id != current(in: browser), let to = all.firstIndex(where: { $0.id == id }) else { return }
         let from = all.firstIndex { $0.id == current(in: browser) } ?? to
         // The column on screen is pictured before anything changes, and the
@@ -255,33 +360,38 @@ final class Spaces: ObservableObject {
         // not every old row leaving and every new one arriving (SpaceSlide).
         // With no column on screen — the tab bar, a folded sidebar — the
         // switch is what it always was.
-        guard SpaceSlide.shared.begin(forward: to > from, in: browser) else { return swap(to: id, in: browser) }
+        guard SpaceSlide.shared.begin(forward: to > from, in: browser) else { return swap(to: id, in: browser, landing: landing) }
         var calm = Transaction()
         calm.disablesAnimations = true
-        withTransaction(calm) { swap(to: id, in: browser) }
+        withTransaction(calm) { swap(to: id, in: browser, landing: landing) }
     }
 
-    private func swap(to id: UUID, in browser: Browser) {
+    private func swap(to id: UUID, in browser: Browser, landing: Tab.ID? = nil) {
         let key = ObjectIdentifier(browser)
         let old = current(in: browser)
-        rows[old] = browser.tabs
         if let active = browser.activeID { activeByBrowserSpace[key, default: [:]][old] = active }
+        objectWillChange.send() // `current(in:)` is read by views, and is not @Published
         currentByBrowser[key] = id
         if browser.primary { current = id }
+        browser.taken = nil
         let next = rows[id] ?? []
         setProjection(next, in: browser)
-        if next.isEmpty {
-            browser.newTab()
-        } else {
-            let remembered = activeByBrowserSpace[key]?[id]
-            guard let active = next.first(where: { $0.id == remembered }) ?? next.first else { return }
+        // The tab asked for; else the one this window last looked at here,
+        // unless another window is showing it now — then the most recent one
+        // that is free; with none free (or none at all), a new tab, as Arc
+        // gives rather than taking a page off another window's stage.
+        let asked = landing.flatMap { id in next.first { $0.id == id } }
+        if let active = asked ?? pick(from: next, remembered: activeByBrowserSpace[key]?[id], for: browser, steal: false) {
             browser.activeID = nil
             browser.select(active)
+        } else {
+            browser.activeID = nil
+            browser.newTab()
         }
         Recent.shared.rebuild(from: browser.tabs)
         Sections.shared.sweep(in: browser)
         Windows.keep(browser)
-        Session.write(now: false, shape(visible: browser.tabs, active: browser.activeID))
+        keep()
     }
 
     func step(_ by: Int, in browser: Browser) {
@@ -370,23 +480,40 @@ final class Spaces: ObservableObject {
     /// that space's row instead. The last space cannot be removed.
     func remove(_ id: UUID, in browser: Browser, movingTabsTo destination: UUID? = nil) {
         guard all.count > 1, let i = all.firstIndex(where: { $0.id == id }) else { return }
+        let kept = destination.flatMap { d in d != id && all.contains(where: { $0.id == d }) ? d : nil }
+        // Where a window standing on this space goes: to the tabs, when they
+        // were kept; otherwise to the neighbour the sheet named.
+        let landing = kept ?? neighbour(of: id)?.id ?? all[i == 0 ? 1 : i - 1].id
         let row = rows.removeValue(forKey: id) ?? []
-        if let destination, destination != id, all.contains(where: { $0.id == destination }) {
-            rows[destination, default: []].append(contentsOf: row)
-            publish(destination)
+        // Windows on the space leave it before anything in its row closes,
+        // so no stage is holding a view that is being torn down.
+        let affected = browsers.filter { current(in: $0) == id }
+        all.remove(at: i)
+        if current == id { current = landing }
+        for other in affected {
+            activeByBrowserSpace[ObjectIdentifier(other)]?.removeValue(forKey: id)
+            currentByBrowser[ObjectIdentifier(other)] = landing
+            other.taken = nil
+            setProjection([], in: other)
+            other.activeID = nil
+        }
+        if let kept {
+            rows[kept, default: []].append(contentsOf: row)
         } else {
             row.forEach { $0.close() }
         }
-        all.remove(at: i)
-        let affected = Windows.all.filter { current(in: $0) == id }
         for other in affected {
-            let neighbor = all[min(i, all.count - 1)].id
-            currentByBrowser[ObjectIdentifier(other)] = neighbor
-            if other.primary { current = neighbor }
-            setProjection(rows[neighbor] ?? [], in: other)
-            if other.tabs.isEmpty { other.newTab() }
-            else { other.activeID = other.tabs.first?.id }
+            let next = rows[landing] ?? []
+            setProjection(next, in: other)
+            if let tab = pick(from: next, remembered: activeByBrowserSpace[ObjectIdentifier(other)]?[landing], for: other, steal: false) {
+                other.select(tab)
+            } else {
+                other.newTab()
+            }
+            Recent.shared.rebuild(from: other.tabs)
         }
+        if let kept { publish(kept) }
+        objectWillChange.send()
         keep()
     }
 
@@ -396,13 +523,12 @@ final class Spaces: ObservableObject {
         guard let from = spaceID(of: tab), id != from, all.contains(where: { $0.id == id }) else { return }
         rows[from]?.removeAll { $0.id == tab.id }
         rows[id, default: []].append(tab)
+        // Every window on either row, the mover included: the one that was
+        // showing the tab lands on another, or on a blank one.
         publish(from)
         publish(id)
-        if browser.activeID == tab.id {
-            if browser.tabs.isEmpty { browser.newTab() }
-            else if let first = browser.tabs.first { browser.activeID = first.id }
-        }
-        Session.write(now: false, shape(visible: browser.tabs, active: browser.activeID))
+        objectWillChange.send()
+        keep()
     }
 
     // MARK: - Flow import
@@ -494,6 +620,10 @@ final class Spaces: ObservableObject {
         if let index, row.indices.contains(index), current(in: browser) == id {
             browser.activeID = row[index].id
         }
+        // On disk at once: windows.json is about to forget these rows, and
+        // session.json is the only other place they exist.
+        guard !entries.isEmpty else { return }
+        Session.write(now: true, shape(visible: browser.tabs, active: browser.activeID))
     }
 
     // MARK: - profiles
@@ -736,19 +866,19 @@ extension Spaces {
             move(id, to: to)
         case "edit", "page":
             if arg == "close" { SpaceEditing.shared.close(); return ["page": ""] }
-            let id = words.isEmpty ? current : (find(arg) ?? UUID())
+            let id = words.isEmpty ? current(in: browser) : (find(arg) ?? UUID())
             guard all.contains(where: { $0.id == id }) else { return ["error": "no space \(arg)"] }
-            SpaceEditing.shared.open(id)
+            SpaceEditing.shared.open(id, in: browser)
             return ["page": all.first { $0.id == id }?.name ?? ""]
         case "tap":
             if arg == "header" {
-                SpaceEditing.shared.open(current)
+                SpaceEditing.shared.open(current(in: browser), in: browser)
             } else {
                 guard let id = find(arg) else { return ["error": "spaces tap N|NAME|header"] }
                 SpaceEditing.shared.pressed(id, in: browser)
             }
             return ["page": SpaceEditing.shared.space.flatMap { id in all.first { $0.id == id }?.name } ?? "",
-                    "current": all.first { $0.id == current }?.name ?? ""]
+                    "current": all.first { $0.id == current(in: browser) }?.name ?? ""]
         case "delete":
             // The sheet, as Delete Space… shows it; `answer` presses a button.
             guard let id = find(arg) else { return ["error": "no space \(arg)"] }
@@ -758,7 +888,7 @@ extension Spaces {
             guard SpaceDelete.answer(arg) else { return ["error": "no sheet up, or no \(arg) button on it"] }
             return ["answered": arg, "did": SpaceDelete.last]
         case "slide": return ["slide": SpaceSlide.shared.bench(arg)]
-        case "profile": profile(current, named: arg)
+        case "profile": profile(current(in: browser), named: arg)
         case "theme":
             if let error = benchTheme(words, find: find) { return ["error": error] }
         case "picture":
@@ -777,7 +907,7 @@ extension Spaces {
         default: break
         }
         return ["spaces": all.enumerated().map { i, s in
-            ["index": i, "name": s.name, "current": s.id == current, "profile": s.profile ?? "shared",
+            ["index": i, "name": s.name, "current": s.id == current(in: browser), "profile": s.profile ?? "shared",
              "tabs": count(of: s.id, in: browser), "hue": s.hue ?? -1, "colour": SpaceColour.nearest(s.hue).name,
              "icon": s.icon ?? "", "theme": s.theme.map(Spaces.describe) ?? "hue"] as [String: Any]
         }]

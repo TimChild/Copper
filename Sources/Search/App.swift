@@ -309,6 +309,8 @@ struct ContentView: View {
                                 }
                             }
                             .animation(Motion.quick, value: browser.suggesting)
+                    } else if let id = browser.taken, let tab = browser.tabs.first(where: { $0.id == id }) {
+                        TakenStage(browser: browser, tab: tab) // Fork: windows — the page is on another window's stage
                     } else {
                         Palette.ground
                     }

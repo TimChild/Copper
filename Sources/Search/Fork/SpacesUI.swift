@@ -70,7 +70,7 @@ final class SpaceEditing: ObservableObject {
     var space: UUID? {
         let browser = Windows.current
         guard browser.tuning, browser.settingsPage == .spaces else { return nil }
-        return selected ?? Spaces.shared.current
+        return selected ?? Spaces.shared.current(in: browser)
     }
 
     /// Settings, on Spaces, with this space picked.

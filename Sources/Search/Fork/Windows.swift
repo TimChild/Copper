@@ -4,14 +4,21 @@ import SwiftUI
 // More than one window. ⌘N opens another browser window, and every window
 // sees the same Spaces rows, pinned tabs, folders and groups. Each window
 // remembers its own current space and active tab, like Arc; selecting a tab
-// that is visible elsewhere hands that tab to this window and leaves the old
-// window on its most recent other tab. The Tab (and its WKWebView) is shared,
-// never copied, so two StageViews cannot fight over one page.
+// that is on another window's stage hands it to this window, and that window
+// lands on its most recent tab no window is showing — or, with none left,
+// says the page is open in another window and offers it back (TakenStage).
+// The Tab (and its WKWebView) is shared, never copied, so two StageViews
+// never hold one page; ⌘W, a space switch and the archive sweep all steer
+// clear of a tab another window is showing, and the one split view belongs
+// to one window at a time (Split.holder).
 //
 // session.json remains the source of truth for spaces and tabs. windows.json
-// contains only per-window view state. Closing a window forgets that state;
-// quitting keeps it for the next launch. A legacy row with a `tabs` array is
-// folded into its space on first load before the new shape is written.
+// holds only each window's space and the address of the tab it was on.
+// Closing a window with the red button forgets that state and keeps the
+// shared tabs (only an untouched blank tab the window made goes with it);
+// quitting keeps every window for the next launch. A row in the old format,
+// with its own `tabs`, is folded into the window's space on first load and
+// written to session.json before windows.json forgets it.
 //
 // Agents follow the window in front: the MCP server and the command bar act
 // on the frontmost browser window, and fall back to the first one when it
@@ -140,18 +147,23 @@ enum Windows {
 
     // MARK: - keeping
 
+    /// One window's view state: its space, and the address of the tab it
+    /// was on. An address rather than a tab id — a Tab's id is made afresh
+    /// every launch and session.json carries none, so an id could never be
+    /// found again on the next one.
     struct Saved: Codable {
         var id: UUID
         var space: UUID?
-        var active: UUID?
-        /// Only populated while decoding the old windows.json format.
+        var url: String?
+        /// Only populated while decoding the old windows.json format, whose
+        /// rows carried their own `tabs` and an `active` index.
         var legacyTabs: [Session.Entry]?
         var legacyActive: Int?
 
-        init(id: UUID, space: UUID?, active: UUID?) {
+        init(id: UUID, space: UUID?, url: String?) {
             self.id = id
             self.space = space
-            self.active = active
+            self.url = url
             legacyTabs = nil
             legacyActive = nil
         }
@@ -160,13 +172,8 @@ enum Windows {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             id = try c.decode(UUID.self, forKey: .id)
             space = try c.decodeIfPresent(UUID.self, forKey: .space)
-            if let value = try? c.decode(UUID.self, forKey: .active) {
-                active = value
-                legacyActive = nil
-            } else {
-                active = nil
-                legacyActive = try c.decodeIfPresent(Int.self, forKey: .active)
-            }
+            url = try c.decodeIfPresent(String.self, forKey: .url)
+            legacyActive = try? c.decodeIfPresent(Int.self, forKey: .active)
             legacyTabs = try c.decodeIfPresent([Session.Entry].self, forKey: .tabs)
         }
 
@@ -174,10 +181,10 @@ enum Windows {
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(id, forKey: .id)
             try c.encodeIfPresent(space, forKey: .space)
-            try c.encodeIfPresent(active, forKey: .active)
+            try c.encodeIfPresent(url, forKey: .url)
         }
 
-        private enum CodingKeys: String, CodingKey { case id, space, active, tabs }
+        private enum CodingKeys: String, CodingKey { case id, space, url, active, tabs }
     }
 
     private static var file: URL { Store.file("windows.json") }
@@ -215,7 +222,7 @@ enum Windows {
     @discardableResult
     private static func record(_ browser: Browser) -> Bool {
         guard let id = browser.windowID, others[id] != nil else { return false }
-        let row = Saved(id: id, space: Spaces.shared.current(in: browser), active: browser.activeID)
+        let row = Saved(id: id, space: Spaces.shared.current(in: browser), url: browser.active.flatMap { ($0.pending ?? $0.address)?.absoluteString })
         if let i = saved.firstIndex(where: { $0.id == id }) { saved[i] = row } else { saved.append(row) }
         return true
     }
@@ -243,6 +250,56 @@ enum Windows {
     static func reopen() {
         guard let opener else { return }
         for row in saved { opener(row.id) }
+    }
+}
+
+extension Browser {
+    /// Where ⌘W lands after the tab at `index` left the row: the neighbour
+    /// on the right, or the last one — unless another window is showing that
+    /// tab, in which case the nearest tab no window is showing. With every
+    /// tab on a stage somewhere, the neighbour anyway: selecting it hands it
+    /// over (Spaces.claim) and the other window says where it went.
+    func landing(after index: Int) -> Tab {
+        let at = min(index, tabs.count - 1)
+        let near = tabs[at]
+        guard Spaces.shared.shown(near, outside: self) else { return near }
+        // The free tab nearest the gap, right first.
+        let order = (at..<tabs.count).map { $0 } + stride(from: at - 1, through: 0, by: -1).map { $0 }
+        return order.map { tabs[$0] }.first { !Spaces.shared.shown($0, outside: self) } ?? near
+    }
+
+    /// The most recently looked-at of `pool`, preferring one no other window
+    /// is showing.
+    func landing(among pool: [Tab]) -> Tab? {
+        let free = pool.filter { !Spaces.shared.shown($0, outside: self) }
+        return (free.isEmpty ? pool : free).max { $0.touched < $1.touched }
+    }
+}
+
+/// The stage of a window whose only tab another window took (Browser.taken):
+/// the page is not gone, it is simply over there. One line, and the two
+/// things worth doing about it — as Arc's "open in another window" does.
+struct TakenStage: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject var tab: Tab
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text("\(tab.title.isEmpty ? "This page" : tab.title) is open in another window.")
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.muted)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                Button("Show Here") { browser.select(tab) }
+                    .keyboardShortcut(.defaultAction)
+                Button("New Tab") { browser.newTab() }
+            }
+            .controlSize(.regular)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.ground)
     }
 }
 
@@ -283,7 +340,8 @@ struct WindowOpener: ViewModifier {
 
 extension Windows {
     /// `windows` lists every browser window; `windows new`; `windows open N URL`
-    /// (a tab in window N); `windows key N`; `windows close N` (the red button);
+    /// (a tab in window N); `windows key N`; `windows space N INDEX`; `windows
+    /// select N TAB`; `windows closetab N TAB` (⌘W); `windows close N` (the red button);
     /// `windows saved` is windows.json as held; `windows quit` is ⌘Q.
     static func bench(_ request: [String: Any]) -> [String: Any] {
         let op = request["op"] as? String ?? ""
@@ -309,6 +367,12 @@ extension Windows {
                 return ["error": "select N TAB"]
             }
             browser.select(tab)
+        case "closetab":
+            // ⌘W on a tab of window N, by the id prefix `windows` lists.
+            guard bits.count > 1, let browser = pick(), let tab = browser.tabs.first(where: { $0.id.uuidString.lowercased().hasPrefix(bits[1].lowercased()) }) else {
+                return ["error": "closetab N TAB"]
+            }
+            browser.close(tab)
         case "close":
             guard let browser = pick() else { return ["error": "close N"] }
             window(of: browser)?.performClose(nil)
@@ -317,7 +381,8 @@ extension Windows {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
             return ["quitting": true]
         case "saved":
-            return ["saved": saved.map { ["id": $0.id.uuidString, "space": $0.space?.uuidString ?? "", "active": $0.active?.uuidString ?? ""] as [String: Any] }]
+            return ["saved": saved.map { ["id": $0.id.uuidString, "space": $0.space?.uuidString ?? "", "url": $0.url ?? "",
+                                          "legacy": $0.legacyTabs?.count ?? 0] as [String: Any] }]
         default: break
         }
         return ["windows": list.enumerated().map { i, browser -> [String: Any] in
@@ -330,7 +395,9 @@ extension Windows {
                     "spaceName": Spaces.shared.space(in: browser).name,
                     "tabs": browser.tabs.map { $0.address?.absoluteString ?? "" },
                     "tabIDs": browser.tabs.map { String($0.id.uuidString.prefix(8)).lowercased() },
-                    "active": browser.tabs.firstIndex { $0.id == browser.activeID } ?? -1]
+                    "active": browser.tabs.firstIndex { $0.id == browser.activeID } ?? -1,
+                    "taken": browser.taken.map { String($0.uuidString.prefix(8)).lowercased() } ?? "",
+                    "split": Split.shared.on(in: browser)]
         }, "opener": opener != nil]
     }
 }

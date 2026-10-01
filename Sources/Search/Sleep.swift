@@ -65,7 +65,7 @@ extension Browser {
     /// Why a tab has to stay awake — nil when nothing keeps it. The clock is
     /// the caller's business; this is everything else.
     func awake(because tab: Tab) -> String? {
-        if Windows.all.contains(where: { $0.activeID == tab.id }) || Windows.all.contains(where: { Split.shared.has(tab.id) && $0.tabs.contains { $0.id == tab.id } }) { return "on screen" }
+        if Windows.all.contains(where: { $0.activeID == tab.id }) || Split.shared.has(tab.id) { return "on screen" } // Fork: windows — any window's stage
         if tab.pin != nil { return "pinned" }
         if tab.bench { return "a bench tab" }
         if tab.isBlank { return "blank" }

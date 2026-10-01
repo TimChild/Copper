@@ -61,8 +61,9 @@ import SwiftUI
         }
     }
 
-    private static func handle(_ event: NSEvent, in browser: Browser) -> NSEvent? {
-        guard event.window != nil, event.window == Links.window,
+    private static func handle(_ event: NSEvent, in _: Browser) -> NSEvent? {
+        // Each browser window's column switches that window's space. (Fork: windows)
+        guard let window = event.window, let browser = Windows.owner(of: window),
               overSidebar(event.locationInWindow, in: browser) else { return event }
         if event.type == .swipe {
             guard event.deltaX != 0 else { return event }
@@ -90,7 +91,7 @@ import SwiftUI
             if swallow { swallowed += 1 }
         }
         _ = track.feed(phase: .ended, dx: 0, dy: 0)
-        return ["step": stepped, "swallowed": swallowed, "space": Spaces.shared.space.name]
+        return ["step": stepped, "swallowed": swallowed, "space": Spaces.shared.space(in: browser).name]
     }
 
     /// Switch a space with the same glide used by a two-finger swipe.

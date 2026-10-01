@@ -58,7 +58,8 @@
     ./bench spaces [page [N]|page close|tap N|tap header]
                                        the Space page; tap is a click on chip N (another space
                                        switches, the current one opens its page) or the title icon
-    ./bench windows [new|open N URL|key N|space N INDEX|select N TAB|close N|saved|quit]   ⌘N windows
+    ./bench windows [new|open N URL|key N|space N INDEX|select N TAB|closetab N TAB|close N|saved|quit]
+                                       ⌘N windows
     ./bench spaces [delete N|answer close|move|cancel]
                                        the Delete Space sheet, and its buttons
     ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|blur X
@@ -99,7 +100,7 @@
     ./bench passkeys list|count|forget --id ID|answer yes|no|ask
                                        Copper's own test-world passkeys (no private keys in list)
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
-    ./bench mouse back|forward|middle [X Y] [--shift]
+    ./bench mouse back|forward|middle [X Y] [--shift] [--window N]
                                        a click of that mouse button at window point X Y (top-left
                                        origin; the page's middle by default), through the app's routing;
                                        over the sidebar, back/forward switches the previous/next space

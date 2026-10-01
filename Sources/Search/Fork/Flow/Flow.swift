@@ -59,10 +59,16 @@ final class Flow: ObservableObject {
         var cookies = 0
         var passkeys = 0
         var extensions = 0
+        /// Sites whose localStorage came over, and how many keys in all.
+        var storageSites = 0
+        var storageKeys = 0
+        /// Keys WebKit actually took, across every store (a profile's store
+        /// counts its keys again).
+        var storageKeysSet = 0
         var notes: [String] = []
 
         var line: String {
-            "\(tabs) tabs in \(spaces) spaces · \(groups) groups · \(bookmarks) bookmarks · \(places) places · \(passwords) passwords · \(cookies) cookies · \(passkeys) passkeys · \(extensions) extensions"
+            "\(tabs) tabs in \(spaces) spaces · \(groups) groups · \(bookmarks) bookmarks · \(places) places · \(passwords) passwords · \(cookies) cookies · local storage for \(storageSites) sites · \(passkeys) passkeys · \(extensions) extensions"
         }
     }
 
@@ -122,6 +128,16 @@ final class Flow: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var selected: FlowSource?
     @Published private(set) var historyImport: HistoryImportState = .idle
+    /// When Arc was last moved in. A move is a one-time thing, so once this is
+    /// set the sheet says so and wants "Move again" before it will run.
+    @Published private(set) var arcMovedAt: Date? = Flow.arcMovedAtSetting
+    @Published var moveAgain = false
+
+    private static let arcMovedKey = "flow.arcMovedAt"
+    private static var arcMovedAtSetting: Date? {
+        let stamp = Store.settings.double(forKey: arcMovedKey)
+        return stamp > 0 ? Date(timeIntervalSince1970: stamp) : nil
+    }
 
     private var lastHaul = FlowModel.Haul()
     private var createdSpaces: [UUID] = []
@@ -215,18 +231,29 @@ final class Flow: ObservableObject {
         return haul
     }
 
+    var moving: Bool { if case .moving = phase { return true } else { return false } }
+
     /// Performs each choice independently. A failure is a line in the report,
     /// never a reason to abandon the remaining data.
-    func move(_ source: FlowSource, into browser: Browser) {
-        guard !source.locked else { return }
+    ///
+    /// Async so the window stays live the whole way: everything that reads
+    /// another browser's files, and the keychain call that can sit behind
+    /// macOS's "allow" prompt for as long as the person takes, runs in a
+    /// detached task; only the merges into Copper's own state come back here.
+    func move(_ source: FlowSource, into browser: Browser) async {
+        guard !source.locked, !moving else { return }
         browserForUndo = browser
         selected = source
-        // A haul with no spaces and no note is one that was never scanned (or
-        // whose scan is stale); read again rather than move nothing.
-        let haul = lastHaul.spaces.isEmpty ? Flow.read(source) : lastHaul
         var report = Report()
         var lines: [String] = []
         phase = .moving(lines)
+        // A haul with no spaces and no note is one that was never scanned (or
+        // whose scan is stale); read again rather than move nothing.
+        let haul = lastHaul.spaces.isEmpty
+            ? await Task.detached(priority: .userInitiated) { Flow.read(source) }.value
+            : lastHaul
+        let choice = self.choice
+        let reader = source.readerSource
         NSLog("Copper: Flow moving from %@ — %d spaces, %d tabs read; notes: %@",
               source.name, haul.spaces.count, haul.tabCount, haul.notes.joined(separator: "; "))
 
@@ -258,7 +285,7 @@ final class Flow: ObservableObject {
         }
 
         if choice.history {
-            let places = FlowChromium.places(in: source)
+            let places = await Task.detached(priority: .userInitiated) { FlowChromium.places(in: source) }.value
             for place in places {
                 browser.history.take(place.url, title: place.title, count: place.count, last: place.last)
             }
@@ -269,21 +296,35 @@ final class Flow: ObservableObject {
         }
 
         if choice.passwords || choice.cookies || choice.passkeys {
-            do {
-                let key = try Chromium.key(for: source.readerSource)
-                if choice.passwords {
-                    let found = try Chromium.read(source.readerSource, key: key)
-                    for login in found.logins where Vault.save(host: login.host, user: login.user, password: login.password, used: login.used) {
+            lines.append("asking macOS for \(source.name)'s key…")
+            phase = .moving(lines)
+            // The keychain read, the decryption and the SQLite copies all
+            // happen off the main actor; this is where the old path froze the
+            // window behind macOS's prompt.
+            let unlocked = await Task.detached(priority: .userInitiated) { () -> Result<Unlocked, Error> in
+                Result {
+                    let key = try Chromium.key(for: reader)
+                    var found = Unlocked()
+                    if choice.passwords { found.logins = try Chromium.read(reader, key: key) }
+                    if choice.cookies { found.cookies = try FlowCookies.read(reader, key: key, profiles: source.profiles) }
+                    if choice.passkeys { found.passkeys = try FlowPasskeys.read(reader, key: key, profiles: source.profiles) }
+                    return found
+                }
+            }.value
+            lines.removeLast()
+            switch unlocked {
+            case .success(let found):
+                if let logins = found.logins {
+                    for login in logins.logins where Vault.save(host: login.host, user: login.user, password: login.password, used: login.used) {
                         report.passwords += 1
                     }
                     var never = Vault.never
-                    found.never.forEach { never.insert($0) }
+                    logins.never.forEach { never.insert($0) }
                     Vault.never = never
                     browser.relist()
                     lines.append("\(report.passwords) passwords")
                 }
-                if choice.cookies {
-                    let cookies = try FlowCookies.read(source.readerSource, key: key, profiles: source.profiles)
+                if let cookies = found.cookies {
                     report.cookies = cookies.count
                     Task { [cookies] in
                         let store = Store.websites.httpCookieStore
@@ -291,23 +332,26 @@ final class Flow: ObservableObject {
                     }
                     lines.append("\(report.cookies) cookies")
                 }
-                if choice.passkeys {
-                    let passkeys = try FlowPasskeys.read(source.readerSource, key: key, profiles: source.profiles)
+                if let passkeys = found.passkeys {
                     report.passkeys = FlowPasskeys.install(passkeys, from: source.name)
                     lines.append("\(report.passkeys) passkeys")
                 }
-            } catch Chromium.Trouble.noPassphrase {
+            case .failure(Chromium.Trouble.noPassphrase):
                 report.notes.append("macOS did not hand over \(source.name)'s key")
                 if choice.passwords { lines.append("passwords: needs your OK from macOS") }
                 if choice.cookies { lines.append("cookies: needs your OK from macOS") }
                 if choice.passkeys { lines.append("passkeys: needs your OK from macOS") }
-            } catch {
+            case .failure:
                 report.notes.append("couldn't read \(source.name)'s key")
                 if choice.passwords { lines.append("passwords: not readable") }
                 if choice.cookies { lines.append("cookies: not readable") }
                 if choice.passkeys { lines.append("passkeys: not readable") }
             }
             phase = .moving(lines)
+        }
+
+        if choice.localStorage {
+            await moveLocalStorage(source, haul: haul, report: &report, lines: &lines)
         }
 
         if choice.extensions {
@@ -335,7 +379,67 @@ final class Flow: ObservableObject {
         if choice.passwords { browser.relist() }
         browser.objectWillChange.send()
         Session.write(now: true, Spaces.shared.shape(visible: browser.tabs, active: browser.activeID))
+        if source.isArc {
+            let now = Date()
+            Store.settings.set(now.timeIntervalSince1970, forKey: Self.arcMovedKey)
+            arcMovedAt = now
+            moveAgain = false
+        }
         phase = .done(report)
+    }
+
+    /// What the keychain key unlocked, read in one detached pass.
+    private struct Unlocked {
+        var logins: Chromium.Found?
+        var cookies: [FlowModel.Cookie]?
+        var passkeys: [FlowModel.Passkey]?
+    }
+
+    /// Reads the browser's localStorage LevelDBs off the main actor, then has
+    /// `StorageImport` set it origin by origin in a hidden web view — the one
+    /// part WebKit insists happen here, awaited so the window keeps drawing.
+    /// Every profile's storage goes into the shared store (where a space with
+    /// no profile looks); a profile that one of the moved spaces wears also
+    /// gets its own into that profile's store.
+    private func moveLocalStorage(_ source: FlowSource, haul: FlowModel.Haul, report: inout Report, lines: inout [String]) async {
+        lines.append("reading local storage…")
+        phase = .moving(lines)
+        let root = source.root
+        let found = await Task.detached(priority: .userInitiated) { FlowLocalStorage.read(root: root) }.value
+        found.warnings.forEach { NSLog("Copper: Flow local storage: %@", $0) }
+        var plan = [StorageImport.Target(label: "shared", store: StorageImport.sharedStore,
+                                         data: found.merged, origins: found.merged.keys.sorted())]
+        let worn = Set(haul.spaces.compactMap(\.profile))
+        for (name, origins) in found.profiles where worn.contains(name) && !origins.isEmpty {
+            plan.append(StorageImport.Target(label: "profile:\(name)", store: Spaces.store(forProfile: name),
+                                             data: origins, origins: origins.keys.sorted()))
+        }
+        let line = lines.count - 1
+        let sites = found.merged.count
+        let summary = await StorageImport.shared.put(plan) { [weak self] done, total in
+            guard let self, case .moving(var shown) = self.phase, line < shown.count else { return }
+            // Count every few origins rather than redraw the sheet 900 times.
+            guard done == total || done.isMultiple(of: 10) else { return }
+            shown[line] = "local storage for \(sites) sites… \(done)/\(total)"
+            self.phase = .moving(shown)
+        }
+        guard let summary else {
+            lines[line] = "local storage: another import is running"
+            report.notes.append("local storage was not moved: an import was already running")
+            phase = .moving(lines)
+            return
+        }
+        report.storageSites = sites
+        report.storageKeys = found.keyCount
+        report.storageKeysSet = summary.keys
+        lines[line] = "local storage for \(sites) sites (\(found.keyCount.formatted()) keys)"
+        if summary.failedOrigins > 0 {
+            report.notes.append("local storage: \(summary.failedOrigins) sites kept only part of theirs (over WebKit's 5 MB, or would not load)")
+        }
+        if found.partitioned > 0 {
+            report.notes.append("left out \(found.partitioned) third-party (partitioned) local storage keys")
+        }
+        phase = .moving(lines)
     }
 
     func undo() {
@@ -515,7 +619,7 @@ final class Flow: ObservableObject {
             guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
             if let only = request["only"] as? String {
                 choice = FlowModel.Choice()
-                choice.tabs = false; choice.bookmarks = false; choice.history = false; choice.passwords = false; choice.cookies = false; choice.passkeys = false; choice.extensions = false
+                choice.tabs = false; choice.bookmarks = false; choice.history = false; choice.passwords = false; choice.cookies = false; choice.localStorage = false; choice.passkeys = false; choice.extensions = false
                 for item in only.split(separator: ",").map({ String($0).lowercased() }) {
                     switch item {
                     case "tabs", "spaces": choice.tabs = true
@@ -523,24 +627,51 @@ final class Flow: ObservableObject {
                     case "history", "places": choice.history = true
                     case "passwords": choice.passwords = true
                     case "cookies": choice.cookies = true
+                    case "localstorage", "storage": choice.localStorage = true
                     case "passkeys": choice.passkeys = true
                     case "extensions": choice.extensions = true
                     default: break
                     }
                 }
             }
+            guard !moving else { return ["error": "a move is already running"] }
             _ = scanNow(source)
-            move(source, into: browser)
-            if case .done(let report) = phase {
-                return ["source": source.name, "report": report.line, "tabs": report.tabs, "spaces": report.spaces, "groups": report.groups,
+            // The move runs on (local storage alone is minutes of origins,
+            // past the bench's 25 s answer); the script asks `flow status`
+            // until it is done, as `storage import` does.
+            Task { await move(source, into: browser) }
+            return ["started": true, "source": source.name]
+        case "status":
+            switch phase {
+            case .moving(let lines): return ["running": true, "lines": lines]
+            case .done(let report):
+                return ["running": false, "source": selected?.name ?? "", "report": report.line, "tabs": report.tabs, "spaces": report.spaces, "groups": report.groups,
                         "bookmarks": report.bookmarks, "places": report.places, "passwords": report.passwords, "cookies": report.cookies, "passkeys": report.passkeys, "extensions": report.extensions,
+                        "localStorageSites": report.storageSites, "localStorageKeys": report.storageKeys, "localStorageKeysSet": report.storageKeysSet,
+                        "arcMovedAt": arcMovedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
                         "notes": report.notes]
+            default: return ["running": false, "phase": "\(phase)"]
             }
-            return ["error": "flow did not finish"]
+        case "localstorage":
+            // The reader alone, written as `arc-localstorage` JSON, so the
+            // two readers can be diffed on the same data. Reads only.
+            guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
+            guard let out = request["path"] as? String else { return ["error": "localstorage needs --path OUT.json"] }
+            let root = (request["root"] as? String).map { URL(fileURLWithPath: $0) } ?? source.root
+            let started = Date()
+            let found = FlowLocalStorage.read(root: root)
+            do { try FlowLocalStorage.json(found.merged).write(to: URL(fileURLWithPath: out)) } catch { return ["error": error.localizedDescription] }
+            return ["path": out, "origins": found.merged.count, "keys": found.keyCount, "partitioned": found.partitioned,
+                    "undecoded": found.undecoded, "warnings": found.warnings, "seconds": Date().timeIntervalSince(started),
+                    "profiles": found.profiles.map { "\($0.name): \($0.origins.count)" }]
         case "open":
+            // A script's `--only` move leaves its narrowed switches behind;
+            // the sheet opens on the defaults a person would see.
+            choice = FlowModel.Choice()
+            moveAgain = request["again"] as? Bool ?? false
             open = true
             refreshSources()
-            return ["open": true, "sources": sources.count]
+            return ["open": true, "sources": sources.count, "arcMovedAt": arcMovedAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""]
         case "probe":
             // Why a source was or wasn't found: the folder, whether the app
             // can list it, and which profile folders carry a Preferences file.

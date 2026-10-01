@@ -463,7 +463,9 @@ final class Spaces: ObservableObject {
         for (i, entry) in saved.tabs.enumerated() {
             guard let url = URL(string: entry.url) else { continue }
             let id = entry.space.flatMap { s in all.first { $0.id == s }?.id } ?? current
-            let tab = building(for: id) { Tab() }
+            // A board's tab is built from its own configuration (Fork/Easel);
+            // it has to be there when the view is made, long before it wakes.
+            let tab = building(for: id) { Tab(configuration: Easels.configuration(for: url)) }
             browser.prepare(tab)
             tab.restore(url: url, title: entry.title)
             tab.pin = entry.pin
@@ -502,7 +504,10 @@ extension Session.Entry {
         // A sleeping tab holds its address in `pending`; asking for it there
         // too means a pin can never be written out of existence by whatever
         // its web view happens to be showing.
-        guard let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true else { return nil }
+        // A board is a real page too (Fork/Easel): it comes back from its own file.
+        guard let url = tab.pending ?? tab.address,
+              url.scheme?.hasPrefix("http") == true || Easels.id(of: url) != nil
+        else { return nil }
         self.init(url: url.absoluteString, title: tab.title, pin: tab.pin)
     }
 }

@@ -167,6 +167,8 @@ struct SplitBar: View {
     /// says the title, and with no address row anywhere else in the window
     /// this strip is the one place the address can be read.
     private var name: String {
+        // A board's address is a UUID nobody reads; it says what it is instead.
+        if let address = tab.address, let easel = Easels.pill(for: address) { return easel }
         if let address = tab.address { return Address.pretty(address) }
         if !tab.title.isEmpty { return tab.title }
         return "New Tab"

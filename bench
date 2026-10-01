@@ -59,6 +59,11 @@
                                        the Space page; tap is a click on chip N (another space
                                        switches, the current one opens its page) or the title icon
     ./bench windows [new|open N URL|key N|close N|saved|quit]   ⌘N windows
+    ./bench easels [new|open ID|check ID|flush ID|delete ID|path|menu [press]]
+                                       boards (Fork/Easel): list them; new makes one and opens it the
+                                       way ⌘K's New Easel does; check reads back doc.yjs, the index
+                                       entry and the pictures; flush asks the board's page to save now;
+                                       menu is File › New Easel as the menu bar holds it (press chooses it)
     ./bench spaces [delete N|answer close|move|cancel]
                                        the Delete Space sheet, and its buttons
     ./bench spaces theme N [colors #hex[,#hex..]|intensity X|grain X|image PATH|none|blur X
@@ -233,7 +238,7 @@ def main(argv):
         if len(args) < 2: sys.exit("usage: bench render bitwarden|drive PATH")
         request["op"] = args[0]
         request["path"] = os.path.abspath(args[1])
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows"):
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows", "easels"):
         request["op"] = args[0] if args else ("status" if verb in ("updates", "bw", "drive") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "history":

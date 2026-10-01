@@ -161,3 +161,37 @@ a stub with the same exports.
 - Easel tabs restore after relaunch, sleep and wake like any tab (reloading from `doc.yjs`).
 - Web pages must not be able to open, navigate to, or frame `copper-easel://` URLs; only Copper
   itself (⌘K, menu, typed in the address field, session restore) opens them.
+
+## As built (native WP, `feat/easels-native`)
+
+What the native half does beyond, or more strictly than, the text above. The web and laser
+packages need none of it except where marked **web**.
+
+- **Native → page messages carry `v: 1` too** (**web**: `host/types.ts` already expects it).
+- **Bound to one board.** Each easel tab's scheme handler and bridge are made for its board:
+  `/<id>` serves `index.html` only for the tab's own id, and `/files/<easelId>/…` only for its own
+  easel id. Another board's id is a 404. A board renders only its own pictures (**web**: the
+  `file:<fileId>` → URL rule above already does that).
+- **An easel tab never leaves its board.** Main-frame navigations elsewhere are cancelled, and
+  http(s) ones open in an ordinary tab. `window.open` from a board opens an ordinary tab and returns
+  `null` (**web**: use `open`). An http(s) address typed into an easel tab's field opens beside it.
+- **One tab per board.** Opening a board that is already open (⌘K, the menu, the field, ⌘T, ⌘D,
+  an agent) goes to its tab.
+- **Unknown ids open empty**, and join the index with their first save. A deleted board's late
+  `save` (from its closing tab) is ignored.
+- **`file`** sniffs the bytes (PNG/JPEG/GIF/WebP). An empty `mime` or `application/octet-stream` is
+  taken from the bytes, a `mime` that is given must match, and `image/jpg` is accepted as
+  `image/jpeg`. `save` is capped at 64 MB.
+- **`flush`**: quitting waits ≤ 300 ms for every awake board, as specified. A closing tab's view is
+  kept up to 1 s to answer, but nothing waits on it (the row goes at once), so this is not a
+  slower close.
+- **Headers**: every answer has `nosniff` and `Cross-Origin-Resource-Policy: same-origin`, and
+  `index.html` also has `frame-ancestors 'none'` + `X-Frame-Options: DENY`. The MIME list also
+  takes `gif`, `jpeg`, `woff`, `ttf`.
+- **No Chrome extensions in easel tabs** (as in private tabs), so no content script can reach the
+  bridge from the page's world.
+- **Viewer colour** comes from `EaselStore.cursorColors`: `#ff5a36 #3b82f6 #10b981 #a855f7
+  #f59e0b #ec4899 #14b8a6 #6366f1`, picked by an FNV-1a hash of the viewer id.
+- **Menu**: File › New Easel ⌃⇧E sits after New Private Tab in `App.swift`'s File group, not in
+  `ForkCommands`.
+- `docs/easels.md` has the rest, including a list of WKWebView quirks for the web bundle.

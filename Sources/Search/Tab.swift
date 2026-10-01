@@ -664,6 +664,7 @@ final class Tab: ObservableObject, Identifiable {
     }
 
     func go(to url: URL) {
+        if Easels.reroute(self, to: url) { return } // Fork: a board opens in its own tab, and keeps it
         // Set straight away rather than waiting for the observer: the tab has to
         // stop being blank in the same frame the field disappears, or the empty
         // state flashes back for an instant on its way out.

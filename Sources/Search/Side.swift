@@ -845,6 +845,7 @@ struct SideAddress: View {
 
     /// `https://www.calendar.google.com/x` → `calendar.google.com`.
     static func host(_ url: URL) -> String {
+        if let easel = Easels.pill(for: url) { return easel } // Fork: "Easel · <title>", not a host
         guard let host = url.host(), !host.isEmpty else { return url.absoluteString }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }

@@ -34,6 +34,7 @@ enum CommandBar {
         var list: [Command] = [
             .init(id: "new-tab", name: "New Tab", glyph: "plus") { $0.newTab() },
             .init(id: "new-private", name: "New Private Tab", glyph: "eyeglasses") { $0.newShyTab() },
+            .init(id: "new-easel", name: "New Easel", glyph: "scribble.variable") { Easels.newEasel(in: $0) },
             .init(id: "reopen", name: "Reopen Closed Tab", glyph: "arrow.uturn.backward") { $0.reopen() },
             .init(id: "close", name: "Close Tab", glyph: "xmark") { b in if let t = b.active { b.close(t) } },
             .init(id: "pin", name: "Pin Tab", glyph: "pin") { b in if let t = b.active { b.pin(t) } },
@@ -151,6 +152,14 @@ enum CommandBar {
             if marks.count == 3 { break }
         }
         marks.forEach { add($0, base: 700) }
+
+        // Boards, by title (Fork/Easel), matched their own way: "easel"
+        // alone lists them, "easel plan" narrows to titles with "plan" in
+        // them. Below bookmarks, above history; a board already open is the
+        // open-page row above and this one folds into it.
+        for (index, row) in Easels.offers(for: typed).enumerated() {
+            ranked.append((row, 650 - Double(index)))
+        }
 
         // History has already combined match position, visit count and
         // recency. Keep its six best rows, then let the same score compete
@@ -297,6 +306,7 @@ enum CommandBar {
     }
 
     private static func hint(for row: Suggestion) -> String {
+        if row.kind != .open, row.url.scheme == Easels.scheme { return "Open Easel" }
         switch row.kind {
         case .open: return "Switch to Tab"
         case .command: return "Run"

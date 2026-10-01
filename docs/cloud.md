@@ -2,20 +2,23 @@
 
 *Settings › Cloud (or ⌘K › Copper Cloud…). Copper links to **one** self-hosted
 [copper-cloud](https://github.com/Exowatt-Labs/copper-cloud) instance at a time,
-signs in to an account on it, and syncs the parts of the browser you switch on.
-Off until you turn it on; nothing leaves the Mac before that.
-Implementation: `Sources/Search/Fork/Cloud/`.*
+signs in to an account on it, and syncs the parts of the browser you switch on
+(*Browser sync*) and, if you choose it, your Personal canvas. Off until you turn
+it on: before that nothing leaves the Mac but signing in. Shared canvases are
+cloud documents by definition — that is what sharing means
+([canvas.md](canvas.md)). Implementation: `Sources/Search/Fork/Cloud/`.*
 
 ## Setting it up
 
 Three steps on the page, in order — or one, with a pairing code from a Mac
 already signed in (see [Pairing another Mac](#pairing-another-mac)):
 
-1. **Connect.** One field, *Paste a link code or a pairing code*; the page says
-   which it got. A **link code** is what the server printed — `install.sh`
-   prints it when it finishes, `copper-cloud link-code` prints it again, and on
-   an instance that keeps a directory of people its admin hands you one from
-   the admin portal:
+1. **Connect.** One field, led by *Paste the link code from your Copper Cloud
+   administrator — or a pairing code from a Mac that is already signed in*;
+   the page says which it got. A **link code** is what the instance's admin
+   hands you — on an instance that keeps a directory of people, from the admin
+   portal. Running your own server, `copper-cloud link-code` prints one (and
+   `install.sh` prints it when it finishes):
 
    ```text
    copper-cloud://HOST:PORT/#k=<key>&fp=<sha256 of the certificate>
@@ -26,6 +29,10 @@ already signed in (see [Pairing another Mac](#pairing-another-mac)):
    you want to be sure. **Connect** checks `/healthz` through the pinned
    certificate and that the instance accepts the key, then keeps the link.
    *Enter it by hand* takes the address, key and fingerprint as three fields.
+   Once connected, this step folds to one line — *Connected to* the host, the
+   start of the pinned fingerprint, and **Change…**, which opens the whole
+   fingerprint and **Disconnect** — so the account form and its button stay in
+   view below it (all of *Create account* fits a 760×640 window).
 
    **Access keys.** `k` is either the instance's shared key (an instance in
    `open` mode) or a **per-person access key**, `ck_…`, that the admin minted
@@ -39,14 +46,22 @@ already signed in (see [Pairing another Mac](#pairing-another-mac)):
    10 characters, the name shown beside your cursor on shared canvases). The
    first account on an instance is its admin; an instance can close sign-up
    after that, and then its admin creates accounts (`copper-cloud admin`).
-3. **Sync.** Choose what syncs, press **Turn on sync**. The first sync merges
-   this Mac with whatever the cloud already has — nothing on either side is
-   thrown away.
+3. **Sync.** Choose what syncs — the *Browser sync* switches and, under
+   *Canvas*, *Personal canvas* — and press **Turn on sync**. The first sync
+   merges this Mac with whatever the cloud already has — nothing on either side
+   is thrown away.
 
-After that the page shows the sync switches (each takes effect at once), the
-status and **Sync now**, the account (sign out, rename this Mac), **Pair
-another Mac**, the tabs open on your other devices, the instance
-(disconnect), and a log.
+After that the page shows, in order: the status (*Up to date · Last synced
+just now*, or how long ago; *Syncing…* only while a sync is under way, and the
+steps above say *Sync on*) with **Sync now**, and **Pause sync** › *Turn off*,
+which pauses browser sync and the Personal canvas — shared canvases stay live;
+the switches (each takes effect at once); the tabs open on your other devices
+(*1 tab · Updated 2 minutes ago*); the account (sign out, rename this Mac);
+**Pair another Mac**; the instance in one line, with *Details* for the
+fingerprint and **Disconnect**; and a log. A field that takes focus or a
+problem that appears is scrolled into view, and while more of the page is
+below the panel's bottom edge, that edge fades with a small chevron (the
+Settings scroll view has no scroller of its own).
 
 ## Pairing another Mac
 
@@ -55,8 +70,11 @@ the same instance *and* signs it in as the same person — nothing to type on
 the new Mac but one paste.
 
 1. On the Mac that's signed in: Settings › Cloud › **Pair another Mac** ›
-   *Make a code* (or ⌘K › *Pair another Mac with Copper Cloud*). The card shows
-   the code big, with **Copy**, a ten-minute countdown and **Revoke**:
+   *Make a code* (or ⌘K › *Pair another Mac with Copper Cloud*). The card says
+   *Paste this into Settings › Cloud on the other Mac* over the code — the
+   address, then the `cp_…` part large on a line of its own, then the
+   fingerprint, wrapping inside the box — with **Copy**, *Expires in 9:58 ·
+   works once* and a quiet red **Revoke**:
 
    ```text
    copper-cloud://HOST:PORT/#p=cp_<32 characters>&fp=<sha256 of the certificate>
@@ -70,7 +88,7 @@ the new Mac but one paste.
    `gate_key` the server hands out, the fingerprint), the account and the
    session token — in one write. Then it turns on sync for everything (the
    switches it had before, if it was signed in once) and the steps land on
-   *Syncing*; switch any domain off after.
+   *Sync on*; switch any domain off after.
 
 A code works **once**, for **10 minutes**; making a new one on the card
 revokes the one it showed. When the other Mac uses it, the card says so
@@ -97,6 +115,11 @@ that certificate from then on, exactly as an `fp=` would have.
 | Bookmarks | The whole tree, ids and folders kept | |
 | Open tabs | This Mac's open (non-pinned) tabs, for the others to see under *On your other devices* | One way: another Mac's tabs never open here by themselves — click one to open it. Turning the switch (or sync) off publishes an empty list. |
 | History | Places visited | Append-only: pushed in batches of 500 from where the last push stopped; pulled from where the last pull stopped. Clearing history here doesn't clear it on the server or other Macs. |
+
+Those five are *Browser sync*. The page shows the **Personal canvas** switch
+apart from them, under *Canvas*, once CloudSync has it: Personal's room
+connects only while it is on, and *Turn off* pauses it with the rest — see
+[canvas.md](canvas.md). Shared canvases ignore every switch here.
 
 ### The settings allowlist
 

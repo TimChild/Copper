@@ -7,6 +7,12 @@ import SwiftUI
 // one press; signed in, the page offers to make one (Pair another Mac).
 // Nothing happens until a button is pressed. Drawn with the same cards,
 // lines, pills and switches as every other page.
+//
+// The step in front keeps its form and its button together inside the
+// panel (760×640 window, 500-point panel): a finished step folds to one
+// line, a field that takes focus or goes wrong is scrolled to, and — the
+// Settings scroll view shows no scroller — a page longer than the panel
+// fades at the bottom edge while there is more below.
 
 struct CloudPage: View {
     @ObservedObject var browser: Browser
@@ -21,17 +27,21 @@ struct CloudPage: View {
             if !cloud.isLinked {
                 CloudConnectCard(draft: draft)
             } else if !cloud.isSignedIn {
-                CloudInstanceCard(cloud: cloud, sync: sync, compact: true)
+                CloudConnection(cloud: cloud, sync: sync, opener: "Change…", lead: "Connected to")
                 CloudAccountForm()
             } else {
                 CloudSyncCard(sync: sync, cloud: cloud)
                 if sync.on, !sync.otherDevices.isEmpty { CloudDevicesCard(sync: sync) }
                 CloudAccountCard(cloud: cloud)
                 CloudPairCard(pairing: CloudPairing.shared)
-                CloudInstanceCard(cloud: cloud, sync: sync, compact: false)
+                VStack(alignment: .leading, spacing: 8) {
+                    Caption("Instance")
+                    CloudConnection(cloud: cloud, sync: sync, opener: "Details")
+                }
                 CloudLogCard(sync: sync)
             }
         }
+        .modifier(CloudMoreBelow())
         .task { if cloud.isLinked { await cloud.ping() } }
     }
 }
@@ -46,7 +56,7 @@ private struct CloudSteps: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Your spaces, settings, bookmarks and history on every Mac — through a Copper Cloud instance you or your team runs, not a service in between.")
+            Text("Browser sync — spaces, settings, bookmarks, history — and shared canvases, through a Copper Cloud instance you or your team runs.")
                 .font(.system(size: 12))
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -55,9 +65,16 @@ private struct CloudSteps: View {
                 bar(done: step > 1)
                 mark(2, "Account")
                 bar(done: step > 2)
-                mark(3, sync.on ? "Syncing" : "Sync")
+                mark(3, third)
             }
         }
+    }
+
+    /// "Sync on" once it is — the status line says how it's doing —
+    /// and "Syncing…" only while a sync is actually under way.
+    private var third: String {
+        guard sync.on else { return "Sync" }
+        return sync.state == .syncing ? "Syncing…" : "Sync on"
     }
 
     private func mark(_ n: Int, _ title: String) -> some View {
@@ -92,6 +109,9 @@ private struct CloudSteps: View {
 /// code (`#p=`, from Pair another Mac on a Copper already signed in) connects,
 /// signs in and turns on sync, all on one press.
 private struct CloudConnectCard: View {
+    enum Field: Hashable { case code, host, key, fingerprint }
+
+    @FocusState private var focus: Field?
     @State private var code = ""
     @State private var advanced = false
     @State private var host = ""
@@ -130,15 +150,27 @@ private struct CloudConnectCard: View {
             Caption("1 · Connect to an instance")
             Card {
                 if advanced {
-                    Line("Address", "host:port, or https://…") { field("cloud.example.com:443", text: $host, width: 200) }
+                    Line("Address", "host:port, or https://…") {
+                        field("cloud.example.com:443", text: $host, width: 200).focused($focus, equals: .host)
+                    }
+                    .cloudAnchor("cloud.connect.host")
                     Rule()
-                    Line("Key", "The k= part of the link code: the instance key, or your access key") { field("key", text: $key, width: 200, secure: true) }
+                    Line("Key", "The k= part of the link code: the instance key, or your access key") {
+                        field("key", text: $key, width: 200, secure: true).focused($focus, equals: .key)
+                    }
+                    .cloudAnchor("cloud.connect.key")
                     Rule()
-                    Line("Certificate fingerprint", "SHA-256, for a self-signed instance. Empty trusts the Mac's own roots.") { field("optional", text: $fingerprint, width: 200) }
+                    Line("Certificate fingerprint", "SHA-256, for a self-signed instance. Empty trusts the Mac's own roots.") {
+                        field("optional", text: $fingerprint, width: 200).focused($focus, equals: .fingerprint)
+                    }
+                    .cloudAnchor("cloud.connect.fingerprint")
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Paste a link code or a pairing code").font(.system(size: 13)).foregroundStyle(Palette.ink)
-                        Text("A link code comes from the server (`copper-cloud link-code`) or its admin, and holds the address, a key and the certificate's fingerprint. A pairing code comes from a Mac already signed in — Settings › Cloud › Pair another Mac.")
+                        Text("Paste the link code from your Copper Cloud administrator — or a pairing code from a Mac that is already signed in.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Palette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Running your own server? `copper-cloud link-code` prints one.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(Palette.muted)
                             .fixedSize(horizontal: false, vertical: true)
@@ -148,6 +180,7 @@ private struct CloudConnectCard: View {
                                 .font(.system(size: 11.5, design: .monospaced))
                                 .lineLimit(1...3)
                                 .autocorrectionDisabled()
+                                .focused($focus, equals: .code)
                                 .padding(.horizontal, 8).padding(.vertical, 6)
                                 .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                                 .onSubmit(go)
@@ -163,6 +196,7 @@ private struct CloudConnectCard: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14).padding(.vertical, 11)
+                    .cloudAnchor("cloud.connect.code")
                 }
                 if let parsed {
                     Rule()
@@ -180,7 +214,7 @@ private struct CloudConnectCard: View {
                         Text("This Mac doesn't trust the instance's certificate, and the pairing code has no fingerprint to pin it by. Its certificate's fingerprint is:")
                             .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text(Cloud.pairs(unknown.seen))
+                        Text(cloudPairLines(Cloud.pairs(unknown.seen)))
                             .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Palette.ink)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -206,11 +240,32 @@ private struct CloudConnectCard: View {
                         .opacity(parsed == nil ? 0.5 : 1)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
+                .cloudAnchor("cloud.connect.submit")
             }
             .onChange(of: code) { _, _ in problem = nil }
             if let message = problem ?? hint {
-                CloudProblem(message)
+                CloudProblem(message).cloudAnchor("cloud.connect.problem")
             }
+        }
+        .onChange(of: focus) { _, field in
+            if let field { cloudReveal(Self.anchor(field)) }
+        }
+        // Something wrong, or a certificate to confirm: the message and the
+        // button it is about, in view.
+        .onChange(of: problem ?? hint) { _, message in
+            if message != nil { cloudReveal("cloud.connect.problem") }
+        }
+        .onChange(of: parsed != nil) { _, ready in
+            if ready { cloudReveal("cloud.connect.submit") }
+        }
+    }
+
+    private static func anchor(_ field: Field) -> String {
+        switch field {
+        case .code: return "cloud.connect.code"
+        case .host: return "cloud.connect.host"
+        case .key: return "cloud.connect.key"
+        case .fingerprint: return "cloud.connect.fingerprint"
         }
     }
 
@@ -303,7 +358,7 @@ private struct CloudConnectCard: View {
 }
 
 private func fingerprintText(_ pairs: String) -> some View {
-    Text(pairs)
+    Text(cloudPairLines(pairs))
         .font(.system(size: 10.5, design: .monospaced))
         .foregroundStyle(Palette.muted)
         .textSelection(.enabled)
@@ -316,7 +371,9 @@ private func fingerprintText(_ pairs: String) -> some View {
 
 private struct CloudAccountForm: View {
     enum Mode: Hashable { case signIn, create }
+    enum Field: Hashable { case email, password, name }
 
+    @FocusState private var focus: Field?
     @State private var mode: Mode = .signIn
     @State private var email = ""
     @State private var password = ""
@@ -335,20 +392,29 @@ private struct CloudAccountForm: View {
                 Segmented(options: [(Mode.signIn, "Sign in"), (Mode.create, "Create account")], selection: $mode, wide: true)
                     .padding(.horizontal, 14).padding(.vertical, 10)
                 Rule()
-                Line("Email") { field("you@example.com", text: $email, width: 220) }
+                Line("Email") {
+                    field("you@example.com", text: $email, width: 220, submit: next).focused($focus, equals: .email)
+                }
+                .cloudAnchor("cloud.account.email")
                 Rule()
                 Line("Password", mode == .create ? "At least \(Cloud.minimumPassword) characters" : nil) {
-                    field(mode == .create ? "10 or more characters" : "password", text: $password, width: 220, secure: true, submit: go)
+                    field(mode == .create ? "10 or more characters" : "password", text: $password, width: 220, secure: true, submit: mode == .create ? next : go)
+                        .focused($focus, equals: .password)
                 }
+                .cloudAnchor("cloud.account.password")
                 if mode == .create {
                     Rule()
-                    Line("Your name", "Shown beside your cursor on shared canvases") { field("Name", text: $name, width: 220) }
+                    Line("Your name", "Shown beside your cursor on shared canvases") {
+                        field("Name", text: $name, width: 220, submit: go).focused($focus, equals: .name)
+                    }
+                    .cloudAnchor("cloud.account.name")
                 }
                 Rule()
                 HStack {
                     Text(mode == .create ? "The first account on an instance is its admin." : "Same email and password as on your other Macs.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     if working { ProgressView().controlSize(.small) }
                     Pill(working ? "…" : (mode == .create ? "Create account" : "Sign in"), filled: ready && !working, action: go)
@@ -356,9 +422,37 @@ private struct CloudAccountForm: View {
                         .opacity(ready ? 1 : 0.5)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
+                .cloudAnchor("cloud.account.submit")
             }
-            .onChange(of: mode) { _, _ in problem = nil }
-            if let problem { CloudProblem(problem) }
+            .onChange(of: mode) { _, mode in
+                problem = nil
+                // Create account grows the form by a field: keep its button in view.
+                if mode == .create { cloudReveal("cloud.account.submit") }
+            }
+            if let problem { CloudProblem(problem).cloudAnchor("cloud.account.problem") }
+        }
+        .onChange(of: focus) { _, field in
+            if let field { cloudReveal(Self.anchor(field)) }
+        }
+        .onChange(of: problem) { _, problem in
+            if problem != nil { cloudReveal("cloud.account.problem") }
+        }
+    }
+
+    private static func anchor(_ field: Field) -> String {
+        switch field {
+        case .email: return "cloud.account.email"
+        case .password: return "cloud.account.password"
+        case .name: return "cloud.account.name"
+        }
+    }
+
+    /// Return in a field that isn't the last: on to the next one.
+    private func next() {
+        switch focus {
+        case .email?: focus = .password
+        case .password? where mode == .create: focus = .name
+        default: go()
         }
     }
 
@@ -366,6 +460,7 @@ private struct CloudAccountForm: View {
         guard ready, !working else { return }
         if mode == .create, password.count < Cloud.minimumPassword {
             problem = "Use at least \(Cloud.minimumPassword) characters for the password"
+            focus = .password
             return
         }
         working = true
@@ -380,6 +475,8 @@ private struct CloudAccountForm: View {
                 password = ""
             } catch {
                 problem = error.localizedDescription
+                // Most refusals are about the password: back to it, in view.
+                focus = .password
             }
             working = false
         }
@@ -402,11 +499,44 @@ private struct CloudSyncCard: View {
         _chosen = State(initialValue: sync.enabled)
     }
 
+    /// The Personal canvas switch, once CloudSync has it (`case canvas`).
+    /// It is shown apart from the browser's switches — the board isn't the
+    /// browser — and every word below that promises what stays on this Mac
+    /// counts it in only when it is there to switch.
+    private static let canvas = CloudSync.Domain(rawValue: "canvas")
+
+    /// Browser sync — every domain but the canvas — then the canvas, if any.
+    private var sections: [(caption: String, domains: [CloudSync.Domain])] {
+        var out = [(caption: sync.on ? "Browser sync" : "3 · Browser sync",
+                    domains: CloudSync.Domain.allCases.filter { $0 != Self.canvas })]
+        if let canvas = Self.canvas { out.append((caption: "Canvas", domains: [canvas])) }
+        return out
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if sync.on {
+                VStack(alignment: .leading, spacing: 8) {
+                    Caption("Sync")
+                    Card { status }
+                }
+            }
+            let all = sections
+            ForEach(Array(all.enumerated()), id: \.offset) { index, section in
+                VStack(alignment: .leading, spacing: 8) {
+                    group(section.caption, section.domains)
+                    // Until sync is on, "Turn on sync" sits under the last of them.
+                    if !sync.on, index == all.count - 1 { Card { start } }
+                }
+            }
+        }
+    }
+
+    private func group(_ caption: String, _ domains: [CloudSync.Domain]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Caption(sync.on ? "Sync" : "3 · Choose what syncs")
+            Caption(caption)
             Card {
-                ForEach(Array(CloudSync.Domain.allCases.enumerated()), id: \.element) { index, domain in
+                ForEach(Array(domains.enumerated()), id: \.element) { index, domain in
                     if index > 0 { Rule() }
                     Line(domain.title, domain.detail) {
                         Switch(on: Binding(
@@ -418,46 +548,70 @@ private struct CloudSyncCard: View {
                         ))
                     }
                 }
-                Rule()
-                if sync.on {
-                    Line("Status", statusLine) {
-                        HStack(spacing: 8) {
-                            Circle().fill(dot).frame(width: 7, height: 7)
-                            Pill("Sync now") { Task { await sync.syncNow() } }
-                                .disabled(sync.state == .syncing)
-                        }
-                    }
-                    Rule()
-                    Line("Pause sync", "Stops sending and receiving. What is already on the cloud stays there.") {
-                        Pill("Turn off") { sync.turnOff() }
-                    }
-                } else {
-                    HStack {
-                        Text(chosen.isEmpty ? "Pick at least one. Nothing leaves this Mac until you turn sync on." : "\(chosen.count) chosen — the first sync merges this Mac with what the cloud has.")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Palette.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer()
-                        if starting { ProgressView().controlSize(.small) }
-                        Pill("Turn on sync", filled: !chosen.isEmpty) {
-                            guard !chosen.isEmpty, !starting else { return }
-                            starting = true
-                            Task { await sync.turnOn(chosen); starting = false }
-                        }
-                        .disabled(chosen.isEmpty || starting)
-                        .opacity(chosen.isEmpty ? 0.5 : 1)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                }
             }
         }
     }
 
-    private var statusLine: String {
-        let state = sync.state.text
-        guard let last = sync.lastSync else { return state }
-        let ago = RelativeDateTimeFormatter().localizedString(for: last, relativeTo: Date())
-        return sync.state == .idle ? "Up to date · last synced \(ago)" : "\(state) · last synced \(ago)"
+    /// How it is doing, and since when — re-read every few seconds so
+    /// "just now" grows into "2 minutes ago" while the page is open.
+    @ViewBuilder
+    private var status: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            Line(statusTitle, statusDetail(now: context.date)) {
+                HStack(spacing: 8) {
+                    Circle().fill(dot).frame(width: 7, height: 7)
+                    Pill("Sync now") { Task { await sync.syncNow() } }
+                        .disabled(sync.state == .syncing)
+                }
+            }
+        }
+        Rule()
+        Line("Pause sync", Self.canvas != nil
+             ? "Pauses browser sync and the Personal canvas. Shared canvases stay live."
+             : "Pauses browser sync. Canvases aren't affected.") {
+            Pill("Turn off") { sync.turnOff() }
+        }
+    }
+
+    private var start: some View {
+        HStack {
+            Text(chosen.isEmpty
+                 ? (Self.canvas != nil ? "Pick at least one. Nothing leaves this Mac until you turn sync on." : "Pick at least one. Browser data stays on this Mac until you turn sync on.")
+                 : "\(chosen.count) chosen — the first sync merges this Mac with what the cloud has.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            if starting { ProgressView().controlSize(.small) }
+            Pill("Turn on sync", filled: !chosen.isEmpty) {
+                guard !chosen.isEmpty, !starting else { return }
+                starting = true
+                Task { await sync.turnOn(chosen); starting = false }
+            }
+            .disabled(chosen.isEmpty || starting)
+            .opacity(chosen.isEmpty ? 0.5 : 1)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    /// Never "Up to date" before a sync has finished, and "Syncing…" only
+    /// while one is under way — the same words as the steps above.
+    private var statusTitle: String {
+        switch sync.state {
+        case .idle: return sync.lastSync == nil ? "Sync on" : "Up to date"
+        case .syncing: return "Syncing…"
+        case .offline: return "Can't reach the cloud"
+        case .error: return "Couldn't sync"
+        }
+    }
+
+    private func statusDetail(now: Date) -> String {
+        let last = sync.lastSync.map { "Last synced " + cloudAgo($0, now: now) }
+        switch sync.state {
+        case .idle, .syncing: return last ?? "Not synced yet"
+        case .offline: return ["Will retry", last].compactMap { $0 }.joined(separator: " · ")
+        case .error(let message): return [message, last].compactMap { $0 }.joined(separator: " · ")
+        }
     }
 
     private var dot: Color {
@@ -489,8 +643,10 @@ private struct CloudDevicesCard: View {
                             Image(systemName: "laptopcomputer").font(.system(size: 12)).foregroundStyle(Palette.muted).frame(width: 16)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(device.name).font(.system(size: 13)).foregroundStyle(Palette.ink)
-                                Text("\(device.tabs.count) tab\(device.tabs.count == 1 ? "" : "s")\(device.updated.map { " · " + RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()) } ?? "")")
-                                    .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
+                                TimelineView(.periodic(from: .now, by: 15)) { context in
+                                    Text("\(device.tabs.count) tab\(device.tabs.count == 1 ? "" : "s")\(device.updated.map { " · Updated " + cloudAgo($0, now: context.date) } ?? "")")
+                                        .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
+                                }
                             }
                             Spacer()
                             Image(systemName: open.contains(device.id) ? "chevron.down" : "chevron.right")
@@ -623,23 +779,23 @@ private struct CloudPairCard: View {
             let left = code.expiresAt.timeIntervalSince(now)
             switch pairing.outcome {
             case .used?:
-                Line("Used — the other Mac is signed in", "It's connected to this instance as you. Make another code for the next Mac.") {
+                Line("Used — the other Mac is signed in", "Make another code for the next Mac.") {
                     Pill(pairing.working ? "…" : "New code", action: pairing.make).disabled(pairing.working)
                 }
             case .revoked?:
-                Line("Revoked", "Nobody can use that code now.") {
+                Line("Code revoked", "Nobody can use it now.") {
                     Pill(pairing.working ? "…" : "New code", action: pairing.make).disabled(pairing.working)
                 }
             case .none where left <= 0:
-                Line("That code expired", "Codes last 10 minutes. Make a new one when the other Mac is ready.") {
+                Line("Code expired", "Make a new one when the other Mac is ready.") {
                     Pill(pairing.working ? "…" : "New code", filled: !pairing.working, action: pairing.make).disabled(pairing.working)
                 }
             case .none:
                 live(code, left: left)
             }
         } else {
-            Line("One-time pairing code", "Connects another Mac to this instance and signs it in as you — no link code or password to type there. Good once, for 10 minutes.") {
-                Pill(pairing.working ? "Making…" : "Make a code", filled: !pairing.working, action: pairing.make)
+            Line("One-time code", "Signs another Mac in as you with one paste. Works once, for 10 minutes.") {
+                Pill(pairing.working ? "Making…" : "Make a code", action: pairing.make)
                     .disabled(pairing.working)
             }
         }
@@ -647,10 +803,10 @@ private struct CloudPairCard: View {
 
     private func live(_ code: Cloud.MintedPairing, left: TimeInterval) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("On the other Mac, open Copper › Settings › Cloud and paste this into Connect — one press there links it, signs it in and starts syncing.")
+            Text("Paste this into Settings › Cloud on the other Mac.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
             CloudCodeBox(link: code.link, secret: code.code)
             VStack(alignment: .leading, spacing: 5) {
                 GeometryReader { box in
@@ -667,7 +823,7 @@ private struct CloudPairCard: View {
                         .foregroundStyle(left < 60 ? Color.orange.opacity(0.95) : Palette.muted)
                     Spacer()
                     if pairing.working { ProgressView().controlSize(.small) }
-                    Pill("Revoke", tint: Color.red.opacity(0.85)) { confirmRevoke = true }
+                    CloudQuietButton("Revoke", tint: Color.red.opacity(0.85)) { confirmRevoke = true }
                         .disabled(pairing.working)
                     Pill(pairing.copied ? "Copied" : "Copy", filled: true, action: pairing.copy)
                 }
@@ -684,60 +840,100 @@ private struct CloudPairCard: View {
     }
 }
 
-/// The pairing code whole, large and monospaced, the `cp_…` part in ink and
-/// the address and fingerprint around it quieter — selectable, and copied
-/// whole by the button beside it.
+/// The pairing code whole and monospaced, in three lines that wrap inside
+/// the box — the address, the `cp_…` part large and in ink on a line of its
+/// own (never broken at its hyphen), the fingerprint small and quiet.
+/// Selectable as one piece; the line breaks are whitespace, which a pasted
+/// code ignores (`Cloud.parseCode`). Copy copies the code without them.
 private struct CloudCodeBox: View {
     let link: String
     let secret: String
 
     var body: some View {
         styled
-            .font(.system(size: 14, design: .monospaced))
             .lineSpacing(3)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12).padding(.vertical, 11)
+            .padding(.horizontal, 12).padding(.vertical, 10)
             .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
     }
 
     private var styled: Text {
-        guard let range = link.range(of: secret) else { return Text(link).foregroundColor(Palette.ink) }
-        return Text(link[..<range.lowerBound]).foregroundColor(Palette.muted)
-            + Text(link[range]).foregroundColor(Palette.ink).fontWeight(.semibold)
-            + Text(link[range.upperBound...]).foregroundColor(Palette.muted)
+        guard let range = link.range(of: secret) else {
+            return Text(link).font(.system(size: 13, design: .monospaced)).foregroundColor(Palette.ink)
+        }
+        let head = link[..<range.lowerBound]
+        let tail = link[range.upperBound...]
+        var text = Text(head).font(.system(size: 11.5, design: .monospaced)).foregroundColor(Palette.muted)
+            + Text("\n")
+            + Text(link[range]).font(.system(size: 15, weight: .semibold, design: .monospaced)).foregroundColor(Palette.ink)
+        if !tail.isEmpty {
+            text = text + Text("\n") + Text(tail).font(.system(size: 10.5, design: .monospaced)).foregroundColor(Palette.muted)
+        }
+        return text
     }
 }
 
 // MARK: - the instance
 
-private struct CloudInstanceCard: View {
+/// The instance this Mac is linked to, in one line: where, how its
+/// certificate is trusted, and a way into the details. Disconnect lives in
+/// the details — it is how to change instance, and too final to sit
+/// between a finished step and the next one.
+private struct CloudConnection: View {
     @ObservedObject var cloud: Cloud
     @ObservedObject var sync: CloudSync
-    let compact: Bool
+    /// What opens the details: "Change…" while signing in is still to do,
+    /// "Details" after.
+    let opener: String
+    /// Said before the host when there is no caption over the line.
+    var lead: String?
+    @State private var open = false
     @State private var confirm = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Caption(compact ? "1 · Connected" : "Instance")
-            Card {
-                Line(cloud.link?.host ?? "—", detail) {
-                    Circle().fill(cloud.reachable ? Color.green.opacity(0.8) : Palette.faint).frame(width: 7, height: 7)
-                        .help(cloud.reachable ? "Reachable" : "Not reached yet")
+        Card {
+            HStack(spacing: 8) {
+                Circle().fill(cloud.reachable ? Color.green.opacity(0.8) : Palette.faint).frame(width: 7, height: 7)
+                    .help(cloud.reachable ? "Reachable" : "Not reached yet")
+                if let lead {
+                    Text(lead).font(.system(size: 12.5)).foregroundStyle(Palette.muted).fixedSize()
                 }
-                if !compact, let pairs = cloud.link?.fingerprintPairs {
-                    Text(pairs)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(Palette.muted)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14).padding(.bottom, 10)
+                Text(cloud.link?.host ?? "—")
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1).truncationMode(.middle)
+                if let link = cloud.link { CloudTrustPill(link: link) }
+                Spacer(minLength: 8)
+                Button(open ? "Hide" : opener) {
+                    withAnimation(Motion.settle) { open.toggle() }
                 }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.muted)
+                .fixedSize()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            if open {
                 Rule()
-                Line("Disconnect", "Signs out and forgets this instance. Your data here and on the cloud stays as it is.") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(trust).font(.system(size: 11.5)).foregroundStyle(Palette.ink)
+                    if let pairs = cloud.link?.fingerprintPairs {
+                        Text(cloudPairLines(pairs))
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(Palette.muted)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Compare it with `copper-cloud doctor` on the server.")
+                            .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                Rule()
+                Line("Disconnect", "Signs out and forgets this instance, to connect to another. Nothing is deleted.") {
                     Pill("Disconnect", tint: Color.red.opacity(0.85)) { confirm = true }
                 }
                 .confirmationDialog("Disconnect from \(cloud.link?.host ?? "this instance")?", isPresented: $confirm) {
@@ -753,10 +949,46 @@ private struct CloudInstanceCard: View {
         }
     }
 
-    private var detail: String {
+    private var trust: String {
         guard let link = cloud.link else { return "" }
+        if link.url.scheme == "http" { return "Plain HTTP — this Mac only, for development" }
+        return link.fingerprint == nil ? "Trusted by its public certificate" : "Pinned to this certificate (SHA-256):"
+    }
+}
+
+/// How the instance's certificate is trusted, small enough to sit beside
+/// the host: the start of a pinned fingerprint, or what trusts it instead.
+private struct CloudTrustPill: View {
+    let link: Cloud.Link
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 8.5, weight: .semibold))
+            Text(label).font(.system(size: 10.5, design: link.fingerprint == nil ? .default : .monospaced))
+        }
+        .foregroundStyle(Palette.muted)
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 7).padding(.vertical, 2.5)
+        .background(Palette.wash, in: Capsule())
+        .help(help)
+    }
+
+    private var symbol: String {
+        if link.url.scheme == "http" { return "exclamationmark.triangle" }
+        return link.fingerprint == nil ? "checkmark.seal" : "lock.fill"
+    }
+
+    private var label: String {
+        if link.url.scheme == "http" { return "Plain HTTP" }
+        guard let pairs = link.fingerprintPairs else { return "Public certificate" }
+        return String(pairs.prefix(11)) + "…"
+    }
+
+    private var help: String {
         if link.url.scheme == "http" { return "Plain HTTP on this Mac (development)" }
-        return link.fingerprint == nil ? "Public certificate" : "Pinned certificate"
+        guard let pairs = link.fingerprintPairs else { return "Trusted by the Mac's own certificate roots" }
+        return "Pinned certificate — SHA-256 " + pairs
     }
 }
 
@@ -804,6 +1036,151 @@ private struct CloudLogCard: View {
 }
 
 // MARK: - bits
+
+/// Scroll the Settings page just far enough to show the view marked `id`
+/// (`cloudAnchor`) whole — a field taking focus, a problem appearing, a
+/// button pushed down by the form growing. After the layout the change
+/// brings; nothing when it is in view already.
+@MainActor
+fileprivate func cloudReveal(_ id: String) {
+    DispatchQueue.main.async {
+        guard let mark = CloudAnchor.mark(id) else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.allowsImplicitAnimation = true
+            _ = mark.scrollToVisible(mark.bounds.insetBy(dx: 0, dy: -6))
+        }
+    }
+}
+
+extension View {
+    /// Marks this view as somewhere `cloudReveal(id)` can scroll to.
+    fileprivate func cloudAnchor(_ id: String) -> some View {
+        background(CloudAnchor(id: id))
+    }
+}
+
+/// An empty AppKit view the size of the view it sits behind, kept by id, so
+/// the scroll view around the page (an NSScrollView) can be asked to show
+/// it. Several can share an id — `cloud picture` lays out a second page off
+/// screen — and the one in a window on screen wins.
+private struct CloudAnchor: NSViewRepresentable {
+    let id: String
+
+    final class Mark: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    private final class Weak { weak var mark: Mark?; init(_ mark: Mark) { self.mark = mark } }
+    @MainActor private static var marks: [String: [Weak]] = [:]
+
+    func makeNSView(context: Context) -> Mark {
+        let mark = Mark()
+        CloudAnchor.marks[id, default: []].append(Weak(mark))
+        return mark
+    }
+
+    func updateNSView(_ mark: Mark, context: Context) {}
+
+    @MainActor static func mark(_ id: String) -> Mark? {
+        let alive = (marks[id] ?? []).filter { $0.mark != nil }
+        marks[id] = alive
+        return alive.lazy.compactMap(\.mark).first { $0.window?.isVisible == true && $0.enclosingScrollView != nil }
+    }
+}
+
+/// A fingerprint's 32 pairs as two lines of 16, so it never breaks inside a
+/// pair. The break is whitespace, which every fingerprint field ignores.
+fileprivate func cloudPairLines(_ pairs: String) -> String {
+    let all = pairs.split(separator: ":")
+    guard all.count > 16 else { return pairs }
+    return all.prefix(16).joined(separator: ":") + ":\n" + all.dropFirst(16).joined(separator: ":")
+}
+
+/// When something last happened, in the past tense whatever the clocks say:
+/// "just now" for the first 45 seconds (and for a date a skewed clock puts
+/// a little ahead), then "2 minutes ago", "3 hours ago".
+fileprivate func cloudAgo(_ date: Date, now: Date = Date()) -> String {
+    guard now.timeIntervalSince(date) >= 45 else { return "just now" }
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .full
+    return formatter.localizedString(for: date, relativeTo: now)
+}
+
+/// A destructive action that isn't the point of the card: red words, no
+/// outline, a wash under the pointer.
+private struct CloudQuietButton: View {
+    let title: String
+    let tint: Color
+    let action: () -> Void
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var enabled
+
+    init(_ title: String, tint: Color, action: @escaping () -> Void) {
+        self.title = title
+        self.tint = tint
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5))
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(tint.opacity(enabled ? 1 : 0.5))
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(hovering && enabled ? Palette.hover : .clear, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Motion.quick, value: hovering)
+    }
+}
+
+/// The Settings scroll view draws no scroller, so a page taller than the
+/// panel says so itself: while more of it is below the bottom edge, that
+/// edge fades into the ground with a small chevron. Gone once the end is in
+/// view, and never drawn off screen (`cloud picture`), where nothing scrolls.
+private struct CloudMoreBelow: ViewModifier {
+    /// The scroll view's visible height.
+    @State private var viewport: CGFloat = 0
+    /// The page, in the scroll view's visible coordinates (`minY` goes
+    /// negative as it scrolls up).
+    @State private var page: CGRect = .zero
+    private let fade: CGFloat = 30
+
+    func body(content: Content) -> some View {
+        content
+            .background(alignment: .top) {
+                Color.clear
+                    .frame(width: 1)
+                    .containerRelativeFrame(.vertical)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 }
+                    .allowsHitTesting(false)
+            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { page = $0 }
+            .overlay(alignment: .top) {
+                // The visible bottom edge, in the page's own coordinates.
+                let bottom = viewport - page.minY
+                let more = viewport > 160 && page.height - bottom > 6
+                ZStack(alignment: .bottom) {
+                    LinearGradient(colors: [Palette.ground.opacity(0), Palette.ground], startPoint: .top, endPoint: .bottom)
+                    Image(systemName: "chevron.compact.down")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Palette.muted)
+                        .padding(.bottom, 1)
+                }
+                .frame(height: fade)
+                .offset(y: bottom - fade)
+                .opacity(more ? 1 : 0)
+                .animation(Motion.quick, value: more)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+    }
+}
 
 private struct CloudProblem: View {
     let text: String

@@ -79,7 +79,7 @@ struct CanvasDoor: View {
     private var others: Int { presence.peers.values.reduce(0, +) }
 
     var body: some View {
-        Door(icon: "scribble.variable", help: others > 0 ? "Canvas · \(others) here now   ⌘⇧O" : "Canvas   ⌘⇧O",
+        Door(icon: "scribble.variable", help: others > 0 ? "Canvas · \(CanvasRow.live(others))   ⌘⇧O" : "Canvas   ⌘⇧O",
              size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
             ui.popoverOpen.toggle()
         }
@@ -114,7 +114,7 @@ struct CanvasPopover: View {
             case .list, .new:
                 list
             case .rename(let id):
-                if let entry = canvases.entry(id) { CanvasNameForm(title: "Rename “\(entry.name)”", action: "Rename", start: entry.name) { name in
+                if let entry = canvases.entry(id) { CanvasNameForm(title: "Rename canvas", subject: entry.name, action: "Rename", start: entry.name) { name in
                     try await canvases.rename(id, to: name)
                     ui.note = "Renamed to “\(Canvases.clean(name))”"
                 } }
@@ -176,6 +176,7 @@ struct CanvasPopover: View {
                         CanvasSection(title: "Shared with me")
                         ForEach(shared) { entry in CanvasRow(entry: entry, browser: browser) }
                     }
+                    signedOut
                 }
                 .padding(.vertical, 4)
             }
@@ -193,13 +194,29 @@ struct CanvasPopover: View {
             }
             Rectangle().fill(Palette.hairline).frame(height: 1)
             if ui.mode == .new {
-                CanvasNameForm(title: nil, action: "Create", start: "") { name in
+                CanvasNameForm(title: nil, subject: nil, action: "Create", start: "") { name in
                     let entry = try await canvases.create(named: name)
                     ui.popoverOpen = false
                     CanvasHost.show(entry.id, in: browser)
                 }
             } else {
                 footer
+            }
+        }
+    }
+
+    /// Shared canvases of an account that isn't signed in: their copy here
+    /// opens offline while nobody is signed in; with another account signed
+    /// in they are only counted — one account never sees another's boards.
+    @ViewBuilder private var signedOut: some View {
+        let away = canvases.signedOut
+        if !away.isEmpty {
+            CanvasSection(title: "Signed out")
+            if cloud.account == nil {
+                CanvasExplain(text: "Kept on this Mac. They open offline and keep your changes; sign in at Settings › Cloud to see others' changes and send yours.")
+                ForEach(away) { entry in CanvasRow(entry: entry, browser: browser) }
+            } else {
+                CanvasExplain(text: "\(away.count) shared canvas\(away.count == 1 ? " is" : "es are") kept on this Mac for another account. Sign in as that account to open \(away.count == 1 ? "it" : "them").")
             }
         }
     }
@@ -232,6 +249,71 @@ struct CanvasPopover: View {
     }
 }
 
+/// The card's own buttons, drawn the same in a key window, a window behind
+/// and a picture: outlined, filled in ink (the one you came to press), or
+/// filled red (it destroys something).
+private struct CanvasButtonStyle: ButtonStyle {
+    enum Kind { case plain, primary, destructive }
+    let kind: Kind
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11.5, weight: kind == .plain ? .regular : .semibold))
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(kind == .plain ? Palette.ink : kind == .primary ? Palette.ground : Color.white)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 4.5)
+            .background(Capsule().fill(kind == .plain ? Palette.ground : kind == .primary ? Palette.ink : Color(nsColor: .systemRed)))
+            .overlay(Capsule().strokeBorder(kind == .plain ? Palette.faint : .clear, lineWidth: 1))
+            .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
+            .contentShape(Capsule())
+    }
+}
+
+/// One line under a section heading, wrapping, in the muted voice.
+private struct CanvasExplain: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(Palette.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 4)
+    }
+}
+
+/// The canvas a form or a confirmation is about, whole: a long name wraps
+/// instead of being cut off where the decision is made.
+private struct CanvasSubject: View {
+    let name: String
+    var body: some View {
+        Text(name)
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(Palette.ink)
+            .multilineTextAlignment(.leading)
+            .lineLimit(4)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.wash))
+            .textSelection(.enabled)
+            .accessibilityLabel("Canvas: \(name)")
+    }
+}
+
+/// A form's short title — what is being done, never the name it is done to.
+private struct CanvasFormTitle: View {
+    let text: String
+    var body: some View {
+        Text(text).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(1)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
 private struct CanvasSection: View {
     let title: String
     var body: some View {
@@ -253,11 +335,17 @@ struct CanvasRow: View {
     @ObservedObject private var presence = CanvasPresence.shared
     @ObservedObject private var canvases = Canvases.shared
     @ObservedObject private var ui = CanvasUI.shared
+    @ObservedObject private var sync = CloudSync.shared
     @State private var hovering = false
 
     private var peers: Int { presence.peers[entry.id] ?? 0 }
     private var isOpen: Bool { CanvasHost.tab(showing: entry.id, in: browser) != nil }
     private var isFront: Bool { CanvasHost.active(in: browser) == entry.id }
+    /// Shared, but its account isn't the one signed in: an offline copy.
+    private var away: Bool { entry.isShared && entry.account != Canvases.account }
+
+    /// "1 collaborator live", "3 collaborators live" — people, not tabs.
+    static func live(_ count: Int) -> String { "\(count) collaborator\(count == 1 ? "" : "s") live" }
 
     private var glyph: String {
         if entry.isPersonal { return "person.crop.square" }
@@ -265,9 +353,21 @@ struct CanvasRow: View {
         return "scribble.variable"
     }
 
+    /// "Synced" only once the room has answered; before that it is
+    /// connecting, and with Personal's sync off it is simply on this Mac.
     private var detail: String {
-        if entry.isPersonal { return canvases.cloudReady ? "Private · synced" : "Private · on this Mac" }
+        if entry.isPersonal {
+            guard canvases.cloudReady, sync.syncs(.canvas) else { return "Private · on this Mac" }
+            if presence.synced.contains(entry.id) { return "Private · synced" }
+            if presence.open.contains(entry.id) { return "Private · connecting…" }
+            // Its room comes up with its page: nothing is moving right now.
+            return "Private · sync on"
+        }
         if entry.isShared {
+            if away { return "Offline · changes saved on this Mac" }
+            if presence.open.contains(entry.id), !presence.synced.contains(entry.id) {
+                return canvases.cloudReady ? "Shared · connecting…" : "Offline · changes saved on this Mac"
+            }
             if !entry.isOwner, let owner = entry.owner, !owner.isEmpty { return "From \(owner)" }
             let members = entry.members ?? 1
             return members > 1 ? "Shared · \(members) members" : "Shared · just you so far"
@@ -285,7 +385,7 @@ struct CanvasRow: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Palette.ink.opacity(0.8))
                     .frame(width: 26, height: 26)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.wash))
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(isFront ? Palette.ground : Palette.wash))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.name)
                         .font(.system(size: 12.5, weight: isFront ? .semibold : .regular))
@@ -305,21 +405,36 @@ struct CanvasRow: View {
                         Text("\(peers)").font(.system(size: 11).monospacedDigit())
                     }
                     .foregroundStyle(Palette.muted)
-                    .help("\(peers) other\(peers == 1 ? "" : "s") here now")
-                } else if isOpen {
-                    Text("Open").font(.system(size: 11)).foregroundStyle(Palette.faint)
+                    .help(CanvasRow.live(peers))
+                }
+                if isOpen {
+                    // The tab's state, as a mark: the one in front, or one open behind.
+                    Image(systemName: isFront ? "checkmark" : "macwindow")
+                        .font(.system(size: 10.5, weight: isFront ? .semibold : .regular))
+                        .foregroundStyle(isFront ? Palette.ink : Palette.muted)
+                        .frame(width: 16)
+                        .help(isFront ? "The tab in front" : "Open in a tab — click to switch to it")
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(hovering ? Palette.hover : .clear)
+            .background(isFront ? Palette.wash : hovering ? Palette.hover : .clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .accessibilityLabel("\(entry.name), \(detail)\(peers > 0 ? ", \(peers) here now" : "")")
+        .help(entry.name)
+        .accessibilityLabel(accessibility)
         .contextMenu { menu }
+    }
+
+    private var accessibility: String {
+        var parts = [entry.name, detail]
+        if peers > 0 { parts.append(CanvasRow.live(peers)) }
+        if isFront { parts.append("the tab in front") } else if isOpen { parts.append("open in a tab") }
+        return parts.joined(separator: ", ")
     }
 
     @ViewBuilder private var menu: some View {
@@ -329,9 +444,9 @@ struct CanvasRow: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(CanvasLinks.url(entry.id).absoluteString, forType: .string)
         }
-        if !entry.isPersonal {
+        if !entry.isPersonal && !away {
             Divider()
-            if entry.isOwner { Button("Rename…") { ui.mode = .rename(entry.id) } }
+            if entry.isOwner { Button("Rename…") { ui.mode = .rename(entry.id) }.disabled(entry.isShared && !canvases.cloudReady) }
             if entry.isShared && canvases.cloudReady {
                 Button("Invite…") { ui.mode = .invite(entry.id) }
                 Button("Members…") { ui.mode = .members(entry.id) }
@@ -349,44 +464,70 @@ struct CanvasRow: View {
 private struct CanvasInviteRow: View {
     let invite: Canvases.Invite
     @ObservedObject private var ui = CanvasUI.shared
-    @State private var working = false
+    /// Which answer is on its way, if one is.
+    @State private var working: Bool?
+    @State private var failure: String?
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "envelope")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Palette.ink.opacity(0.8))
-                .frame(width: 26, height: 26)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.wash))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(invite.canvasName).font(.system(size: 12.5)).foregroundStyle(Palette.ink).lineLimit(1)
-                Text(invite.from.isEmpty ? "Invited you" : "From \(invite.from)")
-                    .font(.system(size: 11)).foregroundStyle(Palette.muted).lineLimit(1)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "envelope")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.ink.opacity(0.8))
+                    .frame(width: 26, height: 26)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.wash))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(invite.canvasName)
+                        .font(.system(size: 12.5)).foregroundStyle(Palette.ink)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(invite.from.isEmpty ? "Invited you" : "From \(invite.from)")
+                        .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer(minLength: 4)
-            Button("Decline") { answer(false) }
-                .controlSize(.small)
-                .disabled(working)
-            Button("Accept") { answer(true) }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-                .disabled(working)
+            if let failure {
+                Text(failure)
+                    .font(.system(size: 11)).foregroundStyle(Color.orange)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 36)
+            }
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                if let working {
+                    ProgressView().controlSize(.mini)
+                    Text(working ? "Joining…" : "Declining…").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                }
+                Button("Decline") { answer(false) }
+                    .buttonStyle(CanvasButtonStyle(kind: .plain))
+                    .disabled(working != nil)
+                Button("Accept") { answer(true) }
+                    .buttonStyle(CanvasButtonStyle(kind: .primary))
+                    .disabled(working != nil)
+            }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.vertical, 7)
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("Invitation to \(invite.canvasName)\(invite.from.isEmpty ? "" : " from \(invite.from)")")
     }
 
+    /// The row stays until the server has said yes: a failure is said here,
+    /// in the row, and both buttons come back.
     private func answer(_ accept: Bool) {
-        working = true
+        working = accept
+        failure = nil
         Task {
             do {
                 try await Canvases.shared.answer(invite, accept: accept)
                 ui.note = accept ? "Joined “\(invite.canvasName)”" : "Declined “\(invite.canvasName)”"
             } catch {
-                ui.note = Canvases.explain(error)
+                failure = Canvases.explain(error)
             }
-            working = false
+            working = nil
         }
     }
 }
@@ -394,6 +535,8 @@ private struct CanvasInviteRow: View {
 /// A name, asked for in place: New canvas and Rename.
 private struct CanvasNameForm: View {
     let title: String?
+    /// The canvas being renamed, whole, under the title.
+    var subject: String? = nil
     let action: String
     let start: String
     let done: (String) async throws -> Void
@@ -406,7 +549,8 @@ private struct CanvasNameForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let title { Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(1) }
+            if let title { CanvasFormTitle(text: title) }
+            if let subject { CanvasSubject(name: subject) }
             TextField("Canvas name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .focused($focused)
@@ -462,7 +606,8 @@ private struct CanvasInviteForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Invite to “\(entry.name)”").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(1)
+            CanvasFormTitle(text: "Invite to canvas")
+            CanvasSubject(name: entry.name)
             TextField("name@example.com", text: $email)
                 .textFieldStyle(.roundedBorder)
                 .textContentType(.emailAddress)
@@ -513,8 +658,11 @@ private struct CanvasMembers: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Members of “\(entry.name)”").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink)
-                .lineLimit(1).padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
+            VStack(alignment: .leading, spacing: 8) {
+                CanvasFormTitle(text: "Members")
+                CanvasSubject(name: entry.name)
+            }
+            .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
             if loading {
                 ProgressView().controlSize(.small).padding(14)
             } else if let failure {
@@ -558,30 +706,45 @@ private struct CanvasDeleteConfirm: View {
     @ObservedObject private var ui = CanvasUI.shared
     @State private var working = false
     @State private var failure: String?
+    @FocusState private var cancelFocused: Bool
 
     private var leaving: Bool { entry.isShared && !entry.isOwner }
 
+    /// What goes, said plainly: there is no undo and no bin to restore from.
+    private var consequence: String {
+        if leaving { return "It stays for everyone else. Someone will have to invite you again." }
+        if entry.isShared { return "Permanently deletes this canvas and everything on it, for every member. This can't be undone." }
+        return "Permanently deletes this canvas and everything on it from this Mac. This can't be undone."
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(leaving ? "Leave “\(entry.name)”?" : "Delete “\(entry.name)”?")
-                .font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(1)
-            Text(leaving ? "It stays for everyone else. Someone will have to invite you again."
-                 : entry.isShared ? "It goes for every member, with everything on it." : "Everything on it goes too. This can't be undone.")
+            CanvasFormTitle(text: leaving ? "Leave canvas" : "Delete canvas")
+            CanvasSubject(name: entry.name)
+            Text(consequence)
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
             if let failure { Text(failure).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2) }
-            HStack {
+            HStack(spacing: 8) {
                 Spacer()
+                if working { ProgressView().controlSize(.mini) }
+                // Cancel is where the keyboard starts and what Escape does;
+                // Return confirms nothing here.
                 Button("Cancel") { ui.mode = .list }
+                    .buttonStyle(CanvasButtonStyle(kind: .plain))
                     .keyboardShortcut(.cancelAction)
-                Button(leaving ? "Leave" : "Delete", role: .destructive) { run() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(working)
+                    .focused($cancelFocused)
+                Button(role: .destructive) { run() } label: {
+                    Text(leaving ? "Leave canvas" : "Delete canvas")
+                }
+                .buttonStyle(CanvasButtonStyle(kind: .destructive))
+                .disabled(working)
+                .accessibilityHint(consequence)
             }
-            .controlSize(.small)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .onAppear { DispatchQueue.main.async { cancelFocused = true } }
     }
 
     private func run() {

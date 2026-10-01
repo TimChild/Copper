@@ -12,10 +12,13 @@ import Foundation
 // a cloud is linked and signed in the same updates also go to its room,
 // where Yjs merges them with everyone else's.
 //
-// The Personal canvas always exists, is never shared and never deleted. Signed
-// in, it follows the account's own Personal canvas on the server; signed out
-// it is simply local. Other canvases are either local (made with no account)
-// or shared (made on the server, with members and invites). See docs/canvas.md.
+// The Personal canvas always exists, is never shared and never deleted. It
+// is local until the person chooses Personal canvas in Settings › Cloud ›
+// Choose what syncs (`CloudSync.syncs(.canvas)`); then, signed in, it follows
+// the account's own Personal canvas on the server. Other canvases are either
+// local (made with no account) or shared (made on the server, with members
+// and invites) — a shared one is a cloud document by definition and is
+// relayed whenever its account is signed in. See docs/canvas.md.
 
 // MARK: - addresses
 
@@ -149,6 +152,9 @@ final class Canvases: ObservableObject {
     private var me: Me
     private var observers: [NSObjectProtocol] = []
     private var refreshing: Task<Void, Never>?
+    /// The account the list was last read for: a different one signing in
+    /// starts over (no list read yet, no invites).
+    private var listAccount: String?
 
     static var folder: URL { Store.file("canvas") }
     private static var listFile: URL { folder.appendingPathComponent("canvases.json") }
@@ -175,6 +181,13 @@ final class Canvases: ObservableObject {
         observers.append(NotificationCenter.default.addObserver(forName: Cloud.didChange, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { Canvases.shared.cloudChanged() }
         })
+        // The Personal canvas switch (or sync as a whole) going on or off.
+        observers.append(NotificationCenter.default.addObserver(forName: CloudSync.didChange, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                Canvases.shared.objectWillChange.send()
+                CanvasHost.cloudChanged()
+            }
+        })
         observers.append(NotificationCenter.default.addObserver(forName: Cloud.event, object: nil, queue: .main) { note in
             let type = (note.userInfo?["event"] as? [String: Any])?["type"] as? String
             MainActor.assumeIsolated {
@@ -182,8 +195,12 @@ final class Canvases: ObservableObject {
                 if type == "canvas" || type == "open" { Canvases.shared.refreshSoon() }
             }
         })
+        listAccount = Canvases.account
         if Cloud.shared.isSignedIn { refreshSoon() }
     }
+
+    /// The signed-in account's user id, lowercased, as rows keep it.
+    static var account: String? { Cloud.shared.account?.userId.uuidString.lowercased() }
 
     // MARK: lookups
 
@@ -202,12 +219,23 @@ final class Canvases: ObservableObject {
     /// What the sidebar lists: Personal, the local canvases, and — signed in
     /// — the shared ones of the account that is signed in.
     var visible: [Entry] {
-        let account = Cloud.shared.account?.userId.uuidString.lowercased()
+        let account = Canvases.account
         return all.filter { entry in
             guard entry.isShared else { return true }
             return account != nil && entry.account == account
         }
     }
+
+    /// Shared canvases kept on this Mac for an account that isn't signed in
+    /// now. Their copy here still opens (offline) while nobody is signed in;
+    /// with another account signed in they are only counted, never named.
+    var signedOut: [Entry] {
+        let account = Canvases.account
+        return all.filter { $0.isShared && $0.account != account }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// The Personal canvas may use its room: chosen in Settings › Cloud.
+    var personalSyncs: Bool { CloudSync.shared.syncs(.canvas) }
 
     var mine: [Entry] { visible.filter { !$0.isPersonal && $0.isOwner }.sorted { $0.updatedAt > $1.updatedAt } }
     var sharedWithMe: [Entry] { visible.filter { $0.isShared && !$0.isOwner }.sorted { $0.updatedAt > $1.updatedAt } }
@@ -235,12 +263,17 @@ final class Canvases: ObservableObject {
         return "personal-\(account)"
     }
 
-    /// The room a canvas relays to, when it has one and the cloud is up.
+    /// The room a canvas relays to, when it has one and the cloud is up —
+    /// and only for the account signed in now: a row read for another
+    /// account (Personal's remote id is the last account's until the list is
+    /// read again) has none. Personal has one only when its sync is chosen:
+    /// with every switch off, nothing on it leaves this Mac.
     func room(for entry: Entry) -> String? {
         guard cloudReady, let remote = entry.remoteId else { return nil }
-        if entry.isShared {
-            guard entry.account == Cloud.shared.account?.userId.uuidString.lowercased() else { return nil }
+        if entry.isShared || entry.isPersonal {
+            guard let account = Canvases.account, entry.account == account else { return nil }
         }
+        if entry.isPersonal, !personalSyncs { return nil }
         return remote
     }
 
@@ -309,6 +342,14 @@ final class Canvases: ObservableObject {
     // MARK: the cloud
 
     private func cloudChanged() {
+        let account = Canvases.account
+        if account != listAccount {
+            // Another account (or none): its list and invites are not this one's.
+            listAccount = account
+            refreshed = nil
+            invites = []
+            problem = nil
+        }
         if cloudReady {
             refreshSoon()
         } else {
@@ -319,23 +360,36 @@ final class Canvases: ObservableObject {
 
     /// Coalesced: a burst of events is one round trip.
     func refreshSoon() {
-        guard cloudReady, refreshing == nil else { return }
+        guard cloudReady else { return }
+        if refreshing != nil { again = true; return }
         refreshing = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
             await self?.refresh()
             self?.refreshing = nil
+            // Asked for again while that one was in flight (an account
+            // switch in the middle of a read): once more, for what is now.
+            if self?.again == true {
+                self?.again = false
+                self?.refreshSoon()
+            }
         }
     }
 
+    private var again = false
+
     /// The server's list and the invites waiting for this account.
     func refresh() async {
-        guard cloudReady, let account = Cloud.shared.account?.userId.uuidString.lowercased() else { return }
+        guard cloudReady, let account = Canvases.account else { return }
         busy = true
         defer { busy = false }
         do {
             let (data, _) = try await Cloud.shared.request("GET", "/v1/canvases")
+            // Signed out or switched while the answer was on its way: it is
+            // the old account's list, and goes nowhere.
+            guard Canvases.account == account else { again = true; return }
             adopt(remote: Canvases.rows(data), account: account)
             let (pending, _) = try await Cloud.shared.request("GET", "/v1/invites")
+            guard Canvases.account == account else { again = true; return }
             invites = Canvases.rows(pending).compactMap(Canvases.invite)
             problem = nil
             refreshed = Date()
@@ -550,7 +604,8 @@ final class Canvases: ObservableObject {
 // MARK: - the history on disk
 
 /// One canvas's Yjs history: `updates.log` (each update as a 4-byte
-/// big-endian length and its bytes, in the order the page made them) and,
+/// big-endian length and its bytes, in the order the page made them or the
+/// room handed them to the page — see CanvasHost.deliver) and,
 /// once that grows past 2 MB or 500 entries, `snapshot.bin` — the whole
 /// document as one update, from the page's `exportState()` — with the log
 /// cut back to what came after it. Opening a canvas is the snapshot, then
@@ -615,6 +670,47 @@ final class CanvasStore {
         queue.async { io.append(update, to: log, in: folder) }
     }
 
+    /// Hashes of the room's updates kept lately: two tabs on one canvas each
+    /// hold a room and each hand the page the same update; it is kept once.
+    private var remoteSeen: [Int] = []
+
+    /// An update the room handed the page. The page never reports those
+    /// back (they are the provider's), so the host keeps them itself, as
+    /// they arrive — what a collaborator wrote is on disk the moment it is on
+    /// the board, and survives a disconnect, a sleep or a quit.
+    func appendRemote(_ update: Data) {
+        let hash = CanvasStore.fingerprint(update)
+        if remoteSeen.contains(hash) { return }
+        remoteSeen.append(hash)
+        if remoteSeen.count > 128 { remoteSeen.removeFirst(remoteSeen.count - 128) }
+        append(update)
+    }
+
+    /// Changes made here since the room last confirmed a sync (shared
+    /// canvases): what the page shows as waiting to go. Lives as long as
+    /// the app — a reload of the page doesn't forget it.
+    var pending = 0
+
+    /// A hash of every byte. (`Data.hashValue` reads only the length and the
+    /// first 80 bytes — two updates can share those.)
+    static func fingerprint(_ data: Data) -> Int {
+        var hasher = Hasher()
+        hasher.combine(data.count)
+        data.withUnsafeBytes { hasher.combine(bytes: $0) }
+        return hasher.finalize()
+    }
+
+    /// Every write queued so far is on disk when this returns.
+    func flush() {
+        let io = io
+        queue.sync { io.synchronize() }
+    }
+
+    /// The app is quitting: every open canvas's history, written down.
+    static func flushAll() {
+        for store in open.values { store.flush() }
+    }
+
     /// Past the size the log should be cut back at.
     var wantsCompaction: Bool { entries > CanvasStore.maxEntries || bytes > CanvasStore.maxBytes }
 
@@ -661,7 +757,7 @@ final class CanvasStore {
 
     /// For the bench and the tools: what is on disk.
     var describe: [String: Any] {
-        ["key": key, "entries": entries, "bytes": bytes,
+        ["key": key, "entries": entries, "bytes": bytes, "pending": pending,
          "snapshot": (try? FileManager.default.attributesOfItem(atPath: snapshot.path)[.size] as? NSNumber)?.intValue ?? 0]
     }
 }
@@ -728,5 +824,10 @@ private final class CanvasIO: @unchecked Sendable {
     func close() {
         try? handle?.close()
         handle = nil
+    }
+
+    /// What was written reaches the disk, not just the kernel.
+    func synchronize() {
+        try? handle?.synchronize()
     }
 }

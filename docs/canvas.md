@@ -2,7 +2,8 @@
 
 *An infinite board of stickies, text, frames, arrows, images and links that lives in an ordinary
 Copper tab at `copper://canvas/<id>`. One **Personal** canvas always exists, works with no
-network and no account, and is never shared; with Copper Cloud signed in you can make shared
+network and no account, and is never shared — it stays on this Mac until you choose **Personal
+canvas** in Settings › Cloud › Choose what syncs; with Copper Cloud signed in you can make shared
 canvases, invite people, and see each other — and each other's agents — live. The ⌘E agent, MCP
 agents and the `copper` CLI all read and write the same boards. Implementation:
 `Sources/Search/Fork/Canvas/` (the page itself is built from `Canvas/`).*
@@ -20,7 +21,22 @@ agents and the `copper` CLI all read and write the same boards. Implementation:
   sleeps and wakes like any tab (the board comes back from disk), and links clicked on the board
   open in a tab of their own — a canvas tab never navigates away by itself.
 - Signed out, everything cloud-shaped is hidden and the card says, in one line, that sharing lives
-  at **Settings › Cloud**. New canvases are then local to this Mac.
+  at **Settings › Cloud**. New canvases are then local to this Mac. Shared canvases already kept
+  here stay listed under **Signed out** with a line saying what that means: they open offline and
+  keep your changes until you sign in again. With *another* account signed in they are only
+  counted ("2 shared canvases are kept on this Mac for another account"), never named or opened.
+- Row subtitles say what is true now: Personal is *Private · on this Mac* while its sync is off,
+  *Private · connecting…* (its tab is up, the room hasn't answered) or *Private · sync on* (no tab open) while it is on, and *Private · synced* only once its
+  room has answered with the server's side of the document; a shared board with no room reads
+  *Offline · changes saved on this Mac*. The tab in front has a tinted row and a ✓; one open behind
+  has a window mark ("Open in a tab"); the green dot's help says "1 collaborator live".
+- Rename, Invite, Members and Delete open with a short title ("Rename canvas", "Invite to
+  canvas", "Delete canvas") over the canvas's whole name, wrapped. Delete is a red **Delete
+  canvas** that says what it does — *Permanently deletes this canvas and everything on it, for
+  every member. This can't be undone.* — with Cancel first: Escape cancels and Return confirms
+  nothing. An invitation row shows the whole name and who sent it above Decline / **Accept**, says
+  *Joining…* in the row while the answer is on its way, and stays — with the reason, in the row —
+  until the server has said yes.
 
 ## Where things are kept
 
@@ -30,7 +46,7 @@ agents and the `copper` CLI all read and write the same boards. Implementation:
 |---|---|
 | `canvases.json` | the registry: `[{id, name, kind: personal\|shared\|local, remoteId?, createdAt, updatedAt, role?, owner?, members?, account?}]` |
 | `me.json` | this Mac's persona (stable id + colour, shown when signed out) and which account the local Personal history was first bound to |
-| `<id>/updates.log` | every Yjs update the page reported, in order: 4-byte big-endian length + bytes |
+| `<id>/updates.log` | every Yjs update the page reported **and every update the room handed the page** (a sync message's SyncStep2 / update payload, kept as it is delivered), in order: 4-byte big-endian length + bytes |
 | `<id>/snapshot.bin` | the whole document as one update, written when the log passes 2 MB or 500 entries (the page's `exportState()`), after which the log keeps only what came after |
 
 Opening a canvas hands the page `snapshot.bin` as `init.state`, then every logged update through
@@ -41,6 +57,15 @@ short by a crash is trimmed on the next read.
 Personal belongs to one account: the first account it is relayed to is remembered, and a
 *different* account signing in on the same Mac gets a fresh local Personal history
 (`personal-<userId>/`) so two people's private boards never merge.
+
+**Personal syncs only when chosen.** Its room is a sync domain like the others —
+`CloudSync.Domain.canvas`, "Personal canvas" in Settings › Cloud › Choose what syncs, included in
+`cloud sync on all`, off until picked, paused by *Turn off* and by signing out. The switch is kept
+in `cloud-sync.json` (`canvas`, beside the sync bases; `Cloud.SyncPrefs` in cloud.json has no
+field for it yet). `Canvases.room(for:)` gives Personal a room only when
+`CloudSync.shared.syncs(.canvas)` and the row's `account` is the account signed in; with every
+switch off nothing on the Personal board leaves the Mac. Shared canvases are cloud documents by
+definition and keep their room whenever their account is signed in.
 
 ## The cloud
 
@@ -60,10 +85,35 @@ so their provider starts or stops. After a couple of connections that never open
 member, a deleted canvas — `CloudSocket` doesn't surface the 4403/4404 close codes) the list is
 read again, and a canvas gone from it closes its tabs.
 
-The page reports only its own changes, not what arrived from the room, so while a room has
-brought anything in the host writes a fresh `snapshot.bin` every two minutes (and every open of a
-canvas with a non-empty log folds it into one snapshot); the copy on disk is never more than that
-behind the room, and the room has the rest.
+**Which room, for whom.** A page is told its room once, in `init`; the host remembers that room id
+(`roomId`). Signing in or out, another account, the Personal switch (`CloudSync.didChange`) and
+every list read (`Canvases.refresh`) compare it with what `room(for:)` says now; a page whose room
+is no longer the right one — or whose history is another account's (`storeKey`) — is
+**checkpointed and reloaded** (`restartPage`), so its provider starts, stops or moves rooms. The
+list is keyed to the account it was read for: a different account signing in starts with no list
+(the first page open waits up to 1.5 s for it) and an answer that arrives after a switch is
+dropped and asked for again. The 20 s sweeper repeats the comparison (a notice missed) and gives a
+live page that lost its room a new one, so a page never stays on "online, no room".
+
+**Nothing a collaborator wrote is lost to a disconnect.** The page reports only its own changes;
+what its provider applied from the room it never reports. So the host keeps those itself, as it
+hands them over (`CanvasHost.hand` → `CanvasStore.appendRemote`, deduplicated across two tabs on
+one canvas, and handed to the sibling tab too): a sync message's SyncStep2 or update payload is a
+whole v1 Yjs update, the same as the page's own. Frames for a socket that never opened are not
+kept (the page never had them; the next sync brings them). Before a page is let go for a room
+change, the whole document is exported (`exportState`) and written as `snapshot.bin` by atomic
+rename (`checkpoint`, two seconds at most) and the store's queue is flushed; closing a tab,
+navigating it away and quitting (⌘Q, SIGTERM in a probe, an update's relaunch:
+`NSApplication.willTerminateNotification` → `CanvasStore.flushAll`) flush too. Compaction stays
+safe because every update counted in the log was *posted* to the page before the export is asked
+for (`post` issues the call at once, and WebKit runs one view's calls in order). While a room has
+brought anything in the host still folds the log into a fresh snapshot every two minutes.
+
+**The page's status line** is told with `copperCanvas.setStatus({mode, pending})` whenever it
+changes (when the page has the function): `local` (Personal or a local canvas, on this Mac by
+design), `personal-synced`, `shared-live` (room open and the server's SyncStep2 received) or
+`shared-offline` (a shared board with no room: signed out, disconnected, the server away), and
+`pending` — changes made here since the room last confirmed a sync.
 
 Create `POST /v1/canvases {name}`, rename `PATCH /v1/canvases/:id`, delete `DELETE
 /v1/canvases/:id` (owner), leave `DELETE /v1/canvases/:id/members/<me>`, members `GET
@@ -104,6 +154,8 @@ arguments, never pasted into source), so a function may return a value or a prom
 - `copperCanvas.select(ids)`, `zoomTo(ids)`, `setAgent({id,name,color,cursor,status})`,
   `theme("light"|"dark")` (pushed again whenever the view's appearance changes)
 - `copperCanvas.exportState() → b64` (optional; without it the log is simply never compacted)
+- `copperCanvas.setStatus({mode: "local"|"personal-synced"|"shared-live"|"shared-offline", pending})`
+  (optional; called only when `typeof setStatus === 'function'`)
 
 `me` is the cloud account (`userId`, display name) when signed in, else this Mac's persona (the
 macOS full name, a stable colour). `docId` is the server's canvas id when there is one.
@@ -129,6 +181,11 @@ shows on the board.
 | `canvas_screenshot` | `id?` | PNG of the canvas tab |
 
 `id?` omitted means the canvas tab in front, else Personal. Every schema also takes `reason`.
+Each call leaves its one line in `Tools.summary` — *220 operations applied on Roadmap*, *Read 7
+shapes on Personal*, *Invited ada@example.com to Roadmap*, *Selected 2 shapes…*, *Created …* —
+which rides as `_meta.summary` and is what the Driver pane's row says after the arrow (MCP and the
+⌘E agent alike). Canvas tools never report "page changed / no change": they change a board, not
+the page.
 Ops: `add {shape:{type, x?, y?, w?, h?, color?, …}}` (no x/y → free space near the view),
 `update {id, patch}`, `move {id, dx, dy}`, `resize {id, w, h}`, `delete {id}`, `connect {from, to,
 label?}`, `clear {confirm:true}`. Colours: yellow, pink, blue, green, purple, gray, white, `#hex`.
@@ -155,7 +212,7 @@ $C call canvas_open '{"reason":"t","id":"personal","foreground":true}'
 $C call canvas_apply '{"reason":"t","ops":[{"op":"add","shape":{"type":"sticky","text":"hello"}}]}'
 $C call canvas_read '{"reason":"t"}'
 $C shot /tmp/canvas.png
-./bench --world canvasE canvas hosts      # each open canvas: ready, room, clients, collaborators, store
+./bench --world canvasE canvas hosts      # each open canvas: ready, online, roomId, room, synced, status{mode,pending}, clients, collaborators, store
 ./bench --world canvasE canvas list | open ID | read [ID] | apply JSON | create NAME
 ./bench --world canvasE canvas invites | accept INVITE | decline INVITE      # INVITE: id or canvas name
 ./bench --world canvasE canvas rename ID -> NAME | delete ID | leave ID | members ID

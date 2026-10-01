@@ -17,7 +17,9 @@ import WebKit
 // It never touches the network: when the canvas has a room on the cloud,
 // Copper holds the WebSocket (`CanvasRoom`) and relays frames both ways.
 // Every Yjs update the page reports is kept on disk (CanvasStore) before
-// anything else happens to it, so a canvas works — and survives — offline.
+// anything else happens to it, and so is every update the room hands the
+// page (`deliver`), so a canvas works — and survives — offline, including
+// what collaborators wrote up to the moment the connection went.
 
 // MARK: - the bundled page
 
@@ -81,17 +83,23 @@ final class CanvasPresence: ObservableObject {
     static let shared = CanvasPresence()
     @Published fileprivate(set) var open: Set<String> = []
     @Published fileprivate(set) var live: Set<String> = []
+    /// Live, and the room has answered with its side of the document: what
+    /// is on the board here is what the cloud has. Only these say "synced".
+    @Published fileprivate(set) var synced: Set<String> = []
     @Published fileprivate(set) var peers: [String: Int] = [:]
 
     fileprivate func recount() {
         let hosts = CanvasHost.all
         let open = Set(hosts.map(\.canvasId))
         let live = Set(hosts.filter(\.roomOpen).map(\.canvasId))
+        let synced = Set(hosts.filter(\.roomSynced).map(\.canvasId))
         var peers: [String: Int] = [:]
         for host in hosts where host.roomOpen { peers[host.canvasId] = max(peers[host.canvasId] ?? 0, host.collaborators) }
         if open != self.open { self.open = open }
         if live != self.live { self.live = live }
+        if synced != self.synced { self.synced = synced }
         if peers != self.peers { self.peers = peers }
+        for host in hosts { host.statusSoon() }
     }
 }
 
@@ -180,8 +188,19 @@ final class CanvasHost {
     private var initialized = 0
     private weak var readyWeb: WKWebView?
     private(set) var selection: [String] = []
-    private var online = false
+    /// The room this page was given in `init` (nil: it was told it is
+    /// offline). A different answer from `Canvases.room(for:)` — signed out,
+    /// another account, Personal's sync switched — reloads the page.
+    private var roomId: String?
+    private var online: Bool { roomId != nil }
     private var room: CanvasRoom?
+    /// The open room has sent its SyncStep2: the page holds what it has.
+    private var synced = false
+    /// A reload for a changed room is on its way (after a checkpoint).
+    private var restarting = false
+    /// What `setStatus` last told the page, so it is told only of changes.
+    private var toldStatus: [String: Int]?
+    private var statusWork: DispatchWorkItem?
     /// The page's end of the relayed socket (its BridgeSocket), as far as
     /// the host knows: none, asked for (`wsOpen`), or told it is open.
     private enum PageSocket { case none, waiting, open }
@@ -209,6 +228,7 @@ final class CanvasHost {
     var store: CanvasStore { CanvasStore.store(for: storeKey) }
     var isReady: Bool { initialized > 0 && initialized == generation && readyWeb != nil && readyWeb === tab?.built }
     var roomOpen: Bool { room?.isOpen ?? false }
+    var roomSynced: Bool { roomOpen && synced }
     /// Other people in the room right now — by person, not by tab: you in a
     /// second tab or on another Mac are not a collaborator. Awareness states
     /// are renewed every 15 s, so one not heard for 45 s has gone.
@@ -378,16 +398,37 @@ final class CanvasHost {
         sweeper = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in
             MainActor.assumeIsolated {
                 for host in all where host.room != nil && (host.tab?.built == nil || !host.isReady) {
-                    host.room?.stop()
-                    host.room = nil
+                    host.stopRoom()
                 }
                 for host in all where host.remoteDirty && Date().timeIntervalSince(host.lastSnapshot) > 120 {
                     host.compactIfNeeded(force: true)
                 }
+                // A page told one room while another (or none) is now right
+                // — a notice missed, a list read late — is reloaded; a page
+                // that should be live but lost its room gets one again.
+                for host in all where host.isReady && !host.restarting {
+                    guard let entry = host.entry else { continue }
+                    let wanted = Canvases.shared.room(for: entry)
+                    if wanted != host.roomId || Canvases.shared.storeKey(entry) != host.storeKey {
+                        host.restartPage()
+                    } else if host.roomId != nil, host.room == nil {
+                        host.startRoom()
+                    }
+                }
                 CanvasPresence.shared.recount()
             }
         }
+        // Quitting (⌘Q, SIGTERM in a probe, an update's relaunch): whatever
+        // is still queued for disk is written before the process goes.
+        terminating = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                for host in all { host.stopRoom() }
+                CanvasStore.flushAll()
+            }
+        }
     }
+
+    private static var terminating: NSObjectProtocol?
 
     /// Load the canvas page into this tab.
     static func mount(_ tab: Tab, _ id: String, in browser: Browser) {
@@ -403,8 +444,9 @@ final class CanvasHost {
     }
 
     private func switchTo(_ id: String) {
-        room?.stop()
-        room = nil
+        stopRoom()
+        store.flush()
+        roomId = nil
         pageSocket = .none
         pageEverAsked = false
         remoteDirty = false
@@ -438,8 +480,8 @@ final class CanvasHost {
 
     /// The tab went somewhere that isn't a canvas.
     private func unmount() {
-        room?.stop()
-        room = nil
+        stopRoom()
+        store.flush()
         appearance = nil
         if let tab { CanvasHost.hosts[tab.id] = nil }
         // The handler stays on the view: the page may come Back, and the
@@ -450,8 +492,8 @@ final class CanvasHost {
     /// The tab is closing: its room closes and its view lets go of the handler.
     static func forget(_ tab: Tab) {
         guard let host = hosts.removeValue(forKey: tab.id) else { return }
-        host.room?.stop()
-        host.room = nil
+        host.stopRoom()
+        host.store.flush()
         detach(tab.built)
         CanvasPresence.shared.recount()
     }
@@ -463,8 +505,8 @@ final class CanvasHost {
         case "ready":
             // A new page: a new provider, which will want a connection of its own.
             readyWeb = web
-            room?.stop()
-            room = nil
+            stopRoom()
+            toldStatus = nil
             pageSocket = .none
             pageEverAsked = false
             roomFresh = false
@@ -493,8 +535,7 @@ final class CanvasHost {
         case "wsClose":
             // The provider let go (destroyed, or its own timeout): so does the room.
             pageSocket = .none
-            room?.stop()
-            room = nil
+            stopRoom()
             CanvasPresence.shared.recount()
         case "openUrl":
             guard let text = body["url"] as? String, let url = URL(string: text),
@@ -524,17 +565,29 @@ final class CanvasHost {
     /// that client's clock that strands every later one. The page doesn't
     /// echo what the host gives it (those carry the host's origin).
     private func keep(_ update: Data) {
-        let hash = update.hashValue
+        let hash = CanvasStore.fingerprint(update)
         // An update this page only echoed back after being handed it.
         if let at = recent.firstIndex(of: hash) { recent.remove(at: at); return }
         store.append(update)
         Canvases.shared.touched(canvasId)
+        handToSiblings(update, hash: hash)
+        // Made here while the room isn't confirmed: waiting to go.
+        if online || entry?.isShared == true, !roomSynced {
+            store.pending += 1
+            statusSoon()
+        }
+        compactIfNeeded()
+    }
+
+    /// Every other tab on the same history gets the update now — posted in
+    /// order, so a page asked for `exportState` afterwards already holds
+    /// every update the log has (compaction drops what it was asked over).
+    private func handToSiblings(_ update: Data, hash: Int) {
         for other in CanvasHost.hosts(of: canvasId) where other !== self && other.isReady && other.storeKey == storeKey {
             other.recent.append(hash)
             if other.recent.count > 64 { other.recent.removeFirst(other.recent.count - 64) }
-            Task { try? await other.call("window.copperCanvas.applyUpdate(u)", ["u": update.base64EncodedString()]) }
+            other.post("window.copperCanvas.applyUpdate(u)", ["u": update.base64EncodedString()])
         }
-        compactIfNeeded()
     }
 
     // MARK: ready → init
@@ -564,7 +617,8 @@ final class CanvasHost {
         storeKey = Canvases.shared.storeKey(entry)
         let (snapshot, updates) = store.load()
         let remote = Canvases.shared.room(for: entry)
-        online = remote != nil
+        roomId = remote
+        synced = false
         let me = Canvases.shared.identity
         let options: [String: Any] = [
             "docId": entry.remoteId ?? entry.id,
@@ -595,6 +649,8 @@ final class CanvasHost {
         guard ticket == generation else { return }
         initialized = ticket
         lastSnapshot = Date()
+        // Asked for while this page was coming up: the answer may have changed.
+        if Canvases.shared.room(for: entry) != roomId { restartPage(); return }
         if online {
             if entry.isPersonal { Canvases.shared.bindPersonal() }
             // The page's provider asks for the socket itself (`wsOpen`), often
@@ -606,10 +662,10 @@ final class CanvasHost {
                 startRoom()
             }
         } else {
-            room?.stop()
-            room = nil
+            stopRoom()
         }
         CanvasPresence.shared.recount()
+        statusNow()
         // A board opened from a log is folded into one snapshot straight
         // away: the next open hands the page the whole document in `init`
         // (so it sees its own name and history at once) and replays nothing.
@@ -753,9 +809,14 @@ final class CanvasHost {
 
     // MARK: keeping the log short
 
-    /// Past 2 MB / 500 entries — or, `force`, a snapshot now because the
-    /// room brought in what others wrote (the page only reports its own
-    /// changes, so the copy on disk would otherwise lag behind the room).
+    /// Past 2 MB / 500 entries — or, `force`, a snapshot now: a board opened
+    /// from a long log, or one the room has been writing into (its updates
+    /// are logged as they come — `deliver` — so this only folds them).
+    ///
+    /// Safe against the log because of ordering: everything counted in
+    /// `covered` was posted to this page (its own updates, siblings' through
+    /// `handToSiblings`, the room's through `deliver`) before the export is
+    /// asked for, and WebKit runs a view's calls in the order they were made.
     private func compactIfNeeded(force: Bool = false) {
         guard isReady, force || store.wantsCompaction, !compactionUnsupported else { return }
         if let since = compactingSince, Date().timeIntervalSince(since) < 30 { return }
@@ -783,10 +844,62 @@ final class CanvasHost {
         }
     }
 
+    /// The whole document as the page has it, written as the snapshot and
+    /// on disk before this returns — before a reload or anything else that
+    /// lets the page go. Two seconds at most; the log has everything anyway,
+    /// this only makes the next open one read instead of a replay.
+    func checkpoint(within seconds: Double = 2) async {
+        guard isReady, !compactionUnsupported, let web = tab?.built else { store.flush(); return }
+        let covered = store.entries
+        let store = store
+        let state: Data? = await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
+            var finished = false
+            func finish(_ value: Data?) {
+                guard !finished else { return }
+                finished = true
+                continuation.resume(returning: value)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { finish(nil) }
+            web.callAsyncJavaScript("""
+                const c = window.copperCanvas;
+                if (!c || typeof c.exportState !== 'function') return null;
+                return await c.exportState();
+                """, arguments: [:], in: nil, in: .page) { result in
+                if case .success(let value) = result, let b64 = value as? String, let data = Data(base64Encoded: b64), !data.isEmpty {
+                    finish(data)
+                } else {
+                    finish(nil)
+                }
+            }
+        }
+        if let state {
+            store.compact(state: state, dropping: covered)
+            remoteDirty = false
+            lastSnapshot = Date()
+        }
+        store.flush()
+    }
+
+    /// The page's room is no longer the right one: the room stops, the
+    /// document is checkpointed to disk, then the page reloads and starts
+    /// (or doesn't start) its provider for what is right now.
+    func restartPage() {
+        guard !restarting else { return }
+        restarting = true
+        stopRoom()
+        Task {
+            await checkpoint()
+            restarting = false
+            tab?.built?.reload()
+        }
+    }
+
     // MARK: the room
 
-    private func startRoom() {
-        guard let entry, let remote = Canvases.shared.room(for: entry) else { return }
+    func startRoom() {
+        guard let entry, let remote = roomId else { return }
+        // The page was given another room than is right now: it reloads.
+        guard Canvases.shared.room(for: entry) == remote else { restartPage(); return }
         if let room, room.remoteId == remote {
             room.start()
             return
@@ -799,9 +912,17 @@ final class CanvasHost {
         room.start()
     }
 
+    /// The room goes, saying so to the page's socket first if it was open.
+    func stopRoom() {
+        room?.stop()
+        room = nil
+        synced = false
+    }
+
     private func roomChanged(_ open: Bool) {
         openFallback?.cancel()
         heldFrames = []
+        synced = false
         if open {
             roomFresh = true
             if pageSocket == .waiting {
@@ -821,39 +942,33 @@ final class CanvasHost {
             peers = [:]
             if pageSocket != .none {
                 pageSocket = .none
-                Task { try? await call("window.copperCanvas.wsState('closed')") }
+                post("window.copperCanvas.wsState('closed')")
             }
         }
         CanvasPresence.shared.recount()
     }
 
     /// The room is up and the page's socket is waiting: open it, then hand
-    /// over what the room said in the meantime.
+    /// over what the room said in the meantime (kept on disk as it goes).
     private func tellOpen() {
         guard let room, room.isOpen, isReady, pageSocket == .waiting else { return }
         pageSocket = .open
         roomFresh = false
         let held = heldFrames
         heldFrames = []
-        Task {
-            try? await call("""
-                window.copperCanvas.wsState('open');
-                for (const f of frames) window.copperCanvas.wsMessage(f);
-                """, ["frames": held.map { $0.base64EncodedString() }])
-        }
+        post("window.copperCanvas.wsState('open')")
+        for frame in held { hand(frame) }
     }
 
     private func deliver(_ frame: Data) {
         guard tab?.built != nil else {
-            room?.stop()
-            room = nil
+            stopRoom()
             return
         }
         noteIncoming(frame)
-        remoteDirty = true
         switch pageSocket {
         case .open:
-            Task { try? await call("window.copperCanvas.wsMessage(f)", ["f": frame.base64EncodedString()]) }
+            hand(frame)
         case .waiting, .none:
             // Kept until the page's socket opens — but only for a fresh
             // connection; anything older is for a socket that is gone.
@@ -863,17 +978,95 @@ final class CanvasHost {
         }
     }
 
-    /// Signed in, signed out, the list read: canvases whose room came or went
-    /// are reloaded so the page starts (or stops) its provider.
+    /// One frame to the page's socket. The document updates in it (the
+    /// room's SyncStep2 and every update after it) go on disk first: the page
+    /// never reports what its provider applied, and a disconnect, a sleep or
+    /// a quit must not take a collaborator's latest work with it.
+    private func hand(_ frame: Data) {
+        let sync = CanvasWire.sync(frame)
+        if !sync.updates.isEmpty {
+            for update in sync.updates {
+                store.appendRemote(update)
+                handToSiblings(update, hash: CanvasStore.fingerprint(update))
+            }
+            remoteDirty = true
+            Canvases.shared.touched(canvasId)
+        }
+        post("window.copperCanvas.wsMessage(f)", ["f": frame.base64EncodedString()])
+        if sync.step2, !synced {
+            // The room's answer to the page's state: in step from here.
+            synced = true
+            store.pending = 0
+            CanvasPresence.shared.recount()
+            statusNow()
+        }
+        if !sync.updates.isEmpty, store.wantsCompaction { compactIfNeeded() }
+    }
+
+    /// Issued now, answered never: calls made this way reach the page in
+    /// the order they were made, which `compactIfNeeded` relies on.
+    private func post(_ body: String, _ arguments: [String: Any] = [:]) {
+        guard let web = tab?.built else { return }
+        web.callAsyncJavaScript(body, arguments: arguments, in: nil, in: .page, completionHandler: nil)
+    }
+
+    // MARK: the board's status line
+
+    /// What the page's status says: `local` (Personal or a local canvas, on
+    /// this Mac by design), `personal-synced`, `shared-live`, or
+    /// `shared-offline` (a shared board with no room right now — signed out,
+    /// disconnected, the server away — whose changes wait here), and how
+    /// many changes are waiting to go.
+    var status: [String: Any] {
+        let mode: String
+        if entry?.isShared == true {
+            mode = roomSynced ? "shared-live" : "shared-offline"
+        } else if entry?.isPersonal == true, roomSynced {
+            mode = "personal-synced"
+        } else {
+            mode = "local"
+        }
+        let pending = (online || entry?.isShared == true) && !roomSynced ? store.pending : 0
+        return ["mode": mode, "pending": pending]
+    }
+
+    /// Soon (changes come in bursts while someone drags), and only a change.
+    fileprivate func statusSoon() {
+        guard isReady, statusWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.statusWork = nil
+            self?.statusNow()
+        }
+        statusWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func statusNow() {
+        guard isReady else { return }
+        let now = status
+        let key = ["mode": ["local", "personal-synced", "shared-live", "shared-offline"].firstIndex(of: now["mode"] as? String ?? "") ?? 0,
+                   "pending": now["pending"] as? Int ?? 0]
+        guard key != toldStatus else { return }
+        toldStatus = key
+        post("""
+            const c = window.copperCanvas;
+            if (c && typeof c.setStatus === 'function') c.setStatus(s);
+            """, ["s": now])
+    }
+
+    /// Signed in, signed out, another account, a sync switch, the list read:
+    /// a page whose room is no longer the right one (or whose history is
+    /// another account's) is checkpointed and reloaded so its provider
+    /// starts, stops or moves rooms. The rest just hear the new status.
     static func cloudChanged() {
         for host in all {
             guard let entry = host.entry, host.isReady else { continue }
-            let wants = Canvases.shared.room(for: entry) != nil
+            let wants = Canvases.shared.room(for: entry)
             let key = Canvases.shared.storeKey(entry)
-            if wants != host.online || key != host.storeKey {
-                host.room?.stop()
-                host.room = nil
-                host.tab?.built?.reload()
+            if wants != host.roomId || key != host.storeKey {
+                host.restartPage()
+            } else {
+                host.statusNow()
             }
         }
         CanvasPresence.shared.recount()
@@ -919,7 +1112,8 @@ final class CanvasHost {
     var describe: [String: Any] {
         var out: [String: Any] = [
             "canvas": canvasId, "ready": isReady, "generation": generation, "online": online,
-            "room": roomOpen, "collaborators": collaborators, "selection": selection, "store": store.describe,
+            "room": roomOpen, "synced": roomSynced, "roomId": roomId ?? NSNull(), "status": status,
+            "collaborators": collaborators, "selection": selection, "store": store.describe,
             "clients": peers.count,
         ]
         if let tab { out["tab"] = String(tab.id.uuidString.prefix(8)).lowercased(); out["address"] = tab.address?.absoluteString ?? "" }
@@ -1051,6 +1245,35 @@ final class CanvasRoom {
 /// varuint8array holding a count and, per client, its id, clock and state as
 /// JSON — `null` when the client has gone), 2 auth, 3 awareness query.
 enum CanvasWire {
+    /// The document updates in a frame — a sync message's SyncStep2 (1) or
+    /// update (2) payload, each a whole Yjs update (v1, what the page's own
+    /// `update` messages carry) — and whether a SyncStep2 was among them.
+    static func sync(_ frame: Data) -> (updates: [Data], step2: Bool) {
+        var reader = Reader(bytes: [UInt8](frame))
+        var updates: [Data] = []
+        var step2 = false
+        while reader.left > 0 {
+            guard let type = reader.varUInt() else { break }
+            switch type {
+            case 0:
+                guard let sub = reader.varUInt(), let length = reader.varUInt(), length <= reader.left else { return (updates, step2) }
+                let end = reader.at + Int(length)
+                if sub == 1 || sub == 2, length > 0 {
+                    updates.append(Data(reader.bytes[reader.at ..< end]))
+                }
+                if sub == 1 { step2 = true }
+                reader.at = end
+            case 1:
+                guard reader.skipBytes() else { return (updates, step2) }
+            case 3:
+                continue
+            default:
+                return (updates, step2)
+            }
+        }
+        return (updates, step2)
+    }
+
     static func awareness(_ frame: Data) -> [(UInt, [String: Any]?)]? {
         var reader = Reader(bytes: [UInt8](frame))
         var out: [(UInt, [String: Any]?)] = []

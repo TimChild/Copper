@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-// The sync engine. Five domains, each off until the person turns it on in
+// The sync engine. Six domains, each off until the person turns it on in
 // Settings › Cloud:
 //
 //   spaces     the spaces and the tabs kept in them (pins and Saved)
@@ -10,6 +10,10 @@ import Foundation
 //   tabs       this Mac's open tabs, for the other Macs to look at (one
 //              way: nothing of another Mac's ever opens here by itself)
 //   history    places visited, append-only
+//   canvas     the Personal canvas's room (Fork/Canvas/). Not a document
+//              here: the switch only says whether Personal may connect —
+//              `syncs(.canvas)`, read by `Canvases.room(for:)`. Shared
+//              canvases live on the cloud by definition and ignore it.
 //
 // Pushing: a change here (Preferences, Bookmarks and History publish theirs;
 // the session file's writes say when tabs and spaces moved) waits two quiet
@@ -35,7 +39,7 @@ final class CloudSync: ObservableObject {
     static let shared = CloudSync()
 
     enum Domain: String, CaseIterable, Identifiable {
-        case spaces, settings, bookmarks, tabs, history
+        case spaces, settings, bookmarks, tabs, history, canvas
 
         var id: String { rawValue }
 
@@ -46,6 +50,7 @@ final class CloudSync: ObservableObject {
             case .bookmarks: return "Bookmarks"
             case .tabs: return "Open tabs"
             case .history: return "History"
+            case .canvas: return "Personal canvas"
             }
         }
 
@@ -56,6 +61,7 @@ final class CloudSync: ObservableObject {
             case .bookmarks: return "The whole bookmarks tree, folders and all."
             case .tabs: return "Let your other Macs see the tabs open here, and open them from there. Nothing opens by itself."
             case .history: return "Places you visit, so the address field knows them everywhere. Added to, never removed — clearing history here doesn't clear it there."
+            case .canvas: return "Your Personal canvas follows you between Macs. Shared canvases always live on the cloud — that is what sharing means."
             }
         }
 
@@ -66,6 +72,7 @@ final class CloudSync: ObservableObject {
             case .bookmarks: return "bookmark"
             case .tabs: return "macbook.and.iphone"
             case .history: return "clock.arrow.circlepath"
+            case .canvas: return "scribble.variable"
             }
         }
     }
@@ -104,9 +111,22 @@ final class CloudSync: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var lastSync: Date?
     @Published private(set) var otherDevices: [DeviceTabs] = []
-    /// Mirrors of what cloud.json keeps, for the page to bind to.
-    @Published private(set) var on = false
-    @Published private(set) var enabled: Set<Domain> = []
+    /// Mirrors of what cloud.json keeps, for the page to bind to. (The
+    /// canvas switch is kept in cloud-sync.json — see `canvasSwitch`.)
+    /// Either changing posts `didChange`.
+    @Published private(set) var on = false {
+        didSet { if on != oldValue { CloudSync.announce() } }
+    }
+    @Published private(set) var enabled: Set<Domain> = [] {
+        didSet { if enabled != oldValue { CloudSync.announce() } }
+    }
+
+    /// `on` or `enabled` changed: the canvas host starts or stops Personal's room.
+    static let didChange = Notification.Name("CloudSync.didChange")
+
+    private static func announce() {
+        NotificationCenter.default.post(name: didChange, object: nil)
+    }
 
     private weak var browser: Browser?
     private var started = false
@@ -124,10 +144,10 @@ final class CloudSync: ObservableObject {
 
     private init() {
         let prefs = Cloud.shared.sync
-        on = prefs.on
-        enabled = CloudSync.domains(prefs)
         account = Cloud.shared.account?.userId
         loadState()
+        on = prefs.on
+        enabled = CloudSync.domains(prefs, canvas: canvasSwitch)
         if let account, let owner, owner != account { resetState() }
     }
 
@@ -143,6 +163,10 @@ final class CloudSync: ObservableObject {
     func active(_ domain: Domain) -> Bool {
         cloud.isSignedIn && on && enabled.contains(domain)
     }
+
+    /// Sync is on and this domain is one of the chosen — whether or not
+    /// anyone is signed in right now (the caller checks that).
+    func syncs(_ domain: Domain) -> Bool { on && enabled.contains(domain) }
 
     // MARK: - starting
 
@@ -220,13 +244,14 @@ final class CloudSync: ObservableObject {
 
     // MARK: - switches
 
-    private static func domains(_ prefs: Cloud.SyncPrefs) -> Set<Domain> {
+    private static func domains(_ prefs: Cloud.SyncPrefs, canvas: Bool) -> Set<Domain> {
         var out: Set<Domain> = []
         if prefs.spaces { out.insert(.spaces) }
         if prefs.settings { out.insert(.settings) }
         if prefs.bookmarks { out.insert(.bookmarks) }
         if prefs.tabs { out.insert(.tabs) }
         if prefs.history { out.insert(.history) }
+        if canvas { out.insert(.canvas) }
         return out
     }
 
@@ -239,6 +264,10 @@ final class CloudSync: ObservableObject {
         prefs.history = domains.contains(.history)
         prefs.on = on
         cloud.sync = prefs
+        if canvasSwitch != domains.contains(.canvas) {
+            canvasSwitch = domains.contains(.canvas)
+            saveState()
+        }
         self.on = on
         enabled = domains
     }
@@ -362,6 +391,9 @@ final class CloudSync: ObservableObject {
         case .tabs:
             await push(.tabs)
             await refreshDevices()
+        case .canvas:
+            // Personal's room comes up on its own (didChange → CanvasHost).
+            break
         default:
             await pull(domain)
             await push(domain)
@@ -438,6 +470,9 @@ final class CloudSync: ObservableObject {
             await pullHistory()
         case .tabs:
             await refreshDevices()
+        case .canvas:
+            // A room, not a document: the canvas host connects it.
+            break
         }
     }
 
@@ -465,6 +500,8 @@ final class CloudSync: ObservableObject {
         case .history:
             guard active(.history) else { return }
             await pushHistory()
+        case .canvas:
+            break
         }
     }
 
@@ -837,11 +874,18 @@ final class CloudSync: ObservableObject {
         var owner: UUID?
         var docs: [String: Base] = [:]
         var remote: [String: Double] = [:]
+        /// The Personal canvas switch. Kept here rather than beside the
+        /// other switches in cloud.json (`Cloud.SyncPrefs` has no field for
+        /// it); optional, so a file from before it reads as off.
+        var canvas: Bool?
     }
 
     private var bases: [String: Base] = [:]
     private var remote: [String: Double] = [:]
     private var owner: UUID?
+    /// See `Saved.canvas`. Off until chosen, like every other domain; not
+    /// reset when another account signs in (the switches never are).
+    private var canvasSwitch = false
 
     private static var stateFile: URL { Store.file("cloud-sync.json") }
 
@@ -851,11 +895,12 @@ final class CloudSync: ObservableObject {
         owner = saved.owner
         bases = saved.docs
         remote = saved.remote
+        canvasSwitch = saved.canvas ?? false
     }
 
     private func saveState() {
         if let account { owner = account }
-        guard let data = try? JSONEncoder().encode(Saved(owner: owner, docs: bases, remote: remote)) else { return }
+        guard let data = try? JSONEncoder().encode(Saved(owner: owner, docs: bases, remote: remote, canvas: canvasSwitch)) else { return }
         let file = CloudSync.stateFile
         let temporary = file.deletingLastPathComponent().appendingPathComponent(".cloud-sync.\(UUID().uuidString).tmp")
         guard FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
@@ -900,6 +945,7 @@ final class CloudSync: ObservableObject {
         case .bookmarks: data = try? encode(CloudApply.bookmarks(browser))
         case .tabs: data = try? encode(CloudApply.openTabs(device: cloud.deviceName))
         case .history: data = try? JSONEncoder().encode(CloudApply.visits().suffix(20).map { ["url": $0.url, "title": $0.title] })
+        case .canvas: data = try? JSONSerialization.data(withJSONObject: ["personal": syncs(.canvas) ? "room" : "this Mac only"])
         }
         return data.flatMap { try? JSONSerialization.jsonObject(with: $0) }
     }

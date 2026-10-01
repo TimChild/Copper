@@ -82,7 +82,7 @@ enum CanvasTools {
         switch name {
         case "canvas_list":
             let rows = Canvases.shared.visible.map { summary($0, in: browser) }
-            Tools.summary?.line = "\(rows.count) canvas\(rows.count == 1 ? "" : "es")"
+            Tools.summary?.line = "Listed \(rows.count) canvas\(rows.count == 1 ? "" : "es")"
             return [.text(json(["canvases": rows, "cloud": cloudLine]))]
 
         case "canvas_open":
@@ -90,14 +90,15 @@ enum CanvasTools {
             let foreground = (args["foreground"] as? Bool) ?? false
             let host = try await open(entry, in: browser, foreground: foreground)
             try await host.waitReady()
-            Tools.summary?.line = "opened \(entry.name)"
+            Tools.summary?.line = "Opened \(entry.name)"
             return [.text(json(summary(entry, in: browser)))]
 
         case "canvas_read":
             let entry = try resolve(args, in: browser)
             let host = try await open(entry, in: browser, foreground: false)
             let read = try await host.read(full: (args["full"] as? Bool) ?? false)
-            Tools.summary?.line = "\(entry.name): \((read["shapes"] as? [Any])?.count ?? 0) shapes"
+            let shapes = (read["shapes"] as? [Any])?.count ?? 0
+            Tools.summary?.line = "Read \(shapes) shape\(shapes == 1 ? "" : "s") on \(entry.name)"
             return [.text(json(read))]
 
         case "canvas_apply":
@@ -109,7 +110,7 @@ enum CanvasTools {
             let result = try await host.apply(ops, as: agent)
             let applied = (result["applied"] as? NSNumber)?.intValue ?? 0
             let errors = (result["errors"] as? [Any])?.count ?? 0
-            Tools.summary?.line = "\(entry.name): \(applied) applied\(errors > 0 ? ", \(errors) failed" : "") as \(agent.name)"
+            Tools.summary?.line = "\(applied) operation\(applied == 1 ? "" : "s") applied\(errors > 0 ? ", \(errors) failed" : "") on \(entry.name)"
             return [.text(json(result))]
 
         case "canvas_select", "canvas_focus":
@@ -118,29 +119,34 @@ enum CanvasTools {
             let host = try await open(entry, in: browser, foreground: false)
             if name == "canvas_select" {
                 try await host.select(wanted)
+                Tools.summary?.line = "Selected \(wanted.count) shape\(wanted.count == 1 ? "" : "s") on \(entry.name)"
                 return [.text("Selected \(wanted.count) shape\(wanted.count == 1 ? "" : "s") on \(entry.name)")]
             }
             guard !wanted.isEmpty else { throw Failure(text: "shapeIds required") }
             try await host.zoom(to: wanted)
+            Tools.summary?.line = "Showing \(wanted.count) shape\(wanted.count == 1 ? "" : "s") on \(entry.name)"
             return [.text("Showing \(wanted.count) shape\(wanted.count == 1 ? "" : "s") on \(entry.name)")]
 
         case "canvas_create":
             let name = (args["name"] as? String) ?? ""
             guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { throw Failure(text: "name required") }
             let entry = try await Canvases.shared.create(named: name)
-            Tools.summary?.line = "created \(entry.name)"
+            Tools.summary?.line = "Created \(entry.name)\(entry.isShared ? " (shared)" : " on this Mac")"
             return [.text(json(summary(entry, in: browser)))]
 
         case "canvas_invite":
             guard let key = args["id"] as? String, let entry = Canvases.shared.find(key) else { throw Failure(text: "no canvas \(args["id"] as? String ?? "") — canvas_list names them") }
             guard let email = args["email"] as? String, !email.isEmpty else { throw Failure(text: "email required") }
             try await Canvases.shared.invite(entry.id, email: email)
-            return [.text("Invited \(email) to \(entry.name)")]
+            let address = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            Tools.summary?.line = "Invited \(address) to \(entry.name)"
+            return [.text("Invited \(address) to \(entry.name)")]
 
         case "canvas_screenshot":
             let entry = try resolve(args, in: browser)
             let host = try await open(entry, in: browser, foreground: false)
             let data = try await host.picture()
+            Tools.summary?.line = "Screenshot of \(entry.name)"
             return [.image(data, mime: "image/png"), .text("Canvas › \(entry.name)")]
 
         default:
@@ -200,7 +206,10 @@ enum CanvasTools {
 
     @MainActor
     private static var cloudLine: String {
-        if Canvases.shared.cloudReady { return "signed in — new canvases are shared and can take invites" }
+        if Canvases.shared.cloudReady {
+            let personal = Canvases.shared.personalSyncs ? "Personal syncs with the account" : "Personal stays on this Mac (its sync is off)"
+            return "signed in — new canvases are shared and can take invites; \(personal)"
+        }
         if Cloud.shared.isLinked { return "linked, not signed in — canvases are local" }
         return "not connected — canvases are local to this Mac"
     }

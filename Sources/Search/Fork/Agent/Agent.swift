@@ -290,9 +290,13 @@ final class Agent: ObservableObject {
         if let refusal = Drive.shared.refusal { Drive.shared.refused(call: name, args: args, by: .pane); return (refusal, true) }
         let ticket = Drive.shared.began(call: name, args: args, by: .pane, tab: browser.active)
         if let thought = pendingThought { Drive.shared.thought(thought); pendingThought = nil }
+        // The tool's own one line ("220 operations applied") for the pane's row.
+        let summary = Tools.SummaryBox()
         do {
             // A Jev run this agent starts is labelled as the pane's.
-            let content = try await DriveCaller.$who.withValue(Drive.Who.plain(.pane)) { try await Tools.call(name, args, in: browser) }
+            let content = try await DriveCaller.$who.withValue(Drive.Who.plain(.pane)) {
+                try await Tools.$summary.withValue(summary) { try await Tools.call(name, args, in: browser) }
+            }
             var texts: [String] = []
             for part in content {
                 switch part {
@@ -300,7 +304,7 @@ final class Agent: ObservableObject {
                 case .image(let data, _): pictures.append(data); texts.append("[screenshot attached]")
                 }
             }
-            if let ticket { Drive.shared.ended(ticket, error: nil, tab: browser.active) }
+            if let ticket { Drive.shared.ended(ticket, error: nil, summary: summary.line, tab: browser.active) }
             return (texts.joined(separator: "\n"), false)
         } catch {
             let text = (error as? Tools.Failure)?.text ?? error.localizedDescription

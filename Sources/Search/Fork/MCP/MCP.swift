@@ -520,7 +520,7 @@ final class MCP: ObservableObject {
                         try await Tools.call(name, arguments, in: browser)
                     }
                 }
-                if let ticket { Drive.shared.ended(ticket, error: nil, tab: browser.active) }
+                if let ticket { Drive.shared.ended(ticket, error: nil, summary: summary.line, tab: browser.active) }
                 return reply(result(content.map(\.json), isError: false))
             } catch {
                 let text = (error as? Tools.Failure)?.text ?? error.localizedDescription

@@ -288,7 +288,16 @@ struct DrivePane: View {
                             .layoutPriority(1)
                     }
                     Spacer(minLength: 6)
-                    if let changed = outcome.pageChanged {
+                    if let result = outcome.result {
+                        // What the tool said it did leads; a long canvas
+                        // name after it gives way first.
+                        Text("→ \(result)")
+                            .font(.system(size: 10.5)).foregroundStyle(Palette.muted)
+                            .lineLimit(2).truncationMode(.tail)
+                            .multilineTextAlignment(.trailing)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .help(result)
+                    } else if let changed = outcome.pageChanged {
                         Text(changed ? "→ page changed" : "→ no change")
                             .font(.system(size: 10.5)).foregroundStyle(Palette.muted)
                             .fixedSize()

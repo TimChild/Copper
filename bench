@@ -46,10 +46,11 @@
                                        the Remove sheet, and its buttons
     ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade
     ./bench downloads [open|close|cancel ID|retry ID|clear|start URL]
-    ./bench render bitwarden|drive PATH  one card drawn to a PNG on its own, no window brought forward
+    ./bench render bitwarden|drive|hands|hands-dark PATH  one card drawn to a PNG on its own, no window brought forward
     ./bench drive [status|stop|resume|clear|pane on|off]
+    ./bench drive fake NAME THREAD… [tab N|ID] [--for S] [--doing WORDS…]   a stand-in agent's hand on a tab; drive card N|off; drive unfake
                                        who is driving the page (Jev, an agent, a bot) and every row of the timeline
-    ./bench bw status|server URL|login EMAIL PW [OTP] [--method N]|code OTP|cancel|unlock PW|lock|sync|candidates HOST|choose ID
+    ./bench bw status|server URL|login EMAIL PW [OTP] [--method N]|code OTP|cancel|unlock PW|lock|sync|candidates HOST|choose ID|rows|pick ROW
               |identities|cards|fields HOST|usernames|counts|autofill card|identity ID
               |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
                                        Bitwarden probe controls and Copper feed status
@@ -70,6 +71,10 @@
                            |tone X|motion STYLE|none|speed X|clear]
                                        a space's own theme, as the Space page sets it
     ./bench spaces picture N PATH [light|dark]
+    ./bench backdrop                   the column's animated scenes: WebContent pid, hidden, and
+                                       the page's status() (clock time, wall, key, frames, fading)
+    ./bench spaces swipe direction [system|natural|inverted]
+                                       which way a swipe moves the column (Settings › Tabs)
     ./bench spaces slide [at X|off]    the last space switch's slide timings (ms from the click,
                                        frames, missed frames); `at X` holds the next slide at X
                                        the Space page as a PNG, drawn off screen, laid out whole
@@ -194,6 +199,8 @@ def main(argv):
         request["id"] = args[0]
         if len(args) > 1: request["path"] = os.path.abspath(args[1])
         if len(args) > 2: request["width"] = float(args[2])
+    elif verb == "backdrop":
+        pass
     elif verb in ("split", "swipe"):
         request["arg"] = args[0] if args else ""
     elif verb == "mouse":
@@ -235,7 +242,7 @@ def main(argv):
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
     elif verb == "render":
-        if len(args) < 2: sys.exit("usage: bench render bitwarden|drive PATH")
+        if len(args) < 2: sys.exit("usage: bench render bitwarden|drive|hands|hands-dark PATH")
         request["op"] = args[0]
         request["path"] = os.path.abspath(args[1])
     elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows", "easels"):

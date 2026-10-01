@@ -5,10 +5,26 @@
 // a compile-time constant so no shader branches on it.
 //
 // Swift drives everything through `window.backdrop`:
-//   backdrop.set({ style, colors: ['#rrggbb', …], speed, blur, dark })
+//   backdrop.set({ style, colors: ['#rrggbb', …], speed, blur, dark, key, epoch }, fade)
+//   backdrop.toward({ … the same … }, x)
 //   backdrop.mode('run' | 'still' | 'pause')
 // Nothing is drawn until the first `set`, so the still gradient under the
 // (transparent) web view carries the load.
+//
+// One page serves every space the column visits. A space switch is a `set`
+// with a `fade`: the colours, the softness and the clock slide from what is
+// on screen to the new space's over that many seconds, in the shader, with
+// no reload. A swipe is `toward`: the arriving space's look mixed in by the
+// fingers' `x`, 0…1, until the swipe lands (a `set` of the new space) or
+// springs back (a `set` of the old one).
+//
+// The scenes' clock is the wall's, counted from an `epoch` Swift fixes once
+// per launch, not the page's own: a space's scene at any moment is where it
+// "would be" had it been drawing all along, so going away and coming back,
+// a pause behind another window, or a second window, all land on the same
+// frame of the same continuous motion. Each space's time is that clock times
+// its speed, plus an offset kept per space (`key`) so that dragging the
+// speed slider bends the motion rather than jumping it.
 //
 // Performance is the point. The canvas is rendered at half device
 // resolution (less as blur rises) and upscaled by the compositor — the
@@ -28,6 +44,18 @@ import { WebGLRenderer, Scene, PerspectiveCamera, PlaneGeometry, ShaderMaterial,
 // option.
 const FPS = 24, MAX_FPS = 60;
 const STYLES = { ribbons: 0, silk: 1, aurora: 2, waves: 3 };
+
+// The clock folds over every 2^16 seconds (about eighteen hours): the
+// shaders read time as a 32-bit float, and past that its steps grow coarse
+// enough to show as judder. The fold is one jump, once in that span, at the
+// same instant for every space.
+const WRAP = 65536;
+let epoch = null;
+function wall() {
+  const now = performance.timeOrigin + performance.now();
+  const since = (now - (epoch ?? performance.timeOrigin)) / 1000;
+  return ((since % WRAP) + WRAP) % WRAP;
+}
 
 // Ashima's 3D simplex noise — the standard GLSL port.
 const NOISE = /* glsl */`
@@ -235,6 +263,17 @@ function palette(hexes, dark) {
 class Backdrop {
   constructor() {
     this.params = null;
+    // What is drawn: `to`, the look Swift last set; `from`, while a fade
+    // is on, the look it is fading out of; `scrub`, while a swipe is on, the
+    // arriving space's look and how far it is mixed in.
+    this.to = null;
+    this.from = null;
+    this.fadeAt = 0;
+    this.fadeFor = 0;
+    this.scrub = null;
+    // Per space, what its clock is ahead of `wall × speed` — moved only
+    // when its speed changes, so the change is a bend and not a jump.
+    this.offsets = {};
     this.mode = 'pause';
     this.running = false;
     this.time = 0;
@@ -251,21 +290,74 @@ class Backdrop {
     document.addEventListener('visibilitychange', () => this.reconsider());
   }
 
-  set(params) {
-    const first = !this.params;
-    const styleChanged = !this.params || this.params.style !== params.style;
-    this.params = params;
-    if (first) this.build();
-    if (styleChanged && !first) {
-      this.material.defines.STYLE = STYLES[params.style] ?? 0;
-      this.material.needsUpdate = true;
+  /// A look as the shaders want it: plain numbers, so two can be mixed.
+  resolve(p) {
+    const { stops, light } = palette(p.colors || [], !!p.dark);
+    return {
+      style: STYLES[p.style] ?? 0, stops: stops.map(c => [c.r, c.g, c.b]), light: [light.r, light.g, light.b],
+      blur: Math.min(1, Math.max(0, +p.blur || 0)), dark: p.dark ? 1 : 0,
+      speed: Math.max(0, +p.speed || 0), key: String(p.key || ''),
+    };
+  }
+
+  /// Where a look's scene is at wall time `w`.
+  timeOf(look, w) {
+    return look.clock ? look.clock(w) : w * look.speed + (this.offsets[look.key] || 0);
+  }
+
+  /// Part way from look `a` to look `b`. The shape (the style) cannot be
+  /// mixed — it is which program runs — so it changes half way; the clock
+  /// is mixed like the colours, so the motion never jumps either.
+  blend(a, b, k) {
+    if (k <= 0) return a;
+    if (k >= 1) return b;
+    const m = (x, y) => x + (y - x) * k;
+    return {
+      style: k < 0.5 ? a.style : b.style,
+      stops: a.stops.map((s, i) => s.map((v, j) => m(v, b.stops[i][j]))),
+      light: a.light.map((v, j) => m(v, b.light[j])),
+      blur: m(a.blur, b.blur), dark: m(a.dark, b.dark), speed: Math.max(a.speed, b.speed), key: '',
+      clock: w => m(this.timeOf(a, w), this.timeOf(b, w)),
+    };
+  }
+
+  /// What is on screen at wall time `w`.
+  current(w) {
+    let look = this.to;
+    if (this.from) {
+      const x = this.fadeFor > 0 ? (performance.now() - this.fadeAt) / this.fadeFor : 1;
+      if (x >= 1) this.from = null;
+      else look = this.blend(this.from, this.to, x * x * (3 - 2 * x));
     }
-    const { stops, light } = palette(params.colors || [], !!params.dark);
-    const u = this.material.uniforms;
-    u.uC.value = stops;
-    u.uLight.value = light;
-    u.uBlur.value = Math.min(1, Math.max(0, +params.blur || 0));
-    u.uDark.value = params.dark ? 1 : 0;
+    if (this.scrub) look = this.blend(look, this.scrub.look, this.scrub.x);
+    return look;
+  }
+
+  set(params, fade) {
+    if (params.epoch) epoch = +params.epoch;
+    const look = this.resolve(params);
+    const first = !this.to;
+    this.params = params;
+    if (first) {
+      this.to = look;
+      this.build();
+    } else if (!this.scrub && look.key && look.key === this.to.key) {
+      // The same space, retuned — its own page's colours or sliders. Its
+      // clock carries on from where it is at the new speed.
+      const w = wall();
+      if (look.speed !== this.to.speed) this.offsets[look.key] = this.timeOf(this.to, w) - w * look.speed;
+      this.to = look;
+    } else {
+      // Another space, or the end of a swipe either way: from whatever is
+      // on screen now, mixed and all, to this one.
+      const shown = this.current(wall());
+      this.scrub = null;
+      this.to = look;
+      this.from = shown === look ? null : shown;
+      this.fadeAt = performance.now();
+      this.fadeFor = this.mode === 'run' && +fade > 0 ? +fade * 1000 : 0;
+      if (!this.fadeFor) this.from = null;
+    }
     this.fps = Math.min(MAX_FPS, Math.max(5, +params.fps || FPS));
     // Blur is mostly resolution: a softer picture is a smaller one, upscaled.
     this.resizeDue = true;
@@ -273,8 +365,21 @@ class Backdrop {
     this.poke();
   }
 
+  /// A swipe in flight: the arriving space mixed in by `x`, 0…1.
+  toward(params, x) {
+    if (!this.to) return;
+    const look = this.resolve(params);
+    if (!this.scrub || this.scrub.look.key !== look.key || look.key === '') this.scrub = { look, x: 0 };
+    else this.scrub.look = look;
+    this.scrub.x = Math.min(1, Math.max(0, +x || 0));
+    this.reconsider();
+    this.poke();
+  }
+
   setMode(mode) {
     this.mode = mode;
+    // A fade is motion: with Reduce Motion (or nothing to see) it lands at once.
+    if (mode !== 'run') this.from = null;
     this.reconsider();
     if (mode === 'still') this.poke();
   }
@@ -295,7 +400,7 @@ class Backdrop {
     this.camera.position.set(0, 0, 1 / Math.tan(18 * Math.PI / 180));
     this.camera.lookAt(new Vector3(0, 0, 0));
     this.material = new ShaderMaterial({
-      defines: { STYLE: STYLES[this.params.style] ?? 0 },
+      defines: { STYLE: this.to.style },
       uniforms: {
         uTime: { value: 0 }, uAmp: { value: 0.16 }, uBlur: { value: 0 }, uDark: { value: 0 },
         uC: { value: [new Color(), new Color(), new Color(), new Color(), new Color()] },
@@ -312,7 +417,7 @@ class Backdrop {
   resize() {
     const w = Math.max(1, document.documentElement.clientWidth);
     const h = Math.max(1, document.documentElement.clientHeight);
-    const blur = this.material.uniforms.uBlur.value;
+    const blur = this.to.blur;
     const scale = 0.5 * (1 - 0.55 * blur);
     // Capped in pixels too: a backdrop the size of a window still costs the
     // same as a column.
@@ -339,10 +444,11 @@ class Backdrop {
   // visibility, and a speed above zero. WebKit stops requestAnimationFrame
   // itself for an occluded page, which is why the bench (whose windows
   // never reach the screen) can `force` a timer-driven loop instead.
+  // A fade keeps frames flowing even for a scene that stands still.
   reconsider() {
-    const speed = this.params ? +this.params.speed : 0;
+    const speed = this.to ? Math.max(this.to.speed, this.scrub ? this.scrub.look.speed : 0) : 0;
     const visible = !document.hidden || this.forced;
-    const should = this.mode === 'run' && visible && speed > 0.01 && !this.lost && !!this.params;
+    const should = this.mode === 'run' && visible && (speed > 0.01 || !!this.from) && !this.lost && !!this.to;
     if (should && !this.running) this.start();
     if (!should && this.running) this.stop();
   }
@@ -351,9 +457,7 @@ class Backdrop {
     this.running = true;
     this.last = performance.now();
     const step = now => {
-      const dt = Math.min(0.1, (now - this.last) / 1000);
       this.last = now;
-      this.time += dt * (+this.params.speed || 0);
       this.draw();
     };
     if (this.forced) {
@@ -390,14 +494,29 @@ class Backdrop {
   // One frame outside the loop — for a still mode, a resize while paused,
   // or new colours arriving while nothing is moving.
   poke() {
-    if (this.running || !this.params || this.lost || this.mode === 'pause') return;
+    if (this.running || !this.to || this.lost || this.mode === 'pause') return;
     this.draw();
   }
 
   draw() {
     const began = performance.now();
     if (this.resizeDue) this.resize();
-    this.material.uniforms.uTime.value = this.time;
+    const now = wall();
+    const fading = !!this.from;
+    const look = this.current(now);
+    if (look.style !== this.material.defines.STYLE) {
+      // three keeps each style's program once compiled, so going back and
+      // forth costs a compile only the first time.
+      this.material.defines.STYLE = look.style;
+      this.material.needsUpdate = true;
+    }
+    const u = this.material.uniforms;
+    look.stops.forEach((c, i) => u.uC.value[i].setRGB(c[0], c[1], c[2]));
+    u.uLight.value.setRGB(look.light[0], look.light[1], look.light[2]);
+    u.uBlur.value = look.blur;
+    u.uDark.value = look.dark;
+    this.time = this.timeOf(look, now);
+    u.uTime.value = this.time;
     this.renderer.render(this.scene, this.camera);
     const w = this.window;
     this.frames++;
@@ -410,19 +529,24 @@ class Backdrop {
       w.frames = 0;
       w.drawMs = 0;
     }
+    // A fade that just landed on a scene with no motion of its own: stop.
+    if (fading && !this.from) this.reconsider();
   }
 }
 
 const backdrop = new Backdrop();
 window.backdrop = {
-  set: p => backdrop.set(p),
+  set: (p, fade) => backdrop.set(p, fade),
+  toward: (p, x) => backdrop.toward(p, x),
   mode: m => backdrop.setMode(m),
   // Bench only: keep drawing on a timer even while WebKit calls the page
   // hidden (its windows never reach the screen), so motion can be measured.
   force: f => { backdrop.forced = !!f; backdrop.stop(); backdrop.reconsider(); },
   // For the bench: whether the loop runs and how far the clock has gone.
-  status: () => ({ running: backdrop.running, mode: backdrop.mode, hidden: document.hidden, time: backdrop.time, segments: backdrop.segments,
+  status: () => ({ running: backdrop.running, mode: backdrop.mode, hidden: document.hidden, time: +backdrop.time.toFixed(3),
+                   wall: +wall().toFixed(3), epoch, key: backdrop.to ? backdrop.to.key : null, style: backdrop.material ? backdrop.material.defines.STYLE : null,
+                   fading: !!backdrop.from, scrub: backdrop.scrub ? +backdrop.scrub.x.toFixed(3) : null, segments: backdrop.segments,
                    fpsCap: backdrop.fps, frames: backdrop.frames, fps: +backdrop.window.fps.toFixed(1), drawMs: +backdrop.window.avgDrawMs.toFixed(2) }),
 };
 // A queued call from Swift that arrived before this module ran.
-if (window.__backdropPending) { for (const [f, a] of window.__backdropPending) window.backdrop[f](a); delete window.__backdropPending; }
+if (window.__backdropPending) { for (const [f, a] of window.__backdropPending) window.backdrop[f](...a); delete window.__backdropPending; }

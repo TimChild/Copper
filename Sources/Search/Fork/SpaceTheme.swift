@@ -336,13 +336,23 @@ struct SpaceTheme: Codable, Hashable {
 struct ThemeBackdrop: View {
     let theme: SpaceTheme
     let dark: Bool
+    /// The column's own ground, rather than a picture of one: its scene is
+    /// the one long-lived web view (`LiveScene`), kept through still spaces
+    /// and driven by the slide, instead of a scene per backdrop.
+    var live = false
 
     var body: some View {
         ZStack {
             // A scene wins over a picture: choosing Animated keeps the
             // picture in the theme, so going back to Picture finds it again,
             // but the column only ever draws one of the two.
-            if let motion = theme.motion {
+            if live {
+                // The still ground first — all there is for a still space,
+                // and what shows while the page loads for an animated one —
+                // with the scene over it, hidden while there is nothing to draw.
+                if theme.motion == nil { still } else { colour }
+                LiveScene(theme: theme, dark: dark)
+            } else if let motion = theme.motion {
                 AnimatedBackdrop(style: motion.style, colors: theme.grounds(dark: dark), speed: motion.speed,
                                  blur: theme.blur, dark: dark)
             } else {
@@ -395,6 +405,38 @@ struct ThemeBackdrop: View {
             // a vivid picture keeps its colour; deeper in the dark, where
             // light ink needs the picture held down.
             colour.opacity(dark ? 0.35 : 0.15)
+        }
+    }
+
+    /// The column's scene. One for the column's whole life — the same view
+    /// in the same place whatever space is current — so the WebContent
+    /// process and the scene's clock carry on through every switch. Made
+    /// only once some space is animated; a still space hides it, which also
+    /// pauses it.
+    private struct LiveScene: View {
+        let theme: SpaceTheme
+        let dark: Bool
+        @ObservedObject private var spaces = Spaces.shared
+        @ObservedObject private var slide = SpaceSlide.shared
+
+        var body: some View {
+            if BackdropScene.folder != nil, theme.motion != nil || spaces.all.contains(where: { $0.look.motion != nil }) {
+                BackdropWeb.Host(drive: drive)
+                    .allowsHitTesting(false)
+            }
+        }
+
+        /// The current space's look, fading in over a slide's length; while
+        /// a swipe is on, the arriving space's mixed in by the fingers.
+        private var drive: BackdropScene.Drive {
+            var drive = BackdropScene.Drive(look: BackdropScene.Look(theme: theme, dark: dark, key: spaces.current.uuidString),
+                                            fade: SpaceSlide.duration + 0.08)
+            if slide.dragging, slide.picture != nil, let space = slide.arriving,
+               let there = BackdropScene.Look(theme: space.look, dark: dark, key: space.id.uuidString) {
+                drive.toward = there
+                drive.x = Double(slide.phase)
+            }
+            return drive
         }
     }
 

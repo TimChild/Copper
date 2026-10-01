@@ -236,6 +236,10 @@ final class Bench {
         case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render", "ext-manager", "storage", "windows", "easels":
             answer(Fork.bench(verb, request, in: browser))
 
+        case "backdrop":
+            // Fork (backdrop): the column's scene — its process and its clock.
+            BackdropWeb.bench(answer: answer)
+
         case "newtab":
             // Fork (new-tab-launcher): what ⌘T's card offers, by group, once
             // Google and the history ranking have had a moment to answer.

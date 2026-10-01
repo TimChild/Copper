@@ -1,0 +1,222 @@
+name: release
+
+# Builds Copper on a GitHub-hosted Mac and publishes it as a public GitHub
+# release of this repo — the one place every install path reads from:
+#
+#   brew install --cask copper-browser/copper/copper     (tap bumps itself from
+#                                                         copper-version.json)
+#   curl -fsSL https://github.com/copper-browser/Copper/releases/latest/download/copper-install.sh | sh
+#   https://github.com/copper-browser/Copper/releases/latest/download/copper-macos-arm64.zip
+#   Copper's own updater (Fork/Updates.swift → latest/download/copper-version.json)
+#
+# Version scheme: <VERSION file>.<YYYYMMDD>.<run_number>, e.g. 1.0.20261001.1 —
+# monotonic for Homebrew and the updater even when `fork` is rebased; stamped
+# into CFBundleShortVersionString so About / MCP serverInfo.version match.
+#
+# Assets per release (tag v<version>):
+#   copper-<version>-macos-arm64.zip(.sha256)  immutable, what the cask pins
+#   copper-macos-arm64.zip(.sha256)            stable name → releases/latest/download/…
+#   copper-version.json                        manifest for the updater + the tap's bump job
+#   copper-install.sh                          the curl installer
+#
+# Builds are ad-hoc signed (no Developer ID, not notarized); the cask and the
+# installer clear the quarantine flag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch, tag, or SHA)"
+        required: true
+        default: fork
+        type: string
+      prerelease:
+        description: "Mark as a pre-release (not 'latest': the updater, installer and tap ignore it)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-copper
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build + publish (macos-15, arm64)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Derive version
+        id: meta
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          base="$(tr -d '[:space:]' < VERSION)"
+          version="${base}.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          {
+            echo "commit=${commit}"
+            echo "version=${version}"
+            echo "tag=v${version}"
+            echo "zip_name=copper-${version}-macos-arm64.zip"
+            echo "published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building ${GITHUB_REPOSITORY}@${commit} as Copper ${version}"
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: ./build.sh release app
+        env:
+          # Keep build.sh's signing lookup from matching anything on a hosted
+          # runner; the bundle is ad-hoc signed by design.
+          SEARCH_SIGN_IDENTITY: ""
+        run: |
+          set -euo pipefail
+          ./build.sh release app
+          test -d build/Copper.app/Contents/MacOS
+
+      - name: Stamp version, re-sign ad hoc, zip
+        id: package
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          ZIP_NAME: ${{ steps.meta.outputs.zip_name }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/upload"
+          bash release/package-app.sh build/Copper.app "$VERSION" "$out" >> "$GITHUB_OUTPUT"
+          sha="$(cut -d' ' -f1 < "$out/$ZIP_NAME.sha256")"
+          echo "sha256=${sha}" >> "$GITHUB_OUTPUT"
+          # Stable-name copy for releases/latest/download/… (installer, site).
+          cp "$out/$ZIP_NAME" "$out/copper-macos-arm64.zip"
+          printf '%s  copper-macos-arm64.zip\n' "$sha" > "$out/copper-macos-arm64.zip.sha256"
+          cp release/copper-install.sh "$out/copper-install.sh"
+          echo "dir=${out}" >> "$GITHUB_OUTPUT"
+          plutil -p build/Copper.app/Contents/Info.plist | grep -E 'CFBundle(ShortVersionString|Version|Identifier)'
+
+      - name: Write copper-version.json
+        env:
+          OUT: ${{ steps.package.outputs.dir }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+          ZIP_NAME: ${{ steps.meta.outputs.zip_name }}
+          HAS_CLI: ${{ steps.package.outputs.has_cli }}
+          PUBLISHED_AT: ${{ steps.meta.outputs.published_at }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const e = process.env;
+            const base = `https://github.com/${e.GITHUB_REPOSITORY}/releases`;
+            const manifest = {
+              schemaVersion: 1,
+              product: "copper",
+              version: e.VERSION,
+              releaseId: e.TAG,
+              commit: e.COMMIT,
+              source: `https://github.com/${e.GITHUB_REPOSITORY}/commit/${e.COMMIT}`,
+              status: "lkg",
+              publishedAt: e.PUBLISHED_AT,
+              arch: "arm64",
+              zip: e.ZIP_NAME,
+              sha256: e.SHA256,
+              hasCli: e.HAS_CLI === "true",
+              archiveUrl: `${base}/download/${e.TAG}/${e.ZIP_NAME}`,
+              latestUrl: `${base}/latest/download/copper-macos-arm64.zip`,
+              installer: "copper-install.sh",
+            };
+            fs.writeFileSync(`${e.OUT}/copper-version.json`, JSON.stringify(manifest, null, 2) + "\n");
+          '
+          cat "$OUT/copper-version.json"
+          ( cd "$OUT" && shasum -a 256 ./* )
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUT: ${{ steps.package.outputs.dir }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+          ZIP_NAME: ${{ steps.meta.outputs.zip_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/notes.md"
+          cat > "$notes" <<EOF
+          Copper ${VERSION} — built from ${GITHUB_REPOSITORY}@${COMMIT:0:12}.
+
+          **Install**
+
+          \`\`\`sh
+          brew install --cask copper-browser/copper/copper
+          \`\`\`
+
+          or
+
+          \`\`\`sh
+          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/copper-install.sh | sh
+          \`\`\`
+
+          or download \`${ZIP_NAME}\` below, unzip, move Copper.app to /Applications and run \`xattr -cr /Applications/Copper.app\` once (ad-hoc signed, not notarized).
+
+          macOS 14 Sonoma or later, Apple Silicon. Already installed? Copper updates itself — Settings › Updates.
+
+          sha256 \`${SHA256}\`
+          EOF
+          flags=(--latest)
+          [ "$PRERELEASE" = "true" ] && flags=(--prerelease --latest=false)
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$COMMIT" \
+            --title "Copper ${VERSION}" \
+            --notes-file "$notes" \
+            "${flags[@]}" \
+            "$OUT/$ZIP_NAME" "$OUT/$ZIP_NAME.sha256" \
+            "$OUT/copper-macos-arm64.zip" "$OUT/copper-macos-arm64.zip.sha256" \
+            "$OUT/copper-version.json" "$OUT/copper-install.sh"
+
+      - name: Verify the published bytes
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          ZIP_NAME: ${{ steps.meta.outputs.zip_name }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ZIP_NAME}"
+          curl -fsSL --retry 5 --retry-delay 3 -o "${RUNNER_TEMP}/verify.zip" "$url"
+          actual="$(shasum -a 256 "${RUNNER_TEMP}/verify.zip" | cut -d' ' -f1)"
+          [ "$actual" = "$SHA256" ] || { echo "::error::$url serves $actual, expected $SHA256" >&2; exit 1; }
+          echo "OK $url"
+
+      - name: Run summary
+        if: always()
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+          HAS_CLI: ${{ steps.package.outputs.has_cli }}
+        run: |
+          {
+            echo "### Copper ${VERSION}"
+            echo ""
+            echo "- release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+            echo "- source: https://github.com/${GITHUB_REPOSITORY}/commit/${COMMIT}"
+            echo "- sha256: \`${SHA256}\`"
+            echo "- CLI shim in bundle: \`${HAS_CLI}\`"
+            echo "- the tap (copper-browser/homebrew-copper) picks this up from copper-version.json on its next bump run"
+          } >> "$GITHUB_STEP_SUMMARY"

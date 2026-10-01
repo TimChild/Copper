@@ -1,6 +1,6 @@
 # Fork plan: Search → Arc-class features
 
-Fork: `collinrijock/Search` · upstream: `driceroland/Search` (single-author, one squashed commit, v1.0).
+Fork: `copper-browser/Copper` · upstream: `driceroland/Search` (single-author, one squashed commit, v1.0).
 
 Ground truth from the code (as of fork):
 

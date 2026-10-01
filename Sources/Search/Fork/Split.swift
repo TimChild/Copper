@@ -231,17 +231,30 @@ struct SplitStage: View {
     /// The page area while something else has the wheel: the pill in the
     /// corner and a warm line just inside the edge, so it is never a surprise
     /// that the page is moving on its own. Both go the moment the run ends.
+    ///
+    /// Both wear the colour of the agent whose hands are on the tab in view
+    /// (Hands.swift), and the bar sits top centre naming it and its thread.
+    /// A run on some other tab keeps the old corner pill, so a Jev loop in a
+    /// background tab still says it is going and can still be stopped.
     private var driven: some View {
-        stage
+        let shown = [active.id] + (split.side.map { [$0] } ?? [])
+        let here = shown.flatMap { trace.hands(on: $0) }
+        let ring = here.first.map { Drive.colour(for: $0.who).fill.opacity(0.6) }
+            ?? DriveStyle.accent.opacity(trace.live ? 0.35 : 0)
+        return stage
             .overlay {
                 RoundedRectangle(cornerRadius: split.on ? SplitMetrics.corner : 0, style: .continuous)
-                    .strokeBorder(DriveStyle.accent.opacity(trace.live ? 0.35 : 0), lineWidth: 1.5)
+                    .strokeBorder(ring, lineWidth: here.isEmpty ? 1.5 : 2)
                     .allowsHitTesting(false)
             }
+            .overlay(alignment: .top) {
+                if !here.isEmpty { HandBar(tabs: shown).padding(.top, 8).transition(.move(edge: .top).combined(with: .opacity)) }
+            }
             .overlay(alignment: .topTrailing) {
-                if trace.live { DrivePill().padding(8).transition(.opacity) }
+                if trace.live, here.isEmpty { DrivePill().padding(8).transition(.opacity) }
             }
             .animation(Motion.quick, value: trace.live)
+            .animation(Motion.quick, value: here.map(\.id))
     }
 
     @ViewBuilder

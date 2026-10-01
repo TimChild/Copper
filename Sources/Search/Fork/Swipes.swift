@@ -13,10 +13,51 @@ import SwiftUI
 // fingers point for point with the next space coming in beside it
 // (SpaceSlide.drag), and letting go either carries on — past about two
 // fifths of the way, or on a flick — or springs back (SpaceSlide.release).
-// Content follows the fingers whichever way the system scrolls. Reduce
-// Motion keeps the old trigger: 70 points sideways and the space changes,
-// with the crossfade and no travel. Three-finger swipes (when System
-// Settings hands them to apps) are a trigger too; they come whole.
+// Which way the column goes for which way the fingers go is Settings › Tabs
+// › Swipe between spaces (`SwipeDirection`): with the fingers (Natural),
+// against them (Inverted, the way a page turns the other way), or — the
+// default — whichever of the two the Mac's own Natural scrolling setting
+// says. The choice is applied once, here, to the fingers' travel and speed,
+// so everything downstream — the slide, the springs, the rubber band at the
+// first and last space, the Reduce Motion trigger — follows it without
+// knowing. Reduce Motion keeps the old trigger: 70 points sideways and the
+// space changes, with the crossfade and no travel. Three-finger swipes (when
+// System Settings hands them to apps) are a trigger too; they come whole.
+
+/// Which way a two-finger swipe over the column moves it.
+enum SwipeDirection: String, CaseIterable, Identifiable {
+    /// Natural when the Mac's Natural scrolling is on, Inverted when it is off.
+    case system
+    /// The column follows the fingers: fingers to the left bring in the next space.
+    case natural
+    /// The column moves against the fingers: fingers to the left bring in the last one.
+    case inverted
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: return "Like scrolling"
+        case .natural: return "Natural"
+        case .inverted: return "Inverted"
+        }
+    }
+
+    /// +1 when the column moves with the fingers, -1 against them.
+    var sign: CGFloat {
+        switch self {
+        case .natural: return 1
+        case .inverted: return -1
+        case .system: return SwipeDirection.systemNatural ? 1 : -1
+        }
+    }
+
+    /// System Settings › Trackpad › Natural scrolling, which the Mac keeps
+    /// in the global domain; on unless someone turned it off.
+    static var systemNatural: Bool {
+        UserDefaults.standard.object(forKey: "com.apple.swipescrolldirection") as? Bool ?? true
+    }
+}
 @MainActor enum SpaceSwipe {
     /// Points of sideways travel before a Reduce Motion swipe changes space.
     nonisolated static let threshold: CGFloat = 70
@@ -114,7 +155,7 @@ import SwiftUI
         guard track.axis == .sideways || track.coasting || overSidebar(event, in: browser) else { return event }
         if event.type == .swipe {
             guard event.deltaX != 0 else { return event }
-            go(event.deltaX < 0 ? 1 : -1, in: browser)
+            go(event.deltaX * browser.prefs.swipeDirection.sign < 0 ? 1 : -1, in: browser)
             return nil
         }
         // A wheel with no phase is a mouse wheel; those scroll.
@@ -129,7 +170,14 @@ import SwiftUI
     @discardableResult
     private static func apply(phase: NSEvent.Phase, momentum: NSEvent.Phase, dx: CGFloat, dy: CGFloat,
                               inverted: Bool, time: Double, in browser: Browser) -> Bool {
-        let (say, swallow) = track.feed(phase: phase, momentum: momentum, dx: dx, dy: dy, inverted: inverted, time: time)
+        var (say, swallow) = track.feed(phase: phase, momentum: momentum, dx: dx, dy: dy, inverted: inverted, time: time)
+        // The fingers' way becomes the column's way here, and only here.
+        let sign = browser.prefs.swipeDirection.sign
+        switch say {
+        case .move(let travel): say = .move(travel * sign)
+        case .release(let velocity): say = .release(velocity: velocity * sign)
+        default: break
+        }
         let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         switch say {
         case .nothing: break
@@ -171,6 +219,16 @@ import SwiftUI
     /// can be caught without a round trip through the shell.
     static func script(_ arg: String, in browser: Browser) -> [String: Any] {
         let words = arg.split(separator: " ").map(String.init)
+        if words.first == "direction" {
+            // `spaces swipe direction [system|natural|inverted]`: the setting,
+            // as Settings › Tabs sets it.
+            if words.count > 1 {
+                guard let way = SwipeDirection(rawValue: words[1]) else { return ["error": "spaces swipe direction system|natural|inverted"] }
+                browser.prefs.swipeDirection = way
+            }
+            return ["direction": browser.prefs.swipeDirection.rawValue, "sign": Double(browser.prefs.swipeDirection.sign),
+                    "systemNatural": SwipeDirection.systemNatural]
+        }
         if words.first == "stats" {
             // How evenly the scripted events got through: each is due 8.3 ms
             // after the last, so a longer gap is the main thread busy

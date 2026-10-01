@@ -3,16 +3,18 @@
  * counter-scaled so they stay the same size at any zoom. Lifted from the
  * peer block of the wiki app's wiki-canvas-page.tsx and the gliding
  * `transition-transform` of components/agent-cursors.tsx.
+ *
+ * Reads awareness and the zoom itself, so a cursor moving (anyone's) or a
+ * zoom re-renders this and not the board.
  */
-import type { Peer } from '../lib/awareness'
+import type { Awareness } from 'y-protocols/awareness'
+import { usePeers } from '../lib/awareness'
+import { useCameraZoom } from '../lib/camera'
+import { useBoard } from './board-context'
 
-export function PeerCursors({
-  peers,
-  zoom,
-}: {
-  peers: readonly Peer[]
-  zoom: number
-}) {
+export function PeerCursors({ awareness }: { awareness: Awareness }) {
+  const peers = usePeers(awareness)
+  const zoom = useCameraZoom(useBoard().camera)
   return (
     <>
       {peers.map(peer => (

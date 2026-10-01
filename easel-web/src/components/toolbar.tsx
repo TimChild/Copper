@@ -3,8 +3,9 @@
  * Frame F, Arrow A, Image (file picker), Laser L. A white hairline card,
  * like Copper's own floating UI.
  */
-import { useRef } from 'react'
+import { useRef, useSyncExternalStore } from 'react'
 import { TOOLS, type Tool } from '../lib/canvas-tools'
+import { useBoard } from './board-context'
 import { Icon } from './icons'
 
 const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
@@ -72,14 +73,16 @@ export function Toolbar({
 
 /** Zoom out / level / zoom in / fit, bottom right. */
 export function ZoomCluster({
-  zoom,
   onZoom,
   onFit,
 }: {
-  zoom: number
   onZoom: (factor: number) => void
   onFit: () => void
 }) {
+  // Whole percents only: the label re-renders when the number changes.
+  const { camera } = useBoard()
+  const percent = () => Math.round(camera.applied().z * 100)
+  const zoom = useSyncExternalStore(camera.subscribe, percent, percent)
   return (
     <div
       role="toolbar"
@@ -97,7 +100,7 @@ export function ZoomCluster({
         <Icon name="minus" />
       </button>
       <span className="easel-zoom-level" aria-live="polite">
-        {Math.round(zoom * 100)}%
+        {zoom}%
       </span>
       <button
         type="button"

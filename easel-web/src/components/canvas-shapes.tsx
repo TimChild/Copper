@@ -6,11 +6,21 @@
  * the doc comes from context instead of module imports, the toolbar moved to
  * toolbar.tsx, Tailwind became data attributes + app.css, and the selection
  * bar takes every selected shape (multi-select) rather than one.
+ *
+ * Every shape is memoized and gets only primitives plus its own `Shape`
+ * object (which the doc snapshot keeps identical until that shape changes).
+ * Where a shape *is* during a drag or resize comes from the board's live
+ * boxes, which each shape reads for its own id: moving one note re-renders
+ * that note and the arrows on it, nothing else.
  */
-import { useLayoutEffect, useRef, useState } from 'react'
+import { memo, useLayoutEffect, useRef, useState } from 'react'
 import { SHAPE_COLORS, type Shape } from '../doc/easel-doc'
 import { imageSrc } from '../lib/canvas-images'
-import type { Point } from '../lib/canvas-geometry'
+import { boxSegment, type Point } from '../lib/canvas-geometry'
+import { useCameraView } from '../lib/camera'
+import { useLiveActive, useLiveBox } from '../lib/live-boxes'
+import { useStoreSelect } from '../lib/store'
+import { useBoard } from './board-context'
 import { useEasel } from './easel-context'
 import { Icon } from './icons'
 import { MarkdownLiteInline } from './markdown-lite'
@@ -146,29 +156,26 @@ export function SelectionBar({
 
 interface ShapeProps {
   shape: Shape
-  at: Point
   selected: boolean
   pending: boolean
-  lifted: boolean
   /** Creator label, when it is someone other than the viewer. */
   by?: string
 }
 
-export function StickyShape({
+export const StickyShape = memo(function StickyShape({
   shape,
-  at,
   selected,
   pending,
-  lifted,
   by,
 }: ShapeProps) {
   counters.shapeRenders++
   const { doc, host } = useEasel()
+  const { live } = useBoard()
+  const liveBox = useLiveBox(live, shape.id)
+  const box = liveBox ?? shape
+  const lifted = liveBox?.lifted ?? false
   const field = useFieldFocus()
-  const fit = useFitText(
-    [shape.text, shape.w, shape.h, field.focused],
-    field.focused
-  )
+  const fit = useFitText([shape.text, box.w, box.h, field.focused], field.focused)
   return (
     <div
       data-ref={`shape:${shape.id}`}
@@ -178,9 +185,9 @@ export function StickyShape({
       data-pending={pending || undefined}
       data-lifted={lifted || undefined}
       style={{
-        width: shape.w,
-        height: shape.h,
-        transform: `translate(${at.x}px, ${at.y}px)`,
+        width: box.w,
+        height: box.h,
+        transform: `translate(${box.x}px, ${box.y}px)`,
       }}
     >
       <div ref={fit} className="easel-sticky-body">
@@ -195,18 +202,19 @@ export function StickyShape({
       {by && <span className="easel-by">{by}</span>}
     </div>
   )
-}
+})
 
-export function FrameShape({
+export const FrameShape = memo(function FrameShape({
   shape,
-  at,
   selected,
   pending,
-  lifted,
   by,
 }: ShapeProps) {
   counters.shapeRenders++
   const { doc, host, easelId } = useEasel()
+  const { live } = useBoard()
+  const liveBox = useLiveBox(live, shape.id)
+  const box = liveBox ?? shape
   const field = useFieldFocus()
   const rendered = !field.focused && shape.text.trim() !== ''
   const src = shape.image ? imageSrc(shape.image, host, easelId) : ''
@@ -216,11 +224,11 @@ export function FrameShape({
       className="easel-frame"
       data-selected={selected || undefined}
       data-pending={pending || undefined}
-      data-lifted={lifted || undefined}
+      data-lifted={liveBox?.lifted || undefined}
       style={{
-        width: shape.w,
-        height: shape.h,
-        transform: `translate(${at.x}px, ${at.y}px)`,
+        width: box.w,
+        height: box.h,
+        transform: `translate(${box.x}px, ${box.y}px)`,
       }}
     >
       <div className="easel-frame-title" data-color={shape.color}>
@@ -255,6 +263,7 @@ export function FrameShape({
           src={src}
           alt={shape.text.trim() || 'Pasted image'}
           draggable={false}
+          decoding="async"
           className="easel-frame-image"
         />
       ) : (
@@ -264,25 +273,71 @@ export function FrameShape({
       )}
     </div>
   )
+})
+
+interface ArrowProps {
+  shape: Shape
+  /** The shapes the arrow runs between, as the doc has them. */
+  from: Shape
+  to: Shape
+  selected: boolean
 }
 
-/** An arrow's label at the midpoint; an inline input while editing. */
-export function ArrowLabel({
+/** The arrow's segment, following either end while a gesture moves it. */
+function useArrowSegment(from: Shape, to: Shape) {
+  const { live } = useBoard()
+  const a = useLiveBox(live, from.id) ?? from
+  const b = useLiveBox(live, to.id) ?? to
+  return boxSegment(a, b)
+}
+
+/** One arrow inside the board's <svg>. */
+export const ArrowLine = memo(function ArrowLine({
   shape,
-  at,
+  from,
+  to,
+  selected,
+  markerId,
+}: ArrowProps & { markerId: string }) {
+  counters.shapeRenders++
+  const seg = useArrowSegment(from, to)
+  if (!seg) return null
+  return (
+    <g data-ref={`shape:${shape.id}`}>
+      <line
+        {...seg}
+        stroke="transparent"
+        strokeWidth={14}
+        style={{ pointerEvents: 'stroke' }}
+      />
+      <line
+        {...seg}
+        strokeWidth={selected ? 2.5 : 2}
+        strokeLinecap="round"
+        className={selected ? 'easel-arrow-line-active' : 'easel-arrow-line'}
+        markerEnd={`url(#${markerId}-${selected ? 'active' : 'arrow'})`}
+      />
+    </g>
+  )
+})
+
+/** An arrow's label at the midpoint; an inline input while editing. */
+export const ArrowLabel = memo(function ArrowLabel({
+  shape,
+  from,
+  to,
   editing,
   selected,
   onDone,
-}: {
-  shape: Shape
-  at: Point
+}: ArrowProps & {
   editing: boolean
-  selected: boolean
   onDone: () => void
 }) {
   counters.shapeRenders++
   const { doc } = useEasel()
-  if (!editing && !shape.text) return null
+  const seg = useArrowSegment(from, to)
+  if (!seg || (!editing && !shape.text)) return null
+  const at = { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 }
   return (
     <div
       data-ref={`shape:${shape.id}`}
@@ -312,4 +367,46 @@ export function ArrowLabel({
       )}
     </div>
   )
+})
+
+/** Where the selection bar hangs, in canvas coords (the camera is applied later). */
+export interface BarAnchor {
+  x: number
+  y: number
+  /** Screen px above the anchor. */
+  lift: number
+  /** Keep the bar below the title chip. */
+  minTop?: number
 }
+
+/**
+ * The selection bar in screen space: follows the camera every frame, and
+ * hides while a drag, resize or marquee is in flight, all without the page.
+ */
+export function SelectionBarAt({
+  anchor,
+  shapes,
+  onDelete,
+}: {
+  anchor: BarAnchor
+  shapes: Shape[]
+  onDelete: () => void
+}) {
+  const { camera, live, marquee } = useBoard()
+  const view = useCameraView(camera)
+  const moving = useLiveActive(live)
+  const banding = useStoreSelect(marquee, isBanding)
+  if (moving || banding) return null
+  const y = view.y + anchor.y * view.z + anchor.lift
+  return (
+    <SelectionBar
+      shapes={shapes}
+      at={{
+        x: view.x + anchor.x * view.z,
+        y: anchor.minTop === undefined ? y : Math.max(anchor.minTop, y),
+      }}
+      onDelete={onDelete}
+    />
+  )
+}
+const isBanding = (m: unknown) => m !== null

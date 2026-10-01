@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { detectHost } from './host'
 import type { Host } from './host/types'
@@ -45,10 +45,13 @@ function Session({ session }: { session: EaselSession }) {
   useEffect(() => {
     document.title = meta.title
   }, [meta.title])
+  // Stable, or every shape (they all read this context) re-renders on a title change.
+  const easel = useMemo(
+    () => ({ doc, host, easelId: config.easel.id, viewer: config.viewer }),
+    [doc, host, config]
+  )
   return (
-    <EaselContext.Provider
-      value={{ doc, host, easelId: config.easel.id, viewer: config.viewer }}
-    >
+    <EaselContext.Provider value={easel}>
       <EaselPage session={session} title={meta.title} />
     </EaselContext.Provider>
   )

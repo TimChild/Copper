@@ -4,7 +4,11 @@
  * class names moved to app.css.
  */
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
+import type { Shape } from '../doc/easel-doc'
 import type { Box } from '../lib/canvas-geometry'
+import { useCameraZoom } from '../lib/camera'
+import { useLiveBox } from '../lib/live-boxes'
+import { useBoard } from './board-context'
 import {
   CORNER_HANDLES,
   EDGE_HANDLES,
@@ -21,6 +25,23 @@ const at = (handle: Handle) => ({
   x: handle.includes('w') ? '0%' : handle.includes('e') ? '100%' : '50%',
   y: handle.includes('n') ? '0%' : handle.includes('s') ? '100%' : '50%',
 })
+
+/**
+ * Handles for one shape: follow its live box during a gesture and the zoom
+ * for their counter-scaling, without re-rendering the board.
+ */
+export function ShapeHandles({
+  shape,
+  onStart,
+}: {
+  shape: Shape
+  onStart: (handle: Handle, e: ReactPointerEvent<HTMLElement>) => void
+}) {
+  const { camera, live } = useBoard()
+  const zoom = useCameraZoom(camera)
+  const box = useLiveBox(live, shape.id) ?? shape
+  return <ResizeHandles box={box} zoom={zoom} onStart={onStart} />
+}
 
 export function ResizeHandles({
   box,

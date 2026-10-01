@@ -8,6 +8,15 @@
  *
  * Coordinates: one layer has `transform: translate(x, y) scale(z)` with its
  * origin top-left, so `screen = canvas * z + (x, y)`.
+ *
+ * What this component does NOT hold in React state, so that it re-renders
+ * only when the document, the selection or the tool changes:
+ * - the camera (lib/camera.ts): input moves it, once per frame it writes the
+ *   layer transform and the grid straight to the DOM; a pan or zoom commits
+ *   nothing here;
+ * - where shapes are mid-gesture (lib/live-boxes.ts): drag, resize and drawn
+ *   boxes re-render only the shapes involved and write the doc on release;
+ * - the marquee rect, which sticky is being edited, and cursors (awareness).
  */
 import {
   useCallback,
@@ -47,10 +56,19 @@ import {
 } from '../lib/canvas-resize'
 import { TOOLS, focusShapeText, type Tool } from '../lib/canvas-tools'
 import { frameSizeFor, imageFile, saveEaselImage } from '../lib/canvas-images'
-import { usePeers, useRemoteLasers } from '../lib/awareness'
-import { LaserCanvas, LaserTrails } from '../laser'
-import { ArrowLabel, FrameShape, SelectionBar, StickyShape } from './canvas-shapes'
-import { ResizeHandles } from './resize-handles'
+import { useRemoteLasers } from '../lib/awareness'
+import { LaserTrails } from '../laser'
+import {
+  ArrowLabel,
+  ArrowLine,
+  FrameShape,
+  SelectionBarAt,
+  StickyShape,
+  type BarAnchor,
+} from './canvas-shapes'
+import { BoardContext, createBoard } from './board-context'
+import { CameraLaser, Marquee } from './board-overlays'
+import { ShapeHandles } from './resize-handles'
 import { PeerCursors } from './peer-cursors'
 import { Toolbar, ZoomCluster } from './toolbar'
 import { TitleChip } from './title-chip'
@@ -64,9 +82,9 @@ type Gesture =
       hit: string
       ids: string[]
       start: Point
-      /** Each moved shape's top-left at pointerdown. */
-      from: Map<string, Point>
-      /** Last drag positions; state may lag a frame behind the pointer. */
+      /** Each moved shape's box at pointerdown. */
+      from: Map<string, Box>
+      /** Where the drag has them now (shown through live boxes). */
       at?: Map<string, Point>
     }
   | {
@@ -96,9 +114,19 @@ const refId = (ref: string) => ref.slice(ref.indexOf(':') + 1)
 const isTextField = (el: EventTarget | null) =>
   el instanceof HTMLElement &&
   (el.isContentEditable || el.closest('input, textarea') !== null)
+const sameSet = (a: Set<string>, b: Set<string>) =>
+  a.size === b.size && [...a].every(id => b.has(id))
 
 /** How long after a laser stroke ends before awareness forgets it. */
 const LASER_LINGER_MS = 3200
+/**
+ * While a drawn box grows, write it to the doc this often: peers see it,
+ * and the gaps stay under the undo capture timeout (500 ms) so drawing a
+ * box is still one undo step with its creation.
+ */
+const CREATE_SYNC_MS = 200
+/** The layer is promoted (will-change) until the camera rests this long. */
+const SETTLE_MS = 150
 
 /** Safari's pinch events; not in lib.dom. */
 interface GestureEventLike extends Event {
@@ -119,72 +147,129 @@ export function EaselPage({
   const viewer = config.viewer
   const markerId = useId()
   const shapes = useSyncExternalStore(doc.subscribeShapes, doc.getShapesSnapshot)
-  const peers = usePeers(awareness)
   const trails = useMemo(() => new LaserTrails(), [])
   useRemoteLasers(awareness, trails)
+  const board = useMemo(() => createBoard(), [])
+  const { camera, live, marquee } = board
+  useEffect(() => () => camera.destroy(), [camera])
 
   const viewport = useRef<HTMLDivElement>(null)
-  const [view, setView] = useState<View>({ x: 0, y: 0, z: 1 })
+  const layer = useRef<HTMLDivElement>(null)
   const gesture = useRef<Gesture | null>(null)
-  const [dragging, setDragging] = useState<Map<string, Point> | null>(null)
-  const [resizing, setResizing] = useState<{ id: string; box: Box } | null>(
-    null
-  )
-  const [marquee, setMarquee] = useState<Box | null>(null)
   const [selected, setSelected] = useState<Set<string>>(EMPTY)
   const [tool, setTool] = useState<Tool>('select')
   const [spaceDown, setSpaceDown] = useState(false)
   const [arrowFrom, setArrowFrom] = useState<string | null>(null)
   const [labelEditing, setLabelEditing] = useState<string | null>(null)
-  const lastSent = useRef({ move: 0, cursor: 0, size: 0, laser: 0, create: 0 })
+  const lastSent = useRef({ cursor: 0, laser: 0, create: 0 })
   /** Pointer in viewport px while it is over the board; pastes land here. */
   const pointer = useRef<Point | null>(null)
   const lastTap = useRef({ id: '', at: 0 })
   const laserLinger = useRef<ReturnType<typeof setTimeout> | null>(null)
   const panning = tool === 'hand' || spaceDown
 
-  const select = (ids: Iterable<string>) => setSelected(new Set(ids))
-  const selectOne = (id: string) => setSelected(new Set([id]))
+  useLayoutEffect(() => {
+    counters.pageCommits++
+  })
 
-  /** A shape with the local drag/resize applied, so it moves at frame rate. */
-  const placed = (shape: Shape): Shape => {
-    const moved = dragging?.get(shape.id)
-    if (moved) return { ...shape, ...moved }
-    if (resizing?.id === shape.id) return { ...shape, ...resizing.box }
-    return shape
+  const select = (ids: Iterable<string>) => {
+    const next = new Set(ids)
+    setSelected(prev => (sameSet(prev, next) ? prev : next))
   }
+  const selectOne = (id: string) => select([id])
 
   const boxOf = (id: string | undefined): Box | null => {
     if (!id) return null
     const shape = shapes.get(id)
-    return shape && shape.type !== 'arrow' ? placed(shape) : null
+    return shape && shape.type !== 'arrow' ? shape : null
   }
   const boxOfRef = (ref: string | undefined) =>
     ref?.startsWith('shape:') ? boxOf(refId(ref)) : null
 
-  const clientPoint = (e: { clientX: number; clientY: number }): Point => {
-    const rect = viewport.current!.getBoundingClientRect()
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
-  }
-
-  const fit = useCallback(() => {
+  // The viewport's page rect, read once and dropped when it can change, so
+  // a pointer or wheel event never forces layout to learn it.
+  const rect = useRef<DOMRect | null>(null)
+  useEffect(() => {
     const el = viewport.current
     if (!el) return
-    const boxes = [...doc.getShapesSnapshot().values()].filter(
-      s => s.type !== 'arrow'
-    )
-    setView(fitBoxes(boxes, el.clientWidth, el.clientHeight))
-  }, [doc])
+    const drop = () => {
+      rect.current = null
+    }
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(drop)
+    ro?.observe(el)
+    window.addEventListener('resize', drop)
+    window.addEventListener('scroll', drop, true)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', drop)
+      window.removeEventListener('scroll', drop, true)
+    }
+  }, [])
+  const clientPoint = (e: { clientX: number; clientY: number }): Point => {
+    rect.current ??= viewport.current!.getBoundingClientRect()
+    return { x: e.clientX - rect.current.left, y: e.clientY - rect.current.top }
+  }
 
+  // The camera writes the layer transform and the dot grid itself, once a
+  // frame. While it moves, the layer is flagged `data-moving` (CSS may
+  // promote it) until the camera has rested for SETTLE_MS.
   useLayoutEffect(() => {
-    counters.pageCommits++
-  })
-  useEffect(() => {
-    registerBoard({ getView: () => viewRef.current, setView, fit })
-    return () => registerBoard(null)
+    const el = viewport.current
+    const lay = layer.current
+    if (!el || !lay) return
+    let settle: ReturnType<typeof setTimeout> | null = null
+    const write = (v: View) => {
+      lay.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.z})`
+      const grid = 24 * v.z
+      el.style.backgroundSize = `${grid}px ${grid}px`
+      el.style.backgroundPosition = `${v.x}px ${v.y}px`
+    }
+    write(camera.applied())
+    const off = camera.onApply(v => {
+      write(v)
+      if (settle) clearTimeout(settle)
+      else lay.dataset.moving = ''
+      settle = setTimeout(() => {
+        settle = null
+        delete lay.dataset.moving
+      }, SETTLE_MS)
+    })
+    return () => {
+      off()
+      if (settle) clearTimeout(settle)
+    }
+  }, [camera])
+
+  const fit = useCallback(
+    (now = false) => {
+      const el = viewport.current
+      if (!el) return
+      const boxes = [...doc.getShapesSnapshot().values()].filter(
+        s => s.type !== 'arrow'
+      )
+      const view = fitBoxes(boxes, el.clientWidth, el.clientHeight)
+      if (now) camera.setNow(view)
+      else camera.set(view)
+    },
+    [doc, camera]
+  )
+  const fitAll = useCallback(() => fit(), [fit])
+
+  // Frame the board once on open, before the first paint: everything that
+  // was saved, or the origin.
+  useLayoutEffect(() => {
+    fit(true)
   }, [fit])
-  const viewRef = useRef(view)
-  viewRef.current = view
+
+  useEffect(() => {
+    registerBoard({
+      getView: () => camera.get(),
+      setView: view => camera.set(view),
+      fit: fitAll,
+    })
+    return () => registerBoard(null)
+  }, [camera, fitAll])
+
   // First paint with shapes: when the board shows content after `config`.
   useEffect(() => {
     if (shapes.size === 0) return
@@ -192,49 +277,41 @@ export function EaselPage({
     requestAnimationFrame(() => setTimeout(() => mark('painted')))
   }, [shapes.size])
 
-  // Frame the board once on open: everything that was saved, or the origin.
-  const fitted = useRef(false)
-  useEffect(() => {
-    if (fitted.current || !viewport.current) return
-    fitted.current = true
-    fit()
-  }, [fit])
-
   // Wheel must be non-passive to stop the page from scrolling; two fingers
   // pan, ⌘/ctrl + wheel (and a trackpad pinch, which arrives as ctrl+wheel)
   // zooms around the pointer. Safari also sends gesture events for a pinch.
+  // All of it moves the camera, which applies once per frame.
   useEffect(() => {
     const el = viewport.current
     if (!el) return
+    const at = (e: { clientX: number; clientY: number }) => {
+      rect.current ??= el.getBoundingClientRect()
+      return { x: e.clientX - rect.current.left, y: e.clientY - rect.current.top }
+    }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       const unit = e.deltaMode === 1 ? 16 : 1
       const dx = e.deltaX * unit
       const dy = e.deltaY * unit
       if (e.ctrlKey || e.metaKey) {
-        const rect = el.getBoundingClientRect()
-        const p = { x: e.clientX - rect.left, y: e.clientY - rect.top }
-        setView(v => zoomAt(v, Math.exp(-dy * 0.01), p))
+        const p = at(e)
+        camera.set(v => zoomAt(v, Math.exp(-dy * 0.01), p))
       } else {
-        setView(v => ({ ...v, x: v.x - dx, y: v.y - dy }))
+        camera.set(v => ({ ...v, x: v.x - dx, y: v.y - dy }))
       }
     }
     let pinch: { z: number } | null = null
     const onGestureStart = (e: Event) => {
       e.preventDefault()
-      setView(v => {
-        pinch = { z: v.z }
-        return v
-      })
+      pinch = { z: camera.get().z }
     }
     const onGestureChange = (e: Event) => {
       e.preventDefault()
       const g = e as GestureEventLike
       if (!pinch) return
-      const rect = el.getBoundingClientRect()
-      const p = { x: g.clientX - rect.left, y: g.clientY - rect.top }
+      const p = at(g)
       const z = pinch.z * g.scale
-      setView(v => zoomTo(v, z, p))
+      camera.set(v => zoomTo(v, z, p))
     }
     const onGestureEnd = (e: Event) => {
       e.preventDefault()
@@ -250,15 +327,18 @@ export function EaselPage({
       el.removeEventListener('gesturechange', onGestureChange)
       el.removeEventListener('gestureend', onGestureEnd)
     }
-  }, [])
+  }, [camera])
 
-  const zoomBy = useCallback((factor: number) => {
-    const el = viewport.current
-    if (!el) return
-    setView(v =>
-      zoomAt(v, factor, { x: el.clientWidth / 2, y: el.clientHeight / 2 })
-    )
-  }, [])
+  const zoomBy = useCallback(
+    (factor: number) => {
+      const el = viewport.current
+      if (!el) return
+      camera.set(v =>
+        zoomAt(v, factor, { x: el.clientWidth / 2, y: el.clientHeight / 2 })
+      )
+    },
+    [camera]
+  )
 
   // Every key is handled at the window, not the viewport: focus is on
   // `body` after a title or label blurs, and the shortcuts must still work.
@@ -272,7 +352,7 @@ export function EaselPage({
           e.preventDefault()
           const el = viewport.current
           if (el)
-            setView(v =>
+            camera.set(v =>
               zoomTo(v, 1, { x: el.clientWidth / 2, y: el.clientHeight / 2 })
             )
           return
@@ -307,7 +387,7 @@ export function EaselPage({
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-  }, [zoomBy])
+  }, [zoomBy, camera])
 
   // Leaving the laser tool mid-stroke drops the stroke.
   useEffect(() => {
@@ -338,6 +418,9 @@ export function EaselPage({
     setArrowFrom(null)
   }
 
+  /** Put the caret in a shape's text. */
+  const startEditing = (id: string) => focusShapeText(id)
+
   const createAt = (type: 'sticky' | 'frame', box: Box) => {
     doc.undo.stopCapturing()
     const id = doc.createShape({
@@ -352,7 +435,7 @@ export function EaselPage({
   const finishCreate = (id: string) => {
     changeTool('select')
     selectOne(id)
-    focusShapeText(id)
+    startEditing(id)
   }
 
   const createArrow = (from: string, to: string) => {
@@ -376,6 +459,7 @@ export function EaselPage({
     if (!(active instanceof Node && active.contains(e.target as Node)))
       viewport.current?.focus({ preventScroll: true })
     const p = clientPoint(e)
+    const view = camera.get()
     const c = screenToCanvas(view, p)
     e.currentTarget.setPointerCapture(e.pointerId)
     gesture.current = null
@@ -427,10 +511,10 @@ export function EaselPage({
       }
       const ids = selected.has(id) ? [...selected] : [id]
       if (!selected.has(id)) selectOne(id)
-      const from = new Map<string, Point>()
+      const from = new Map<string, Box>()
       for (const other of ids) {
         const b = boxOf(other)
-        if (b) from.set(other, { x: b.x, y: b.y })
+        if (b) from.set(other, { x: b.x, y: b.y, w: b.w, h: b.h })
       }
       gesture.current = { kind: 'move', hit: id, ids, start: p, from }
       return
@@ -455,13 +539,13 @@ export function EaselPage({
     if (e.button !== 0 || !isResizable(shape.type)) return
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
-    const { x, y, w, h } = placed(shape)
+    const { x, y, w, h } = shape
     gesture.current = {
       kind: 'resize',
       id: shape.id,
       handle,
       type: shape.type,
-      start: screenToCanvas(view, clientPoint(e)),
+      start: screenToCanvas(camera.get(), clientPoint(e)),
       box: { x, y, w, h },
     }
   }
@@ -484,9 +568,11 @@ export function EaselPage({
     const p = clientPoint(e)
     pointer.current = p
     const now = performance.now()
+    const view = camera.get()
     const c = screenToCanvas(view, p)
     if (now - lastSent.current.cursor > 33) {
       lastSent.current.cursor = now
+      // Only peers render cursors; this no longer re-renders the board.
       awareness.setLocalStateField('cursor', c)
     }
     const g = gesture.current
@@ -505,7 +591,7 @@ export function EaselPage({
         return
       }
       case 'pan':
-        setView({
+        camera.set({
           ...g.view,
           x: g.view.x + p.x - g.start.x,
           y: g.view.y + p.y - g.start.y,
@@ -519,16 +605,12 @@ export function EaselPage({
           MIN_SIZE[g.type]
         )
         g.at = box
-        setResizing({ id: g.id, box })
-        if (now - lastSent.current.size > 33) {
-          lastSent.current.size = now
-          doc.updateShape(g.id, box)
-        }
+        live.set([[g.id, box]])
         return
       }
       case 'marquee': {
         const rect = rectFrom(g.start, c)
-        setMarquee(rect)
+        marquee.set(rect)
         const hits = [...shapes.values()]
           .filter(s => s.type !== 'arrow' && boxesIntersect(rect, s))
           .map(s => s.id)
@@ -546,9 +628,11 @@ export function EaselPage({
         g.at = box
         if (!g.id) {
           g.id = createAt(g.type, box)
+          lastSent.current.create = now
           return
         }
-        if (now - lastSent.current.create > 33) {
+        live.set([[g.id, box]])
+        if (now - lastSent.current.create > CREATE_SYNC_MS) {
           lastSent.current.create = now
           doc.updateShape(g.id, box)
         }
@@ -559,14 +643,14 @@ export function EaselPage({
         const dx = (p.x - g.start.x) / view.z
         const dy = (p.y - g.start.y) / view.z
         const at = new Map<string, Point>()
-        for (const [id, from] of g.from)
-          at.set(id, { x: from.x + dx, y: from.y + dy })
-        g.at = at
-        setDragging(at)
-        if (now - lastSent.current.move > 50) {
-          lastSent.current.move = now
-          doc.moveShapes(at)
+        const boxes: [string, Box & { lifted: true }][] = []
+        for (const [id, from] of g.from) {
+          const moved = { x: from.x + dx, y: from.y + dy }
+          at.set(id, moved)
+          boxes.push([id, { ...from, ...moved, lifted: true }])
         }
+        g.at = at
+        live.set(boxes)
         return
       }
       case 'arrow':
@@ -589,15 +673,20 @@ export function EaselPage({
       case 'pan':
         return
       case 'resize':
-        if (g.at) doc.updateShape(g.id, g.at)
-        setResizing(null)
+        if (g.at) {
+          doc.undo.stopCapturing()
+          doc.updateShape(g.id, g.at)
+          doc.undo.stopCapturing()
+        }
+        live.clear()
         return
       case 'marquee':
-        setMarquee(null)
+        marquee.set(null)
         return
       case 'create': {
         if (g.id) {
           if (g.at) doc.updateShape(g.id, g.at)
+          live.clear()
           finishCreate(g.id)
           return
         }
@@ -624,8 +713,11 @@ export function EaselPage({
       }
       case 'move': {
         if (g.at) {
+          // One write for the whole drag, and one undo step of its own.
+          doc.undo.stopCapturing()
           doc.moveShapes(g.at)
-          setDragging(null)
+          doc.undo.stopCapturing()
+          live.clear()
           return
         }
         // A click without a drag selects just the one under the pointer.
@@ -636,7 +728,7 @@ export function EaselPage({
         lastTap.current = { id: g.hit, at: now }
         if (!double) return
         if (shapes.get(g.hit)?.type === 'arrow') setLabelEditing(g.hit)
-        else focusShapeText(g.hit)
+        else startEditing(g.hit)
         return
       }
     }
@@ -646,7 +738,7 @@ export function EaselPage({
   const onDoubleClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     if (tool !== 'select' || panning) return
     if ((e.target as Element).closest('[data-ref], .easel-card')) return
-    const c = screenToCanvas(view, clientPoint(e))
+    const c = screenToCanvas(camera.get(), clientPoint(e))
     const { w, h } = SHAPE_SIZE.sticky
     const id = createAt('sticky', { x: c.x - w / 2, y: c.y - h / 2, w, h })
     finishCreate(id)
@@ -767,7 +859,7 @@ export function EaselPage({
 
   const viewportCentre = (): Point => {
     const el = viewport.current!
-    return screenToCanvas(view, {
+    return screenToCanvas(camera.get(), {
       x: el.clientWidth / 2,
       y: el.clientHeight / 2,
     })
@@ -792,7 +884,7 @@ export function EaselPage({
     e.preventDefault()
     const one = selected.size === 1 ? shapes.get([...selected][0]!) : undefined
     const at = pointer.current
-      ? screenToCanvas(view, pointer.current)
+      ? screenToCanvas(camera.get(), pointer.current)
       : viewportCentre()
     void placeImage(file, titled ?? (one?.type === 'frame' ? one.id : null), at)
   }
@@ -810,65 +902,70 @@ export function EaselPage({
     e.preventDefault()
     const file = imageFile(e.dataTransfer)
     if (!file) return
-    const at = screenToCanvas(view, clientPoint(e))
+    const at = screenToCanvas(camera.get(), clientPoint(e))
     const into = [...shapes.values()]
       .reverse()
       .find(s => s.type === 'frame' && pointInBox(at, s))
     void placeImage(file, into?.id ?? null, at)
   }
 
+  // Stable for the memoized children.
+  const startResizeRef = useRef(startResize)
+  startResizeRef.current = startResize
+  const onHandle = useCallback(
+    (shape: Shape, handle: Handle, e: ReactPointerEvent<HTMLElement>) =>
+      startResizeRef.current(shape, handle, e),
+    []
+  )
+  const stopLabelEditing = useCallback(() => setLabelEditing(null), [])
+
   // ---- render ----
 
   const byLabel = (shape: Shape) =>
     shape.by && shape.by !== viewer.name ? shape.by : undefined
-  const shapeList = [...shapes.values()].map(placed)
-  const frames = shapeList.filter(shape => shape.type === 'frame')
-  const stickies = shapeList.filter(shape => shape.type === 'sticky')
-  const arrows = shapeList.flatMap(shape => {
-    const a = shape.type === 'arrow' ? boxOfRef(shape.from) : null
-    const b = a ? boxOfRef(shape.to) : null
-    const seg = a && b ? boxSegment(a, b) : null
-    return seg ? [{ shape, seg }] : []
-  })
+  const frames: Shape[] = []
+  const stickies: Shape[] = []
+  const arrows: { shape: Shape; from: Shape; to: Shape }[] = []
+  for (const shape of shapes.values()) {
+    if (shape.type === 'frame') frames.push(shape)
+    else if (shape.type === 'sticky') stickies.push(shape)
+    else {
+      const from = shape.from?.startsWith('shape:') ? shapes.get(refId(shape.from)) : undefined
+      const to = shape.to?.startsWith('shape:') ? shapes.get(refId(shape.to)) : undefined
+      if (from && to && from.type !== 'arrow' && to.type !== 'arrow')
+        arrows.push({ shape, from, to })
+    }
+  }
   const shapeProps = (shape: Shape) => ({
     shape,
-    at: { x: shape.x, y: shape.y },
     selected: selected.has(shape.id),
     pending: arrowFrom === shape.id,
-    lifted: dragging?.has(shape.id) ?? false,
     by: byLabel(shape),
   })
-  const grid = 24 * view.z
 
   const selectedShapes = [...selected].flatMap(id => {
     const s = shapes.get(id)
-    return s ? [placed(s)] : []
+    return s ? [s] : []
   })
   const one = selectedShapes.length === 1 ? selectedShapes[0] : undefined
   const resizable =
     tool === 'select' && one && isResizable(one.type) ? one : null
-  // Screen point for the selection bar: above the selection, or above an arrow's middle.
-  const barAt = ((): Point | null => {
-    if (tool !== 'select' || !selectedShapes.length || dragging || resizing)
-      return null
-    if (marquee) return null
+  // Where the selection bar hangs, in canvas coords: above the selection,
+  // or above an arrow's middle. The bar itself follows the camera.
+  const anchor = ((): BarAnchor | null => {
+    if (tool !== 'select' || !selectedShapes.length) return null
     if (one?.type === 'arrow') {
-      const seg = arrows.find(a => a.shape.id === one.id)?.seg
+      const ends = arrows.find(a => a.shape.id === one.id)
+      const seg = ends ? boxSegment(ends.from, ends.to) : null
       if (!seg) return null
-      return {
-        x: view.x + ((seg.x1 + seg.x2) / 2) * view.z,
-        y: view.y + ((seg.y1 + seg.y2) / 2) * view.z - 18,
-      }
+      return { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2, lift: -18 }
     }
     const boxes = selectedShapes.filter(s => s.type !== 'arrow')
     if (!boxes.length) return null
     const minX = Math.min(...boxes.map(b => b.x))
     const maxX = Math.max(...boxes.map(b => b.x + b.w))
     const minY = Math.min(...boxes.map(b => b.y))
-    return {
-      x: view.x + ((minX + maxX) / 2) * view.z,
-      y: Math.max(56, view.y + minY * view.z - 12),
-    }
+    return { x: (minX + maxX) / 2, y: minY, lift: -12, minTop: 56 }
   })()
 
   const cursor = panning
@@ -880,155 +977,132 @@ export function EaselPage({
         : 'easel-cursor-crosshair'
 
   return (
-    <div
-      ref={viewport}
-      role="application"
-      aria-label="Easel"
-      tabIndex={0}
-      className={`easel-viewport ${cursor}`}
-      data-tool={tool}
-      style={{
-        backgroundSize: `${grid}px ${grid}px`,
-        backgroundPosition: `${view.x}px ${view.y}px`,
-      }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      onDoubleClick={onDoubleClick}
-      onPaste={onPaste}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onPointerLeave={() => {
-        pointer.current = null
-        awareness.setLocalStateField('cursor', null)
-      }}
-    >
+    <BoardContext.Provider value={board}>
       <div
-        className="easel-layer"
-        style={{
-          transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})`,
+        ref={viewport}
+        role="application"
+        aria-label="Easel"
+        tabIndex={0}
+        className={`easel-viewport ${cursor}`}
+        data-tool={tool}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onDoubleClick={onDoubleClick}
+        onPaste={onPaste}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        onPointerLeave={() => {
+          pointer.current = null
+          awareness.setLocalStateField('cursor', null)
         }}
       >
-        {frames
-          .filter(shape => !shape.image)
-          .map(shape => (
-            <FrameShape key={shape.id} {...shapeProps(shape)} />
-          ))}
-
-        <svg
-          className="easel-arrows"
-          width={1}
-          height={1}
-          aria-hidden="true"
-        >
-          <defs>
-            {(['arrow', 'active'] as const).map(state => (
-              <marker
-                key={state}
-                id={`${markerId}-${state}`}
-                viewBox="0 0 10 10"
-                refX="10"
-                refY="5"
-                markerWidth="7"
-                markerHeight="7"
-                orient="auto-start-reverse"
-              >
-                <path
-                  d="M0,0 L10,5 L0,10 z"
-                  className={
-                    state === 'active'
-                      ? 'easel-arrow-head-active'
-                      : 'easel-arrow-head'
-                  }
-                />
-              </marker>
+        <div ref={layer} className="easel-layer">
+          {frames
+            .filter(shape => !shape.image)
+            .map(shape => (
+              <FrameShape key={shape.id} {...shapeProps(shape)} />
             ))}
-          </defs>
-          {arrows.map(({ shape, seg }) => {
-            const on = selected.has(shape.id)
-            return (
-              <g key={shape.id} data-ref={`shape:${shape.id}`}>
-                <line
-                  {...seg}
-                  stroke="transparent"
-                  strokeWidth={14}
-                  style={{ pointerEvents: 'stroke' }}
-                />
-                <line
-                  {...seg}
-                  strokeWidth={on ? 2.5 : 2}
-                  strokeLinecap="round"
-                  className={on ? 'easel-arrow-line-active' : 'easel-arrow-line'}
-                  markerEnd={`url(#${markerId}-${on ? 'active' : 'arrow'})`}
-                />
-              </g>
-            )
-          })}
-        </svg>
 
-        {/* A picture is opaque content, so it covers the lines. */}
-        {frames
-          .filter(shape => shape.image)
-          .map(shape => (
-            <FrameShape key={shape.id} {...shapeProps(shape)} />
+          <svg
+            className="easel-arrows"
+            width={1}
+            height={1}
+            aria-hidden="true"
+          >
+            <defs>
+              {(['arrow', 'active'] as const).map(state => (
+                <marker
+                  key={state}
+                  id={`${markerId}-${state}`}
+                  viewBox="0 0 10 10"
+                  refX="10"
+                  refY="5"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto-start-reverse"
+                >
+                  <path
+                    d="M0,0 L10,5 L0,10 z"
+                    className={
+                      state === 'active'
+                        ? 'easel-arrow-head-active'
+                        : 'easel-arrow-head'
+                    }
+                  />
+                </marker>
+              ))}
+            </defs>
+            {arrows.map(({ shape, from, to }) => (
+              <ArrowLine
+                key={shape.id}
+                shape={shape}
+                from={from}
+                to={to}
+                selected={selected.has(shape.id)}
+                markerId={markerId}
+              />
+            ))}
+          </svg>
+
+          {/* A picture is opaque content, so it covers the lines. */}
+          {frames
+            .filter(shape => shape.image)
+            .map(shape => (
+              <FrameShape key={shape.id} {...shapeProps(shape)} />
+            ))}
+
+          {arrows.map(({ shape, from, to }) => (
+            <ArrowLabel
+              key={shape.id}
+              shape={shape}
+              from={from}
+              to={to}
+              editing={labelEditing === shape.id}
+              selected={selected.has(shape.id)}
+              onDone={stopLabelEditing}
+            />
           ))}
 
-        {arrows.map(({ shape, seg }) => (
-          <ArrowLabel
-            key={shape.id}
-            shape={shape}
-            at={{ x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 }}
-            editing={labelEditing === shape.id}
-            selected={selected.has(shape.id)}
-            onDone={() => setLabelEditing(null)}
-          />
-        ))}
+          {stickies.map(shape => (
+            <StickyShape key={shape.id} {...shapeProps(shape)} />
+          ))}
 
-        {stickies.map(shape => (
-          <StickyShape key={shape.id} {...shapeProps(shape)} />
-        ))}
+          {resizable && (
+            <ShapeHandles
+              shape={resizable}
+              onStart={(handle, e) => onHandle(resizable, handle, e)}
+            />
+          )}
 
-        {resizable && (
-          <ResizeHandles
-            box={resizable}
-            zoom={view.z}
-            onStart={(handle, e) => startResize(resizable, handle, e)}
-          />
-        )}
+          <Marquee />
 
-        {marquee && (
-          <div
-            className="easel-marquee"
-            style={{
-              transform: `translate(${marquee.x}px, ${marquee.y}px)`,
-              width: marquee.w,
-              height: marquee.h,
-              borderWidth: 1 / view.z,
-            }}
+          <PeerCursors awareness={awareness} />
+        </div>
+
+        <div className="easel-laser-overlay" aria-hidden="true">
+          <CameraLaser trails={trails} />
+        </div>
+
+        {anchor && (
+          <SelectionBarAt
+            anchor={anchor}
+            shapes={selectedShapes}
+            onDelete={removeSelected}
           />
         )}
 
-        <PeerCursors peers={peers} zoom={view.z} />
+        {shapes.size === 0 && (
+          <p className="easel-hint">Double-click to add a note · L for laser</p>
+        )}
+
+        <TitleChip title={title} onChange={next => doc.setTitle(next)} />
+
+        <Toolbar tool={tool} onTool={changeTool} onPickImage={pickImage} />
+
+        <ZoomCluster onZoom={zoomBy} onFit={fitAll} />
       </div>
-
-      <div className="easel-laser-overlay" aria-hidden="true">
-        <LaserCanvas trails={trails} view={view} />
-      </div>
-
-      {barAt && (
-        <SelectionBar shapes={selectedShapes} at={barAt} onDelete={removeSelected} />
-      )}
-
-      {shapes.size === 0 && (
-        <p className="easel-hint">Double-click to add a note · L for laser</p>
-      )}
-
-      <TitleChip title={title} onChange={next => doc.setTitle(next)} />
-
-      <Toolbar tool={tool} onTool={changeTool} onPickImage={pickImage} />
-
-      <ZoomCluster zoom={view.z} onZoom={zoomBy} onFit={fit} />
-    </div>
+    </BoardContext.Provider>
   )
 }

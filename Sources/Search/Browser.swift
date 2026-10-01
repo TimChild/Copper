@@ -1057,7 +1057,7 @@ final class Browser: NSObject, ObservableObject {
         if let id = windowID, let row = Windows.savedTabs(for: id) {
             for entry in row.tabs {
                 guard let url = URL(string: entry.url) else { continue }
-                let tab = Tab()
+                let tab = Tab(configuration: Easels.configuration(for: url)) // Fork: easels
                 prepare(tab)
                 tab.restore(url: url, title: entry.title)
                 tab.pin = entry.pin
@@ -1173,6 +1173,7 @@ final class Browser: NSObject, ObservableObject {
     func close(_ tab: Tab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         Grouper.shared.forget(tab.id) // Fork
+        Easels.closing(tab) // Fork: a board's last save, before its view goes
 
         // A tab whose page is out in the little window takes the window with
         // it. Left alone, the window would go on holding a page belonging to a
@@ -1317,6 +1318,7 @@ final class Browser: NSObject, ObservableObject {
     /// order it came in.
     @discardableResult
     func open(_ url: URL, foreground: Bool, atEnd: Bool = false) -> Tab {
+        if let board = Easels.already(url, in: self, foreground: foreground) { return board } // Fork: one tab per board
         // An extension's own page is served only to a view built from that
         // extension's configuration.
         let url = Browser.page(url)
@@ -1343,7 +1345,9 @@ final class Browser: NSObject, ObservableObject {
     }
 
     /// The configuration for an extension's page, or nil for anything else.
+    /// (Fork: or a board's, for an easel's address — Fork/Easel.)
     static func extensionConfiguration(for url: URL) -> WKWebViewConfiguration? {
+        if let easel = Easels.configuration(for: url) { return easel } // Fork: easels
         guard #available(macOS 15.4, *) else { return nil }
         let url = Extensions.current(url)
         guard url.scheme == Extensions.scheme else { return nil }
@@ -1971,6 +1975,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.allow)
             return
         }
+        // Fork: easels — only Copper opens a board, and a board's tab shows nothing else.
+        if let verdict = Easels.police(action, in: webView, browser: self) { decisionHandler(verdict); return }
 
         // An extension's OAuth sign-in coming back: the address is the
         // answer, handed to the extension, and never loaded.
@@ -2022,6 +2028,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         for action: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
+        if Easels.refusesWindow(for: action, from: webView, in: self) { return nil } // Fork: easels
         let from = tab(for: webView)?.id ?? activeID
         let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
         adopt(tab)

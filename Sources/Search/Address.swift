@@ -8,7 +8,7 @@ enum Address {
     /// Schemes the window can show itself. Anything else typed with a scheme —
     /// mailto:, a custom app link — is somebody else's job and gets refused
     /// here rather than opening a blank tab.
-    private static let ours: Set<String> = ["http", "https", "file", "about", "data"]
+    private static let ours: Set<String> = ["http", "https", "file", "about", "data", Easels.scheme] // Fork: easels
 
     static func url(from typed: String) -> URL? {
         let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -124,8 +124,11 @@
     ./bench ai [mode off|ask|auto]   which model lanes have keys, and the grouper's last note
     ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
     ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
-    ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark]|bookmark URL [TITLE]|pin URL|open URL
-                                       Copper Cloud: link a probe world to an instance, sign in, sync
+    ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark] [CODE]|bookmark URL [TITLE]|pin URL|open URL
+    ./bench cloud pair CODE [--trust FP] [--sync DOMAINS|none]   link + sign in with a pairing code (#p=, or a bare cp_… when linked)
+    ./bench cloud pairing-code|pairing-codes|revoke-pairing ID|current
+                                       Copper Cloud: link a probe world to an instance, sign in, sync;
+                                       mint a one-time code for another Mac, list or revoke them
     ./bench passkeys list|count|forget --id ID|answer yes|no|ask
                                        Copper's own test-world passkeys (no private keys in list)
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)

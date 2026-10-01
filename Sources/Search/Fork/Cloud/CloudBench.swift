@@ -9,6 +9,13 @@ import Foundation
 //   cloud signup EMAIL PW NAME       create the account and sign in
 //   cloud signin EMAIL PW            sign in
 //   cloud signout | disconnect
+//   cloud pair CODE [--trust FP] [--sync DOMAINS|none]
+//                                    link + sign in with a pairing code (the whole
+//                                    copper-cloud://…#p=… or, already linked, a bare cp_…),
+//                                    then turn on sync as the page does (all, unless --sync)
+//   cloud pairing-code               signed in: mint a code for another Mac → {id, code, link, expiresAt}
+//   cloud pairing-codes              my codes still open
+//   cloud revoke-pairing ID          revoke one (ID from pairing-codes, or `current`)
 //   cloud sync on DOMAINS            "Turn on sync" with these (spaces,settings,bookmarks,tabs,history | all)
 //   cloud sync off | now
 //   cloud devices                    other devices' open tabs
@@ -18,7 +25,7 @@ import Foundation
 //   cloud bookmark URL [TITLE]       test worlds only: add a bookmark
 //   cloud pin URL                    test worlds only: open URL as a pinned tab
 //   cloud open URL                   test worlds only: open URL as an ordinary tab
-//   cloud picture PATH [dark]        the whole Cloud page as a PNG, for a look at it
+//   cloud picture PATH [dark] [CODE] the whole Cloud page as a PNG, for a look at it; CODE pre-fills Connect
 //   cloud wstest                     a canvas WebSocket through the pinned session: open, frames, close
 //
 // Passwords given here are used once and never echoed back.
@@ -49,6 +56,9 @@ enum CloudBench {
         case "status":
             answer(status())
         case "link":
+            if let code = words.first, case .pairing? = Cloud.parseCode(code) {
+                return answer(["error": "That's a pairing code (#p=) — use `cloud pair CODE`, which links and signs in"])
+            }
             guard let code = words.first, let link = Cloud.parseLinkCode(code) else { return answer(["error": "usage: cloud link CODE (copper-cloud://HOST:PORT/#k=KEY&fp=HEX)"]) }
             run { try await cloud.connect(link) }
         case "signup":
@@ -66,6 +76,53 @@ enum CloudBench {
             sync.turnOff()
             cloud.disconnect()
             answer(status())
+        case "pair":
+            pair(words, answer: answer)
+        case "pairing-code":
+            Task { @MainActor in
+                do {
+                    let minted = try await CloudPairing.shared.mint()
+                    answer(["id": minted.id.uuidString.lowercased(), "code": minted.code, "link": minted.link,
+                            "expiresAt": CloudSync.stamp(minted.expiresAt),
+                            "expiresIn": Int(minted.expiresAt.timeIntervalSinceNow.rounded())])
+                } catch {
+                    answer(failure(error))
+                }
+            }
+        case "pairing-codes":
+            Task { @MainActor in
+                do {
+                    let codes = try await cloud.pairingCodes()
+                    await CloudPairing.shared.check()
+                    answer(["codes": codes.map { code -> [String: Any] in
+                        ["id": code.id.uuidString.lowercased(),
+                         "deviceName": code.deviceName ?? NSNull(),
+                         "createdAt": code.createdAt.map(CloudSync.stamp) ?? NSNull(),
+                         "expiresAt": CloudSync.stamp(code.expiresAt),
+                         "usedAt": code.usedAt.map(CloudSync.stamp) ?? NSNull(),
+                         "current": code.id == CloudPairing.shared.current?.id]
+                    }])
+                } catch {
+                    answer(failure(error))
+                }
+            }
+        case "revoke-pairing":
+            let raw = words.first ?? ""
+            let id = raw == "current" ? CloudPairing.shared.current?.id : UUID(uuidString: raw)
+            guard let id else { return answer(["error": "usage: cloud revoke-pairing ID|current (IDs from cloud pairing-codes)"]) }
+            Task { @MainActor in
+                do {
+                    if id == CloudPairing.shared.current?.id, CloudPairing.shared.outcome == nil {
+                        await CloudPairing.shared.revoke()
+                        if let problem = CloudPairing.shared.problem { throw Cloud.Failure(status: 0, code: "revoke", message: problem) }
+                    } else {
+                        try await cloud.revokePairingCode(id)
+                    }
+                    answer(["revoked": id.uuidString.lowercased()])
+                } catch {
+                    answer(failure(error))
+                }
+            }
         case "sync":
             switch words.first ?? "now" {
             case "on":
@@ -133,9 +190,12 @@ enum CloudBench {
                 }
             }
         case "picture":
-            // cloud picture PATH [dark] — the whole Cloud page, laid out off screen.
-            guard let path = words.first else { return answer(["error": "usage: cloud picture PATH [dark]"]) }
-            guard let picture = SettingsPicture.draw(CloudPage(browser: browser), dark: words.dropFirst().first == "dark"),
+            // cloud picture PATH [dark] [CODE] — the whole Cloud page, laid out
+            // off screen; CODE starts the Connect field with it (not linked yet).
+            guard let path = words.first else { return answer(["error": "usage: cloud picture PATH [dark] [CODE]"]) }
+            let rest = words.dropFirst()
+            let draft = rest.first { $0 != "dark" } ?? ""
+            guard let picture = SettingsPicture.draw(CloudPage(browser: browser, draft: draft), dark: rest.contains("dark")),
                   let png = picture.representation(using: .png, properties: [:]) else { return answer(["error": "could not draw the page"]) }
             do { try png.write(to: URL(fileURLWithPath: path)) } catch { return answer(["error": error.localizedDescription]) }
             answer(["path": path, "size": [picture.pixelsWide, picture.pixelsHigh]])
@@ -149,8 +209,73 @@ enum CloudBench {
             browser.pin(tab)
             answer(["pinned": url.absoluteString, "pins": browser.pinnedCount])
         default:
-            answer(["error": "unknown cloud op \(op) — status|link|signup|signin|signout|disconnect|sync|devices|doc|log|selftest"])
+            answer(["error": "unknown cloud op \(op) — status|link|pair|pairing-code|pairing-codes|revoke-pairing|signup|signin|signout|disconnect|sync|devices|doc|log|selftest|wstest|picture"])
         }
+    }
+
+    /// `cloud pair CODE [--trust FP] [--sync DOMAINS|none]`.
+    private static func pair(_ words: [String], answer: @escaping ([String: Any]) -> Void) {
+        let usage = "usage: cloud pair CODE [--trust FINGERPRINT] [--sync DOMAINS|all|none] — CODE is copper-cloud://HOST:PORT/#p=cp_…&fp=…, or a bare cp_… when already linked"
+        var text: String?
+        var trust: String?
+        var domains: Set<CloudSync.Domain>? = nil
+        var skipSync = false
+        var i = 0
+        while i < words.count {
+            switch words[i] {
+            case "--trust":
+                guard i + 1 < words.count else { return answer(["error": usage]) }
+                trust = words[i + 1]; i += 2
+            case "--sync":
+                guard i + 1 < words.count else { return answer(["error": usage]) }
+                let list = words[i + 1].split(separator: ",").map(String.init)
+                if list == ["none"] { skipSync = true }
+                else if !list.contains("all") {
+                    domains = Set(list.compactMap(CloudSync.Domain.init(rawValue:)))
+                    if domains?.isEmpty == true { return answer(["error": usage]) }
+                }
+                i += 2
+            default:
+                if text == nil { text = words[i] } else { return answer(["error": usage]) }
+                i += 1
+            }
+        }
+        guard let text else { return answer(["error": usage]) }
+        let parsed = Cloud.parseCode(text, linkedTo: Cloud.shared.link)
+        guard case .pairing(let code)? = parsed else {
+            if case .link? = parsed { return answer(["error": "That's a link code (#k=), not a pairing code — use `cloud link`"]) }
+            if Cloud.isBarePairingCode(text) { return answer(["error": "A bare pairing code needs this Copper linked already — give the whole copper-cloud://…#p=… code"]) }
+            return answer(["error": usage])
+        }
+        Task { @MainActor in
+            do {
+                if skipSync {
+                    try await Cloud.shared.pair(code, trusting: trust)
+                } else {
+                    try await CloudPairing.pairAndSync(code, trusting: trust, domains: domains)
+                }
+                answer(status())
+            } catch {
+                answer(failure(error))
+            }
+        }
+    }
+
+    /// `status()` with the error said, its code, and — for `untrusted` — the
+    /// fingerprint the server showed (pass it back with `--trust`).
+    private static func failure(_ error: Error) -> [String: Any] {
+        var out = status()
+        out["error"] = error.localizedDescription
+        if let failure = error as? Cloud.Failure {
+            out["code"] = failure.code
+            out["status"] = failure.status
+            if let seen = failure.seen {
+                out["seen"] = seen
+                // The bench prints only the error: say the fingerprint in it.
+                out["error"] = "\(failure.message) It showed \(Cloud.pairs(seen)) — `cloud pair CODE --trust \(seen)` trusts it."
+            }
+        }
+        return out
     }
 
     static func status() -> [String: Any] {
@@ -171,6 +296,17 @@ enum CloudBench {
             out["email"] = account.email
             out["displayName"] = account.displayName
             out["userId"] = account.userId.uuidString.lowercased()
+        }
+        // The code this Copper is showing, never the code itself.
+        if let shown = CloudPairing.shared.current {
+            var pairing: [String: Any] = ["id": shown.id.uuidString.lowercased(), "expiresAt": CloudSync.stamp(shown.expiresAt),
+                                          "live": CloudPairing.shared.live != nil]
+            switch CloudPairing.shared.outcome {
+            case .used(let at)?: pairing["used"] = CloudSync.stamp(at)
+            case .revoked?: pairing["revoked"] = true
+            case .none: break
+            }
+            out["pairing"] = pairing
         }
         out["sync"] = CloudSync.shared.status
         out["devices"] = CloudSync.shared.otherDevices.map { device in
@@ -210,6 +346,34 @@ enum CloudSelfTest {
         check(Cloud.parseLinkCode("copper-cloud://[::1]:8443/#k=x")?.host == "[::1]:8443", "link: ipv6 host")
         check(Cloud.link(address: "cloud.example.com", key: "k", fingerprint: "")?.url.absoluteString == "https://cloud.example.com", "link: advanced fields")
         if let a { check(Cloud.parseLinkCode(a.code) == a, "link: code round trip") }
+        let access = Cloud.parseLinkCode("copper-cloud://cloud.example.com:443/#k=ck_" + String(repeating: "Zz9-_", count: 8) + "&fp=\(fp)")
+        check(access?.key.hasPrefix("ck_") == true && access?.fingerprint == fp, "link: an access key is a key like any other")
+
+        // Pairing codes.
+        let secret = "cp_" + String(repeating: "aB3-_", count: 6) + "xY"
+        let p = Cloud.parseCode("copper-cloud://cloud.example.com:8443/#p=\(secret)&fp=\(fp)")
+        if case .pairing(let code)? = p {
+            check(code.url.absoluteString == "https://cloud.example.com:8443" && code.code == secret && code.fingerprint == fp, "pair: copper-cloud with fp")
+            check(Cloud.parseCode(code.link) == p, "pair: code round trip")
+        } else {
+            check(false, "pair: copper-cloud with fp")
+        }
+        check(Cloud.parseLinkCode("copper-cloud://cloud.example.com:8443/#p=\(secret)&fp=\(fp)") == nil, "pair: not a link code")
+        if case .link? = Cloud.parseCode(a?.code ?? "") {} else { check(false, "pair: a link code still reads as one") }
+        if case .pairing(let code)? = Cloud.parseCode(" copper-cloud://[::1]:8443/#p=\(secret)\n") {
+            check(code.host == "[::1]:8443" && code.fingerprint == nil, "pair: ipv6, no fp, whitespace")
+        } else { check(false, "pair: ipv6, no fp, whitespace") }
+        if case .pairing(let code)? = Cloud.parseCode("http://127.0.0.1:9/#p=\(secret)") {
+            check(code.url.absoluteString == "http://127.0.0.1:9", "pair: loopback http")
+        } else { check(false, "pair: loopback http") }
+        check(Cloud.parseCode("http://evil.example.com/#p=\(secret)") == nil, "pair: plain http off-loopback refused")
+        check(Cloud.parseCode("copper-cloud://h:1/#p=\(secret)&fp=12") == nil, "pair: short fp refused")
+        check(Cloud.parseCode(secret) == nil, "pair: bare code needs a link")
+        if let a, case .pairing(let code)? = Cloud.parseCode(secret, linkedTo: a) {
+            check(code.url == a.url && code.fingerprint == a.fingerprint, "pair: bare code on the linked instance")
+        } else { check(false, "pair: bare code on the linked instance") }
+        check(Cloud.pairFailure(Cloud.Failure(status: 401, code: "pairing_code", message: "unauthorized")).message.contains("10 minutes"), "pair: used code said in words")
+        check(CloudPairing.left(599.2) == "10:00" && CloudPairing.left(61) == "1:01" && CloudPairing.left(-3) == "0:00", "pair: countdown")
 
         // The settings allowlist.
         let filtered = CloudSettingsKeys.filter([

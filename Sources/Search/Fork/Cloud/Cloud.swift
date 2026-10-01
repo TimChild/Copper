@@ -8,7 +8,9 @@ import Security
 // (CloudSync.swift), the canvas host (Fork/Canvas/) and the settings page.
 //
 // Nothing here runs on its own. A link is made by pasting a link code, an
-// account by signing in; until then no request leaves the Mac. What is kept
+// account by signing in — or both at once with a pairing code another
+// signed-in Copper made (CloudPairing.swift); until then no request leaves
+// the Mac. What is kept
 // lives in `cloud.json` beside the session, mode 0600 like agent.json: the
 // instance address, its key and certificate fingerprint, the account, the
 // session token and the sync switches. The token is never published, never
@@ -30,29 +32,40 @@ final class Cloud: ObservableObject {
         var fingerprint: String?
 
         /// `host:port` as people read it.
-        var host: String {
-            guard let host = url.host() else { return url.absoluteString }
-            let shown = host.contains(":") ? "[\(host)]" : host
-            return url.port.map { "\(shown):\($0)" } ?? shown
-        }
+        var host: String { Cloud.hostText(url) }
 
         /// The fingerprint in pairs, `ab:cd:…`, for comparing by eye.
-        var fingerprintPairs: String? {
-            fingerprint.map { hex in
-                stride(from: 0, to: hex.count, by: 2).map { i -> String in
-                    let start = hex.index(hex.startIndex, offsetBy: i)
-                    return String(hex[start..<hex.index(start, offsetBy: min(2, hex.count - i))])
-                }.joined(separator: ":")
-            }
-        }
+        var fingerprintPairs: String? { fingerprint.map(Cloud.pairs) }
 
         /// The code that would make this link again.
-        var code: String {
-            var fragment = "k=\(key)"
-            if let fingerprint { fragment += "&fp=\(fingerprint)" }
-            if url.scheme == "http" { return "\(url.absoluteString)/#\(fragment)" }
-            return "copper-cloud://\(host)/#\(fragment)"
-        }
+        var code: String { Cloud.codeText(url, "k=\(key)", fingerprint) }
+    }
+
+    /// A pairing code: `copper-cloud://HOST:PORT/#p=CODE&fp=HEX`, minted by a
+    /// Copper already signed in (Settings › Cloud › Pair another Mac). Where
+    /// the instance is and the one-time credential that links this Mac to it
+    /// and signs it in — no instance key in it: the server answers with the
+    /// gate credential this Mac keeps (`/v1/auth/pair`). Never kept on disk.
+    struct PairingCode: Equatable {
+        var url: URL
+        /// `cp_…`, single use, ten minutes.
+        var code: String
+        /// As in a link code: the certificate's SHA-256, or nil for one the
+        /// system trusts (an ACME certificate).
+        var fingerprint: String?
+
+        var host: String { Cloud.hostText(url) }
+        var fingerprintPairs: String? { fingerprint.map(Cloud.pairs) }
+        /// The whole code, as the minting Mac shows it.
+        var link: String { Cloud.codeText(url, "p=\(code)", fingerprint) }
+    }
+
+    /// What a pasted code turned out to be.
+    enum Code: Equatable {
+        /// `#k=`: connects; signing in comes next.
+        case link(Link)
+        /// `#p=`: connects and signs in, in one step.
+        case pairing(PairingCode)
     }
 
     /// Who is signed in, and as which device.
@@ -65,7 +78,7 @@ final class Cloud: ObservableObject {
 
     /// A refusal from the server (`{"error": code, "message": …}`), or a
     /// failure to reach it (status 0, code `network`, `tls`, `fingerprint`,
-    /// `not_linked`, `not_signed_in`).
+    /// `not_linked`, `not_signed_in`, `untrusted`).
     struct Failure: Error, LocalizedError {
         var status: Int
         var code: String
@@ -73,6 +86,9 @@ final class Cloud: ObservableObject {
         /// The answer's body, for a 409 that carries the server's copy.
         /// Never logged.
         var body: Data? = nil
+        /// `untrusted`: the fingerprint of the certificate the server showed,
+        /// for a person to compare and trust on first use.
+        var seen: String? = nil
 
         var errorDescription: String? { message }
     }
@@ -180,11 +196,24 @@ final class Cloud: ObservableObject {
     // MARK: - linking
 
     /// `copper-cloud://HOST:PORT/#k=KEY&fp=HEX` (what `copper-cloud link-code`
-    /// prints), or the same fragment on an `https://` address — or `http://`
-    /// for a loopback host. Spaces and line breaks a paste picked up are
-    /// ignored; colons in the fingerprint are allowed. Nil when it is not one.
+    /// prints, or the admin portal for a person's access key — `k` is either),
+    /// or the same fragment on an `https://` address — or `http://` for a
+    /// loopback host. Spaces and line breaks a paste picked up are ignored;
+    /// colons in the fingerprint are allowed. Nil when it is not one —
+    /// including a pairing code (`#p=`), which `parseCode` tells apart.
     nonisolated static func parseLinkCode(_ text: String) -> Link? {
+        if case .link(let link)? = parseCode(text) { return link }
+        return nil
+    }
+
+    /// A link code (`#k=`) or a pairing code (`#p=`), whichever was pasted.
+    /// A bare `cp_…` pairing code has no address in it: it reads only with
+    /// `linkedTo`, the instance this Mac already knows.
+    nonisolated static func parseCode(_ text: String, linkedTo current: Link? = nil) -> Code? {
         let raw = text.filter { !$0.isWhitespace }
+        if let current, isBarePairingCode(raw) {
+            return .pairing(PairingCode(url: current.url, code: raw, fingerprint: current.fingerprint))
+        }
         guard let hash = raw.firstIndex(of: "#") else { return nil }
         let head = String(raw[..<hash])
         var fields: [String: String] = [:]
@@ -193,13 +222,27 @@ final class Cloud: ObservableObject {
             guard bits.count == 2 else { continue }
             fields[bits[0].lowercased()] = bits[1].removingPercentEncoding ?? bits[1]
         }
-        guard let key = fields["k"] ?? fields["key"], !key.isEmpty else { return nil }
         let plain = ["off", "none", "plain", "http"].contains(fields["tls"]?.lowercased() ?? "")
         var address = head
         if address.lowercased().hasPrefix("copper-cloud://") {
             address = (plain ? "http://" : "https://") + address.dropFirst("copper-cloud://".count)
         }
-        return link(address: address, key: key, fingerprint: fields["fp"])
+        if let key = fields["k"] ?? fields["key"], !key.isEmpty {
+            return link(address: address, key: key, fingerprint: fields["fp"]).map(Code.link)
+        }
+        if let code = fields["p"] ?? fields["pair"], !code.isEmpty,
+           !code.contains(where: { $0.isWhitespace || $0 == "/" || $0 == "?" }),
+           let end = endpoint(address: address, fingerprint: fields["fp"]) {
+            return .pairing(PairingCode(url: end.url, code: code, fingerprint: end.pin))
+        }
+        return nil
+    }
+
+    /// `cp_` and base64url: a pairing code on its own, without the address.
+    nonisolated static func isBarePairingCode(_ text: String) -> Bool {
+        let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard raw.hasPrefix("cp_"), raw.count >= 19 else { return false }
+        return raw.dropFirst(3).allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
     }
 
     /// A link from the advanced fields: an address (`host:port` or a URL),
@@ -207,9 +250,18 @@ final class Cloud: ObservableObject {
     /// usable — a bad fingerprint is refused rather than dropped, because
     /// dropping it would silently fall back to the system's trust.
     nonisolated static func link(address: String, key: String, fingerprint: String?) -> Link? {
-        var address = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !address.isEmpty, !key.isEmpty, !key.contains(where: { $0.isWhitespace }) else { return nil }
+        guard !key.isEmpty, !key.contains(where: { $0.isWhitespace }),
+              let end = endpoint(address: address, fingerprint: fingerprint) else { return nil }
+        return Link(url: end.url, key: key, fingerprint: end.pin)
+    }
+
+    /// The address and pin both kinds of code share: `https://host[:port]`
+    /// (or loopback `http://`, never pinned) and the fingerprint as lowercase
+    /// hex. Nil when either is unusable.
+    nonisolated static func endpoint(address: String, fingerprint: String?) -> (url: URL, pin: String?)? {
+        var address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty else { return nil }
         if !address.contains("://") { address = "https://" + address }
         guard let parsed = URLComponents(string: address),
               let scheme = parsed.scheme?.lowercased(), scheme == "https" || scheme == "http",
@@ -227,7 +279,31 @@ final class Cloud: ObservableObject {
         clean.host = host
         clean.port = parsed.port
         guard let url = clean.url else { return nil }
-        return Link(url: url, key: key, fingerprint: scheme == "http" ? nil : pin)
+        return (url, scheme == "http" ? nil : pin)
+    }
+
+    /// `host:port` as people read it, IPv6 in brackets.
+    nonisolated static func hostText(_ url: URL) -> String {
+        guard let host = url.host() else { return url.absoluteString }
+        let shown = host.contains(":") ? "[\(host)]" : host
+        return url.port.map { "\(shown):\($0)" } ?? shown
+    }
+
+    /// A fingerprint in pairs, `ab:cd:…`, for comparing by eye.
+    nonisolated static func pairs(_ hex: String) -> String {
+        stride(from: 0, to: hex.count, by: 2).map { i -> String in
+            let start = hex.index(hex.startIndex, offsetBy: i)
+            return String(hex[start..<hex.index(start, offsetBy: min(2, hex.count - i))])
+        }.joined(separator: ":")
+    }
+
+    /// `copper-cloud://host:port/#<fragment>[&fp=…]`, or the loopback
+    /// `http://` form.
+    nonisolated static func codeText(_ url: URL, _ fragment: String, _ fingerprint: String?) -> String {
+        var fragment = fragment
+        if let fingerprint { fragment += "&fp=\(fingerprint)" }
+        if url.scheme == "http" { return "\(url.absoluteString)/#\(fragment)" }
+        return "copper-cloud://\(hostText(url))/#\(fragment)"
     }
 
     /// Reach the instance with the pin before keeping anything: `/healthz`
@@ -269,6 +345,149 @@ final class Cloud: ObservableObject {
         save()
         changed()
         CloudLog.note("Connected to \(link.host)")
+    }
+
+    /// What `POST /v1/auth/pair` answers.
+    private struct Paired: Decodable {
+        struct User: Decodable {
+            var id: UUID
+            var email: String
+            var displayName: String?
+            enum CodingKeys: String, CodingKey { case id, email, displayName = "display_name" }
+        }
+        struct Device: Decodable {
+            var id: UUID
+            var name: String?
+        }
+        var token: String
+        var user: User
+        var device: Device?
+        /// What this Mac sends as `X-Copper-Instance` from now on: the
+        /// instance key (an open instance) or an access key minted for it.
+        var gateKey: String
+        enum CodingKeys: String, CodingKey { case token, user, device, gateKey = "gate_key" }
+    }
+
+    /// Link this Mac and sign it in with a pairing code, in one step. The
+    /// instance is reached exactly as `connect` reaches it — `/healthz`
+    /// through the code's pinned certificate — then `POST /v1/auth/pair`
+    /// without the instance gate (the code is the credential). The answer's
+    /// link (address, `gate_key`, fingerprint), account and token are kept
+    /// in one write, and the rest follows as after a sign-in.
+    ///
+    /// A code without a fingerprint is trusted the way a link code without
+    /// one is: by the Mac's own roots. When they refuse the certificate the
+    /// failure is `untrusted`, carrying the fingerprint the server showed
+    /// (`Failure.seen`) — pass it back as `trusting` once a person has
+    /// compared it, and from then on this instance is pinned to it.
+    func pair(_ code: PairingCode, trusting confirmed: String? = nil) async throws {
+        let pin = code.fingerprint ?? confirmed.flatMap { Cloud.endpoint(address: code.url.absoluteString, fingerprint: $0)?.pin }
+        if code.fingerprint == nil, confirmed != nil, pin == nil {
+            throw Failure(status: 0, code: "fingerprint", message: "That fingerprint isn't 64 hex characters")
+        }
+        let probeTrust = CloudTrust(pin: pin)
+        let probe = Cloud.makeSession(probeTrust)
+        defer { probe.finishTasksAndInvalidate() }
+        let answer: Paired
+        do {
+            var health = URLRequest(url: code.url.appending(path: "healthz"), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+            health.setValue("Copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
+            let (_, response) = try await probe.data(for: health)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                throw Failure(status: (response as? HTTPURLResponse)?.statusCode ?? 0, code: "health", message: "The server answered, but not as a Copper Cloud instance")
+            }
+            var request = URLRequest(url: code.url.appending(path: "v1/auth/pair"), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue("Copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "code": code.code,
+                "device": ["id": deviceId.uuidString.lowercased(), "name": deviceName],
+            ])
+            let (data, reply) = try await probe.data(for: request)
+            guard let status = (reply as? HTTPURLResponse)?.statusCode else {
+                throw Failure(status: 0, code: "network", message: "No HTTP answer")
+            }
+            guard (200..<300).contains(status) else { throw Cloud.pairFailure(Cloud.failure(from: data, status: status)) }
+            do {
+                answer = try JSONDecoder().decode(Paired.self, from: data)
+            } catch {
+                throw Failure(status: status, code: "decode", message: "The server's answer to the pairing code didn't read: \(error.localizedDescription)")
+            }
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            if pin == nil, code.url.scheme == "https", let seen = probeTrust.seen, Cloud.isCertificateRefusal(error) {
+                throw Failure(status: 0, code: "untrusted",
+                              message: "This instance's certificate isn't one this Mac trusts, and the pairing code has no fingerprint to pin it by. Compare its fingerprint with `copper-cloud doctor` on the server before trusting it.",
+                              seen: seen)
+            }
+            throw Cloud.transportFailure(error, trust: probeTrust)
+        }
+        let key = answer.gateKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, !key.contains(where: \.isWhitespace) else {
+            throw Failure(status: 0, code: "decode", message: "The server paired this Mac but sent no instance credential")
+        }
+        let link = Link(url: code.url, key: key, fingerprint: pin)
+        let account = Account(userId: answer.user.id, email: answer.user.email,
+                              displayName: answer.user.displayName ?? answer.user.email, deviceId: answer.device?.id ?? deviceId)
+        adoptPaired(link: link, trust: probeTrust, token: answer.token, account: account)
+        CloudLog.note("Paired with \(link.host) — signed in as \(account.email)")
+        _ = try? await me()
+    }
+
+    /// The link, the account and the token from a pairing, kept in one write
+    /// with one `didChange` — so nothing ever sees the new instance without
+    /// its account or the other way round. A session this Copper had before
+    /// is ended on its own instance through its own session.
+    private func adoptPaired(link: Link, trust newTrust: CloudTrust, token: String, account: Account) {
+        if let old = self.link, let previous = saved.token, previous != token {
+            // Started before the old session is let go, so it is allowed to finish.
+            session.dataTask(with: Cloud.logoutRequest(link: old, token: previous)).resume()
+        }
+        events?.cancel()
+        events = nil
+        self.link = link
+        self.account = account
+        saved.token = token
+        trust = newTrust.fresh()
+        session.finishTasksAndInvalidate()
+        session = Cloud.makeSession(trust)
+        reachable = true
+        save()
+        startEvents()
+        changed()
+    }
+
+    /// The pairing refusals, in words.
+    nonisolated static func pairFailure(_ failure: Failure) -> Failure {
+        var failure = failure
+        switch (failure.status, failure.code) {
+        case (_, "pairing_code"):
+            failure.message = "That pairing code doesn't work any more — it was used already, revoked, or is past its 10 minutes. Make a new one on the other Mac."
+        case (_, "account_disabled"):
+            failure.message = "The account that made this code is disabled on this instance — ask its admin"
+        case (429, _), (_, "rate_limited"):
+            failure.message = "Too many tries — wait a minute and try again"
+        case (404, _), (401, "instance_key"):
+            failure.message = "This instance doesn't take pairing codes yet — update copper-cloud, or connect with a link code and sign in"
+        case (403, _):
+            if failure.message.isEmpty || failure.message == "forbidden" { failure.message = "The instance refused to pair this Mac — ask its admin" }
+        default:
+            break
+        }
+        return failure
+    }
+
+    /// A TLS failure that means "the certificate wasn't trusted", as opposed
+    /// to the network not being there.
+    nonisolated static func isCertificateRefusal(_ error: Error) -> Bool {
+        switch (error as? URLError)?.code {
+        case .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateHasUnknownRoot,
+             .serverCertificateNotYetValid, .secureConnectionFailed: return true
+        default: return false
+        }
     }
 
     /// Sign out, forget the instance, stop syncing. The server is told about
@@ -627,6 +846,12 @@ final class CloudTrust: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     let pin: String?
     private let lock = NSLock()
     private var lastMismatch: Date?
+    private var lastSeen: String?
+
+    /// The fingerprint of the last leaf certificate a server showed this
+    /// session, trusted or not — what a person compares before trusting an
+    /// instance on first use.
+    var seen: String? { lock.withLock { lastSeen } }
 
     init(pin: String?) {
         self.pin = pin?.lowercased()
@@ -656,12 +881,15 @@ final class CloudTrust: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
               let serverTrust = challenge.protectionSpace.serverTrust else {
             return (.performDefaultHandling, nil)
         }
+        let leaf = (SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate])?.first
+        let shown = leaf.map(CloudTrust.fingerprint(of:))
+        if let shown { lock.withLock { lastSeen = shown } }
         guard let pin else { return (.performDefaultHandling, nil) }
-        guard let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate], let leaf = chain.first else {
+        guard let shown else {
             lock.withLock { lastMismatch = Date() }
             return (.cancelAuthenticationChallenge, nil)
         }
-        if CloudTrust.fingerprint(of: leaf) == pin {
+        if shown == pin {
             return (.useCredential, URLCredential(trust: serverTrust))
         }
         lock.withLock { lastMismatch = Date() }

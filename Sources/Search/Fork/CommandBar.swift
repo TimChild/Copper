@@ -73,6 +73,10 @@ enum CommandBar {
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },
             .init(id: "prev-space", name: "Previous Space", glyph: "chevron.left") { Spaces.shared.step(-1, in: $0) },
         ]
+        // Fork (cloud): a one-time code for another Mac (Fork/Cloud/CloudPairing.swift).
+        if Cloud.shared.isSignedIn {
+            list.append(.init(id: "cloud-pair", name: "Pair another Mac with Copper Cloud", glyph: "laptopcomputer.and.arrow.down") { CloudPairing.shared.open(in: $0) })
+        }
         if FileManager.default.fileExists(atPath: Store.file("session.previous.json").path) {
             list.append(.init(id: "session-restore", name: "Restore previous session", glyph: "arrow.counterclockwise") { $0.restorePreviousSession() })
         }

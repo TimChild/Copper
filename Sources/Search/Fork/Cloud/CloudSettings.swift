@@ -3,11 +3,15 @@ import SwiftUI
 
 // Settings › Cloud: three steps, in order, each one only when the one before
 // is done — connect to an instance, sign in (or create the account), choose
-// what syncs. Nothing happens until a button is pressed. Drawn with the same
-// cards, lines, pills and switches as every other page.
+// what syncs. A pairing code from another signed-in Mac does all three on
+// one press; signed in, the page offers to make one (Pair another Mac).
+// Nothing happens until a button is pressed. Drawn with the same cards,
+// lines, pills and switches as every other page.
 
 struct CloudPage: View {
     @ObservedObject var browser: Browser
+    /// What the Connect field starts with (the bench's `cloud picture … CODE`).
+    var draft = ""
     @ObservedObject private var cloud = Cloud.shared
     @ObservedObject private var sync = CloudSync.shared
 
@@ -15,7 +19,7 @@ struct CloudPage: View {
         VStack(alignment: .leading, spacing: 18) {
             CloudSteps(cloud: cloud, sync: sync)
             if !cloud.isLinked {
-                CloudConnectCard()
+                CloudConnectCard(draft: draft)
             } else if !cloud.isSignedIn {
                 CloudInstanceCard(cloud: cloud, sync: sync, compact: true)
                 CloudAccountForm()
@@ -23,6 +27,7 @@ struct CloudPage: View {
                 CloudSyncCard(sync: sync, cloud: cloud)
                 if sync.on, !sync.otherDevices.isEmpty { CloudDevicesCard(sync: sync) }
                 CloudAccountCard(cloud: cloud)
+                CloudPairCard(pairing: CloudPairing.shared)
                 CloudInstanceCard(cloud: cloud, sync: sync, compact: false)
                 CloudLogCard(sync: sync)
             }
@@ -82,6 +87,10 @@ private struct CloudSteps: View {
 
 // MARK: - 1. connect
 
+/// One field for either code: a link code (`#k=`, the instance's key or a
+/// person's access key) connects and leaves signing in for step 2; a pairing
+/// code (`#p=`, from Pair another Mac on a Copper already signed in) connects,
+/// signs in and turns on sync, all on one press.
 private struct CloudConnectCard: View {
     @State private var code = ""
     @State private var advanced = false
@@ -90,18 +99,30 @@ private struct CloudConnectCard: View {
     @State private var fingerprint = ""
     @State private var connecting = false
     @State private var problem: String?
+    /// A pairing code's instance showed a certificate this Mac doesn't trust
+    /// and the code had no fingerprint: this is the one it showed, for a
+    /// person to compare and trust on first use.
+    @State private var unknown: (code: Cloud.PairingCode, seen: String)?
 
-    private var link: Cloud.Link? {
-        advanced ? Cloud.link(address: host, key: key, fingerprint: fingerprint) : Cloud.parseLinkCode(code)
+    init(draft: String = "") {
+        _code = State(initialValue: draft)
+    }
+
+    private var parsed: Cloud.Code? {
+        advanced ? Cloud.link(address: host, key: key, fingerprint: fingerprint).map(Cloud.Code.link) : Cloud.parseCode(code)
     }
 
     private var hint: String? {
         if advanced {
             if host.isEmpty || key.isEmpty { return nil }
-            return link == nil ? "Check the address, the key and the fingerprint (64 hex characters, or leave it empty for a public certificate)" : nil
+            return parsed == nil ? "Check the address, the key and the fingerprint (64 hex characters, or leave it empty for a public certificate)" : nil
         }
-        if code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
-        return link == nil ? "That isn't a link code — it starts copper-cloud:// and has #k= in it" : nil
+        let typed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed.isEmpty || parsed != nil { return nil }
+        if Cloud.isBarePairingCode(typed) {
+            return "That's the pairing code without its address — copy the whole code, from copper-cloud:// to the end"
+        }
+        return "That isn't a link code or a pairing code — both start copper-cloud://, a link code has #k= in it and a pairing code #p="
     }
 
     var body: some View {
@@ -111,23 +132,25 @@ private struct CloudConnectCard: View {
                 if advanced {
                     Line("Address", "host:port, or https://…") { field("cloud.example.com:443", text: $host, width: 200) }
                     Rule()
-                    Line("Instance key", "The k= part of the link code") { field("key", text: $key, width: 200, secure: true) }
+                    Line("Key", "The k= part of the link code: the instance key, or your access key") { field("key", text: $key, width: 200, secure: true) }
                     Rule()
                     Line("Certificate fingerprint", "SHA-256, for a self-signed instance. Empty trusts the Mac's own roots.") { field("optional", text: $fingerprint, width: 200) }
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Link code").font(.system(size: 13)).foregroundStyle(Palette.ink)
-                        Text("`copper-cloud link-code` prints it on the server, and the installer did when it finished. It holds the address, the instance's key, and its certificate's fingerprint.")
+                        Text("Paste a link code or a pairing code").font(.system(size: 13)).foregroundStyle(Palette.ink)
+                        Text("A link code comes from the server (`copper-cloud link-code`) or its admin, and holds the address, a key and the certificate's fingerprint. A pairing code comes from a Mac already signed in — Settings › Cloud › Pair another Mac.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(Palette.muted)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 6) {
-                            TextField("copper-cloud://host:port/#k=…&fp=…", text: $code, axis: .vertical)
+                            TextField("copper-cloud://host:port/#k=…  or  #p=…", text: $code, axis: .vertical)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 11.5, design: .monospaced))
                                 .lineLimit(1...3)
+                                .autocorrectionDisabled()
                                 .padding(.horizontal, 8).padding(.vertical, 6)
                                 .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                .onSubmit(go)
                             Button {
                                 if let pasted = NSPasteboard.general.string(forType: .string) { code = pasted.trimmingCharacters(in: .whitespacesAndNewlines) }
                             } label: {
@@ -136,55 +159,157 @@ private struct CloudConnectCard: View {
                             .buttonStyle(.plain)
                             .help("Paste")
                         }
+                        if let parsed { kind(parsed) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14).padding(.vertical, 11)
                 }
-                if let link {
+                if let parsed {
                     Rule()
-                    Line("Instance", link.url.scheme == "http" ? "Plain HTTP — this Mac only, for development" : (link.fingerprint == nil ? "Trusted by its public certificate" : "Pinned to this certificate")) {
-                        Text(link.host).font(.system(size: 12, design: .monospaced)).foregroundStyle(Palette.ink)
+                    Line("Instance", trust(parsed)) {
+                        Text(host(parsed)).font(.system(size: 12, design: .monospaced)).foregroundStyle(Palette.ink)
                     }
-                    if let pairs = link.fingerprintPairs {
-                        Text(pairs)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundStyle(Palette.muted)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 14).padding(.bottom, 10)
+                    if let pairs = pairs(parsed) {
+                        fingerprintText(pairs)
                             .help("Compare with `copper-cloud doctor` on the server")
                     }
                 }
+                if let unknown, case .pairing(let now)? = parsed, now == unknown.code {
+                    Rule()
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("This Mac doesn't trust the instance's certificate, and the pairing code has no fingerprint to pin it by. Its certificate's fingerprint is:")
+                            .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(Cloud.pairs(unknown.seen))
+                            .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Palette.ink)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Compare it with `copper-cloud doctor` on the server. Trusting it pins this instance to that certificate from now on.")
+                            .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                }
                 Rule()
                 HStack(spacing: 8) {
-                    Button(advanced ? "Use a link code" : "Enter it by hand") {
-                        withAnimation(Motion.settle) { advanced.toggle(); problem = nil }
+                    Button(advanced ? "Paste a code instead" : "Enter it by hand") {
+                        withAnimation(Motion.settle) { advanced.toggle(); problem = nil; unknown = nil }
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11.5))
                     .foregroundStyle(Palette.muted)
                     Spacer()
                     if connecting { ProgressView().controlSize(.small) }
-                    Pill(connecting ? "Connecting…" : "Connect", filled: link != nil && !connecting) {
-                        guard let link, !connecting else { return }
-                        connecting = true
-                        problem = nil
-                        Task {
-                            do { try await Cloud.shared.connect(link) } catch { problem = error.localizedDescription }
-                            connecting = false
-                        }
-                    }
-                    .disabled(link == nil || connecting)
-                    .opacity(link == nil ? 0.5 : 1)
+                    Pill(buttonTitle, filled: parsed != nil && !connecting, action: go)
+                        .disabled(parsed == nil || connecting)
+                        .opacity(parsed == nil ? 0.5 : 1)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
             }
+            .onChange(of: code) { _, _ in problem = nil }
             if let message = problem ?? hint {
                 CloudProblem(message)
             }
         }
     }
+
+    private var trusting: Bool {
+        if let unknown, case .pairing(let now)? = parsed { return now == unknown.code }
+        return false
+    }
+
+    private var buttonTitle: String {
+        switch parsed {
+        case .pairing?:
+            if connecting { return "Pairing…" }
+            return trusting ? "Trust and pair" : "Pair this Mac"
+        default:
+            return connecting ? "Connecting…" : "Connect"
+        }
+    }
+
+    /// Which code it is, and what pressing the button will do with it.
+    @ViewBuilder
+    private func kind(_ parsed: Cloud.Code) -> some View {
+        let pairing: Bool = { if case .pairing = parsed { return true }; return false }()
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: pairing ? "person.badge.key" : "link")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(Palette.ink)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pairing ? "Pairing code — links this Mac and signs you in" : "Link code — connects to the instance; you sign in next")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.ink)
+                if pairing {
+                    Text("Good once, for 10 minutes. Sync turns on for everything — switch any of it off after.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    private func host(_ parsed: Cloud.Code) -> String {
+        switch parsed {
+        case .link(let link): return link.host
+        case .pairing(let code): return code.host
+        }
+    }
+
+    private func pairs(_ parsed: Cloud.Code) -> String? {
+        switch parsed {
+        case .link(let link): return link.fingerprintPairs
+        case .pairing(let code): return code.fingerprintPairs
+        }
+    }
+
+    private func trust(_ parsed: Cloud.Code) -> String {
+        let (url, pinned): (URL, Bool) = {
+            switch parsed {
+            case .link(let link): return (link.url, link.fingerprint != nil)
+            case .pairing(let code): return (code.url, code.fingerprint != nil)
+            }
+        }()
+        if url.scheme == "http" { return "Plain HTTP — this Mac only, for development" }
+        return pinned ? "Pinned to this certificate" : "Trusted by its public certificate"
+    }
+
+    private func go() {
+        guard let parsed, !connecting else { return }
+        connecting = true
+        problem = nil
+        Task {
+            do {
+                switch parsed {
+                case .link(let link):
+                    try await Cloud.shared.connect(link)
+                case .pairing(let pairing):
+                    let confirmed = unknown.flatMap { $0.code == pairing ? $0.seen : nil }
+                    try await CloudPairing.pairAndSync(pairing, trusting: confirmed)
+                    unknown = nil
+                }
+            } catch let failure as Cloud.Failure where failure.code == "untrusted" {
+                if case .pairing(let pairing) = parsed, let seen = failure.seen { unknown = (pairing, seen) }
+                problem = failure.message
+            } catch {
+                problem = error.localizedDescription
+            }
+            connecting = false
+        }
+    }
+}
+
+private func fingerprintText(_ pairs: String) -> some View {
+    Text(pairs)
+        .font(.system(size: 10.5, design: .monospaced))
+        .foregroundStyle(Palette.muted)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14).padding(.bottom, 10)
 }
 
 // MARK: - 2. account
@@ -458,6 +583,131 @@ private struct CloudAccountCard: View {
         Task {
             do { try await Cloud.shared.renameDevice(clean) } catch { problem = error.localizedDescription }
         }
+    }
+}
+
+// MARK: - pair another Mac
+
+/// A one-time code for another Mac: made here, pasted there, and that Mac is
+/// connected, signed in as this account and syncing. Shown big, copyable,
+/// counted down, revocable — and noticed when it is used.
+private struct CloudPairCard: View {
+    @ObservedObject var pairing: CloudPairing
+    @State private var confirmRevoke = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Caption("Pair another Mac")
+            Card {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    content(now: context.date)
+                }
+            }
+            if let problem = pairing.problem { CloudProblem(problem) }
+        }
+        // While a code is open, look every few seconds for the other Mac
+        // having used it.
+        .task(id: pairing.live?.id) {
+            guard pairing.live != nil else { return }
+            while !Task.isCancelled, pairing.live != nil {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if Task.isCancelled { return }
+                await pairing.check()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func content(now: Date) -> some View {
+        if let code = pairing.current {
+            let left = code.expiresAt.timeIntervalSince(now)
+            switch pairing.outcome {
+            case .used?:
+                Line("Used — the other Mac is signed in", "It's connected to this instance as you. Make another code for the next Mac.") {
+                    Pill(pairing.working ? "…" : "New code", action: pairing.make).disabled(pairing.working)
+                }
+            case .revoked?:
+                Line("Revoked", "Nobody can use that code now.") {
+                    Pill(pairing.working ? "…" : "New code", action: pairing.make).disabled(pairing.working)
+                }
+            case .none where left <= 0:
+                Line("That code expired", "Codes last 10 minutes. Make a new one when the other Mac is ready.") {
+                    Pill(pairing.working ? "…" : "New code", filled: !pairing.working, action: pairing.make).disabled(pairing.working)
+                }
+            case .none:
+                live(code, left: left)
+            }
+        } else {
+            Line("One-time pairing code", "Connects another Mac to this instance and signs it in as you — no link code or password to type there. Good once, for 10 minutes.") {
+                Pill(pairing.working ? "Making…" : "Make a code", filled: !pairing.working, action: pairing.make)
+                    .disabled(pairing.working)
+            }
+        }
+    }
+
+    private func live(_ code: Cloud.MintedPairing, left: TimeInterval) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("On the other Mac, open Copper › Settings › Cloud and paste this into Connect — one press there links it, signs it in and starts syncing.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            CloudCodeBox(link: code.link, secret: code.code)
+            VStack(alignment: .leading, spacing: 5) {
+                GeometryReader { box in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Palette.wash)
+                        Capsule().fill(left < 60 ? Color.orange.opacity(0.85) : Palette.ink.opacity(0.55))
+                            .frame(width: max(3, box.size.width * min(1, max(0, left / CloudPairing.lifetime))))
+                    }
+                }
+                .frame(height: 3)
+                HStack(spacing: 8) {
+                    Text("Expires in \(CloudPairing.left(left)) · works once")
+                        .font(.system(size: 11.5).monospacedDigit())
+                        .foregroundStyle(left < 60 ? Color.orange.opacity(0.95) : Palette.muted)
+                    Spacer()
+                    if pairing.working { ProgressView().controlSize(.small) }
+                    Pill("Revoke", tint: Color.red.opacity(0.85)) { confirmRevoke = true }
+                        .disabled(pairing.working)
+                    Pill(pairing.copied ? "Copied" : "Copy", filled: true, action: pairing.copy)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .confirmationDialog("Revoke this pairing code?", isPresented: $confirmRevoke) {
+            Button("Revoke", role: .destructive) { Task { await pairing.revoke() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Nobody will be able to use it. A Mac already paired with it stays signed in.")
+        }
+    }
+}
+
+/// The pairing code whole, large and monospaced, the `cp_…` part in ink and
+/// the address and fingerprint around it quieter — selectable, and copied
+/// whole by the button beside it.
+private struct CloudCodeBox: View {
+    let link: String
+    let secret: String
+
+    var body: some View {
+        styled
+            .font(.system(size: 14, design: .monospaced))
+            .lineSpacing(3)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12).padding(.vertical, 11)
+            .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
+    }
+
+    private var styled: Text {
+        guard let range = link.range(of: secret) else { return Text(link).foregroundColor(Palette.ink) }
+        return Text(link[..<range.lowerBound]).foregroundColor(Palette.muted)
+            + Text(link[range]).foregroundColor(Palette.ink).fontWeight(.semibold)
+            + Text(link[range.upperBound...]).foregroundColor(Palette.muted)
     }
 }
 

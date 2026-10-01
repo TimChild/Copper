@@ -8,13 +8,17 @@ Implementation: `Sources/Search/Fork/Cloud/`.*
 
 ## Setting it up
 
-Three steps on the page, in order:
+Three steps on the page, in order — or one, with a pairing code from a Mac
+already signed in (see [Pairing another Mac](#pairing-another-mac)):
 
-1. **Connect.** Paste the link code the server printed — `install.sh` prints it
-   when it finishes, and `copper-cloud link-code` prints it again:
+1. **Connect.** One field, *Paste a link code or a pairing code*; the page says
+   which it got. A **link code** is what the server printed — `install.sh`
+   prints it when it finishes, `copper-cloud link-code` prints it again, and on
+   an instance that keeps a directory of people its admin hands you one from
+   the admin portal:
 
    ```text
-   copper-cloud://HOST:PORT/#k=<instance key>&fp=<sha256 of the certificate>
+   copper-cloud://HOST:PORT/#k=<key>&fp=<sha256 of the certificate>
    ```
 
    The page shows the host and the certificate fingerprint before anything is
@@ -22,6 +26,15 @@ Three steps on the page, in order:
    you want to be sure. **Connect** checks `/healthz` through the pinned
    certificate and that the instance accepts the key, then keeps the link.
    *Enter it by hand* takes the address, key and fingerprint as three fields.
+
+   **Access keys.** `k` is either the instance's shared key (an instance in
+   `open` mode) or a **per-person access key**, `ck_…`, that the admin minted
+   for you (an instance in `directory` mode, where the shared key no longer
+   opens the door; the key may be tied to your email, so sign up with that
+   one). Copper doesn't care which: it keeps whatever `k` is and sends it as
+   `X-Copper-Instance` on every request. A revoked or expired access key makes
+   the instance refuse this Copper ("The instance refused this key") — ask the
+   admin for a new link code.
 2. **Account.** *Sign in*, or *Create account* (email, a password of at least
    10 characters, the name shown beside your cursor on shared canvases). The
    first account on an instance is its admin; an instance can close sign-up
@@ -31,8 +44,49 @@ Three steps on the page, in order:
    thrown away.
 
 After that the page shows the sync switches (each takes effect at once), the
-status and **Sync now**, the account (sign out, rename this Mac), the tabs
-open on your other devices, the instance (disconnect), and a log.
+status and **Sync now**, the account (sign out, rename this Mac), **Pair
+another Mac**, the tabs open on your other devices, the instance
+(disconnect), and a log.
+
+## Pairing another Mac
+
+A Mac already signed in can make a **pairing code** that links another Mac to
+the same instance *and* signs it in as the same person — nothing to type on
+the new Mac but one paste.
+
+1. On the Mac that's signed in: Settings › Cloud › **Pair another Mac** ›
+   *Make a code* (or ⌘K › *Pair another Mac with Copper Cloud*). The card shows
+   the code big, with **Copy**, a ten-minute countdown and **Revoke**:
+
+   ```text
+   copper-cloud://HOST:PORT/#p=cp_<32 characters>&fp=<sha256 of the certificate>
+   ```
+
+2. On the new Mac: Settings › Cloud, paste it into the Connect field — it says
+   *Pairing code — links this Mac and signs you in* — and press **Pair this
+   Mac**. Copper reaches `/healthz` through the code's pinned certificate,
+   sends the code to `POST /v1/auth/pair` (without the instance key: the code
+   is the credential), and keeps what comes back — the link (address, the
+   `gate_key` the server hands out, the fingerprint), the account and the
+   session token — in one write. Then it turns on sync for everything (the
+   switches it had before, if it was signed in once) and the steps land on
+   *Syncing*; switch any domain off after.
+
+A code works **once**, for **10 minutes**; making a new one on the card
+revokes the one it showed. When the other Mac uses it, the card says so
+(*Used — the other Mac is signed in*). A used, revoked or expired code is
+refused with "That pairing code doesn't work any more …" — make a new one.
+
+What the new Mac keeps as its key (`gate_key`) is the instance key on an
+`open` instance, or — on a `directory` instance — a fresh access key the
+server mints for it (labelled "<device> via pairing", tied to your email), so
+the admin can revoke that one Mac without touching the others.
+
+A code without `fp=` (an instance with a public certificate) is checked
+against the Mac's own trust. If the Mac doesn't trust the certificate, the
+page shows the fingerprint the server presented and offers *Trust and pair*:
+compare it with `copper-cloud doctor` first; trusting it pins the instance to
+that certificate from then on, exactly as an `fp=` would have.
 
 ## What syncs
 
@@ -131,6 +185,12 @@ another account starts it over.
   use one run by someone you trust.
 - **Passwords** go to the server only to sign up or sign in, over the pinned
   connection, and are not kept.
+- **Pairing codes** (`cp_…`) are minted by the server, which keeps only their
+  SHA-256; single use, ten minutes, revocable. Copper shows the one it made on
+  the card and copies it to the clipboard when asked — it is never written to
+  `cloud.json`, never logged and never in `cloud status` (only its id and
+  expiry are). On the receiving Mac the code is sent once, over the pinned
+  connection, and forgotten.
 
 `cloud.json` holds: the device id (minted once per data folder, so each probe
 world is its own device) and name, the link (address, key, fingerprint), the
@@ -149,7 +209,15 @@ and history cursors.
   the key was rotated. Copy the link code again.
 - **"This instance isn't taking new accounts"** — sign-up is closed; ask the
   admin to create the account.
-- **"Too many tries"** — sign-in is rate-limited per address; wait a minute.
+- **"Too many tries"** — sign-in (and pairing) is rate-limited per address;
+  wait a minute.
+- **"That pairing code doesn't work any more"** — it was used already,
+  revoked, or is past its ten minutes. Make a new one on the other Mac.
+- **"This instance doesn't take pairing codes yet"** — the server predates
+  them; update copper-cloud, or connect with a link code and sign in.
+- **"This Mac doesn't trust the instance's certificate, and the pairing code
+  has no fingerprint"** — the code came from an instance without `fp=`; compare
+  the fingerprint shown with `copper-cloud doctor` before *Trust and pair*.
 - **Status stays "Can't reach the cloud"** — sync retries on its own once the
   event stream reconnects; **Sync now** tries at once. The log (at the foot of
   the page) has the last 200 lines.
@@ -170,8 +238,19 @@ In a probe world (never your own Copper), with *Let a script drive Copper* on:
 ./bench --world NAME cloud doc spaces      # this Mac's document as it would be pushed
 ./bench --world NAME cloud selftest        # link codes, the allowlist, the merges
 ./bench --world NAME cloud wstest          # a canvas WebSocket through the pinned session
-./bench --world NAME cloud picture /tmp/cloud.png [dark]   # the whole page, drawn off screen
+./bench --world NAME cloud picture /tmp/cloud.png [dark] [CODE]   # the whole page, drawn off screen
+./bench --world NAME cloud pairing-code    # signed in: a code for another Mac → {id, code, link, expiresAt}
+./bench --world OTHER cloud pair 'copper-cloud://…/#p=cp_…&fp=…'   # links + signs in + turns on sync
+./bench --world NAME cloud pairing-codes   # my codes still open
+./bench --world NAME cloud revoke-pairing ID|current
 ```
+
+`cloud pair CODE` takes the whole code, or a bare `cp_…` on a Copper already
+linked to that instance; `--sync DOMAINS|all|none` chooses what turns on
+afterwards (default: what the page does), and `--trust FINGERPRINT` answers the
+trust-on-first-use question for a code without `fp=` (the refusal carries the
+fingerprint the server showed as `seen`). `cloud picture … CODE` draws the page
+with CODE already in the Connect field, to see what it makes of it.
 
 Also `cloud signin EMAIL PW`, `signout`, `disconnect`, `sync off|now`,
 `sync set DOMAIN on|off`, `log`, and — in test worlds only — `bookmark URL
@@ -194,6 +273,14 @@ bearer token, JSON, 15 s, GETs retried, `Cloud.Failure` from the server's
 `Cloud.didChange` when the link, account or reachability changes, and
 `Cloud.event` for each server-sent event (`type`: `doc`, `history`, `canvas`,
 plus `open`/`ready`/`resync` when the stream (re)connects).
+
+Pairing (`Fork/Cloud/CloudPairing.swift`, `Cloud.pair` in `Cloud.swift`):
+`Cloud.parseCode(text, linkedTo:)` → `.link(Link)` | `.pairing(PairingCode)`
+(`parseLinkCode` still answers only link codes); `pair(_:trusting:)`;
+`mintPairingCode(deviceName:)` → `MintedPairing {id, code, link, expiresAt}`;
+`pairingCodes()`; `revokePairingCode(_:)`. `CloudPairing.shared` is the one
+code this Copper is showing (card, ⌘K and bench share it), and
+`CloudPairing.pairAndSync` is what the page's *Pair this Mac* runs.
 
 ## TODO
 

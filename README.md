@@ -4,7 +4,7 @@ A small, fast, quiet web browser for the Mac, by Collin and Felipe. Built on Sea
 
 ![Copper, with its tabs down the left and a page taking the rest of the window](.github/screenshot.png)
 
-**[Download for macOS →](https://officecommun.com/search)** · macOS 14 or later · free · about 2 MB
+**[Download for macOS →](https://github.com/copper-browser/Copper/releases/latest/download/copper-macos-arm64.zip)** · `brew install --cask copper-browser/copper/copper` · macOS 14 or later · Apple Silicon · free
 
 ---
 
@@ -30,7 +30,7 @@ It was built by a design studio that spends its whole day in a browser and was t
 - **Light, dark, or the Mac's own.** The frame and the pages follow.
 - **Bookmarks, history, downloads** — each a panel, each searchable, each one keystroke away. A download shows a small door with a progress ring while it arrives and a popover with speed, time left, cancel, retry and Show in Finder — and nothing at all when there is nothing to show ([docs/downloads.md](docs/downloads.md)).
 - **Chrome extensions, without Chrome.** Paste a Chrome Web Store link in Settings › Extensions, or open the extension's page in Copper and press Add. It runs on WebKit's own extension engine — the one Safari uses — and where Chrome has APIs WebKit doesn't (bookmarks, history, downloads, side panel, offscreen documents, fonts, notifications, speech, OAuth sign-in), Copper fills them in itself. They live behind the puzzle button; pin the ones you use often. Building your own? Load its folder as an unpacked extension and press Reload after each change, as in Chrome's developer mode. macOS 15.4 or later.
-- **Updates itself, quietly.** Once every six hours it checks Copper's internal feed. A newer build is downloaded and verified in the background first; only then do Settings › Updates and ⌘K offer **Update**, which backs up your tabs, swaps the new Copper in and relaunches — a few seconds. Anything that fails on the way says so, in a sentence, in Settings › Updates.
+- **Updates itself, quietly.** Once every six hours it checks Copper's GitHub releases. A newer build is downloaded and verified in the background first; only then do Settings › Updates and ⌘K offer **Update**, which backs up your tabs, swaps the new Copper in and relaunches — a few seconds. Anything that fails on the way says so, in a sentence, in Settings › Updates.
 
 ## What it doesn't do
 
@@ -55,20 +55,26 @@ A **private tab** (`⇧⌘N`) has its own cookie jar and leaves nothing behind w
 
 ## Updating
 
-Copper checks `https://forca.apps.exowatt.com/downloads/copper-version.json` after launch and then every six hours. It never restarts without your say-so.
+Copper checks `https://github.com/copper-browser/Copper/releases/latest/download/copper-version.json` (the manifest attached to the newest release) after launch and then every six hours. It never restarts without your say-so.
 
 Everything that can fail happens before you are asked. When the manifest names a newer release, Copper downloads the archive from the feed, checks it against the manifest's SHA-256, unpacks it under `~/Library/Application Support/Copper/updates/<version>/`, and checks that the bundle is Copper, is that version, and that its code signature verifies. Only then does **Settings › Updates** say *Copper X is ready* and offer **Update** (also ⌘K › **Update Copper**). Update backs up `session.json` (ten copies are kept), moves the running bundle to `updates/previous/`, moves the verified one into its place, and relaunches; the tab session comes back as it was. A refused swap puts the old bundle back and says why.
 
-Whatever goes wrong is shown where it happened: a download or verification failure sits under the release with a **Retry** button and the reason (`did not match the feed's checksum`, `answered 404`, `the signature did not verify`, …); a refused update stays as *The last update didn't finish* with the reason and an **Open log** button (`~/Library/Logs/Copper/update.log`, one dated line per step). Offline or off-VPN checks stay quiet; a failed download after a successful check is announced once per release.
+Whatever goes wrong is shown where it happened: a download or verification failure sits under the release with a **Retry** button and the reason (`did not match the feed's checksum`, `answered 404`, `the signature did not verify`, …); a refused update stays as *The last update didn't finish* with the reason and an **Open log** button (`~/Library/Logs/Copper/update.log`, one dated line per step). Offline checks stay quiet; a failed download after a successful check is announced once per release.
 
-Homebrew remains the way to install Copper, and `brew upgrade --cask copper` (by name) still works as a manual path; the cask declares `auto_updates` so a plain `brew upgrade` leaves the app to update itself. The curl installer is the other manual path:
+### Installing
 
 ```sh
-brew upgrade --cask copper
-curl -fsSL https://forca.apps.exowatt.com/downloads/copper-install.sh | sh
+brew install --cask copper-browser/copper/copper      # Homebrew (tap: copper-browser/homebrew-copper)
+curl -fsSL https://github.com/copper-browser/Copper/releases/latest/download/copper-install.sh | sh
 ```
 
-The feed installer accepts `COPPER_NO_LAUNCH=1` / `--no-launch` for scripts that want to relaunch separately. For the bench: `./bench updates status|check|stub URL|stage|dry-run on|off|upgrade` — `stub` points a test world at a local manifest, `stage` downloads and verifies now, `dry-run on` makes `upgrade` stop after the checks and the session backup and log what it would have swapped.
+Or download [`copper-macos-arm64.zip`](https://github.com/copper-browser/Copper/releases/latest/download/copper-macos-arm64.zip) from the [latest release](https://github.com/copper-browser/Copper/releases/latest), move `Copper.app` to `/Applications` and run `xattr -cr /Applications/Copper.app` once — builds are ad-hoc signed, not notarized, and Homebrew and the installer clear the quarantine flag for you. Apple Silicon, macOS 14 or later.
+
+`brew upgrade --cask copper` (by name) still works as a manual path; the cask declares `auto_updates` so a plain `brew upgrade` leaves the app to update itself. Re-running the curl installer is the other manual path.
+
+Releases are cut by `.github/workflows/release.yml` (`gh workflow run release.yml -R copper-browser/Copper -f ref=fork`): it builds on a GitHub-hosted Mac, stamps `<VERSION>.<YYYYMMDD>.<run>` into the bundle, and attaches the zip, its `.sha256`, `copper-version.json` and `copper-install.sh` to a `v<version>` release. The tap bumps its cask from that manifest.
+
+The installer accepts `COPPER_NO_LAUNCH=1` / `--no-launch` for scripts that want to relaunch separately. For the bench: `./bench updates status|check|stub URL|stage|dry-run on|off|upgrade` — `stub` points a test world at a local manifest, `stage` downloads and verifies now, `dry-run on` makes `upgrade` stop after the checks and the session backup and log what it would have swapped.
 
 ## Keyboard
 

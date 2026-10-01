@@ -7,8 +7,10 @@ import Foundation
 /// has to travel through a copied prompt. Every write is local and atomic;
 /// malformed files are reported without touching them.
 struct Setup {
-    static let feed = "https://forca.apps.exowatt.com"
-    static let installCommand = "curl -fsSL \(feed)/downloads/copper-install.sh | sh"
+    /// Releases are GitHub releases of copper-browser/Copper; `latest/download`
+    /// always redirects to the newest non-prerelease asset of that name.
+    static let feed = "https://github.com/copper-browser/Copper/releases/latest/download"
+    static let installCommand = "curl -fsSL \(feed)/copper-install.sh | sh"
     static let brewCommand = "brew install --cask copper-browser/copper/copper"
 
     enum State: String, Codable {

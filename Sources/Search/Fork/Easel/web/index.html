@@ -1,0 +1,151 @@
+<!doctype html>
+<!--
+  A stand-in for the easel web app, for testing the native half (bridge,
+  scheme handler, storage) on its own. easel-web's `npm run build` writes the
+  real bundle over this folder; nothing here is meant to survive that.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Untitled Easel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; font: 14px -apple-system, system-ui, sans-serif; }
+  body { margin: 0; padding: 28px 36px; background: Canvas; color: CanvasText; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .muted { opacity: 0.6; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #8884; background: #ff5a36; color: white; cursor: pointer; }
+  input { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid #8886; width: 240px; }
+  pre { background: #8881; padding: 12px; border-radius: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  #picture { width: 96px; height: 96px; border-radius: 10px; border: 1px dashed #8886; image-rendering: pixelated; }
+  .counter { font-size: 44px; font-weight: 700; color: #ff5a36; }
+</style>
+</head>
+<body>
+<h1>Easel bridge test page</h1>
+<div class="muted">Native half of Easels P1 · replaced by the web build</div>
+
+<div class="row">
+  <span class="counter" id="counter">–</span>
+  <span class="muted">saves kept in doc.yjs (reload: it should stay)</span>
+</div>
+
+<div class="row">
+  <input id="title" placeholder="Title">
+  <button id="save">save</button>
+  <button id="file">file</button>
+  <button id="open">open example.com</button>
+</div>
+
+<div class="row">
+  <img id="picture" alt="(no picture yet)">
+  <span class="muted" id="picture-state">no file yet</span>
+</div>
+
+<h3>config</h3>
+<pre id="config">(waiting for config…)</pre>
+<h3>log</h3>
+<pre id="log"></pre>
+
+<script>
+(function () {
+  var bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.easel;
+  var state = { config: null, counter: 0, lastFile: null, flushes: 0, received: [] };
+  window.__easelTest = state;
+
+  function log(line) {
+    var el = document.getElementById('log');
+    el.textContent = new Date().toISOString().slice(11, 23) + '  ' + line + '\n' + el.textContent;
+  }
+  function post(message) {
+    message.v = 1;
+    if (!bridge) { log('no bridge: ' + message.type); return; }
+    bridge.postMessage(message);
+  }
+
+  // The document this page keeps: "easel-test:<n>" as UTF-8, base64'd.
+  function encode(n) { return btoa('easel-test:' + n); }
+  function decode(b64) {
+    try { var m = /^easel-test:(\d+)$/.exec(atob(b64)); return m ? Number(m[1]) : 0; } catch (e) { return 0; }
+  }
+
+  function save(reason) {
+    var title = document.getElementById('title').value.trim() || 'Untitled Easel';
+    document.title = title;
+    post({ type: 'save', state: encode(state.counter), title: title });
+    log('save (' + reason + ') counter=' + state.counter + ' title=' + title);
+  }
+
+  window.__easelHost = {
+    receive: function (raw) {
+      var message = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      state.received.push(message.type);
+      switch (message.type) {
+        case 'config':
+          state.config = message;
+          state.counter = message.state ? decode(message.state) : 0;
+          document.getElementById('counter').textContent = String(state.counter);
+          document.getElementById('title').value = message.easel.title;
+          document.title = message.easel.title;
+          var shown = JSON.parse(JSON.stringify(message));
+          if (shown.state) shown.state = shown.state + '  (' + atob(shown.state) + ')';
+          document.getElementById('config').textContent = JSON.stringify(shown, null, 2);
+          log('config: state ' + (message.state ? 'present' : 'null'));
+          break;
+        case 'file:done':
+          state.lastFile = message;
+          var img = document.getElementById('picture');
+          img.onload = function () {
+            state.lastFile.loaded = { w: img.naturalWidth, h: img.naturalHeight };
+            document.getElementById('picture-state').textContent = 'loaded ' + img.naturalWidth + '×' + img.naturalHeight + ' from ' + message.url;
+            log('img loaded ' + img.naturalWidth + '×' + img.naturalHeight);
+          };
+          img.onerror = function () {
+            state.lastFile.loaded = false;
+            document.getElementById('picture-state').textContent = 'img failed: ' + message.url;
+            log('img failed');
+          };
+          img.src = message.url;
+          log('file:done ' + message.fileId);
+          break;
+        case 'file:error':
+          state.lastFile = message;
+          log('file:error ' + message.message);
+          break;
+        case 'flush':
+          state.flushes++;
+          save('flush');
+          break;
+        default:
+          log('unknown message ' + message.type);
+      }
+    }
+  };
+
+  document.getElementById('save').onclick = function () { state.counter++; document.getElementById('counter').textContent = String(state.counter); save('button'); };
+
+  // A tiny picture, drawn here: a 16×16 PNG in Copper's colour.
+  document.getElementById('file').onclick = function () {
+    var canvas = document.createElement('canvas');
+    canvas.width = 16; canvas.height = 16;
+    var g = canvas.getContext('2d');
+    g.fillStyle = '#ff5a36'; g.fillRect(0, 0, 16, 16);
+    g.fillStyle = '#ffffff'; g.fillRect(4, 4, 8, 8);
+    var data = canvas.toDataURL('image/png').split(',')[1];
+    post({ type: 'file', reqId: 'req-' + Date.now(), name: 'square.png', mime: 'image/png', data: data });
+    log('file sent (' + data.length + ' base64 chars)');
+  };
+
+  document.getElementById('open').onclick = function () { post({ type: 'open', url: 'https://example.com' }); };
+
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') save('hidden'); });
+  window.addEventListener('pagehide', function () { save('pagehide'); });
+
+  post({ type: 'log', level: 'info', message: 'test page up at ' + location.href });
+  post({ type: 'ready' });
+  log('ready sent' + (bridge ? '' : ' (no bridge — not in Copper)'));
+})();
+</script>
+</body>
+</html>

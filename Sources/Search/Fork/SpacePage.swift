@@ -444,6 +444,9 @@ struct SpacePage: View {
                     Button {
                         var next = look
                         if next.colors.isEmpty { next.colors = named.colors } else { next.colors[0] = named.colors[0] }
+                        // The copper picture is the default's, not a choice:
+                        // picking a colour means that colour, not copper under it.
+                        if next.image == SpaceTheme.copperPicture { next.image = nil; next.intensity = named.intensity }
                         if next == named { spaces.tint(id, hue: colour.hue) } else { spaces.theme(id, next) }
                     } label: {
                         ZStack {
@@ -810,8 +813,11 @@ enum SpacePictures {
                 let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                 return a > b
             }
-            .prefix(limit)
+            .prefix(limit - 1)
             .map(\.lastPathComponent)
+            // Copper's own picture is always on offer, first, whether or not
+            // any space has worn it yet.
+            .reduce(into: [SpaceTheme.copperPicture]) { $0.append($1) }
     }
 
     /// 160 pixels on the long side, off ImageIO's thumbnailer rather than

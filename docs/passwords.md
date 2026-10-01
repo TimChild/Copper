@@ -95,7 +95,17 @@ is wiped (including identity/card values) when you lock the vault.
 ## Fills and saves
 
 The under-field picker combines keychain and Bitwarden candidates. Select a row
-to fill it; a Bitwarden TOTP can also be filled into a one-time-code field.
+to fill it.
+
+**Two-step codes.** Click a one-time-code box and the list shows a *Two-step
+code* row for every Bitwarden login on the site that has an authenticator key;
+the account you just signed in with in that tab comes first, since the code
+page is often on another host (accounts.google.com, login.microsoftonline.com).
+Pick it and Copper works out the current code from the stored seed and fills
+it — one box, or one box per digit. Codes kept only in the separate Bitwarden
+Authenticator app are invisible to `bw`: the key has to be on a Password
+Manager login item with the site's URL.
+
 While Bitwarden is unlocked, turn on **Save new passwords to Bitwarden** in its
 Settings card to route new save offers there. Turn it off (or leave Bitwarden
 unavailable) to keep saving to the keychain. Existing fills continue to include

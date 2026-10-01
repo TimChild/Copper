@@ -137,11 +137,6 @@ enum BackdropScene {
     /// keeps drawing on a timer and the pause rules that read the window are
     /// skipped. Reduce Motion and Low Power are honoured either way.
     static let forced = Store.testing
-
-    /// True for the instant the slide draws the column with the ground
-    /// hidden (SpaceSlide.photograph): the web view is hidden and shown
-    /// again inside one call, and must not send a pause and a run for it.
-    static var capturing = false
 }
 
 /// The web view behind an animated column. It draws nothing itself until the
@@ -309,7 +304,7 @@ final class BackdropWeb: WKWebView, WKNavigationDelegate {
     }
 
     private func refresh() {
-        guard loaded, !BackdropScene.capturing else { return }
+        guard loaded else { return }
         let mode = mode
         guard mode != sent else { return }
         sent = mode

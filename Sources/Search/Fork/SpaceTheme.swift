@@ -246,27 +246,6 @@ struct SpaceTheme: Codable, Hashable {
     /// The colours the backdrop runs through.
     func grounds(dark: Bool) -> [Color] { colors.map { ground($0, dark: dark).color } }
 
-    /// A still theme with no picture and no scene: one the column can draw
-    /// as a colour or gradient alone, and so morph into another such.
-    var simple: Bool { image == nil && motion == nil }
-
-    /// This theme `t` of the way to `other`, stop by stop — what the ground
-    /// is part-way through a slide between two simple themes. A flat colour
-    /// against a gradient is given the gradient's number of stops, all the
-    /// one colour, so each stop has a partner to move towards and the
-    /// morph is one surface changing colour rather than two crossfading.
-    func mixed(_ other: SpaceTheme, _ t: Double) -> SpaceTheme {
-        let count = max(colors.count, other.colors.count, 1)
-        func padded(_ stops: [Stop]) -> [Stop] {
-            let base = stops.isEmpty ? SpaceTheme.plain.colors : stops
-            return (0..<count).map { base[min($0, base.count - 1)] }
-        }
-        let stops = zip(padded(colors), padded(other.colors)).map { $0.mixed($1, t) }
-        func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * t }
-        return SpaceTheme(colors: stops, intensity: mix(intensity, other.intensity), grain: mix(grain, other.grain),
-                          image: nil, motion: nil, blur: 0, tone: mix(tone, other.tone))
-    }
-
     /// Arc's theme for a space — `customInfo.windowTheme` in its sidebar
     /// file: a single colour or a gradient's colours, the intensity and the
     /// grain. Nil for a space Arc left on its default.
@@ -380,11 +359,24 @@ struct ThemeBackdrop: View {
                 still
             }
             // The tone over everything but the grain, so a dark column is
-            // still grainy rather than grain under a black sheet. The grain
-            // is an overlay round a middle grey: it lightens and darkens by
-            // the same amount, so it is grain on a dark column too rather
-            // than a lift or a shadow.
-            Veil(tone: theme.tone, grain: theme.grain)
+            // still grainy rather than grain under a black sheet.
+            if abs(theme.tone) > 0.005 {
+                (theme.tone < 0 ? Color.black : Color.white)
+                    .opacity(abs(theme.tone) * SpaceTheme.toneReach)
+                    .allowsHitTesting(false)
+            }
+            if theme.grain > 0.01 {
+                Image(nsImage: ThemeBackdrop.noise)
+                    .resizable(resizingMode: .tile)
+                    // Overlay, round a middle grey: the grain lightens and
+                    // darkens by the same amount, so it is grain on a dark
+                    // column too rather than a lift (plus-lighter) or a
+                    // shadow (multiply). At full strength it is still the
+                    // column you see, not the noise.
+                    .opacity(min(1, theme.grain) * 0.45)
+                    .blendMode(.overlay)
+                    .allowsHitTesting(false)
+            }
         }
         .clipped()
     }
@@ -448,69 +440,13 @@ struct ThemeBackdrop: View {
         }
     }
 
-    private var colour: some View { Colour(theme: theme, dark: dark) }
-
-    /// The colour or gradient alone. A flat colour is the one stop's ground
-    /// — not `flat`, which has the tone in it already: the tone is laid over
-    /// every ground once (`Veil`), so a toned flat column and a toned
-    /// gradient come out the same, and a morph from one to the other
-    /// (`SpaceGround`) has nothing to jump over.
-    struct Colour: View {
-        let theme: SpaceTheme
-        let dark: Bool
-
-        var body: some View {
-            let stops = theme.grounds(dark: dark)
-            if stops.count > 1 {
-                LinearGradient(colors: stops, startPoint: .topLeading, endPoint: .bottomTrailing)
-            } else {
-                stops.first ?? Palette.ground
-            }
-        }
-    }
-
-    /// The colour or gradient and the picture over it, for a still theme;
-    /// the colour alone for an animated one, whose scene is drawn by whoever
-    /// owns it (`SpaceGround`'s one live scene, or `AnimatedBackdrop`).
-    struct Still: View {
-        let theme: SpaceTheme
-        let dark: Bool
-
-        var body: some View {
-            Colour(theme: theme, dark: dark)
-            if theme.motion == nil, let name = theme.image, let picture = ThemeBackdrop.picture(name, blur: theme.blur) {
-                GeometryReader { geo in
-                    Image(nsImage: picture)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                }
-                (dark ? Color.black.opacity(0.3) : Color.white.opacity(0.22))
-                Colour(theme: theme, dark: dark).opacity(dark ? 0.35 : 0.15)
-            }
-        }
-    }
-
-    /// The tone and the grain over a ground.
-    struct Veil: View {
-        let tone: Double
-        let grain: Double
-
-        var body: some View {
-            if abs(tone) > 0.005 {
-                (tone < 0 ? Color.black : Color.white)
-                    .opacity(abs(tone) * SpaceTheme.toneReach)
-                    .allowsHitTesting(false)
-            }
-            if grain > 0.01 {
-                Image(nsImage: ThemeBackdrop.noise)
-                    .resizable(resizingMode: .tile)
-                    .opacity(min(1, grain) * 0.45)
-                    .blendMode(.overlay)
-                    .allowsHitTesting(false)
-            }
+    @ViewBuilder
+    private var colour: some View {
+        let stops = theme.grounds(dark: dark)
+        if stops.count > 1 {
+            LinearGradient(colors: stops, startPoint: .topLeading, endPoint: .bottomTrailing)
+        } else {
+            theme.flat(dark: dark)
         }
     }
 

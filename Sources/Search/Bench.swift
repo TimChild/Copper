@@ -236,6 +236,10 @@ final class Bench {
         case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render", "ext-manager", "storage", "windows":
             answer(Fork.bench(verb, request, in: browser))
 
+        case "cloud":
+            // Fork (cloud): link, sign in and sync a probe world (Fork/Cloud/CloudBench.swift).
+            CloudBench.handle(request, in: browser, answer: answer)
+
         case "backdrop":
             // Fork (backdrop): the column's scene — its process and its clock.
             BackdropWeb.bench(answer: answer)

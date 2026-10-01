@@ -30,6 +30,7 @@ It was built by a design studio that spends its whole day in a browser and was t
 - **Light, dark, or the Mac's own.** The frame and the pages follow.
 - **Bookmarks, history, downloads** — each a panel, each searchable, each one keystroke away. A download shows a small door with a progress ring while it arrives and a popover with speed, time left, cancel, retry and Show in Finder — and nothing at all when there is nothing to show ([docs/downloads.md](docs/downloads.md)).
 - **Chrome extensions, without Chrome.** Paste a Chrome Web Store link in Settings › Extensions, or open the extension's page in Copper and press Add. It runs on WebKit's own extension engine — the one Safari uses — and where Chrome has APIs WebKit doesn't (bookmarks, history, downloads, side panel, offscreen documents, fonts, notifications, speech, OAuth sign-in), Copper fills them in itself. They live behind the puzzle button; pin the ones you use often. Building your own? Load its folder as an unpacked extension and press Reload after each change, as in Chrome's developer mode. macOS 15.4 or later.
+- **Copper Cloud, if you want it.** Link Copper to a copper-cloud instance you (or your team) run, sign in, and choose what follows you between Macs: spaces and their kept tabs, the look-and-behaviour settings, bookmarks, history, and a view of the tabs open on your other Macs. Off until you turn it on; the instance is pinned by its certificate; your token stays in a file only you can read ([docs/cloud.md](docs/cloud.md)).
 - **Updates itself, quietly.** Once every six hours it checks Copper's internal feed. A newer build is downloaded and verified in the background first; only then do Settings › Updates and ⌘K offer **Update**, which backs up your tabs, swaps the new Copper in and relaunches — a few seconds. Anything that fails on the way says so, in a sentence, in Settings › Updates.
 
 ## What it doesn't do
@@ -37,7 +38,7 @@ It was built by a design studio that spends its whole day in a browser and was t
 On purpose:
 
 - No extension you have to install to feel at home. Blocking ads, hiding clutter, reading mode, picture-in-picture and passwords are built in; extensions are there for everything else.
-- No sync, no account, no cloud. Your tabs, history and passwords are on your Mac and nowhere else.
+- No sync, no account, no cloud — unless you link it to a Copper Cloud instance you run yourself, which is off until you turn it on and never carries passwords. Otherwise your tabs, history and passwords are on your Mac and nowhere else.
 - No telemetry, no analytics, no crash reports sent anywhere. The only things that leave your Mac are the pages you ask for, their icons, and one small request a day to see whether there is a newer version.
 - One window. Tabs are the only kind of "new" there is.
 
@@ -49,6 +50,7 @@ On purpose:
 | History, bookmarks, open tabs, hidden elements | Small JSON files in `~/Library/Application Support/Copper/` | You. |
 | Cookies and site data | WebKit's own store for the app | The sites that set them, as in any browser. |
 | Extensions | Unpacked in `~/Library/Application Support/Copper/Extensions/`, their data in WebKit's extension store | Each extension, within the permissions you accepted when adding it. |
+| Copper Cloud (only if you link it) | The domains you switched on, on the instance you linked — encrypted at rest with your account's key; the link and session token in `cloud.json` (0600) | You, and that instance's operator. |
 | Anything else | Nowhere. There is no server. | — |
 
 A **private tab** (`⇧⌘N`) has its own cookie jar and leaves nothing behind when it closes.

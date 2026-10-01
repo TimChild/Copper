@@ -11,6 +11,11 @@ in [ROADMAP.md](ROADMAP.md).
 
 ## Unreleased
 
+<!-- cloud -->
+### Added (Copper Cloud)
+
+- **Copper Cloud: sync through an instance you run.** Settings › Cloud (or ⌘K › Copper Cloud…) walks through three steps — paste the link code a copper-cloud server prints, sign in or create an account, choose what syncs — and nothing leaves the Mac until **Turn on sync**. Five switches, all off to start: spaces and their pinned/Saved tabs, the look-and-behaviour settings (an allowlist: never passwords, paths, keys or agent setup), bookmarks, this Mac's open tabs (shown under *On your other devices*, opened only by a click) and history (append-only). Changes push two seconds after they settle; another Mac's writes arrive over a server-sent event stream; when two Macs change the same thing, a three-way merge keeps both sides' changes and lets the server win a real conflict. A self-signed instance is pinned by its certificate's SHA-256 — nothing else is trusted for it — and the session token lives in `cloud.json` (0600), never the keychain. `./bench cloud …` drives it in a probe world; details in [docs/cloud.md](docs/cloud.md).
+
 ### Added (Copper)
 
 - **Choose which way a swipe moves the column.** Settings › Tabs › Swipe between spaces: Natural (the column follows your fingers), Inverted (it moves the other way, so fingers to the left bring in the space before), or Like scrolling — the default — which follows the Mac's Natural scrolling setting (`com.apple.swipescrolldirection`; off on Collin's Mac, so his default is now Inverted). The drag, the release springs, the rubber band at the first and last space, three-finger swipes and the Reduce Motion trigger all follow it. `./bench spaces swipe direction [system|natural|inverted]` reads or sets it.

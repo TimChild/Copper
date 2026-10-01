@@ -104,6 +104,10 @@
     ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
                                        the MCP server agents drive the window through; setup bridges terminal agents
     ./bench ai [mode off|ask|auto]   which model lanes have keys, and the grouper's last note
+    ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
+    ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
+    ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark]|bookmark URL [TITLE]|pin URL|open URL
+                                       Copper Cloud: link a probe world to an instance, sign in, sync
     ./bench passkeys list|count|forget --id ID|answer yes|no|ask
                                        Copper's own test-world passkeys (no private keys in list)
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
@@ -240,6 +244,10 @@ def main(argv):
         if len(args) < 2: sys.exit("usage: bench render bitwarden|drive|hands|hands-dark PATH")
         request["op"] = args[0]
         request["path"] = os.path.abspath(args[1])
+    elif verb == "cloud":
+        request["op"] = args[0] if args else "status"
+        if request["op"] == "picture" and len(args) > 1: args[1] = os.path.abspath(args[1])
+        request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows"):
         request["op"] = args[0] if args else ("status" if verb in ("updates", "bw", "drive") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
@@ -379,6 +387,8 @@ def main(argv):
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
     elif verb in ("updates", "bw", "drive", "render"):
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True))
+    elif verb == "cloud":
+        print(json.dumps(answer, ensure_ascii=False, sort_keys=True, indent=2))
     elif verb == "newtab":
         if request.get("json"):
             print(json.dumps(answer, ensure_ascii=False, indent=2))

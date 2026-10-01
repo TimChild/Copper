@@ -160,6 +160,14 @@ final class Bookmarks: ObservableObject {
         save()
     }
 
+    /// Fork (cloud): the whole tree at once, ids kept — Copper Cloud's merged
+    /// copy (Fork/Cloud/CloudApply.swift). One save: a run of removes and
+    /// inserts is a run of snapshots racing to the file on a concurrent queue.
+    func replace(_ nodes: [Bookmark]) {
+        roots = nodes
+        save()
+    }
+
     // MARK: - the file
 
     private static var file: URL { Store.file("bookmarks.json") }

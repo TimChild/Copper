@@ -21,7 +21,7 @@ It was built by a design studio that spends its whole day in a browser and was t
 - **One field.** Type an address and you go there; type words and you search. It finishes addresses from your own history — and from Arc's or Chrome's, whole, once you press **Bring in** under Settings › General — and from every tab you keep in any space, and never sends what you type anywhere until you press Return.
 - **Tabs that stay out of the way.** Pin the pages you keep open all day and they shrink to a letter or their icon. Tabs from your last session come back instantly and cost nothing until you click them. `⌘K` lists your open tabs by name. The tab you are on is unmistakable — paper on the column, a bar in the space's colour, a heavier title — and the column scrolls to it whenever the selection moves. `⌃Tab` walks the row, or, from Settings › Tabs, flips between the tabs you used most recently ([docs/tabs.md](docs/tabs.md)).
 - **Spaces.** Rows of tabs with a name, an icon, a colour the whole column wears, and optionally a profile of their own. A labelled header, icon chips at the foot, **Edit Space…** for everything, delete that offers to keep the tabs ([docs/spaces.md](docs/spaces.md)).
-- **Reading mode.** `⇧⌘R` strips a page down to the article.
+- **Reading mode.** `⌥⌘R` strips a page down to the article. `⇧⌘R` clears the current site's cache and reloads from origin; `⇧⌘I` opens Web Inspector's element picker.
 - **Hide anything, for good.** `⇧⌘H`, then click a cookie banner, a newsletter overlay, a rail of "related" nonsense — it goes, and it is still gone on that site next time, before the page has drawn a single frame.
 - **An ad blocker that runs before the page.** Third-party trackers and ad networks are stopped at the network level, so there is nothing to render and nothing to slow down. On by default, off per site if something breaks.
 - **Video that follows you.** `⇧⌘P` lifts the video out of the page into a small window that stays above everything, including other apps.
@@ -75,7 +75,7 @@ The feed installer accepts `COPPER_NO_LAUNCH=1` / `--no-launch` for scripts that
 | | |
 |---|---|
 | `⌘L` address · `⌘K` switch tab · `⌘T` new tab · `⌘W` close · `⇧⌘T` reopen | `⌘[` `⌘]` back, forward · `⇧⌘[` `⇧⌘]` previous, next tab · `⌘1`–`⌘9` jump |
-| `⇧⌘S` tabs across the top or down the left · `⌘S` fold the sidebar away · `⇧⌘B` bookmark this page | `⇧⌘R` reading mode · `⇧⌘P` float the video · `⇧⌘H` hide something · `⇧⌘U` what is hidden here |
+| `⇧⌘S` tabs across the top or down the left · `⌘S` fold the sidebar away · `⇧⌘B` bookmark this page | `⌥⌘R` reading mode · `⇧⌘R` hard reload · `⇧⌘I` inspect element · `⇧⌘P` float the video · `⇧⌘H` hide something · `⇧⌘U` what is hidden here |
 | `⌘F` find · `⌘D` duplicate tab · `⇧⌘C` copy address · `⇧⌘V` paste and go | `⌘Y` history · `⇧⌘J` downloads · `⌘,` settings · `⌥⌘L` passwords |
 | `⌘E` agent pane · `⌥⌘J` driver timeline (who is driving the page, and what they are doing) · `⌥⌘E` close every pane · `⇧⌘D` split | `⌃N` new space · `⌃⌥←` `⌃⌥→` previous, next space · `⌃1`–`⌃9` jump to a space |
 

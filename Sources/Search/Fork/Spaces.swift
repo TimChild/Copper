@@ -509,7 +509,7 @@ struct ForkCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .sidebar) {
             Button("Move in from Another Browser…") { Flow.shared.open = true }
-                .keyboardShortcut("i", modifiers: [.command, .shift])
+                .keyboardShortcut("i", modifiers: [.command, .shift, .option])
             Button(split.on ? "Close Split View" : "Split View") { split.toggle(in: browser) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
             Button(agent.open ? "Close Agent" : "Agent") { agent.toggle() }

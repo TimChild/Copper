@@ -236,6 +236,35 @@ final class Bench {
         case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render", "ext-manager", "storage", "windows":
             answer(Fork.bench(verb, request, in: browser))
 
+        case "hardreload":
+            let tab = (request["id"] as? String).flatMap { find(["id": $0], in: browser) } ?? browser.active
+            guard let tab else { answer(["error": "no active tab"]); return }
+            tab.hardReload { names in
+                answer(["removed": names, "url": tab.address?.absoluteString ?? "", "hollow": tab.hollow])
+            }
+
+        case "inspect":
+            let tab = (request["id"] as? String).flatMap { find(["id": $0], in: browser) } ?? browser.active
+            guard let tab else { answer(["error": "no active tab"]); return }
+            house(tab)
+            let initial = Inspect.element(in: tab)
+            guard initial.available else {
+                answer(["available": false, "visible": false, "elementSelectionActive": false])
+                return
+            }
+            // `show` creates WebKit's inspector frontend asynchronously. Poll
+            // briefly so the hook reports the window that the user can see,
+            // rather than the pre-window state from the same event turn.
+            func report(_ tries: Int) {
+                let state = Inspect.status(in: tab)
+                if state.visible || tries >= 50 {
+                    answer(["available": state.available, "visible": state.visible, "elementSelectionActive": state.elementSelectionActive])
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { report(tries + 1) }
+                }
+            }
+            report(0)
+
         case "newtab":
             // Fork (new-tab-launcher): what ⌘T's card offers, by group, once
             // Google and the history ranking have had a moment to answer.
@@ -578,7 +607,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "ui", "flow", "history", "passkeys", "downloads",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "hardreload", "inspect", "ui", "flow", "history", "passkeys", "downloads",
             ]])
         }
     }

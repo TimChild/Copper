@@ -945,17 +945,35 @@ struct HistorySettingsLine: View {
 }
 
 extension Browser {
-    /// Settings, opened on one page.
+    /// Settings, opened on one page. Spaces and Extensions are pages of it
+    /// like any other: every "Edit Space…" and "Manage Extensions…" — the
+    /// pill's puzzle piece, the foot's doors, the menus, ⌘K — lands here.
     func openSettings(_ page: SettingsPanel.Page) {
-        // Extensions has a page of its own over the window: every "Manage
-        // Extensions…" — the pill's puzzle piece, the list's foot, the top
-        // row's list — lands there rather than on Settings' short list.
-        if page == .extensions, #available(macOS 15.4, *) {
-            ExtensionManager.shared.open(in: self)
-            return
-        }
         settingsPage = page
         Store.settings.set(page.rawValue, forKey: "settings.page")
         tuning = true
+    }
+}
+
+/// A page of Settings drawn off screen at the page's own width and laid out
+/// whole, on Settings' ground — for the bench's `spaces picture` and
+/// `ext-manager picture`, which get every row this way rather than the top
+/// of a scroll.
+@MainActor
+enum SettingsPicture {
+    static func draw<Page: View>(_ page: Page, dark: Bool) -> NSBitmapImageRep? {
+        let host = NSHostingView(rootView: page
+            .frame(width: SpacePage.width, alignment: .topLeading)
+            .padding(22)
+            .background(Palette.ground)
+            .environment(\.colorScheme, dark ? .dark : .light))
+        host.frame = NSRect(origin: .zero, size: host.fittingSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+        host.cacheDisplay(in: host.bounds, to: picture)
+        return picture
     }
 }

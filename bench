@@ -83,9 +83,12 @@
     ./bench flow scan --source Chrome  cheap counts (no keychain prompt)
     ./bench flow root --source Chrome --path /tmp/copy
                                        use a test-only read-only source copy
-    ./bench flow move --source Arc [--only tabs,bookmarks,history,cookies,extensions] [--real]
-                                       move in a test world; passwords/cookies ask macOS
-    ./bench flow open                  open the Move in sheet
+    ./bench flow move --source Arc [--only tabs,bookmarks,history,cookies,localstorage,extensions] [--real]
+                                       move in a test world; passwords/cookies ask macOS;
+                                       waits and prints the report (also `flow status`)
+    ./bench flow localstorage --source Arc --path OUT.json [--root DIR]
+                                       Copper's own localStorage reader, as `arc-localstorage` JSON
+    ./bench flow open [--again]        open the Move in sheet (--again: past "Moved from Arc on …")
     ./bench history import arc|chrome [--root PATH] [--limit N]
                                        import all URL history from an isolated copy
     ./bench storage import PATH [--only ORIGIN] [--profile-store NAME]
@@ -260,7 +263,7 @@ def main(argv):
                 else: sys.exit(usage)
                 rest = rest[2:]
     elif verb == "flow":
-        if not args: sys.exit("usage: bench flow sources|scan|move|open")
+        if not args: sys.exit("usage: bench flow sources|scan|move|status|localstorage|open")
         request["op"] = args[0]
         rest = args[1:]
         i = 0
@@ -271,8 +274,12 @@ def main(argv):
                 request["path"] = rest[i + 1]; i += 2
             elif rest[i] == "--only" and i + 1 < len(rest):
                 request["only"] = rest[i + 1]; i += 2
+            elif rest[i] == "--root" and i + 1 < len(rest):
+                request["root"] = os.path.abspath(rest[i + 1]); i += 2
             elif rest[i] == "--real":
                 request["real"] = True; i += 1
+            elif rest[i] == "--again":
+                request["again"] = True; i += 1
             else:
                 i += 1
     elif verb == "ui":
@@ -332,6 +339,16 @@ def main(argv):
     answer = ask(os.path.join(folder(world), "bench.sock"), request)
     if answer.get("error"):
         sys.exit("error: " + str(answer["error"]))
+    if verb == "flow" and request.get("op") == "move" and answer.get("started"):
+        # Same for a move: it runs on in Copper (keychain prompt, minutes of
+        # local storage), so poll its status and print the finished report.
+        import time
+        while True:
+            time.sleep(1)
+            answer = ask(os.path.join(folder(world), "bench.sock"), {"do": "flow", "op": "status"})
+            if not answer.get("running"): break
+            print("\r" + " · ".join(answer.get("lines", []))[-120:], end="", file=sys.stderr, flush=True)
+        print(file=sys.stderr)
     if verb == "storage" and answer.get("started"):
         # The import runs on in Copper; the bench answers within 25 s, so ask
         # for the report until it is done rather than holding one request.

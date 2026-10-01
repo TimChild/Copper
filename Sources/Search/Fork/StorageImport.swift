@@ -2,7 +2,8 @@ import Foundation
 import WebKit
 
 /// Puts another browser's localStorage into Copper's website store, from the
-/// JSON `arc-localstorage` writes: `{"<origin>": {"<key>": "<value>"}}`.
+/// JSON `arc-localstorage` writes (`{"<origin>": {"<key>": "<value>"}}`) or,
+/// in Flow's move, straight from `FlowLocalStorage`.
 ///
 /// WebKit has no API for writing another origin's localStorage, so the only
 /// way in is to be that origin: one hidden web view loads an empty document
@@ -50,17 +51,13 @@ import WebKit
                 origins = origins.filter { $0 == wanted }
                 if origins.isEmpty { return ["error": "\(only) is not in \(path)"] }
             }
-            var stores: [(String, WKWebsiteDataStore)] = [("shared", Self.sharedStore)]
+            var plan: [Target] = [Target(label: "shared", store: Self.sharedStore, data: data, origins: origins)]
             if let name = request["profileStore"] as? String, !name.isEmpty {
-                stores.append(("profile:\(name)", Spaces.store(forProfile: name)))
+                plan.append(Target(label: "profile:\(name)", store: Spaces.store(forProfile: name), data: data, origins: origins))
             }
-            running = true
-            done = 0
-            total = origins.count * stores.count
-            rows = []
-            error = nil
-            Task { await run(data, origins, stores) }
-            return ["started": true, "origins": origins.count, "stores": stores.map(\.0)]
+            begin(plan)
+            Task { await run(plan) }
+            return ["started": true, "origins": origins.count, "stores": plan.map(\.label)]
         default:
             return status
         }
@@ -84,15 +81,57 @@ import WebKit
         Spaces.shared.building(for: UUID()) { Store.websites }
     }
 
-    private func run(_ data: [String: [String: String]], _ origins: [String], _ stores: [(String, WKWebsiteDataStore)]) async {
+    /// One website store and the origins it should get. The bench gives every
+    /// store the same data; Flow gives a profile's store that profile's own.
+    struct Target {
+        let label: String
+        let store: WKWebsiteDataStore
+        let data: [String: [String: String]]
+        var origins: [String]
+    }
+
+    /// What one import put where, for Flow's report line.
+    struct Summary {
+        var origins = 0
+        var keys = 0
+        var failedOrigins = 0
+    }
+
+    /// Flow's move: the same one-origin-at-a-time walk as the bench, awaited
+    /// to the end, with `progress(done, total)` after each origin so the
+    /// sheet can count. Answers nil if an import is already running.
+    func put(_ plan: [Target], progress: @escaping (Int, Int) -> Void) async -> Summary? {
+        guard !running else { return nil }
+        begin(plan)
+        await run(plan, progress: progress)
+        var summary = Summary()
+        for row in rows {
+            let set = row["set"] as? Int ?? 0
+            if set > 0 { summary.origins += 1 }
+            summary.keys += set
+            if row["error"] != nil || (row["failed"] as? [String])?.isEmpty == false { summary.failedOrigins += 1 }
+        }
+        return summary
+    }
+
+    private func begin(_ plan: [Target]) {
+        running = true
+        done = 0
+        total = plan.reduce(0) { $0 + $1.origins.count }
+        rows = []
+        error = nil
+    }
+
+    private func run(_ plan: [Target], progress: ((Int, Int) -> Void)? = nil) async {
         defer { running = false }
-        for (label, store) in stores {
+        for target in plan {
+            let label = target.label
             let configuration = WKWebViewConfiguration()
-            configuration.websiteDataStore = store
+            configuration.websiteDataStore = target.store
             let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 16, height: 16), configuration: configuration)
             view.navigationDelegate = self
-            for origin in origins {
-                let keys = data[origin] ?? [:]
+            for origin in target.origins {
+                let keys = target.data[origin] ?? [:]
                 var row: [String: Any] = ["origin": origin, "store": label, "keys": keys.count]
                 do {
                     let set = try await put(keys, at: origin, in: view)
@@ -104,6 +143,7 @@ import WebKit
                 }
                 rows.append(row)
                 done += 1
+                progress?(done, total)
             }
             // Leave the page on a blank document so the last origin's page
             // is not kept alive holding its storage area open.

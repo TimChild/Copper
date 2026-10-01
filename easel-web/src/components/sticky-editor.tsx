@@ -9,6 +9,7 @@
  * open through the host instead of `window.open`.
  */
 import {
+  memo,
   useEffect,
   useRef,
   useState,
@@ -17,6 +18,7 @@ import {
 } from 'react'
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import { normalizeMarkdown, stickyExtensions } from '../lib/sticky-markdown'
+import { stickyStaticHTML } from '../lib/sticky-static'
 import { counters } from '../debug'
 
 export interface StickyEditorProps {
@@ -32,6 +34,8 @@ export interface StickyEditorProps {
   className?: string
   /** Aria label of the editable region. */
   label?: string
+  /** Focus with the caret at the end once mounted (double-click, new note). */
+  autoFocus?: boolean
 }
 
 /** Replace the doc from markdown without polluting undo or echoing an update. */
@@ -61,6 +65,7 @@ export function StickyEditor({
   placeholder = 'Type something',
   className,
   label = 'Sticky note',
+  autoFocus = false,
 }: StickyEditorProps) {
   const [focused, setFocused] = useState(false)
   // What we last wrote or loaded; a `value` equal to this is our own echo.
@@ -106,6 +111,16 @@ export function StickyEditor({
       counters.editors--
     }
   }, [])
+
+  // After the gesture that asked for editing settles, like focusShapeText.
+  useEffect(() => {
+    if (!editor || !autoFocus) return
+    const frame = requestAnimationFrame(() => {
+      if (!editor.isDestroyed) editor.commands.focus('end', { scrollIntoView: false })
+    })
+    return () => cancelAnimationFrame(frame)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor])
 
   // Remote (or programmatic) change: reload unless it is our own echo.
   useEffect(() => {
@@ -195,3 +210,84 @@ export function StickyEditor({
     />
   )
 }
+
+export interface StickyStaticProps {
+  value: string
+  /** The `index`-th task box (document order) was clicked. */
+  onToggleTask: (index: number) => void
+  onOpenLink?: (href: string) => void
+  placeholder?: string
+  className?: string
+  label?: string
+}
+
+/**
+ * The note while nobody edits it: the editor's HTML without the editor
+ * (see lib/sticky-static.ts), under the same classes, so it looks the same.
+ * Links and task boxes stay live the way they are on an unfocused editor:
+ * the canvas cancels pointerdown, which suppresses mousedown/mouseup but
+ * not click, so act on pointerdown here and swallow the click that follows.
+ */
+export const StickyStatic = memo(function StickyStatic({
+  value,
+  onToggleTask,
+  onOpenLink,
+  placeholder = 'Type something',
+  className,
+  label = 'Sticky note',
+}: StickyStaticProps) {
+  const html = stickyStaticHTML(value, placeholder)
+
+  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement
+    const link = target.closest('a')
+    if (link) {
+      e.preventDefault()
+      e.stopPropagation()
+      const href = link.getAttribute('href') ?? ''
+      if (/^https?:/i.test(href)) {
+        if (onOpenLink) onOpenLink(href)
+        else window.open(href, '_blank', 'noopener,noreferrer')
+      }
+      return
+    }
+    if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+      e.preventDefault()
+      e.stopPropagation()
+      const boxes = [...e.currentTarget.querySelectorAll('input[type="checkbox"]')]
+      const index = boxes.indexOf(target)
+      if (index !== -1) onToggleTask(index)
+    }
+  }
+
+  const onClickCapture = (e: MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement
+    if (
+      target.closest('a') ||
+      (target instanceof HTMLInputElement && target.type === 'checkbox')
+    ) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+  }
+
+  return (
+    <div
+      data-testid="sticky-editor"
+      data-static=""
+      onPointerDown={onPointerDown}
+      onClickCapture={onClickCapture}
+      className={['sticky-editor', className].filter(Boolean).join(' ')}
+    >
+      <div
+        className="tiptap ProseMirror sticky-editor-doc"
+        role="textbox"
+        aria-label={label}
+        aria-multiline="true"
+        aria-readonly="true"
+        translate="no"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
+  )
+})

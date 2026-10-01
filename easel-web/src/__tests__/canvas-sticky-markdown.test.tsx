@@ -14,6 +14,7 @@ import {
   StickyShape,
 } from '../components/canvas-shapes'
 import { EaselContext } from '../components/easel-context'
+import { BoardContext, createBoard } from '../components/board-context'
 import { MarkdownLite } from '../components/markdown-lite'
 import { SHAPE_COLORS, type EaselDoc, type Shape } from '../doc/easel-doc'
 import type { Host } from '../host/types'
@@ -28,15 +29,19 @@ const host = {
 } as unknown as Host
 const viewer = { id: 'me', name: 'Me', color: '#f00' }
 
-const wrap = (ui: ReactNode) =>
-  render(
+let board = createBoard()
+const providers = (ui: ReactNode) => (
+  <BoardContext.Provider value={board}>
     <EaselContext.Provider value={{ doc, host, easelId: 'e1', viewer }}>
       {ui}
     </EaselContext.Provider>
-  )
+  </BoardContext.Provider>
+)
+const wrap = (ui: ReactNode) => render(providers(ui))
 
 afterEach(() => {
   cleanup()
+  board = createBoard()
   setShapeText.mockClear()
   updateShape.mockClear()
   open.mockClear()
@@ -55,10 +60,8 @@ const sticky = (text: string, patch: Partial<Shape> = {}): Shape => ({
 })
 
 const props = {
-  at: { x: 0, y: 0 },
   selected: false,
   pending: false,
-  lifted: false,
 }
 
 /** Type like a keyboard would: input rules first, then plain insertion. */
@@ -78,7 +81,11 @@ function press(view: EditorView, key: string, init: KeyboardEventInit = {}) {
   )
 }
 
+/** Double-click does this: the sticky mounts its editor. */
+const edit = (id = 's1') => act(() => board.editing.set(id))
+
 const focusedEditor = () => {
+  edit()
   const el = screen.getByLabelText('Sticky note')
   act(() => el.focus())
   fireEvent.focus(el)
@@ -111,13 +118,20 @@ describe('MarkdownLite', () => {
 })
 
 describe('StickyShape live markdown editor', () => {
-  it('renders markdown in place, with no separate preview layer', () => {
+  it('renders markdown statically until edited, then live in the same place', () => {
     wrap(<StickyShape shape={sticky('**bold** move')} {...props} />)
-    const view = screen.getByTestId('sticky-editor')
+    let view = screen.getByTestId('sticky-editor')
     expect(view.querySelector('strong')?.textContent).toBe('bold')
+    // Not being edited: static HTML, no editor behind it.
+    expect(view.hasAttribute('data-static')).toBe(true)
+    expect(screen.getByLabelText('Sticky note').getAttribute('contenteditable')).toBeNull()
+    edit()
+    view = screen.getByTestId('sticky-editor')
+    expect(view.hasAttribute('data-static')).toBe(false)
     const field = screen.getByLabelText('Sticky note')
     expect(field.getAttribute('contenteditable')).toBe('true')
     expect(field.textContent).toBe('bold move')
+    expect(view.querySelector('strong')?.textContent).toBe('bold')
   })
 
   it('shows the placeholder when empty', () => {
@@ -148,11 +162,7 @@ describe('StickyShape live markdown editor', () => {
   it('re-renders live when the shape text changes underneath (remote typing)', () => {
     const { rerender } = wrap(<StickyShape shape={sticky('- one')} {...props} />)
     expect(screen.getAllByRole('listitem')).toHaveLength(1)
-    rerender(
-      <EaselContext.Provider value={{ doc, host, easelId: 'e1', viewer }}>
-        <StickyShape shape={sticky('- one\n- two')} {...props} />
-      </EaselContext.Provider>
-    )
+    rerender(providers(<StickyShape shape={sticky('- one\n- two')} {...props} />))
     expect(screen.getAllByRole('listitem').map(li => li.textContent)).toEqual([
       'one',
       'two',

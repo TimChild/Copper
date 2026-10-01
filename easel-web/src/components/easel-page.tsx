@@ -150,7 +150,7 @@ export function EaselPage({
   const trails = useMemo(() => new LaserTrails(), [])
   useRemoteLasers(awareness, trails)
   const board = useMemo(() => createBoard(), [])
-  const { camera, live, marquee } = board
+  const { camera, live, editing, marquee } = board
   useEffect(() => () => camera.destroy(), [camera])
 
   const viewport = useRef<HTMLDivElement>(null)
@@ -418,8 +418,11 @@ export function EaselPage({
     setArrowFrom(null)
   }
 
-  /** Put the caret in a shape's text. */
-  const startEditing = (id: string) => focusShapeText(id)
+  /** Put the caret in a shape's text: a sticky mounts its editor for it. */
+  const startEditing = (id: string) => {
+    if (doc.getShapesSnapshot().get(id)?.type === 'sticky') editing.set(id)
+    else focusShapeText(id)
+  }
 
   const createAt = (type: 'sticky' | 'frame', box: Box) => {
     doc.undo.stopCapturing()

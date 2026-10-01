@@ -13,18 +13,19 @@
  * boxes, which each shape reads for its own id: moving one note re-renders
  * that note and the arrows on it, nothing else.
  */
-import { memo, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { SHAPE_COLORS, type Shape } from '../doc/easel-doc'
 import { imageSrc } from '../lib/canvas-images'
 import { boxSegment, type Point } from '../lib/canvas-geometry'
 import { useCameraView } from '../lib/camera'
 import { useLiveActive, useLiveBox } from '../lib/live-boxes'
 import { useStoreSelect } from '../lib/store'
+import { toggleTask } from '../lib/sticky-static'
 import { useBoard } from './board-context'
 import { useEasel } from './easel-context'
 import { Icon } from './icons'
 import { MarkdownLiteInline } from './markdown-lite'
-import { StickyEditor } from './sticky-editor'
+import { StickyEditor, StickyStatic } from './sticky-editor'
 import { counters } from '../debug'
 
 /** Sticky body size; the rendered view shrinks from here to fit its box. */
@@ -162,6 +163,8 @@ interface ShapeProps {
   by?: string
 }
 
+const isEditingId = (id: string) => (editing: string | null) => editing === id
+
 export const StickyShape = memo(function StickyShape({
   shape,
   selected,
@@ -170,12 +173,25 @@ export const StickyShape = memo(function StickyShape({
 }: ShapeProps) {
   counters.shapeRenders++
   const { doc, host } = useEasel()
-  const { live } = useBoard()
+  const { live, editing } = useBoard()
   const liveBox = useLiveBox(live, shape.id)
   const box = liveBox ?? shape
   const lifted = liveBox?.lifted ?? false
-  const field = useFieldFocus()
-  const fit = useFitText([shape.text, box.w, box.h, field.focused], field.focused)
+  const select = useMemo(() => isEditingId(shape.id), [shape.id])
+  const isEditing = useStoreSelect(editing, select)
+  const [focused, setFocused] = useState(false)
+  const paused = isEditing && focused
+  const fit = useFitText([shape.text, box.w, box.h, paused], paused)
+
+  // Stable for the memoized static view; always reads the latest text.
+  const text = useRef(shape.text)
+  text.current = shape.text
+  const onToggleTask = useCallback(
+    (index: number) => doc.setShapeText(shape.id, toggleTask(text.current, index)),
+    [doc, shape.id]
+  )
+  const onOpenLink = useCallback((href: string) => host.open(href), [host])
+
   return (
     <div
       data-ref={`shape:${shape.id}`}
@@ -191,13 +207,26 @@ export const StickyShape = memo(function StickyShape({
       }}
     >
       <div ref={fit} className="easel-sticky-body">
-        <StickyEditor
-          value={shape.text}
-          onChange={md => doc.setShapeText(shape.id, md)}
-          onOpenLink={href => host.open(href)}
-          onFocus={field.onFocus}
-          onBlur={field.onBlur}
-        />
+        {isEditing ? (
+          <StickyEditor
+            value={shape.text}
+            autoFocus
+            onChange={md => doc.setShapeText(shape.id, md)}
+            onOpenLink={onOpenLink}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              setFocused(false)
+              // Leaving the note (not the window): back to static HTML.
+              if (document.hasFocus() && editing.get() === shape.id) editing.set(null)
+            }}
+          />
+        ) : (
+          <StickyStatic
+            value={shape.text}
+            onToggleTask={onToggleTask}
+            onOpenLink={onOpenLink}
+          />
+        )}
       </div>
       {by && <span className="easel-by">{by}</span>}
     </div>

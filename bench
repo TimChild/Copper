@@ -101,7 +101,10 @@
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
     ./bench mouse back|forward|middle [X Y] [--shift]
                                        a click of that mouse button at window point X Y (top-left
-                                       origin; the page's middle by default), through the app's routing
+                                       origin; the page's middle by default), through the app's routing;
+                                       over the sidebar, back/forward switches the previous/next space
+                                       (with more than one space), while over a page it navigates
+                                       the pane under the pointer
     ./bench bar TEXT [--go]          what ⌘K offers for TEXT; --go takes the first row
     ./bench newtab [TEXT] [--go [--pick N] [--how open|background|split]] [--keep] [--settle S] [--json]
                                        what ⌘T's card offers for TEXT, by group, after S seconds (0.8) for

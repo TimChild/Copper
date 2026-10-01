@@ -62,7 +62,8 @@ import SwiftUI
     }
 
     private static func handle(_ event: NSEvent, in browser: Browser) -> NSEvent? {
-        guard event.window != nil, event.window == Links.window, overSidebar(event, in: browser) else { return event }
+        guard event.window != nil, event.window == Links.window,
+              overSidebar(event.locationInWindow, in: browser) else { return event }
         if event.type == .swipe {
             guard event.deltaX != 0 else { return event }
             go(event.deltaX < 0 ? 1 : -1, in: browser)
@@ -92,14 +93,19 @@ import SwiftUI
         return ["step": stepped, "swallowed": swallowed, "space": Spaces.shared.space.name]
     }
 
-    private static func go(_ by: Int, in browser: Browser) {
+    /// Switch a space with the same glide used by a two-finger swipe.
+    /// Mouse buttons use this helper too, so the two ways of changing spaces
+    /// cannot drift into different animations.
+    static func go(_ by: Int, in browser: Browser) {
         withAnimation(Motion.glide) { Spaces.shared.step(by, in: browser) }
     }
 
-    /// Whether the pointer is over the column of tabs — down the left, shown,
-    /// and not folded away (the same test App.swift makes to lay it out).
-    private static func overSidebar(_ event: NSEvent, in browser: Browser) -> Bool {
-        guard browser.prefs.sidebar, !browser.folded, browser.active?.immersed != true else { return false }
-        return event.locationInWindow.x <= browser.prefs.sideWidth
+    /// Whether a point is over the column of tabs — down the left, shown, or
+    /// briefly peeking out while folded (the same test Fold.swift uses to lay
+    /// it out).
+    static func overSidebar(_ location: CGPoint, in browser: Browser) -> Bool {
+        guard browser.prefs.sidebar, browser.active?.immersed != true,
+              !browser.folded || browser.peeking else { return false }
+        return location.x <= browser.prefs.sideWidth
     }
 }

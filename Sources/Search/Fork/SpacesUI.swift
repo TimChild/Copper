@@ -196,6 +196,9 @@ struct SpaceHeader: View {
 
 struct SpaceStrip<Tools: View>: View {
     @ObservedObject var browser: Browser
+    /// The column's ink as the slide mixes it (SlideInk), or nil for the
+    /// current space's own.
+    var tint: SpaceTint? = nil
     /// The column's own small doors — bookmarks, extensions. They share the
     /// strip's row, the way Arc's do.
     @ViewBuilder var tools: () -> Tools
@@ -214,7 +217,7 @@ struct SpaceStrip<Tools: View>: View {
 
     private var step: CGFloat { SpaceChip.size + SpaceChip.gap }
 
-    private var tint: SpaceTint { SpaceTint(space: spaces.space(in: browser), dark: scheme == .dark) }
+    private var ink: SpaceTint { tint ?? SpaceTint(space: spaces.space(in: browser), dark: scheme == .dark) }
 
     /// Every space as a chip, the current one lifted; a plus; the doors.
     /// When the chips outgrow the room, the row of them scrolls sideways
@@ -284,7 +287,7 @@ struct SpaceStrip<Tools: View>: View {
     private func chip(_ space: Space, index: Int) -> some View {
         let held = dragging == space.id
         return SpaceChip(space: space, current: space.id == spaces.current(in: browser), dark: scheme == .dark,
-                         over: hovering == space.id, ink: tint.ink, glow: tint.hover)
+                         over: hovering == space.id, ink: ink.ink, glow: ink.hover)
             .id(space.id)
             .anchorPreference(key: ChipFrames.self, value: .bounds) { [space.id: $0] }
             .offset(x: held ? travel - CGFloat(index - from) * step : 0)
@@ -332,11 +335,11 @@ struct SpaceStrip<Tools: View>: View {
                 let rect = geo[anchor]
                 let text = Text(space.title)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(tint.ink)
+                    .foregroundStyle(ink.ink)
                     .lineLimit(1)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Capsule().fill(tint.pill))
+                    .background(Capsule().fill(ink.pill))
                     .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.12), radius: 6, y: 2)
                     .fixedSize()
                 // Roughly half the label's width, so it stays in the column.
@@ -357,7 +360,7 @@ struct SpaceStrip<Tools: View>: View {
         Button(action: newSpace) {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(tint.muted)
+                .foregroundStyle(ink.muted)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }

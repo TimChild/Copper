@@ -319,12 +319,17 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
                 "window": Windows.all.firstIndex { $0 === browser } ?? -1]
     }
 
+    /// The window's pixels are taken on the main thread (a few
+    /// milliseconds); the PNG is made and written off it, so a dense run of
+    /// shots does not itself stall the slide it is picturing.
     private static func picture(of window: NSWindow?, to path: String) {
         guard let window,
               let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
-                                                  [.boundsIgnoreFraming, .bestResolution]),
-              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
-        try? png.write(to: URL(fileURLWithPath: path))
+                                                  [.boundsIgnoreFraming, .bestResolution]) else { return }
+        DispatchQueue.global(qos: .utility).async {
+            guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
+            try? png.write(to: URL(fileURLWithPath: path))
+        }
     }
 
     /// `bench swipe left|right|down [--window N]`: a quick whole gesture,

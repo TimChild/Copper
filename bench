@@ -111,6 +111,13 @@
                                        the page's status() (clock time, wall, key, frames, fading)
     ./bench spaces swipe direction [system|natural|inverted]
                                        which way a swipe moves the column (Settings › Tabs)
+    ./bench spaces slide [at X|off]    the last space switch's slide timings (ms from the click,
+                                       frames, missed frames); `at X` holds the next slide at X
+    ./bench spaces swipe DX,DX,…[ end|cancel] [--hold] [--shot PATH@MS]
+                                       a two-finger swipe over the column, scripted; `stats` for
+                                       how evenly its events got through (main-thread gaps)
+    ./bench spaces preview N|NAME      what the live preview of that space's column costs to
+                                       build, lay out and draw off screen; `premount on|off`
                                        the Space page as a PNG, drawn off screen, laid out whole
                                        spaces by index or name; --keep moves a deleted space's tabs
                                        to its neighbour; colours are Graphite Copper Orange Yellow
@@ -467,6 +474,7 @@ def main(argv):
             print(f"latency: {answer['milliseconds']:.2f} ms")
     elif verb == "spaces":
         if "slide" in answer: print(json.dumps(answer["slide"], ensure_ascii=False))
+        if "preview" in answer: print(json.dumps(answer["preview"], ensure_ascii=False, sort_keys=True))
         if "pinCount" in answer:
             print(f"global pins: {answer['pinCount']}")
             for pin in answer.get("pins", []):

@@ -53,11 +53,17 @@ struct SideBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            head
+            // Fork (space-slide): the lights, the address and the strip stay
+            // put when the space changes; their ink is mixed between the two
+            // spaces' as the slide goes (SlideInk), so they change colour
+            // with the ground under them.
+            SlideInk(browser: browser) { tint in head(tint) }
 
-            SideAddress(browser: browser, tint: tint)
-                .padding(.horizontal, SideBar.inset)
-                .padding(.bottom, 10)
+            SlideInk(browser: browser) { tint in
+                SideAddress(browser: browser, tint: tint)
+                    .padding(.horizontal, SideBar.inset)
+                    .padding(.bottom, 10)
+            }
 
             // Fork (global-pins): the favourites are the same in every space,
             // so they stay put when the space changes, as Arc's do.
@@ -73,17 +79,20 @@ struct SideBar: View {
             column
                 .modifier(SpaceSlideBand(browser: browser))
 
-            SpaceStrip(browser: browser) { foot }
+            SlideInk(browser: browser) { tint in SpaceStrip(browser: browser, tint: tint) { foot(tint) } }
         }
         .frame(width: prefs.sideWidth)
         .frame(maxHeight: .infinity)
+        // Fork (space-slide): the ground is one live surface that blends
+        // between the two spaces of a slide (SpaceGround) — never pictured,
+        // never slid, so there is no seam between two grounds.
         .background {
             ZStack {
-                tint.backdrop(in: browser)
+                SpaceGroundView(browser: browser, dark: scheme == .dark)
                 if landing { tint.hover }
             }
         }
-        // Fork (space-slide): the old column, over the new one while it goes.
+        // Fork (space-slide): the previews over the column while it goes.
         .overlay(alignment: .topLeading) { SpaceSlideCurtain(browser: browser) }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SpaceSlide.shared.place(column: $0, in: browser) }
         .onDisappear { SpaceSlide.shared.place(column: nil, in: browser) }
@@ -132,7 +141,7 @@ struct SideBar: View {
     /// them at in this mode.
     /// Arc's row: the lights, the door that folds the column away beside
     /// them, and back / forward / reload at the far end, in the column's ink.
-    private var head: some View {
+    private func head(_ tint: SpaceTint) -> some View { // Fork (space-slide): the ink is handed in
         ZStack(alignment: .leading) {
             DragStrip()
             HStack(spacing: 0) {
@@ -365,7 +374,7 @@ struct SideBar: View {
     /// row half-scrolled off doesn't look sliced.
     /// A few points at each end, whatever the column's height — a
     /// proportional fade would eat the space's name on a tall window.
-    private static var fade: some View {
+    static var fade: some View { // Fork: SpacePreview masks its rows with it too
         VStack(spacing: 0) {
             LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 6)
             Rectangle()
@@ -425,7 +434,7 @@ struct SideBar: View {
 
     /// The door at the foot's left, where Arc keeps its library: bookmarks.
     /// Fork: and beside it the Extensions page's (Fork/ExtensionsManager.swift).
-    private var foot: some View {
+    private func foot(_ tint: SpaceTint) -> some View { // Fork (space-slide): the ink is handed in
         HStack(spacing: 2) {
             Door(icon: "books.vertical", help: "Bookmarks", size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
                 browser.bookmarksOpen.toggle()

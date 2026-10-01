@@ -175,6 +175,14 @@ final class Spaces: ObservableObject {
     private func home(_ id: UUID?, else fallback: UUID) -> UUID {
         id.flatMap { id in all.contains { $0.id == id } ? id : nil } ?? fallback
     }
+    /// The tab this window would land on if it switched to space `id` now —
+    /// the choice `swap` makes, made ahead so a preview of that space
+    /// (SpacePreview) can draw the same row live.
+    func wouldLand(in id: UUID, for browser: Browser) -> Tab.ID? {
+        let remembered = activeByBrowserSpace[ObjectIdentifier(browser)]?[id]
+        let pool = remembered == nil && row(id).isEmpty ? [] : projection(id)
+        return pick(from: pool, remembered: remembered, for: browser, steal: false)?.id
+    }
 
     private init() {
         let home = Space(name: "Home")
@@ -417,22 +425,23 @@ final class Spaces: ObservableObject {
     func select(_ id: UUID, in browser: Browser, landing: Tab.ID? = nil) {
         guard id != current(in: browser), let to = all.firstIndex(where: { $0.id == id }) else { return }
         let from = all.firstIndex { $0.id == current(in: browser) } ?? to
-        // The column on screen is pictured before anything changes, and the
-        // new row goes in with animations off: the slide is the one motion,
-        // not every old row leaving and every new one arriving (SpaceSlide).
+        // The column on screen is planned for its preview before anything
+        // changes, and the new row goes in with animations off: the slide is
+        // the one motion, not every old row leaving and every new one
+        // arriving (SpaceSlide).
         // With no column on screen — the tab bar, a folded sidebar — the
         // switch is what it always was.
-        guard SpaceSlide.shared.begin(forward: to > from, in: browser) else { return swap(to: id, in: browser, landing: landing) }
+        guard SpaceSlide.shared.begin(forward: to > from, to: all[to], in: browser) else { return swap(to: id, in: browser, landing: landing) }
         var calm = Transaction()
         calm.disablesAnimations = true
         withTransaction(calm) { swap(to: id, in: browser, landing: landing) }
     }
 
-    /// A swipe's commit (SpaceSlide.release): the picture of the old column
-    /// is already up and the slide under way, so only the rows change — in
-    /// the window the fingers were on.
-    func select(_ id: UUID, in browser: Browser, pictured: Bool) {
-        guard pictured else { return select(id, in: browser) }
+    /// A swipe's commit (SpaceSlide): the slide is already under way with
+    /// its previews up, so only the rows change — in the window the
+    /// fingers were on.
+    func select(_ id: UUID, in browser: Browser, sliding: Bool) {
+        guard sliding else { return select(id, in: browser) }
         guard id != current(in: browser), all.contains(where: { $0.id == id }) else { return }
         var calm = Transaction()
         calm.disablesAnimations = true
@@ -1097,7 +1106,9 @@ extension Spaces {
     /// slides at X for a picture — see `SpaceSlide.bench`), `spaces swipe
     /// DX,DX,…[ end|cancel] [--hold] [--window N]` (a two-finger swipe,
     /// scripted, on window N's column — see `SpaceSwipe.script`), `spaces scroll` (the column's scroll view:
-    /// its elasticity each way and where it stands).
+    /// its elasticity each way and where it stands), `spaces preview N|NAME
+    /// | premount on|off` (what a space's preview costs to make — see
+    /// `SpacePreview.bench`).
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         func find(_ key: String) -> UUID? {
             if let n = Int(key), all.indices.contains(n) { return all[n].id }
@@ -1161,6 +1172,7 @@ extension Spaces {
         case "slide": return ["slide": SpaceSlide.shared.bench(arg)]
         case "swipe": return ["slide": SpaceSwipe.script(arg, in: browser)]
         case "scroll": return ["slide": SideScrollElasticity.script(arg)]
+        case "preview": return ["preview": SpacePreview.bench(words, find: find, in: browser)]
         case "profile": profile(current(in: browser), named: arg)
         case "theme":
             if let error = benchTheme(words, find: find) { return ["error": error] }

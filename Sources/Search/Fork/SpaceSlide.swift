@@ -11,50 +11,93 @@ import SwiftUI
 // frame after frame for half a second. The main thread spent most of that
 // half second in SwiftUI.
 //
-// Instead the switch is one move. The moment it is asked for, the column as
-// it stands is pictured — a bitmap of what is on screen, taken before
-// anything changes — and the new space's rows go in at once, with no
-// animation at all. Then two layers travel together: the picture of the
-// old column slides out one way and fades, and the real new column slides in
-// from the other side. The lights, the address and the strip at the foot
-// stay where they are; the picture's copy of them, and of the old ground,
-// fades in place over the new, so the theme crossfades while the rows
-// travel. After ~0.22 s the picture is dropped and nothing is left of it.
+// Instead the switch is one move, on one ground, with nothing pictured:
+//
+//   The ground (SpaceGround) is the column's background, drawn live for
+//   the whole column — under the lights, the address, the favourites, the
+//   rows and the strip — and blended from the old space's theme to the new
+//   one's by how far the slide has gone. It never moves.
+//
+//   The band — the space's name and its rows, one scroll view — travels.
+//   One of the two columns in motion is the real, live band; the other is a
+//   preview (SpacePreview): the same rows drawn from the space's tabs, with
+//   the same parts and measures, in that space's ink, on a clear ground,
+//   taking no clicks.
+//
+//   The lights, the address, the favourites and the strip stay where they
+//   are; their ink is mixed from the old space's to the new one's as the
+//   slide goes (SlideInk), so a dark column's white glyphs become a light
+//   one's brown with the ground, not after it.
+//
+// On a click or a key the new rows go in with animations off and the live
+// band slides in from the side while a preview of the rows that were there
+// slides out. After ~0.22 s the preview is dropped and nothing is left of it.
+//
+// A two-finger swipe (Swipes.swift) drives the same layers by hand, the
+// other way round: the live band — the rows on screen — is what the fingers
+// pull out, and the space they are heading for comes in as its preview,
+// built from its parked tabs so a space never visited this launch looks
+// exactly as it will. The previews of both neighbours are kept drawn and
+// hidden while nothing moves (SpacePreview.premount), so the first frame of
+// a swipe has nothing to build. When the fingers let go, the rest of the
+// way is a spring; only once it has landed does the real switch happen,
+// under the arriving preview — swapping a column of a hundred rows and its
+// page is the one costly frame of a switch (several hundred milliseconds on
+// a long column), and done at the end it costs no visible motion where done
+// at the lift it froze the dragged frame and then jumped. The live band,
+// now the new space's and laid out as the preview was, shows through as the
+// preview fades. When the fingers let go short of the way, everything
+// springs back and the live band is where it never left.
 //
 // Which way: towards a space after this one in `Spaces.all`, the old column
 // leaves to the left; before it, to the right. Reduce Motion keeps the
 // crossfade and drops the travel.
 //
-// A two-finger swipe (Swipes.swift) drives the same two layers by hand. The
-// space it is heading for is not on screen, and putting it there just to
-// take its picture would select its tab and wake the page, so every space's
-// column is pictured as it is left (and again just after it arrives), and
-// the swipe slides that picture in. It is a few seconds stale at most and
-// only in flight: when the fingers let go far enough, the real switch happens
-// under the curtain and the live column takes the picture's place; when not,
-// the pictures spring back and are dropped. A space not yet visited this
-// launch has no picture, and comes in as its bare ground until it is real.
-//
-// An animated space's scene is not pictured into the ground the swipe
-// draws: the column's one live scene (AnimatedBackdrop) stays under the
-// curtain, mixing towards the arriving space as the fingers go, and only
-// the band's picture travels over it. That picture still holds the frame
-// of the scene it was taken on, so on a commit it does not vanish when the
-// live column takes its place but fades out over it as the band settles —
-// the frozen frame gives way to the moving one instead of jumping to it.
+// Earlier versions pictured the column (the window's pixels, or the views
+// drawn twice over black and white for a matte) and slid the pictures. The
+// picture cost up to 55 ms at the moment the fingers moved, a space with no
+// picture yet came in blank, and the ground baked into a picture met the
+// other ground at a seam. None of that is here.
 
 @MainActor
 final class SpaceSlide: ObservableObject {
     static let shared = SpaceSlide()
 
-    /// The old column, as it was on screen when the switch was asked for.
-    /// Nil between slides — which is also how the views know one is on.
-    @Published private(set) var picture: NSImage?
-    /// How far along: 0 at the switch, 1 once the new column is home.
+    /// A slide is on: a click's, or a swipe's with a space to head for.
+    @Published private(set) var sliding = false
+    /// How far along: 0 with the old column home, 1 with the new one home.
     @Published private(set) var phase: CGFloat = 1
     /// +1 when the new space is after the old one (the old column leaves to
     /// the left), -1 before it, 0 under Reduce Motion.
     @Published private(set) var way: CGFloat = 0
+    /// The two spaces the slide is between: the ground blends `from`'s look
+    /// towards `to`'s by `phase`, the static parts mix their ink the same
+    /// way. Nil at rest; during a swipe `to` is nil at the ends, where there
+    /// is nowhere to go.
+    @Published private(set) var from: Space?
+    @Published private(set) var to: Space?
+    /// A click's rows on their way out, as a preview: the space that was on
+    /// screen, taken from the live column the instant before the switch (so
+    /// its scroll and its live row are exact). Nil for a swipe, whose
+    /// outgoing rows are the live band itself.
+    @Published private(set) var leaving: SpacePreviewModel?
+
+    // The swipe's own state, all false/zero outside one. One swipe at a
+    // time, in `owner`'s window.
+    /// True from the first sideways movement until the fingers let go.
+    @Published private(set) var dragging = false
+    /// True from the first sideways movement until the swipe's slide is over
+    /// (a settle back, or the switch and its fade) — what tells the band it
+    /// is the outgoing column, not the incoming one.
+    @Published private(set) var swiping = false
+    /// At the first or last space there is nowhere to go: the live column is
+    /// pulled this far, with resistance, and springs back.
+    @Published private(set) var stretch: CGFloat = 0
+    /// A swipe's switch has happened: the live band is the new space's, home.
+    @Published private(set) var switched = false
+    /// After the switch, while the arriving preview is still whole over the
+    /// live band; it fades out as this goes false.
+    @Published private(set) var landing = false
 
     /// Where the column is, and where the band that travels is, in SwiftUI's
     /// global space (the window's content, from its top left) — per window,
@@ -73,43 +116,44 @@ final class SpaceSlide: ObservableObject {
     /// The sliding window's column and band — the first window's between slides.
     var column: CGRect { columns[ObjectIdentifier(owner ?? Windows.main)] ?? .zero }
     var band: CGRect { bands[ObjectIdentifier(owner ?? Windows.main)] ?? .zero }
+    func column(in browser: Browser) -> CGRect { columns[ObjectIdentifier(browser)] ?? .zero }
+    func band(in browser: Browser) -> CGRect { bands[ObjectIdentifier(browser)] ?? .zero }
 
-    var moving: Bool { picture != nil || dragging }
+    var moving: Bool { sliding || dragging }
     /// Whether it is this window's column that is sliding, or under the
     /// fingers; another window's column stays still.
     func moving(in browser: Browser) -> Bool { moving && owner === browser }
 
-    // The swipe's own state, all nil/false/zero outside one. One swipe at a
-    // time, in `owner`'s window.
-    /// True from the first sideways movement until the fingers let go.
-    @Published private(set) var dragging = false
-    /// The space the swipe is heading for, and its column as last pictured.
-    @Published private(set) var arriving: Space?
-    @Published private(set) var incoming: NSImage?
-    /// At the first or last space there is nowhere to go: the live column is
-    /// pulled this far, with resistance, and springs back.
-    @Published private(set) var stretch: CGFloat = 0
-    /// After a swipe commits, while the band settles: the incoming picture
-    /// stays over the live band and fades out, from the phase the fingers
-    /// let go at (`landed`) to home.
-    @Published private(set) var landing = false
-    private(set) var landed: CGFloat = 0
-    /// The column as it was when the fingers started; the curtain while the
-    /// swipe is on, and the old picture of the slide if it commits.
-    private var outgoing: NSImage?
-    /// The last picture of every space's column, by space — per window
-    /// (Fork: windows), since two windows' columns differ in height, and a
-    /// picture from one stretched to the other would show. A space never
-    /// shown in this window comes in as its bare ground.
-    private var caches: [ObjectIdentifier: [UUID: NSImage]] = [:]
+    /// Which previews the column keeps drawn (see SpacePreviewStack).
+    let anchor = PreviewAnchor()
+    /// The slide's progress in coarse steps, for the parts that stay put:
+    /// their ink is mixed by it (SlideInk), and re-mixing the lights, the
+    /// address and the strip on every frame of a drag was the one cost of
+    /// the live ink. Twenty-four steps across a column is below what the
+    /// eye tells apart in a colour; a timed slide sets the last step inside
+    /// its animation, so the colours still glide.
+    let ink = InkSteps()
+    static let inkSteps: CGFloat = 24
 
-    private func cached(_ space: UUID, in browser: Browser) -> NSImage? { caches[ObjectIdentifier(browser)]?[space] }
-    private func cache(_ shot: NSImage, for space: UUID, in browser: Browser) { caches[ObjectIdentifier(browser), default: [:]][space] = shot }
+    private func set(phase value: CGFloat) {
+        phase = value
+        let step = Int((min(1, max(0, value)) * SpaceSlide.inkSteps).rounded())
+        if ink.step != step { ink.step = step }
+    }
 
     /// Arc's is about this: quick off the mark, a soft landing, and over
     /// before the eye has finished following it.
     static let duration = 0.22
     static let curve = Animation.timingCurve(0.2, 0.9, 0.3, 1, duration: duration)
+    /// How long the arriving preview takes to give way to the live rows
+    /// under it after a swipe's switch.
+    static let handover = 0.12
+
+    /// Whether the live band is held to its own edges while it travels. On:
+    /// the part still on its way never draws over the page, but the band's
+    /// scroll view (an AppKit view) is resized to the clip every frame. Off:
+    /// only moved. `bench spaces slide clip on|off` to compare.
+    static var clipsBand = true
 
     /// Which slide is the current one, so a switch that interrupts another
     /// is not ended by the first one's completion.
@@ -118,39 +162,53 @@ final class SpaceSlide: ObservableObject {
     /// for a picture of it. Nil in normal use.
     private var hold: CGFloat?
 
+    private var calm: Transaction {
+        var t = Transaction()
+        t.disablesAnimations = true
+        return t
+    }
+
     // MARK: - the switch
 
     /// Called by `Spaces.select` before anything changes. True when there is
     /// a column on screen to slide — the caller then makes its change with
     /// animations off, since the slide is the only motion there is.
-    func begin(forward: Bool, in browser: Browser) -> Bool {
+    func begin(forward: Bool, to space: Space, in browser: Browser) -> Bool {
         let started = CACurrentMediaTime()
         timed = browser.prefs.bench
         // A slide already on in another window ends there, cleanly.
-        if picture != nil, owner !== browser { end() }
+        if moving, owner !== browser { end() }
         owner = browser
         guard column.width > 1, column.height > 1, band.height > 1,
-              let window = Windows.window(of: browser), window.isVisible,
-              let shot = photograph(in: window) else { return false }
+              let window = Windows.window(of: browser), window.isVisible else { return false }
         serial += 1
         let mine = serial
         let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        cache(shot, for: Spaces.shared.current(in: browser), in: browser)
-        var calm = Transaction()
-        calm.disablesAnimations = true
+        let old = Spaces.shared.space(in: browser)
+        // The rows as they stand, planned for the preview that slides out.
+        // Planning is the cheap part; the view is built with the frame.
+        let model = SpacePreviewModel.live(old, in: browser, width: column.width, height: band.height)
         withTransaction(calm) {
             dragging = false
-            arriving = nil
-            incoming = nil
+            swiping = false
+            switched = false
             landing = false
             stretch = 0
-            picture = shot
-            phase = 0
+            from = old
+            to = space
+            leaving = model
+            sliding = true
+            set(phase: 0)
+            ink.objectWillChange.send()
             way = still ? 0 : (forward ? 1 : -1)
+            // The neighbours kept drawn stay the old space's through the
+            // slide, so nothing is built or dropped while it moves.
+            anchor.home = old.id
+            anchor.arriving = nil
         }
-        timing = Timing(asked: started, pictured: CACurrentMediaTime())
+        timing = Timing(asked: started, planned: CACurrentMediaTime())
         // One turn of the run loop: it commits the frame that has the new
-        // column in place under the picture (the switch's own frame, looking
+        // column in place under the preview (the switch's own frame, looking
         // exactly as the old one did), and the slide sets off from there.
         // A second turn, to let the column's scroll-to-live-row settle
         // first, was measured costing up to 40 ms of standing still; the
@@ -164,17 +222,15 @@ final class SpaceSlide: ObservableObject {
     }
 
     private func go(_ mine: Int) {
-        guard mine == serial, picture != nil else { return }
+        guard mine == serial, sliding else { return }
         timing?.moved = CACurrentMediaTime()
         watch()
         if let hold {
-            var calm = Transaction()
-            calm.disablesAnimations = true
-            withTransaction(calm) { phase = hold }
+            withTransaction(calm) { set(phase: hold) }
             return
         }
         withAnimation(SpaceSlide.curve, completionCriteria: .logicallyComplete) {
-            phase = 1
+            set(phase: 1)
         } completion: { [weak self] in
             guard let self, mine == self.serial else { return }
             self.end()
@@ -182,32 +238,28 @@ final class SpaceSlide: ObservableObject {
     }
 
     private func end() {
-        var calm = Transaction()
-        calm.disablesAnimations = true
+        let mine = serial
         withTransaction(calm) {
-            picture = nil
-            phase = 1
+            sliding = false
+            set(phase: 1)
+            ink.objectWillChange.send()
             dragging = false
-            arriving = nil
-            incoming = nil
+            swiping = false
+            switched = false
             landing = false
             stretch = 0
+            from = nil
+            to = nil
+            leaving = nil
+            anchor.arriving = nil
         }
-        outgoing = nil
         timing?.ended = CACurrentMediaTime()
         unwatch()
-        remember()
-    }
-
-    /// A fresh picture of the space now on screen, for the next swipe that
-    /// heads for it — a moment after it arrives, once its rows have drawn.
-    private func remember() {
-        let mine = serial
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self, mine == self.serial, !self.moving, let browser = self.owner,
-                  let window = Windows.window(of: browser), window.isVisible,
-                  self.column.width > 1, let shot = self.photograph(in: window) else { return }
-            self.cache(shot, for: Spaces.shared.current(in: browser), in: browser)
+        // The neighbours kept drawn become the new space's — a moment
+        // later, so building them is not in the slide's last frame.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self, mine == self.serial, !self.moving else { return }
+            self.anchor.home = nil
         }
     }
 
@@ -215,7 +267,7 @@ final class SpaceSlide: ObservableObject {
 
     /// The column `travel` points sideways from where it started (negative is
     /// to the left) — the fingers' travel, turned round if the swipe
-    /// direction setting says so. The first call takes the picture of the column; every
+    /// direction setting says so. The first call starts the swipe; every
     /// call after only moves things, with no animation — the fingers are the
     /// animation. False when there is no column to drive.
     @discardableResult
@@ -229,20 +281,27 @@ final class SpaceSlide: ObservableObject {
             if moving, owner !== browser { end() }
             // A settle still running from the last swipe or a click is left
             // to finish; these fingers do nothing.
-            guard picture == nil else { return false }
+            guard !sliding else { return false }
             owner = browser
             let started = CACurrentMediaTime()
             timed = browser.prefs.bench
             guard column.width > 1, column.height > 1, band.height > 1,
-                  let window = Windows.window(of: browser), window.isVisible,
-                  let shot = photograph(in: window) else { return false }
+                  let window = Windows.window(of: browser), window.isVisible else { return false }
             serial += 1
-            outgoing = shot
-            cache(shot, for: current, in: browser)
-            timing = Timing(asked: started, pictured: CACurrentMediaTime())
-            var calm = Transaction()
-            calm.disablesAnimations = true
-            withTransaction(calm) { dragging = true }
+            timing = Timing(asked: started, planned: CACurrentMediaTime())
+            withTransaction(calm) {
+                dragging = true
+                swiping = true
+                switched = false
+                landing = false
+                from = spaces.space(in: browser)
+                leaving = nil
+                anchor.home = current
+                // The previews were planned against the column's scroll as
+                // it was; if it has scrolled since, they land elsewhere now.
+                let scroll = SideScrollElasticity.column?.contentView.bounds.minY ?? 0
+                if abs(scroll - anchor.scrollSeen) > 0.5 { anchor.generation += 1 }
+            }
             watch()
         } else if owner !== browser {
             // Fingers down on one window's column, moving over another's:
@@ -255,26 +314,24 @@ final class SpaceSlide: ObservableObject {
         // not the fingers' — Swipes.swift turns it round for Inverted.
         let forward = travel < 0
         let there = here + (forward ? 1 : -1)
-        var calm = Transaction()
-        calm.disablesAnimations = true
         withTransaction(calm) {
             if travel != 0, spaces.all.indices.contains(there) {
                 let space = spaces.all[there]
-                if arriving?.id != space.id {
-                    arriving = space
-                    incoming = cached(space.id, in: browser)
+                if to?.id != space.id {
+                    to = space
+                    anchor.arriving = space.id
                 }
-                picture = outgoing
+                sliding = true
                 way = forward ? 1 : -1
-                phase = min(1, abs(travel) / width)
+                set(phase: min(1, abs(travel) / width))
                 stretch = 0
             } else {
-                // Nowhere to go this way: no pictures, only the live column
+                // Nowhere to go this way: no preview, only the live column
                 // pulled against a spring that gets stiffer the further it goes.
-                picture = nil
-                arriving = nil
-                incoming = nil
-                phase = 1
+                sliding = false
+                to = nil
+                anchor.arriving = nil
+                set(phase: 0)
                 stretch = SpaceSlide.rubber(travel, over: width)
             }
         }
@@ -297,15 +354,13 @@ final class SpaceSlide: ObservableObject {
     /// Fingers up (or the gesture cancelled): carry on, or go back. `velocity`
     /// is the fingers' in points a second, signed like `travel`. The rest of
     /// the way is a spring that sets off at the fingers' speed, so there is
-    /// no jolt at the hand-over. On a commit the real switch happens first,
-    /// under the curtain — the picture of the old column is still up and the
-    /// live column, now the new space's, takes the incoming picture's place
-    /// in the same frame.
+    /// no jolt at the hand-over. Carrying on, the switch itself waits for
+    /// the spring to land (see `land`).
     func release(velocity: CGFloat, cancelled: Bool, in browser: Browser) {
         guard dragging, owner === browser else { return }
         let mine = serial
         let width = max(column.width, 1)
-        guard picture != nil, let arriving else {
+        guard sliding, let to else {
             // The stretch at an end, home again.
             withAnimation(SpaceSlide.spring(from: stretch, to: 0, speed: velocity), completionCriteria: .logicallyComplete) {
                 stretch = 0
@@ -315,40 +370,44 @@ final class SpaceSlide: ObservableObject {
             }
             return
         }
-        // In phase per second: positive is on towards `arriving`.
+        // In phase per second: positive is on towards `to`.
         let speed = -velocity * way / width
         let fast = SpaceSlide.flick / width
         let commit = !cancelled && (speed > fast || (speed > -fast && phase > SpaceSlide.commitAt))
         timing?.committed = CACurrentMediaTime()
-        if commit {
-            var calm = Transaction()
-            calm.disablesAnimations = true
-            withTransaction(calm) {
-                dragging = false
-                self.arriving = nil
-                landed = phase
-                landing = incoming != nil
-                if !landing { incoming = nil }
-                Spaces.shared.select(arriving.id, in: browser, pictured: true)
-            }
-            // As for a click: one turn of the run loop commits the frame with
-            // the live column where the picture of it was, and the settle
-            // sets off from there. In the same turn SwiftUI would see the
-            // band go from hidden-at-rest straight to home and not move it.
-            DispatchQueue.main.async { self.settle(to: 1, speed: speed, mine) }
-        } else {
-            settle(to: 0, speed: speed, mine)
+        timing?.moved = CACurrentMediaTime()
+        withTransaction(calm) { dragging = false }
+        withAnimation(SpaceSlide.spring(from: phase, to: commit ? 1 : 0, speed: speed), completionCriteria: .logicallyComplete) {
+            set(phase: commit ? 1 : 0)
+        } completion: { [weak self] in
+            guard let self, mine == self.serial else { return }
+            if commit { self.land(to, in: browser, mine) } else { self.end() }
         }
     }
 
-    private func settle(to goal: CGFloat, speed: CGFloat, _ mine: Int) {
-        guard mine == serial, picture != nil else { return }
-        timing?.moved = CACurrentMediaTime()
-        withAnimation(SpaceSlide.spring(from: phase, to: goal, speed: speed), completionCriteria: .logicallyComplete) {
-            phase = goal
-        } completion: { [weak self] in
+    /// The spring has landed with the arriving preview home over the live
+    /// band's place: the real switch, under it. The next turn of the run
+    /// loop commits the swapped column — the one costly frame — and then the
+    /// preview is taken away over the live rows, now the same rows in the
+    /// same places.
+    private func land(_ space: Space, in browser: Browser, _ mine: Int) {
+        guard mine == serial, sliding else { return }
+        timing?.landed = CACurrentMediaTime()
+        withTransaction(calm) {
+            set(phase: 1)
+            switched = true
+            landing = true
+            Spaces.shared.select(space.id, in: browser, sliding: true)
+        }
+        DispatchQueue.main.async { [weak self] in
             guard let self, mine == self.serial else { return }
-            self.end()
+            self.timing?.switched = CACurrentMediaTime()
+            withAnimation(.linear(duration: SpaceSlide.handover), completionCriteria: .logicallyComplete) {
+                self.landing = false
+            } completion: { [weak self] in
+                guard let self, mine == self.serial else { return }
+                self.end()
+            }
         }
     }
 
@@ -361,61 +420,50 @@ final class SpaceSlide: ObservableObject {
         return .interpolatingSpring(duration: 0.3, bounce: 0, initialVelocity: Double(min(12, max(0, relative))))
     }
 
-    // MARK: - the picture
+    // MARK: - where the layers are
 
-    /// The column's pixels, from the window's own drawing, in points at the
-    /// screen's scale — what `SpaceEditing.picture` does for the Space page,
-    /// cut to the column's rectangle of the live window.
-    private func photograph(in window: NSWindow) -> NSImage? {
-        guard let view = window.contentView else { return nil }
-        // The compositor's copy first: the window's own pixels, as already
-        // on screen, cut to the column — a few milliseconds, where asking
-        // the views to draw themselves again (below) took thirty to sixty
-        // and made the slide set off late. An app may always read its own
-        // window; the drawing is only for when that comes back empty.
-        if let fast = composited(view: view, in: window) { return fast }
-        // SwiftUI's global space runs down from the content's top left;
-        // AppKit's, unless the view is flipped, up from its bottom left.
-        let rect = view.isFlipped ? column
-            : NSRect(x: column.minX, y: view.bounds.height - column.maxY, width: column.width, height: column.height)
-        let inside = rect.intersection(view.bounds).integral
-        guard inside.width > 1, inside.height > 1,
-              let rep = view.bitmapImageRepForCachingDisplay(in: inside) else { return nil }
-        view.cacheDisplay(in: inside, to: rep)
-        let image = NSImage(size: inside.size)
-        image.addRepresentation(rep)
-        return image
+    /// The live band's sideways offset in `browser`'s column this frame: a
+    /// click's new rows coming in, a swipe's old rows going out, the stretch
+    /// at an end, or home.
+    func bandOffset(in browser: Browser) -> CGFloat {
+        guard owner === browser else { return 0 }
+        let width = column.width
+        if dragging { return sliding ? -way * width * phase : stretch }
+        guard sliding else { return 0 }
+        if swiping { return switched ? 0 : -way * width * phase }
+        return way * width * (1 - phase)
     }
 
-    /// The column's rectangle of the window, from the window server: the
-    /// whole window's own pixels, cut to the column. Asking the server for a
-    /// rectangle of the screen instead came back shifted by the window's
-    /// framing (about 12 × 8 points) whenever the window was not frontmost.
-    private func composited(view: NSView, in window: NSWindow) -> NSImage? {
-        let local = view.isFlipped ? column
-            : NSRect(x: column.minX, y: view.bounds.height - column.maxY, width: column.width, height: column.height)
-        let inWindow = view.convert(local, to: nil)
-        guard let whole = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
-                                                  [.boundsIgnoreFraming, .bestResolution]),
-              whole.width > 8, window.frame.width > 1 else { return nil }
-        let scale = CGFloat(whole.width) / window.frame.width
-        // The window's picture runs down from its top left.
-        let cut = CGRect(x: inWindow.minX * scale, y: (window.frame.height - inWindow.maxY) * scale,
-                         width: inWindow.width * scale, height: inWindow.height * scale).integral
-        guard let image = whole.cropping(to: cut), image.width > 8, image.height > 8 else { return nil }
-        return NSImage(cgImage: image, size: column.size)
+    /// Where the arriving space's preview is, and how much of it shows:
+    /// beside the live band while a swipe is on, home and fading once the
+    /// switch is under it, and out of sight for a click (whose arriving
+    /// rows are the live band).
+    func arrivingPlace(of space: UUID, in browser: Browser) -> (x: CGFloat, shown: Double) {
+        guard owner === browser, sliding, swiping, to?.id == space else { return (0, 0) }
+        if switched { return (0, landing ? 1 : 0) }
+        return (way * column.width * (1 - phase), 1)
+    }
+
+    /// Where a click's outgoing preview is: on its way out, or — with no
+    /// travel under Reduce Motion — in place and fading.
+    func leavingPlace(in browser: Browser) -> (x: CGFloat, shown: Double) {
+        guard owner === browser, sliding, !swiping else { return (0, 0) }
+        return (-way * column.width * phase, way == 0 ? Double(1 - phase) : 1)
     }
 
     // MARK: - the bench
 
     /// What the last switch cost, in milliseconds from the moment it was
-    /// asked for: the picture, the frame with the new column in it, the first
-    /// frame that moved; and how the frames came while it moved.
+    /// asked for: the plan of the outgoing preview, the frame with the new
+    /// column in it, the first frame that moved, the swipe's landing and
+    /// switch; and how the frames came while it moved.
     private struct Timing {
         var asked: CFTimeInterval
-        var pictured: CFTimeInterval
+        var planned: CFTimeInterval
         var committed: CFTimeInterval?
         var moved: CFTimeInterval?
+        var landed: CFTimeInterval?
+        var switched: CFTimeInterval?
         var ended: CFTimeInterval?
         var frames: [CFTimeInterval] = []
         var period: CFTimeInterval = 0
@@ -450,31 +498,26 @@ final class SpaceSlide: ObservableObject {
 
     /// `spaces slide` — the last switch's timings; `spaces slide at X` —
     /// the next slides stop at X (0…1) and stay, for a picture;
-    /// `spaces slide off` — back to sliding, and any held slide ends.
+    /// `spaces slide off` — back to sliding, and any held slide ends;
+    /// `spaces slide clip on|off` — whether the live band is clipped as it
+    /// travels.
     func bench(_ arg: String) -> [String: Any] {
         let words = arg.split(separator: " ").map(String.init)
         if words.first == "at", words.count > 1, let x = Double(words[1]) {
             hold = min(1, max(0, CGFloat(x)))
-        } else if words.first == "dump", words.count > 1 {
-            // The pictures the swipe has for the sliding (or first) window,
-            // as PNGs, to see what it slides.
-            let dir = words[1]
-            for (id, image) in caches[ObjectIdentifier(owner ?? Windows.main)] ?? [:] {
-                let name = Spaces.shared.all.first { $0.id == id }?.name ?? id.uuidString
-                if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
-                    try? png.write(to: URL(fileURLWithPath: "\(dir)/cache-\(name).png"))
-                }
-            }
         } else if words.first == "off" {
             hold = nil
-            if picture != nil { end() }
+            if moving { end() }
+        } else if words.first == "clip", words.count > 1 {
+            SpaceSlide.clipsBand = words[1] == "on"
         }
         let browser = owner ?? Windows.main
         var note: [String: Any] = ["moving": moving, "hold": hold.map { Double($0) } ?? -1,
-                                   "dragging": dragging, "phase": (Double(phase) * 1000).rounded() / 1000,
+                                   "dragging": dragging, "swiping": swiping, "switched": switched, "landing": landing,
+                                   "phase": (Double(phase) * 1000).rounded() / 1000,
                                    "way": Double(way), "stretch": (Double(stretch) * 10).rounded() / 10,
-                                   "arriving": arriving?.name ?? "", "incoming": incoming != nil, "landing": landing,
-                                   "cached": (caches[ObjectIdentifier(browser)] ?? [:]).keys.compactMap { id in Spaces.shared.all.first { $0.id == id }?.name },
+                                   "from": from?.name ?? "", "to": to?.name ?? "", "leaving": leaving?.space.name ?? "",
+                                   "premount": SpacePreview.premount, "clip": SpaceSlide.clipsBand,
                                    "space": Spaces.shared.space(in: browser).name,
                                    "owner": Windows.all.firstIndex { $0 === browser } ?? -1,
                                    "window": Windows.window(of: browser).map { w in [Int(w.frame.minX), Int(w.frame.minY), Int(w.frame.width), Int(w.frame.height),
@@ -484,9 +527,11 @@ final class SpaceSlide: ObservableObject {
                                    "band": [Int(band.minX), Int(band.minY), Int(band.width), Int(band.height)]]
         guard let t = timing else { return note }
         func ms(_ x: CFTimeInterval?) -> Double { x.map { (($0 - t.asked) * 10000).rounded() / 10 } ?? -1 }
-        note["picture"] = ms(t.pictured)
+        note["planned"] = ms(t.planned)
         note["committed"] = ms(t.committed)
         note["moved"] = ms(t.moved)
+        note["landed"] = ms(t.landed)
+        note["switched"] = ms(t.switched)
         note["ended"] = ms(t.ended)
         let gaps = zip(t.frames.dropFirst(), t.frames).map { $0 - $1 }
         note["frames"] = t.frames.count
@@ -497,14 +542,23 @@ final class SpaceSlide: ObservableObject {
     }
 }
 
-// MARK: - the two layers
+// MARK: - the layers
 
-/// The band that travels — the space's name and its rows; the favourites
-/// above it are the same in every space and stay put — as the real, live
-/// column: in from the side while a slide is on, and held
-/// to its own edges while it is, so the part still on its way in never draws
-/// over the page. At rest it is not clipped at all, so nothing that hangs
-/// over its edge (a row in the hand, its shadow) is cut.
+// Three layers, on one ground. The ground (SpaceGround, the column's
+// background) is live and never pictured: it blends the outgoing theme
+// towards the incoming one by `phase`. Over it travel the bands — the live
+// one and a preview — carrying their own space's ink and nothing else; and
+// over everything the lights, the address, the favourites and the strip
+// stay put with their ink mixed between the two spaces'. Nothing holds a
+// ground, so there is no edge where one ground meets another and nothing
+// to ghost.
+
+/// The band that travels — the space's name and its rows — as the real, live
+/// column: in from the side after a click's switch, out under the fingers
+/// during a swipe, pulled against the rubber band at an end with nowhere to
+/// go, and held to its own edges while it moves so the part still on its
+/// way never draws over the page. At rest it is not clipped at all, so
+/// nothing that hangs over its edge (a row in the hand, its shadow) is cut.
 struct SpaceSlideBand: ViewModifier {
     let browser: Browser
     @ObservedObject private var slide = SpaceSlide.shared
@@ -512,16 +566,9 @@ struct SpaceSlideBand: ViewModifier {
     init(browser: Browser) { self.browser = browser }
 
     func body(content: Content) -> some View {
-        // Only the sliding window's column moves; another window's stays put.
-        let mine = slide.owner === browser
-        let moving = slide.moving(in: browser)
         content
-            .offset(x: !mine ? 0 : slide.dragging ? slide.stretch
-                : slide.picture != nil ? slide.way * slide.column.width * (1 - slide.phase) : 0)
-            // While a swipe is pictured, the curtain draws both columns and
-            // this one, still the old space's, only has to keep out of sight.
-            .opacity(mine && slide.dragging && slide.picture != nil ? 0 : 1)
-            .clipShape(BandEdge(on: moving))
+            .offset(x: slide.bandOffset(in: browser))
+            .clipShape(BandEdge(on: SpaceSlide.clipsBand && slide.moving(in: browser)))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slide.place(band: $0, in: browser) }
     }
 
@@ -534,11 +581,43 @@ struct SpaceSlideBand: ViewModifier {
     }
 }
 
-/// The old column, over the new one while a slide is on: its copy of the
-/// band slides out and fades; its copy of everything else — the lights, the
-/// address, the strip, and the old ground behind them — fades where it
-/// stands, so the theme crossfades while the rows travel. Takes no clicks:
-/// the new column under it is the real one from the first frame.
+/// The parts of the column that stay put — the lights, the address, the
+/// strip — drawn in an ink mixed from the old space's to the new one's by
+/// the slide's progress, so they change with the ground under them. At
+/// rest, the current space's. The content is built once from whatever tint
+/// this hands it; only the tint changes.
+struct SlideInk<Content: View>: View {
+    let browser: Browser
+    @ViewBuilder let content: (SpaceTint) -> Content
+    /// The slide's coarse steps, not the slide: the content is re-mixed a
+    /// couple of dozen times across a swipe rather than every frame.
+    @ObservedObject private var ink = SpaceSlide.shared.ink
+    @ObservedObject private var spaces = Spaces.shared
+    @Environment(\.colorScheme) private var scheme
+
+    init(browser: Browser, @ViewBuilder content: @escaping (SpaceTint) -> Content) {
+        self.browser = browser
+        self.content = content
+    }
+
+    var body: some View {
+        let dark = scheme == .dark
+        let slide = SpaceSlide.shared
+        let tint: SpaceTint = {
+            if slide.sliding, slide.owner === browser, let from = slide.from, let to = slide.to, from.id != to.id {
+                return SpaceTint(theme: from.look.mixed(to.look, Double(CGFloat(ink.step) / SpaceSlide.inkSteps)), dark: dark)
+            }
+            return SpaceTint(space: spaces.space(in: browser), dark: dark)
+        }()
+        content(tint)
+    }
+}
+
+/// The previews over the column while a slide is on — the arriving space's
+/// rows coming in beside the live band during a swipe, the old space's rows
+/// going out after a click's switch — and, hidden, the neighbours kept
+/// ready for the next swipe. On clear: the ground under them is the
+/// column's own. Takes no clicks: the column under it is the real one.
 struct SpaceSlideCurtain: View {
     let browser: Browser
     @ObservedObject private var slide = SpaceSlide.shared
@@ -547,98 +626,32 @@ struct SpaceSlideCurtain: View {
     init(browser: Browser) { self.browser = browser }
 
     var body: some View {
-        if let picture = slide.picture, slide.owner === browser {
-            let size = slide.column.size
-            let top = max(0, slide.band.minY - slide.column.minY)
-            let height = min(slide.band.height, size.height - top)
-            ZStack(alignment: .topLeading) {
-                if slide.dragging { arriving(size: size, top: top, height: height, fallback: picture) }
-                if slide.landing, let incoming = slide.incoming {
-                    band(incoming, size: size, top: top, height: height)
-                        .opacity(Double((1 - slide.phase) / max(0.001, 1 - slide.landed)))
-                }
-                outgoing(picture, size: size, top: top, height: height)
-            }
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
-            .allowsHitTesting(false)
-        }
-    }
-
-    /// While a swipe is on, what a slide has as its live new column: the
-    /// arriving space's ground, its picture's lights and strip in place, its
-    /// band coming in from the side. With no picture of it yet, the old
-    /// column's lights and strip stand in and the band is bare ground.
-    ///
-    /// An animated arriving space draws no ground of its own here: the
-    /// column's live scene underneath is already mixing towards it (see
-    /// `ThemeBackdrop`'s `live`), and a second scene for the curtain would be
-    /// a second WebContent process that seldom loads before the fingers lift.
-    /// Its lights and strip are not pictured in either — they would bring a
-    /// frozen frame of the scene with them — so the live column's stand until
-    /// the switch.
-    @ViewBuilder
-    private func arriving(size: CGSize, top: CGFloat, height: CGFloat, fallback: NSImage) -> some View {
-        let animated = slide.arriving?.look.motion != nil
-        if let space = slide.arriving, !animated {
-            ThemeBackdrop(theme: space.look, dark: scheme == .dark)
-                .frame(width: size.width, height: size.height)
-        }
-        if !animated {
-            Image(nsImage: slide.incoming ?? fallback)
-                .resizable()
-                .frame(width: size.width, height: size.height)
-                .mask(alignment: .topLeading) {
-                    VStack(spacing: 0) {
-                        Rectangle().frame(height: top)
-                        Color.clear.frame(height: height)
-                        Rectangle()
-                    }
-                }
-        }
-        if let incoming = slide.incoming {
-            band(incoming, size: size, top: top, height: height)
-        }
-    }
-
-    /// The arriving space's band, pictured, where the live one would be.
-    private func band(_ incoming: NSImage, size: CGSize, top: CGFloat, height: CGFloat) -> some View {
-        Image(nsImage: incoming)
-            .resizable()
-            .frame(width: size.width, height: size.height)
-            .offset(x: slide.way * size.width * (1 - slide.phase))
-            .mask(alignment: .topLeading) {
-                Rectangle()
-                    .frame(width: max(0, size.width - 1), height: height)
-                    .offset(y: top)
-            }
-    }
-
-    private func outgoing(_ picture: NSImage, size: CGSize, top: CGFloat, height: CGFloat) -> some View {
+        let column = slide.column(in: browser)
+        let band = slide.band(in: browser)
+        let top = max(0, band.minY - column.minY)
+        let height = max(1, min(band.height, column.height - top))
+        let width = max(1, column.width)
         ZStack(alignment: .topLeading) {
-            // Everything that stays: the picture with the band cut out.
-            Image(nsImage: picture)
-                .resizable()
-                .frame(width: size.width, height: size.height)
-                .mask(alignment: .topLeading) {
-                    VStack(spacing: 0) {
-                        Rectangle().frame(height: top)
-                        Color.clear.frame(height: height)
-                        Rectangle()
-                    }
-                }
-            // The band, on its way out. Its last point is the column's
-            // hairline, which stays put, so it is left behind.
-            Image(nsImage: picture)
-                .resizable()
-                .frame(width: size.width, height: size.height)
-                .offset(x: -slide.way * size.width * slide.phase)
-                .mask(alignment: .topLeading) {
-                    Rectangle()
-                        .frame(width: max(0, size.width - 1), height: height)
-                        .offset(y: top)
-                }
+            SpacePreviewStack(browser: browser, width: width, height: height, dark: scheme == .dark)
+                .equatable()
+            if slide.owner === browser, slide.sliding, let leaving = slide.leaving {
+                // A click's old rows, on their way out.
+                let place = slide.leavingPlace(in: browser)
+                SpacePreview(model: leaving, width: width, height: height, dark: scheme == .dark)
+                    .equatable()
+                    .offset(x: place.x)
+                    .opacity(place.shown)
+            }
         }
-        .frame(width: size.width, height: size.height, alignment: .topLeading)
-        .opacity(1 - slide.phase)
+        .frame(width: width, height: height, alignment: .topLeading)
+        .clipped()
+        .offset(y: top)
+        .allowsHitTesting(false)
     }
+}
+
+/// The slide's progress in coarse steps (see `SpaceSlide.ink`).
+@MainActor
+final class InkSteps: ObservableObject {
+    @Published var step = 0
 }

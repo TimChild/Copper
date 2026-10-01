@@ -9,7 +9,7 @@ import Foundation
 struct Setup {
     static let feed = "https://forca.apps.exowatt.com"
     static let installCommand = "curl -fsSL \(feed)/downloads/copper-install.sh | sh"
-    static let brewCommand = "brew install --cask exowatt-labs/copper/copper"
+    static let brewCommand = "brew install --cask copper-browser/copper/copper"
 
     enum State: String, Codable {
         case missing, stale, ready

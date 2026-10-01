@@ -29,5 +29,5 @@ if [ -n "$hit" ] && [ -x "$hit/Contents/MacOS/Copper" ]; then
   exec "$hit/Contents/MacOS/Copper" --cli "$@"
 fi
 
-echo "copper: Copper.app not found — install it: curl -fsSL https://forca.apps.exowatt.com/downloads/copper-install.sh | sh   (or: brew install --cask exowatt-labs/copper/copper)" >&2
+echo "copper: Copper.app not found — install it: curl -fsSL https://forca.apps.exowatt.com/downloads/copper-install.sh | sh   (or: brew install --cask copper-browser/copper/copper)" >&2
 exit 2

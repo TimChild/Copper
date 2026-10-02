@@ -24,6 +24,8 @@ import WebKit
 //       `scroll stats` is the last gesture's numbers.
 //   canvas perf start | stop    rAF frame times on the board in front, and wheel lag
 //   canvas lean                 what the board in front was spared (CanvasLean.swift)
+//   canvas frames [ID]          live web frames: the reports the host passed on, the embedding
+//                               preference and the board's cookie store (CanvasFrames.swift)
 //   canvas ask-rename ID · ask-delete ID · answer delete|leave|cancel · sheet
 //                               the row's Rename Canvas… (the field on the row, or the
 //                               sheet) and Delete Canvas… sheet, and its buttons
@@ -70,6 +72,16 @@ extension CanvasTools {
             CanvasBench.perf(words.first ?? "", in: browser, answer: answer)
         case "lean":
             CanvasBench.lean(in: browser, answer: answer)
+        case "frames":
+            // Live web frames on the board in front (or ID's): what the host
+            // has heard from them, and whether refusing sites may load.
+            let id = entry(words.first)?.id ?? CanvasHost.active(in: browser)
+            guard let id, let host = CanvasHost.hosts(of: id).first(where: \.isReady), let web = host.tab?.built else {
+                return answer(["error": "canvas frames [ID] — a canvas that is up"])
+            }
+            answer(["canvas": id, "board": web.board, "embedding": CanvasHost.embeddingAllowed(web).map { $0 as Any } ?? NSNull(),
+                    "store": web.configuration.websiteDataStore.identifier?.uuidString ?? (web.configuration.websiteDataStore.isPersistent ? "default" : "ephemeral"),
+                    "events": host.frameEvents])
         case "ask-rename":
             guard let target = entry(words.first),
                   let tab = CanvasTabs.tabs(showing: target.id).first(where: { t in browser.tabs.contains { $0 === t } })

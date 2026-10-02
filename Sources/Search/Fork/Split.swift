@@ -241,10 +241,10 @@ struct SplitStage: View {
     @ObservedObject private var trace = Drive.shared
     @ObservedObject private var flow = Flow.shared
 
-    /// The stage, and the panes beside it when they are open — the agent's,
-    /// and the driver timeline while something drives the page (Jev, an agent
-    /// on the loopback server, a linked bot). Both may be open at once; they
-    /// take their width from the page, never from the sidebar.
+    /// The stage, and the agent's pane beside it when it is open — the one
+    /// conversation, where whatever drives the page (Jev, an agent on the
+    /// loopback server, a linked bot) shows as a card. It takes its width
+    /// from the page, never from the sidebar.
     var body: some View {
         HStack(spacing: 0) {
             driven
@@ -253,14 +253,8 @@ struct SplitStage: View {
                 AgentPane(browser: browser)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
-            if trace.paneOpen {
-                Rectangle().fill(Palette.hairline).frame(width: 1)
-                DrivePane(browser: browser)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
         }
         .animation(Motion.glide, value: agent.open)
-        .animation(Motion.glide, value: trace.paneOpen)
         .sheet(isPresented: $flow.open) { FlowSheet(browser: browser) }
     }
 

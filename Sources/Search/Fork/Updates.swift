@@ -26,6 +26,10 @@ final class Updates: ObservableObject {
         let publishedAt: String
         let sha256: String?
         let archiveUrl: String?
+        /// What's new, as the release says it: NOTES.md's first paragraph.
+        /// Optional — feeds from before it was published have none, and an
+        /// `updates.json` saved by an older Copper decodes without it.
+        let notes: String?
     }
 
     /// A release that has been downloaded, verified and unpacked, waiting for
@@ -63,6 +67,7 @@ final class Updates: ObservableObject {
         let publishedAt: String
         let sha256: String?
         let archiveUrl: String?
+        let notes: String?
     }
 
     private struct Saved: Codable {
@@ -91,6 +96,9 @@ final class Updates: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var checking = false
     @Published private(set) var downloading = false
+    /// How far the download has got, 0 to 1, while `downloading`; nil before
+    /// the server has said how big it is. The sidebar's pill draws it.
+    @Published private(set) var progress: Double?
     /// Why the download or the verification of the latest release failed.
     @Published private(set) var stageError: String?
     @Published private(set) var staged: Staged?
@@ -134,6 +142,12 @@ final class Updates: ObservableObject {
         }
         return false
     }
+
+    /// A test world on the real feed: it never stages those releases (see
+    /// `stage`), so nothing in it should offer them either — every probe
+    /// world's screenshots would carry an update pill. A world the bench
+    /// pointed at a feed of its own is a test of updating, and is not quiet.
+    var quietHere: Bool { Store.testing && manifestURL == Self.defaultManifestURL }
 
     /// The host releases come from, for the sentence under the card.
     var feedHost: String { manifestURL.host ?? Setup.feed }
@@ -223,9 +237,11 @@ final class Updates: ObservableObject {
             guard manifest.schemaVersion == 1, manifest.product.lowercased() == "copper",
                   !manifest.version.isEmpty, !manifest.releaseId.isEmpty
             else { return .failure("The update feed was not a Copper release.") }
+            let notes = manifest.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
             return .success(Latest(version: manifest.version, releaseId: manifest.releaseId,
                                    commit: manifest.commit, publishedAt: manifest.publishedAt,
-                                   sha256: manifest.sha256, archiveUrl: manifest.archiveUrl))
+                                   sha256: manifest.sha256, archiveUrl: manifest.archiveUrl,
+                                   notes: notes?.isEmpty == false ? notes : nil))
         } catch is URLError {
             return .failure("Couldn’t reach the Copper update feed.")
         } catch is DecodingError {
@@ -250,14 +266,18 @@ final class Updates: ObservableObject {
             return
         }
         downloading = true
+        progress = nil
         stageError = nil
         let want = latest
         let folder = Self.updatesFolder
         Self.note("staging \(want.version) from \(want.archiveUrl ?? "no archive URL")")
         Task { [weak self] in
-            let result = await Self.fetchAndStage(want, into: folder)
+            let result = await Self.fetchAndStage(want, into: folder) { fraction in
+                Task { @MainActor in Updates.shared.downloaded(fraction) }
+            }
             guard let self else { return }
             downloading = false
+            progress = nil
             switch result {
             case .success(let done):
                 staged = done
@@ -289,10 +309,18 @@ final class Updates: ObservableObject {
         case failure(String)
     }
 
+    /// A late report from a download that already finished must not put a
+    /// fraction back on a pill that has moved on.
+    private func downloaded(_ fraction: Double) {
+        guard downloading else { return }
+        progress = fraction
+    }
+
     /// Off the main actor: the download, the hash, ditto, codesign. Nothing
     /// here touches the running bundle; a failure leaves at most a folder
     /// under `updates/` that the next attempt clears.
-    private nonisolated static func fetchAndStage(_ latest: Latest, into folder: URL) async -> StageResult {
+    private nonisolated static func fetchAndStage(_ latest: Latest, into folder: URL,
+                                                  progress: @escaping @Sendable (Double) -> Void) async -> StageResult {
         let files = FileManager.default
         let version = latest.version
         guard let raw = latest.archiveUrl, let url = URL(string: raw) else {
@@ -308,8 +336,9 @@ final class Updates: ObservableObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 120
         let zip: URL
+        let watch = DownloadWatch(progress)
         do {
-            let (downloaded, response) = try await URLSession.shared.download(for: request)
+            let (downloaded, response) = try await URLSession.shared.download(for: request, delegate: watch)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 try? files.removeItem(at: downloaded)
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -864,6 +893,8 @@ final class Updates: ObservableObject {
             "available": available,
             "ready": ready,
             "downloading": downloading,
+            "progress": progress ?? -1,
+            "notes": latest?.notes ?? "",
             "stageError": stageError ?? "",
             "staged": staged.map { ["version": $0.version, "path": $0.path, "sha256": $0.sha256] } ?? [:],
             "managedByBrew": managedByBrew,
@@ -874,5 +905,40 @@ final class Updates: ObservableObject {
             "outcome": outcome.map { ["ok": $0.ok, "detail": $0.detail, "at": ISO8601DateFormatter().string(from: $0.at)] } ?? [:],
             "log": Self.log.path,
         ]
+    }
+}
+
+/// Hands a download's fraction out as it goes. The async `download(for:)`
+/// reports nothing until it is done; its task keeps a `Progress` all along,
+/// and a task delegate is the way to reach the task. Reports are thinned to
+/// whole percents — the pill redraws on each one.
+private final class DownloadWatch: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let report: @Sendable (Double) -> Void
+    private let lock = NSLock()
+    private var watching: NSKeyValueObservation?
+    private var said = -1
+
+    init(_ report: @escaping @Sendable (Double) -> Void) {
+        self.report = report
+    }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        let seen = task.progress.observe(\.fractionCompleted, options: [.new]) { [weak self] progress, _ in
+            self?.moved(progress)
+        }
+        lock.withLock { watching = seen }
+    }
+
+    private func moved(_ progress: Progress) {
+        // No total yet is nothing to draw: the pill keeps its turning ring.
+        guard progress.totalUnitCount > 0 else { return }
+        let fraction = min(1, max(0, progress.fractionCompleted))
+        let percent = Int(fraction * 100)
+        let due: Bool = lock.withLock {
+            guard percent != said else { return false }
+            said = percent
+            return true
+        }
+        if due { report(fraction) }
     }
 }

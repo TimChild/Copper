@@ -223,6 +223,8 @@ final class CanvasHost {
     private var peers: [UInt: (user: String, seen: Date)] = [:]
     /// Short-lived hashes of updates just passed between this Mac's tabs.
     private var recent: [Int] = []
+    /// The last live-frame reports handed to the page (CanvasFrames), for the bench.
+    var frameEvents: [[String: Any]] = []
 
     var entry: Canvases.Entry? { Canvases.shared.entry(canvasId) }
     var store: CanvasStore { CanvasStore.store(for: storeKey) }
@@ -288,11 +290,16 @@ final class CanvasHost {
     static func configuration(for url: URL) -> WKWebViewConfiguration? {
         guard CanvasLinks.isCanvas(url) else { return nil }
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = Store.testing && !Store.ownContainer
-            ? WKWebsiteDataStore(forIdentifier: Store.probeStore(1)) : .default()
+        // The space's own jar (its profile's, if it wears one), as a tab
+        // built here would get: live web frames are signed in as you are in
+        // this space (CanvasFrames). The board's own data never lives there.
+        config.websiteDataStore = Store.websites
         config.applicationNameForUserAgent = Web.userAgentName
         if Store.testing, !Store.measuring { config.preferences.inactiveSchedulingPolicy = .none }
+        // Sites that refuse to be framed load in the board's frames, on this view only.
+        allowEmbedding(config.preferences)
         config.userContentController.add(CanvasRelay.shared, name: handler)
+        addFrameHandler(config.userContentController)
         attached.add(config.userContentController)
         made.add(config.userContentController)
         return config
@@ -311,12 +318,14 @@ final class CanvasHost {
         guard !attached.contains(controller) else { return }
         controller.removeScriptMessageHandler(forName: handler)
         controller.add(CanvasRelay.shared, name: handler)
+        addFrameHandler(controller)
         attached.add(controller)
     }
 
     private static func detach(_ web: WKWebView?) {
         guard let controller = web?.configuration.userContentController, attached.contains(controller) else { return }
         controller.removeScriptMessageHandler(forName: handler)
+        removeFrameHandler(controller)
         attached.remove(controller)
     }
 
@@ -683,6 +692,7 @@ final class CanvasHost {
         CanvasPresence.shared.recount()
         statusNow()
         shareNow()
+        tellFrameHost()
         // A board opened from a log is folded into one snapshot straight
         // away: the next open hands the page the whole document in `init`
         // (so it sees its own name and history at once) and replays nothing.

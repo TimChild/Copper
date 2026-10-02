@@ -76,6 +76,12 @@ export interface Shape {
   /** link */
   url?: string
   favicon?: string
+  /**
+   * link: show the site itself (an <iframe>, `canvas/frames.ts`) rather than
+   * a card. A plain extra key on the link, so an older client still reads
+   * the shape as a link card and keeps the flag when it copies or edits it.
+   */
+  live?: boolean
 }
 
 /** Default size per type; arrows and images size themselves. */

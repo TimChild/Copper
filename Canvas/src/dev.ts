@@ -8,6 +8,9 @@
  *   `&empty=1`  start from a blank board
  *   `&status=shared-offline&pending=3` what the host says via `setStatus`
  *   `&theme=dark|light`, `&readonly=1`
+ *   `&frames=1` live web frames (Wikipedia, and a card beside it); `&frames=refused`
+ *   also says the host reports frame loads, so frames nobody reports show the
+ *   "can't be shown here" state (nobody reports outside Copper)
  */
 import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
@@ -100,6 +103,11 @@ const DEMO_OPS = (dark: boolean) => [
   { op: 'connect', id: 'a4', from: 'f-chart', to: 'l1', fromSide: 'bottom', toSide: 'top' },
 ]
 
+/** `&frames=1`: a live frame beside the demo, as an agent would add one. */
+const FRAME_OPS = [
+  { op: 'add', shape: { type: 'web', id: 'web1', x: 760, y: -280, w: 900, h: 620, url: 'https://en.wikipedia.org/wiki/Monkey', title: 'Monkey - Wikipedia' } },
+]
+
 export function startDev(params: URLSearchParams) {
   const host = hostDouble()
   const theme = params.get('theme')
@@ -126,7 +134,8 @@ export function startDev(params: URLSearchParams) {
   let state: string | null = null
   if (params.get('empty') !== '1') {
     const store = new CanvasStore(new Y.Doc())
-    const seeded = applyOps({ store, viewportCenter: () => ({ x: 0, y: 0 }) }, { ops: DEMO_OPS(dark), as: { id: 'seed', name: 'Demo' } })
+    const ops = params.get('frames') ? [...DEMO_OPS(dark), ...FRAME_OPS] : DEMO_OPS(dark)
+    const seeded = applyOps({ store, viewportCenter: () => ({ x: 0, y: 0 }) }, { ops, as: { id: 'seed', name: 'Demo' } })
     if (seeded.errors.length) console.warn('[dev] seed errors', JSON.stringify(seeded.errors))
     state = toBase64(Y.encodeStateAsUpdate(store.doc))
   }
@@ -139,9 +148,10 @@ export function startDev(params: URLSearchParams) {
     online,
     readOnly: params.get('readonly') === '1',
   })
+  if (params.get('frames') === 'refused') window.copperCanvas!.frameHost({ reports: true })
   const status = params.get('status')
   if (status) window.copperCanvas!.setStatus({ mode: status, pending: Number(params.get('pending') ?? 0) })
-  if (params.get('peers') === '1') simulatePeer(params.get('laser') === '1')
+  if (params.get('peers') === '1') simulatePeer(params.get('laser') === '1', params.get('frames') ? 'web1' : null)
   if (params.get('agent') === '1') simulateAgent()
   ;(window as unknown as { __dev: unknown }).__dev = { relay, controller }
   ;(window as unknown as { __canvasDebug: unknown }).__canvasDebug = {
@@ -155,7 +165,7 @@ export function startDev(params: URLSearchParams) {
  * A collaborator wandering the board (awareness only). With `&laser=1` she
  * circles things with the laser pointer every few seconds.
  */
-function simulatePeer(laser = false) {
+function simulatePeer(laser = false, frame: string | null = null) {
   const session = controller.session
   if (!session) return
   const ghost = new Awareness(new Y.Doc())
@@ -181,8 +191,9 @@ function simulatePeer(laser = false) {
       name: 'Ada',
       color: '#2f6fdf',
       cursor,
-      selection: ['s5'],
+      selection: frame ? [frame] : ['s5'],
       laser: laser ? trails.localWire() : null,
+      frame,
     })
     applyAwarenessUpdate(session.awareness, encodeAwarenessUpdate(ghost, [ghost.clientID]), 'dev')
   }

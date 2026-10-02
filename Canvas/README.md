@@ -1,7 +1,8 @@
 # Canvas
 
 The infinite whiteboard Copper shows at `copper://canvas/<id>`: stickies (markdown), text, frames
-(optionally holding an image), arrows that attach to shapes or their sides, images, and link cards;
+(optionally holding an image), arrows that attach to shapes or their sides, images, link cards and
+live web frames (a link with `live: true`: the site itself in an iframe, `src/canvas/frames.ts`);
 select, multi-select, marquee, move, resize, undo/redo, search, live cursors, a laser pointer
 everyone on the board sees, and agent presence. Boards from Easels come over through `importLegacy`.
 
@@ -9,8 +10,9 @@ It is a Vite + React 19 + TypeScript + Tailwind v4 page, built with **bun** into
 file, **`dist/canvas.html`** (≈ 500 KB; every script and style inlined, no fonts or other requests).
 That file is committed and copied into the app bundle; the app does not need bun to build.
 
-The page never talks to the network. Copper hosts it in a `WKWebView`, persists its Yjs updates,
-and relays the sync socket over the bridge described below.
+The page never talks to the network (its CSP has `connect-src 'none'`; a live frame's iframe is
+the site's own document, allowed by `frame-src https: http:`). Copper hosts it in a `WKWebView`,
+persists its Yjs updates, and relays the sync socket over the bridge described below.
 
 ## Develop
 
@@ -31,6 +33,7 @@ bun run dev            # then open http://localhost:5173/?dev=1
 | `online=1` | the relayed sync socket against an in-page server (`src/dev-relay.ts`) |
 | `theme=dark\|light` | force a theme (otherwise `prefers-color-scheme`) |
 | `status=…&pending=N` | what the host would say through `setStatus` (e.g. `status=shared-offline&pending=3`) |
+| `frames=1` | a live web frame (Wikipedia) beside the demo; with `peers=1` the collaborator is using it. `frames=refused` also says the host reports frame loads, so the frame (which nobody reports outside Copper) shows its "doesn't allow embedding" card |
 | `readonly=1`, `name=…`, `kind=personal\|shared` | init options |
 
 Checks (all must pass):
@@ -117,6 +120,8 @@ copperCanvas.setShare({ canShare: true, members: 2 }) // show/enables the native
 copperCanvas.setShare({ canShare: false, reason: "Sign in to share" }) // disabled with a tooltip
 copperCanvas.presence()                       // [{id,name,color,kind,cursor:{x,y}|null}] for everyone else
 copperCanvas.theme("dark")                  // "light" | "dark" | "system" (default: system)
+copperCanvas.frameEvent({ name, kind: "nav", url, title, icon }) // a live frame's report (also "escape", "blank"); → true if a frame took it
+copperCanvas.frameHost({ reports: true })   // the host reports every frame: one that never does didn't load
 
 await copperCanvas.importLegacy({           // an Easels board onto this canvas (see below)
   doc: "AVji…",                             // base64 of the board's doc.yjs

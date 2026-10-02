@@ -181,7 +181,7 @@ struct HandCapsule: View {
         HStack(spacing: 6) {
             HandSquare(hand: hand, size: 14)
                 .opacity(hand.busy ? 1 : (breathing ? 0.55 : 1))
-            Button { drive.paneOpen.toggle() } label: {
+            Button { Agent.shared.reveal() } label: {
                 (Text(hand.who.agent).fontWeight(.semibold)
                  + Text(hand.who.thread.isEmpty ? "" : "  ·  \(hand.who.thread)"))
                     .font(.system(size: 11))

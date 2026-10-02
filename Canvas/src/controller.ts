@@ -28,6 +28,7 @@ import { occupied } from './placement'
 import { parseHostStatus, sameHostStatus, type HostStatus, type SyncStatus } from './canvas/status'
 import { createPresenceReporter, hostPresence, readPresence } from './canvas/presence'
 import type { Me } from './canvas/types'
+import { FrameBus, parseFrameEvent } from './canvas/frames'
 import { hostLog, postToHost } from './host-bridge'
 import { applyOps, readCanvas, type ApplyResult, type CanvasRead } from './ops'
 
@@ -148,6 +149,7 @@ export class Session {
       cursor: null,
       selection: [],
       laser: null,
+      frame: null,
     })
     this.presenceReporter = createPresenceReporter(people => postToHost({ type: 'presence', people }), 400)
     this.awareness.on('change', this.reportPresence)
@@ -240,6 +242,8 @@ export class Controller {
   private hostStatus: HostStatus | null = null
   /** Share capability supplied by Copper; null keeps the Share button hidden. */
   private share: ShareConfig | null = null
+  /** Live frames' reports from the host, to the view that owns each frame. */
+  readonly frames = new FrameBus()
 
   subscribe = (fn: Listener) => {
     this.listeners.add(fn)
@@ -315,6 +319,22 @@ export class Controller {
     this.hostStatus = next
     this.emit()
     return next
+  }
+
+  // ---- live frames --------------------------------------------------------------
+
+  frameEvent(raw: unknown): boolean {
+    const e = parseFrameEvent(raw)
+    return e ? this.frames.emit(e) : false
+  }
+
+  frameHost(raw: unknown) {
+    let v = raw
+    if (typeof v === 'string') v = JSON.parse(v)
+    const reports = isObject(v) && v.reports === true
+    if (reports === this.frames.reports) return
+    this.frames.reports = reports
+    this.emit()
   }
 
   // ---- viewport ----------------------------------------------------------------

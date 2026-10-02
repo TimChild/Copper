@@ -10,7 +10,7 @@ import Foundation
 /// Cycles — for Jev a cycle is read → ask → act → settle; for a tool call it
 /// is the one call, timed — and an outcome per cycle in the page's own words.
 ///
-/// The pane beside the page (DrivePane) and the pill over it only read this.
+/// The agent pane's driver cards (DriveCard) and the pill over the page only read this.
 /// `stop()` is the one thing that travels the other way: a Jev session checks
 /// `stopRequested` before its next action; an agent's next tool call is
 /// refused (`refusal`) until the user lets it back in or the window passes.
@@ -23,14 +23,22 @@ final class Drive: ObservableObject {
     static let shared = Drive()
 
     /// The live run, or the last one until a new one starts or `dismiss()`.
-    @Published private(set) var run: Run?
+    /// The agent pane's transcript is told each time it becomes another
+    /// run, so a run that is replaced is kept there as it ended.
+    @Published private(set) var run: Run? {
+        didSet { if oldValue?.id != run?.id { Agent.shared.driveChanged(from: oldValue, to: run) } }
+    }
     /// True while someone has the wheel: a Jev loop between begin and finish,
     /// or an agent between its first call and `grace` seconds after its last.
     @Published private(set) var live = false
     /// A call is in flight right now. Between calls a live driver is thinking.
     @Published private(set) var busy = false
-    /// The pane beside the page. Set true when a run begins; the user may close it.
-    @Published var paneOpen = false
+    /// The pane beside the page, which is the agent's: a run is a card in
+    /// its conversation. Set true when a run begins; the user may close it.
+    var paneOpen: Bool {
+        get { Agent.shared.open }
+        set { if newValue { Agent.shared.reveal() } else { Agent.shared.open = false } }
+    }
     /// Set by `stop()`; a Jev Session reads it and ends with status "stopped".
     @Published private(set) var stopRequested = false
     /// After Stop on an agent's run: tool calls are refused until this instant.
@@ -308,11 +316,20 @@ final class Drive: ObservableObject {
     /// The pane's agent, which is one session.
     var refusal: String? { refusal(for: Who.plain(.pane).key) }
 
-    /// Put the last run away. Only when nothing is running.
+    /// Put the last run away. Only when nothing is running. Its card stays
+    /// in the conversation, as it ended; the pane stays as it is.
     func dismiss() {
         guard !live else { return }
         run = nil
-        paneOpen = false
+    }
+
+    /// The bench's way to picture a card: a whole run, as given, without a
+    /// driver behind it. Live until `finish` or Stop.
+    func seed(_ seeded: Run, live: Bool) {
+        graceTimer?.invalidate(); graceTimer = nil
+        run = seeded
+        self.live = live
+        busy = false
     }
 
     // MARK: - tool calls
@@ -487,6 +504,16 @@ final class Drive: ObservableObject {
         case "browser_autofill": return ("Filling a saved \((args["kind"] as? String) ?? "item")", detail)
         case "browser_perf_probe": return ("Sampling the page's performance", detail)
         case "jev_observe": return ("Reading the page (Jev)", detail)
+        case "canvas_read": return ("Reading the canvas", detail)
+        case "canvas_apply":
+            let ops = (args["ops"] as? [Any])?.count ?? 0
+            return (ops > 0 ? "Changing the canvas · \(ops) op\(ops == 1 ? "" : "s")" : "Changing the canvas", detail)
+        case "canvas_list": return ("Listing canvases", detail)
+        case "canvas_open": return ("Opening a canvas", detail)
+        case "canvas_create": return ("Making a canvas", detail)
+        case "canvas_select", "canvas_focus": return ("Pointing at shapes on the canvas", detail)
+        case "canvas_invite": return ("Inviting someone to a canvas", detail)
+        case "canvas_screenshot": return ("Picturing the canvas", detail)
         case "jev_extract": return ("Extracting values (Jev)", detail)
         default:
             let plain = tool.hasPrefix("browser_") ? String(tool.dropFirst("browser_".count)) : tool
@@ -518,6 +545,8 @@ final class Drive: ObservableObject {
         case "browser_sign_in": return "SIGN_IN"
         case "browser_autofill": return "AUTOFILL"
         case "browser_perf_probe": return "PROBE"
+        case "canvas_read", "canvas_list": return "READ"
+        case _ where tool.hasPrefix("canvas_"): return "CANVAS"
         default: return String(tool.uppercased().prefix(12))
         }
     }

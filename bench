@@ -53,8 +53,13 @@
     ./bench ext-manager remove ID | answer remove|cancel
                                        the Remove sheet, and its buttons
     ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade
+    ./bench updates pill [available|downloading [F]|ready|installing|failed [swap] [WHY]|off] [v=VERSION]
+                                       the sidebar's update pill forced into a state (its clicks are
+                                       rehearsed, never real); pill click|later|unsnooze|notes [TEXT]|replay
     ./bench downloads [open|close|cancel ID|retry ID|clear|start URL]
-    ./bench render bitwarden|drive|hands|hands-dark PATH  one card drawn to a PNG on its own, no window brought forward
+    ./bench render bitwarden|agent|agent-dark|drive|hands|hands-dark|pill|pill-dark PATH  one card drawn to a PNG on its own, no window brought forward
+    ./bench agent seed chat|running|jev|driver|cutoff|empty   a made-up conversation in the agent pane, for pictures (no model)
+    ./bench agent expand all|none      open or fold every activity row and driver card
     ./bench drive [status|stop|resume|clear|pane on|off]
     ./bench drive fake NAME THREAD… [tab N|ID] [--for S] [--doing WORDS…]   a stand-in agent's hand on a tab; drive card N|off; drive unfake
                                        who is driving the page (Jev, an agent, a bot) and every row of the timeline
@@ -330,7 +335,7 @@ def main(argv):
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
     elif verb == "render":
-        if len(args) < 2: sys.exit("usage: bench render bitwarden|drive|hands|hands-dark PATH")
+        if len(args) < 2: sys.exit("usage: bench render bitwarden|agent|agent-dark|drive|hands|hands-dark|pill|pill-dark PATH")
         request["op"] = args[0]
         request["path"] = os.path.abspath(args[1])
     elif verb == "cloud":

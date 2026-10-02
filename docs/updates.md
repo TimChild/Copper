@@ -2,9 +2,68 @@
 
 Copper's updater (`Sources/Search/Fork/Updates.swift`) verifies the feed manifest, the
 archive's SHA-256, the bundle's identity and version and its code signature before it swaps
-anything (README › Updates). This page is about the part after the swap: getting the new
+anything (README › Updates). This page is about how an update is offered — the sidebar's pill —
+and the part after the swap: getting the new
 Copper running again, in the same world, every time — and about the instance lock that keeps
 agents' probe worlds from swallowing the real browser.
+
+## The update pill
+
+Arc's way of saying an update is waiting: not a dialog, a button you cannot miss in the place
+you already look. `Fork/UpdatePill.swift` reads everything off `Updates` — it never checks,
+downloads or swaps on its own — and draws one of five states (`Updates.cue`):
+
+| state | when | label | click |
+|---|---|---|---|
+| available | `available`, nothing staged | Update Copper | `stage(force: true)` |
+| downloading | `downloading` | Downloading… 42% (a bar fills the pill; a turning ring until the server sends a size) | — |
+| ready | `ready` | Restart to Update | `upgrade()` — back up, swap, relaunch |
+| installing | `state == .upgrading` | Restarting… | — |
+| failed | `stageError`, or a swap refusal kept as the outcome while still `ready` | Retry Update (the reason in the tooltip) | `stage(force: true)`, or `upgrade()` for a failed swap |
+
+The tooltip has the version (and the one you have). The download's fraction is `Updates.progress`:
+the async `URLSession.download(for:delegate:)` reports nothing until it is done, so a task
+delegate (`DownloadWatch`) picks the task up in `didCreateTask` and watches its `Progress`,
+thinned to whole percents. Clicking Update Copper downloads and stops at Restart to Update — the
+relaunch is always its own click (README: it never restarts without your say-so).
+
+Where it is:
+
+- **Sidebar:** full width at the column's foot, between the rows and the space strip
+  (`UpdatePillSlot`, mounted in `Side.swift`). The rows' scroll gives up the room; the strip
+  does not move.
+- **Tabs across the top:** a capsule left of the downloads and bookmarks doors
+  (`UpdateToolbarPill`, in `TabBar.swift`).
+- **Sidebar folded (⌘S):** a round badge in the window's bottom-left corner that spells out its
+  label under the pointer (`UpdateCorner`, an overlay in `App.swift`). The column, peeking out,
+  has the full pill.
+
+Its colour (`UpdateInk`) is the space's hue, deepened until white words read at about 5:1 (a
+luminance near 0.16, never below 0.52 brightness, where green turns to mud); a yellow hue is a
+bright gold with the hue's own near-black words instead; a grey space or a picture with no hue
+takes the system accent. The fill is opaque so an animated backdrop or a photo cannot take its
+contrast. Failed is quiet on purpose — the column's own surface with an orange mark.
+
+The first time a version reaches *available* or *ready* in a run, a band of light crosses the
+pill once and the arrow hops twice; under Reduce Motion it only fades in. Another window, a
+folded column peeking out or a redraw does not replay it (`UpdatePill.introduced`).
+
+Right-click: the click's own action, **What's New…** (a popover with the feed's `notes` — the
+first paragraph of `NOTES.md`, written into `copper-version.json` by `release.yml` — and Full
+Changelog, `CHANGELOG.md` at the release's commit), **Remind Me Later** (hidden for that version
+until the next launch; a newer version brings it back) and **Settings…** (Settings › Updates).
+
+A test world on the real feed shows no pill (`Updates.quietHere`, the same rule that keeps it
+from staging real releases), so probe-world screenshots stay clean; a world the bench pointed at
+its own feed (`updates stub`) shows the real one.
+
+To look at it without a release: `./bench --world <w> updates pill STATE`, where STATE is
+`available`, `downloading [0.42]`, `ready`, `installing`, `failed [swap] [WHY…]`, with an optional
+`v=VERSION`; `off` goes back to the real state. A forced pill's clicks are rehearsed — a two-second
+fake download, then *Restarting…* and a toast saying what a real one would do — never made.
+`pill click`, `pill later`, `pill unsnooze`, `pill notes [TEXT]` (opens What's New), `pill hover
+on|off`, `pill replay` (the entrance again) and `pill status` (state, label, tooltip) drive the
+rest.
 
 ## What went wrong (October 2026)
 

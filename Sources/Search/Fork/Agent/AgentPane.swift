@@ -1,11 +1,18 @@
 import AppKit
 import SwiftUI
 
-// The pane beside the page: the conversation above, the question below.
-// Drawn with the sidebar's palette so it reads as part of the window, not a
-// chat app pasted in. Tool calls are chips — the name, the arguments that
-// matter, the first line of what came back — so you can see the agent's
-// hands without reading JSON.
+// The pane beside the page: one conversation with whoever has hands on it.
+//
+// Your questions on the right in soft bubbles; the agent's answers full
+// width, as text rather than chat balloons; between them one quiet row for
+// what it did to get there (AgentActivity). When something else drives the
+// page — a Jev run, phi or Claude Code on the loopback server, a linked bot —
+// it arrives here too, as a live card where it happened in the conversation
+// (DriveCard), with its steps and a Stop. There used to be a second pane for
+// that, the driver timeline, and with both open every call showed twice.
+//
+// Drawn in the sidebar's palette so it reads as part of the window, not a
+// chat app pasted in. No JSON reaches it.
 
 struct AgentPane: View {
     @ObservedObject var browser: Browser
@@ -13,232 +20,643 @@ struct AgentPane: View {
     @ObservedObject var brain = Intelligence.shared
     @ObservedObject private var account = ClaudeAccount.shared
     @ObservedObject var servers = Servers.shared
+    @ObservedObject private var drive = Drive.shared
+    @ObservedObject private var split = Split.shared
     @FocusState private var focused: Bool
     @State private var copiedJev = false
+    /// Whether this pane holds one of LineBreak's watches.
+    @State private var breaking = false
+    /// Whether the transcript is scrolled to its end. New content follows
+    /// only then; scrolled up to read, the reader keeps their place.
+    @State private var atBottom = true
+    /// Dragged by the pane's leading edge; kept between launches.
+    @AppStorage("agent.paneWidth") private var stored: Double = Double(AgentPane.width)
+    @State private var dragFrom: Double?
 
-    static let width: CGFloat = 360
+    static let width: CGFloat = 400
+    static let widths: ClosedRange<Double> = 340...620
+
+    private var width: CGFloat { CGFloat(min(max(stored, AgentPane.widths.lowerBound), AgentPane.widths.upperBound)) }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(Palette.hairline).frame(height: 1)
-            transcript
-            Rectangle().fill(Palette.hairline).frame(height: 1)
+            if agent.items.isEmpty && !agent.busy {
+                empty
+            } else {
+                transcript
+            }
             composer
         }
-        .frame(width: AgentPane.width)
+        .frame(width: width)
         .background(Palette.ground)
+        .overlay(alignment: .leading) { grip }
         .onAppear { focused = true }
         .onChange(of: agent.focusTick) { _, _ in focused = true }
     }
 
+    /// The leading edge, a few points wide: drag to make the pane wider.
+    private var grip: some View {
+        Color.clear
+            .frame(width: 6)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { drag in
+                        let from = dragFrom ?? Double(width)
+                        dragFrom = from
+                        stored = min(max(from - Double(drag.translation.width), AgentPane.widths.lowerBound), AgentPane.widths.upperBound)
+                    }
+                    .onEnded { _ in dragFrom = nil }
+            )
+    }
+
+    // MARK: - header
+
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink)
-            Text("Agent").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.ink)
-            Menu {
-                ForEach(Intelligence.Tier.allCases) { tier in
-                    Button {
-                        brain.keys.tier = tier
-                    } label: {
-                        HStack {
-                            Text("\(tier.title) — \(tier.blurb)")
-                            if tier == brain.tier {
-                                Spacer()
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-                Divider()
-                Text(brain.accessLine)
-                Button("Model access…") { browser.openSettings(.intelligence) }
-            } label: {
-                HStack(spacing: 3) {
-                    Text(brain.tier.title)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Palette.muted)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 7, weight: .semibold))
-                        .foregroundStyle(Palette.faint)
-                }
-            }
-            // The label draws its own small chevron; the button style's
-            // indicator would sit in front of the word (SpaceHeader does the same).
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Model — \(brain.accessLine)")
+            Text("Agent").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.ink)
+            model
+            Spacer(minLength: 4)
             if servers.readyTools > 0 {
-                Text("+\(servers.readyTools) tools").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                    .help(servers.all.filter(\.ready).map { "\($0.name): \($0.tools.count)" }.joined(separator: "\n"))
-            }
-            Spacer()
-            // Real doors, not bare glyphs: a square each, washed under the
-            // pointer (PaneDoor). "Close all" only shows beside a second pane.
-            HStack(spacing: 2) {
-                if agent.busy {
-                    PaneDoor(icon: "stop.fill", help: "Stop") { agent.stop() }
-                } else if !agent.items.isEmpty {
-                    PaneDoor(icon: "trash", help: "Clear the conversation") { agent.clear() }
+                HStack(spacing: 3) {
+                    Image(systemName: "puzzlepiece.extension").font(.system(size: 9.5))
+                    Text("\(servers.readyTools)").font(.system(size: 11)).monospacedDigit()
                 }
-                if several {
+                .foregroundStyle(Palette.muted)
+                .help("Tools from your MCP servers (mcp.json):\n" + servers.all.filter(\.ready).map { "\($0.name): \($0.tools.count)" }.joined(separator: "\n"))
+            }
+            // Real doors, not bare glyphs: a square each, washed under the
+            // pointer (PaneDoor). "Close all" only shows beside a split.
+            HStack(spacing: 2) {
+                PaneDoor(icon: "square.and.pencil", help: "New chat", on: !agent.items.isEmpty || agent.busy) { agent.clear() }
+                if split.on {
                     PaneDoor(icon: "xmark.square", help: "Close all panes (⌘⌥E)") { Panes.closeAll(in: browser) }
                 }
                 PaneDoor(icon: "xmark", help: "Close (⌘E)") { agent.open = false }
             }
         }
-        .padding(.leading, 14)
+        .padding(.leading, 16)
         .padding(.trailing, 8)
-        .frame(height: 38)
+        .frame(height: 42)
     }
 
-    /// Whether another pane is open beside this one — read off the two other
-    /// objects so the header redraws as they change.
-    @ObservedObject private var trace = Drive.shared
-    @ObservedObject private var split = Split.shared
-    private var several: Bool { (trace.paneOpen ? 1 : 0) + (split.on ? 1 : 0) > 0 }
+    /// The model, as a pill: which tier, and the menu to change it.
+    private var model: some View {
+        Menu {
+            ForEach(Intelligence.Tier.allCases) { tier in
+                Button {
+                    brain.keys.tier = tier
+                } label: {
+                    HStack {
+                        Text("\(tier.title) — \(tier.blurb)")
+                        if tier == brain.tier {
+                            Spacer()
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+            Divider()
+            Text(brain.accessLine)
+            Button("Model access…") { browser.openSettings(.intelligence) }
+            if !servers.all.isEmpty {
+                Divider()
+                ForEach(servers.all, id: \.name) { server in
+                    Text("\(server.name) · \(server.ready ? "\(server.tools.count) tools" : server.state)")
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(brain.tier.title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.ink.opacity(0.8))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(Palette.muted)
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(Palette.wash, in: Capsule())
+            .contentShape(Capsule())
+        }
+        // The label draws its own small chevron; the button style's
+        // indicator would sit in front of the word (SpaceHeader does the same).
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Model — \(brain.accessLine)")
+    }
+
+    // MARK: - the conversation
+
+    /// What the transcript draws, in order: the flat item list with each
+    /// question's steps folded into one activity.
+    enum Block: Identifiable {
+        case user(Agent.Item)
+        case answer(Agent.Item)
+        case note(Agent.Item)
+        case activity(AgentActivityGroup)
+        case drive(Agent.Item)
+        /// Asked, and nothing back yet.
+        case thinking
+
+        var id: String {
+            switch self {
+            case .user(let i), .answer(let i), .note(let i), .drive(let i): return i.id.uuidString
+            case .activity(let g): return "activity-" + g.id.uuidString
+            case .thinking: return "thinking"
+            }
+        }
+    }
+
+    static func blocks(_ items: [Agent.Item], busy: Bool) -> [Block] {
+        var out: [Block] = []
+        var turnStart = items.first?.at ?? Date()
+        var current: Int?           // index in `out` of this question's activity
+        var lastUser = -1
+        func fold(_ item: Agent.Item) {
+            if let at = current, case .activity(var group) = out[at] {
+                group.items.append(item)
+                out[at] = .activity(group)
+            } else {
+                out.append(.activity(AgentActivityGroup(id: item.id, items: [item], started: turnStart, running: false)))
+                current = out.count - 1
+            }
+        }
+        for item in items {
+            switch item.kind {
+            case .user:
+                out.append(.user(item))
+                turnStart = item.at
+                current = nil
+                lastUser = out.count - 1
+            case .tool:
+                fold(item)
+            case .assistant where item.aside:
+                fold(item)
+            case .assistant:
+                out.append(.answer(item))
+            case .note:
+                out.append(.note(item))
+            case .drive:
+                out.append(.drive(item))
+            }
+        }
+        // Only the newest question can still be running.
+        if busy {
+            if let at = current, at > lastUser, case .activity(var group) = out[at] {
+                group.running = true
+                out[at] = .activity(group)
+            } else {
+                out.append(.thinking)
+            }
+        }
+        return out
+    }
 
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if agent.items.isEmpty { empty }
-                    ForEach(agent.items) { item in
-                        row(item).id(item.id)
-                    }
-                    if agent.busy {
-                        HStack(spacing: 6) {
-                            Ring(size: 10)
-                            Text(agent.status).font(.system(size: 11)).foregroundStyle(Palette.muted)
+        // The scroll view's own height, read off the reader around it, so
+        // "at the bottom" is measured against what is really on screen.
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(AgentPane.blocks(agent.items, busy: agent.busy)) { block in
+                            view(block).id(block.id)
                         }
-                        .padding(.horizontal, 4)
-                        .id("busy")
+                        Color.clear.frame(height: 1).id("bottom")
+                            .background(GeometryReader { g in
+                                Color.clear.preference(key: AgentBottomKey.self, value: g.frame(in: .named("agent.chat")).minY)
+                            })
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                    .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .onChange(of: agent.items.count) { _, _ in
-                withAnimation(Motion.quick) {
-                    if agent.busy { proxy.scrollTo("busy", anchor: .bottom) }
-                    else if let last = agent.items.last?.id { proxy.scrollTo(last, anchor: .bottom) }
+                .coordinateSpace(name: "agent.chat")
+                .onPreferenceChange(AgentBottomKey.self) { y in
+                    // A little slack, so a row landing does not count as scrolling up.
+                    atBottom = y <= outer.size.height + 40
                 }
-            }
-            .onChange(of: agent.status) { _, _ in
-                if agent.busy { proxy.scrollTo("busy", anchor: .bottom) }
+                .overlay(alignment: .bottom) {
+                    if !atBottom { jump(proxy) }
+                }
+                .animation(Motion.quick, value: atBottom)
+                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: progress) { _, _ in
+                    guard atBottom || agent.items.last?.kind == .user else { return }
+                    withAnimation(Motion.quick) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+                .onChange(of: agent.revealTick) { _, _ in
+                    // To the card of the run that asked for the pane, when it
+                    // has one; a run nested in a step is at the end anyway.
+                    let card = drive.run.flatMap { run in agent.items.last { $0.kind == .drive && $0.run == run.id } }
+                    let target = card.map { $0.id.uuidString } ?? "bottom"
+                    withAnimation(Motion.glide) { proxy.scrollTo(target, anchor: .top) }
+                }
             }
         }
     }
 
-    private var empty: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if agent.ready {
-                Text("Ask about this page, or tell it what to do here. It has the same hands as an agent on the MCP — and your other servers, from mcp.json.")
-                    .font(.system(size: 12)).foregroundStyle(Palette.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let tab = browser.active, !tab.isBlank {
-                    ForEach(["Summarise this page", "What can I do here?", "Find the main links on this page and list them"], id: \.self) { s in
-                        Button { agent.ask(s, in: browser) } label: {
-                            Text(s).font(.system(size: 11.5)).foregroundStyle(Palette.ink)
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(Palette.wash, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            } else {
-                Text("Not set up yet. Sign in with your Claude account, or add an API key for a gateway.")
-                    .font(.system(size: 12)).foregroundStyle(Palette.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
-                    Pill("Sign in with Claude", filled: true) { account.signIn(in: browser) }
-                    Pill("Use an API key") { browser.openSettings(.intelligence) }
-                }
+    /// Scrolled up while more arrives: one press back to the end.
+    private func jump(_ proxy: ScrollViewProxy) -> some View {
+        Button {
+            withAnimation(Motion.glide) { proxy.scrollTo("bottom", anchor: .bottom) }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.down").font(.system(size: 9.5, weight: .semibold))
+                Text("Jump to latest").font(.system(size: 11.5, weight: .medium))
             }
+            .foregroundStyle(Palette.ink)
+            .padding(.horizontal, 12).frame(height: 26)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.10), radius: 8, y: 2)
+            .contentShape(Capsule())
         }
-        .padding(.top, 6)
+        .buttonStyle(.plain)
+        .padding(.bottom, 8)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    /// Enough of a number to know something new landed — a row, a step that
+    /// finished, a driver's cycle — without making the items equatable.
+    private var progress: Int {
+        var n = agent.items.count * 1000 + agent.items.filter(\.running).count * 7 + agent.status.count
+        if let run = drive.run {
+            n += run.cycles.reduce(run.cycles.count) { $0 + $1.phases.count + ($1.outcome == nil ? 0 : 1) } * 13
+        }
+        return n + (agent.busy ? 1 : 0) + agent.expanded.count * 31
     }
 
     @ViewBuilder
-    private func row(_ item: Agent.Item) -> some View {
-        switch item.kind {
-        case .user:
+    private func view(_ block: Block) -> some View {
+        switch block {
+        case .user(let item):
             HStack {
-                Spacer(minLength: 40)
+                Spacer(minLength: 48)
                 Text(item.text)
-                    .font(.system(size: 12.5)).foregroundStyle(Palette.ink)
+                    .font(.system(size: 13)).foregroundStyle(Palette.ink)
+                    .lineSpacing(2)
                     .textSelection(.enabled)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 13).padding(.vertical, 8)
+                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
             }
-        case .assistant:
-            Text(LocalizedStringKey(item.text))
-                .font(.system(size: 12.5)).foregroundStyle(Palette.ink)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.trailing, 20)
-        case .tool:
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Circle().fill(item.ok ? Color.green.opacity(0.75) : Color.orange.opacity(0.85)).frame(width: 6, height: 6)
-                    Text(item.tool).font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.ink)
-                    Spacer()
-                    if item.ms > 0 { Text(String(format: "%.0f ms", item.ms)).font(.system(size: 10)).foregroundStyle(Palette.faint) }
-                }
-                if !item.text.isEmpty {
-                    Text(item.text).font(.system(size: 11)).foregroundStyle(Palette.muted)
-                        .lineLimit(4).textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        case .answer(let item):
+            MarkdownText(text: item.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .activity(let group):
+            AgentActivity(group: group)
+        case .note(let item):
+            note(item)
+        case .drive(let item):
+            if let run = agent.run(item.run) {
+                DriveCard(run: run)
             }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(Palette.hover, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
-        case .note:
-            Text(item.text)
-                .font(.system(size: 11)).foregroundStyle(item.ok ? Palette.muted : Color.orange.opacity(0.9))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+        case .thinking:
+            HStack(spacing: 8) {
+                TypingDots()
+                Text(agent.status.isEmpty ? "Thinking…" : agent.status)
+                    .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                    .shimmer()
+            }
+            .padding(.vertical, 2)
         }
     }
 
+    /// A plain note is context ("About Hacker News", "Stopped") and sits
+    /// quietly in the middle; a failure is a callout you cannot miss.
+    @ViewBuilder
+    private func note(_ item: Agent.Item) -> some View {
+        if item.ok {
+            HStack(spacing: 8) {
+                Rectangle().fill(Palette.hairline).frame(height: 1)
+                Text(item.text)
+                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    .lineLimit(1).truncationMode(.middle)
+                    .fixedSize()
+                Rectangle().fill(Palette.hairline).frame(height: 1)
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.orange)
+                Text(item.text)
+                    .font(.system(size: 12)).foregroundStyle(Palette.ink)
+                    .lineSpacing(1.5)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(Color.orange.opacity(0.22), lineWidth: 1))
+        }
+    }
+
+    // MARK: - empty
+
+    private var empty: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 20)
+            VStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(LinearGradient(colors: [DriveStyle.accent.opacity(0.95), Color(red: 0.88, green: 0.62, blue: 0.42)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Image(systemName: "sparkles").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                }
+                .frame(width: 42, height: 42)
+                .shadow(color: DriveStyle.accent.opacity(0.3), radius: 10, y: 3)
+                Text(agent.ready ? "What should we do?" : "Set up a model to start")
+                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(Palette.ink)
+                Text(agent.ready
+                     ? "It reads the page, clicks and types for you, and draws on your canvases."
+                     : "Sign in with your Claude account, or add an API key for a gateway in Settings › Intelligence.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 290)
+                // Setting up is the one thing to do, so it sits with the words.
+                if !agent.ready { signIn.padding(.top, 6) }
+            }
+            .padding(.horizontal, 24)
+            Spacer(minLength: 20)
+            if agent.ready {
+                VStack(spacing: 6) {
+                    ForEach(suggestions, id: \.text) { s in
+                        SuggestionRow(icon: s.icon, text: s.text) { agent.ask(s.text, in: browser) }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var suggestions: [(icon: String, text: String)] {
+        guard let tab = browser.active, !tab.isBlank else {
+            return [("rectangle.on.rectangle", "Sum up my Personal canvas"),
+                    ("square.on.square", "Which tabs do I have open?"),
+                    ("globe", "Find today's top story on Hacker News")]
+        }
+        if tab.address.flatMap(CanvasLinks.id(from:)) != nil {
+            return [("text.alignleft", "Sum up this board"),
+                    ("square.grid.2x2", "Group these notes into frames by theme"),
+                    ("arrow.triangle.branch", "Draw arrows between related notes"),
+                    ("plus.square.on.square", "Add a sticky for each next step")]
+        }
+        return [("text.alignleft", "Summarise this page"),
+                ("questionmark.circle", "What can I do here?"),
+                ("link", "List the main links on this page"),
+                ("tablecells", "Pull the key facts into a table")]
+    }
+
+    @ViewBuilder
+    private var signIn: some View {
+        VStack(spacing: 10) {
+            switch account.phase {
+            case .waiting, .exchanging:
+                HStack(spacing: 7) {
+                    Ring(size: 10)
+                    Text(account.phase == .waiting ? "Finish signing in in the tab that opened…" : "Signing in…")
+                        .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                }
+                Pill("Cancel") { account.cancel() }
+            case .failed(let why):
+                Text(why).font(.system(size: 12)).foregroundStyle(Color.red.opacity(0.85))
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 24)
+                buttons
+            case .idle:
+                buttons
+            }
+        }
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 6) {
+            Pill("Sign in with Claude", filled: true) { account.signIn(in: browser) }
+            Pill("Use an API key") { browser.openSettings(.intelligence) }
+        }
+    }
+
+    // MARK: - composer
+
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField(agent.ready ? "Ask, or say what to do…" : "Sign in with Claude or add a key — Settings › Intelligence", text: $agent.draft, axis: .vertical)
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("", text: $agent.draft, prompt: Text(placeholder).foregroundColor(Palette.muted), axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
-                .lineLimit(1...6)
+                .font(.system(size: 13))
+                .lineLimit(1...8)
                 .focused($focused)
                 .disabled(!agent.ready)
                 .onSubmit { agent.send(in: browser) }
-            Button {
-                let goal = agent.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(MCP.jevCommand(goal: goal.isEmpty ? nil : goal), forType: .string)
-                copiedJev = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copiedJev = false }
-            } label: {
-                Text(copiedJev ? "Copied" : "→ /jev")
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(Palette.muted)
+                // Return sends (the field's submit); ⇧Return is a new line,
+                // as in every chat (LineBreak).
+                .onChange(of: focused, initial: true) { _, on in lineBreaks(on) }
+                .onDisappear { lineBreaks(false) }
+                .padding(.horizontal, 4)
+                .padding(.top, 2)
+            HStack(spacing: 6) {
+                context
+                Spacer(minLength: 4)
+                jev
+                send
             }
-            .buttonStyle(.plain)
-            .help("Copy this goal as a /jev command")
-            Button { agent.send(in: browser) } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(canSend ? Palette.ground : Palette.muted)
-                    .frame(width: 24, height: 24)
-                    .background(canSend ? Palette.ink : Palette.wash, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .keyboardShortcut(.return, modifiers: [.command])
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
+        .background(Palette.hover, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(focused ? Palette.faint : Palette.hairline, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { focused = true }
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+        .padding(.bottom, 12)
+        .animation(Motion.quick, value: focused)
+    }
+
+    private var placeholder: String {
+        guard agent.ready else { return "Sign in with Claude or add a key to start" }
+        guard let tab = browser.active, !tab.isBlank else { return "Ask anything, or say what to do…" }
+        return tab.address.flatMap(CanvasLinks.id(from:)) != nil ? "Ask about this canvas…" : "Ask about this page…"
+    }
+
+    /// The page in front of every question, as a chip: which one, and a
+    /// click to leave it out.
+    @ViewBuilder
+    private var context: some View {
+        if let tab = browser.active, !tab.isBlank {
+            let canvas = tab.address.flatMap(CanvasLinks.id(from:)).map { Canvases.shared.entry($0)?.name ?? "Canvas" }
+            let on = agent.config.pageContext
+            Button { agent.config.pageContext.toggle() } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: on ? (canvas != nil ? "rectangle.on.rectangle" : "doc.text") : "eye.slash")
+                        .font(.system(size: 9.5))
+                    Text(canvas ?? (tab.title.isEmpty ? (tab.address?.host ?? "This page") : tab.title))
+                        .font(.system(size: 11))
+                        .lineLimit(1).truncationMode(.tail)
+                        .strikethrough(!on, color: Palette.muted)
+                }
+                .foregroundStyle(on ? Palette.ink.opacity(0.75) : Palette.muted)
+                .padding(.horizontal, 8).frame(height: 22)
+                .frame(maxWidth: 190, alignment: .leading)
+                .background(on ? Palette.ground : .clear, in: Capsule())
+                .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+                .contentShape(Capsule())
+                .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(.plain)
+            .help(on ? "This \(canvas != nil ? "canvas" : "page") goes in front of every question — click to leave it out"
+                     : "Left out — click to put this \(canvas != nil ? "canvas" : "page") in front of every question")
+        }
+    }
+
+    /// The draft as a /jev command for a terminal agent.
+    private var jev: some View {
+        Button {
+            let goal = agent.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(MCP.jevCommand(goal: goal.isEmpty ? nil : goal), forType: .string)
+            copiedJev = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copiedJev = false }
+        } label: {
+            Image(systemName: copiedJev ? "checkmark" : "terminal")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(Palette.muted)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(copiedJev ? "Copied" : "Copy this goal as a /jev command")
+    }
+
+    /// Send, or Stop while it works — the same place, so the thumb knows.
+    private var send: some View {
+        Button {
+            if agent.busy { agent.stop() } else { agent.send(in: browser) }
+        } label: {
+            Image(systemName: agent.busy ? "stop.fill" : "arrow.up")
+                .font(.system(size: agent.busy ? 9 : 11.5, weight: .bold))
+                .foregroundStyle(agent.busy || canSend ? Palette.ground : Palette.muted)
+                .frame(width: 28, height: 28)
+                .background(agent.busy || canSend ? Palette.ink : Palette.wash, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!agent.busy && !canSend)
+        .keyboardShortcut(.return, modifiers: [.command])
+        .help(agent.busy ? "Stop" : "Send (Return)")
+        .animation(Motion.quick, value: agent.busy)
+    }
+
+    private func lineBreaks(_ on: Bool) {
+        guard on != breaking else { return }
+        breaking = on
+        LineBreak.watch(on)
     }
 
     private var canSend: Bool { agent.ready && !agent.busy && !agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+}
+
+/// The bottom of the transcript, measured against its scroll view.
+private struct AgentBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// One suggestion on the empty pane: a row to press instead of a question
+/// to think up.
+private struct SuggestionRow: View {
+    let icon: String
+    let text: String
+    let act: () -> Void
+    @State private var over = false
+
+    var body: some View {
+        Button(action: act) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+                    .frame(width: 16)
+                Text(text)
+                    .font(.system(size: 12.5)).foregroundStyle(Palette.ink)
+                    .lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Palette.faint)
+                    .opacity(over ? 1 : 0)
+            }
+            .padding(.horizontal, 12).frame(height: 36)
+            .background(over ? Palette.hover : Palette.ground, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { over = $0 }
+        .animation(Motion.quick, value: over)
+    }
+}
+
+/// Three dots that rise in turn: it has the question and is working on it.
+struct TypingDots: View {
+    @State private var on = false
+
+    var body: some View {
+        HStack(spacing: 3.5) {
+            ForEach(0..<3) { i in
+                Circle()
+                    .fill(DriveStyle.accent)
+                    .frame(width: 5, height: 5)
+                    .opacity(on ? 1 : 0.3)
+                    .offset(y: on ? -1.5 : 1.5)
+                    .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true).delay(Double(i) * 0.16), value: on)
+            }
+        }
+        .onAppear { on = true }
+    }
+}
+
+/// ⇧Return in the composer. The field's own editor sends on it, as on a
+/// plain Return — only ⌥Return breaks the line there — and SwiftUI's key
+/// handlers never see a press the editor has, so the line break is asked of
+/// the editor directly, at the caret, while the composer has the keyboard.
+@MainActor
+private enum LineBreak {
+    private static var monitor: Any?
+    /// Composers that have the keyboard: one per window can.
+    private static var watchers = 0
+
+    static func watch(_ on: Bool) {
+        watchers = max(watchers + (on ? 1 : -1), 0)
+        if watchers > 0, monitor == nil {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                // Return or the keypad's Enter, with only ⇧ held.
+                guard event.keyCode == 36 || event.keyCode == 76, flags == .shift,
+                      let editor = event.window?.firstResponder as? NSTextView, editor.isFieldEditor
+                else { return event }
+                editor.insertNewlineIgnoringFieldEditor(nil)
+                return nil
+            }
+        } else if watchers == 0, let installed = monitor {
+            NSEvent.removeMonitor(installed)
+            monitor = nil
+        }
+    }
 }

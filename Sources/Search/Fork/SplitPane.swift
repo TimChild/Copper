@@ -136,7 +136,7 @@ struct SplitBar: View {
             Spacer(minLength: 2)
 
             HStack(spacing: 1) {
-                if Agent.shared.open || Drive.shared.paneOpen {
+                if Agent.shared.open {
                     PaneDoor(icon: "xmark.square", help: "Close all panes (⌘⌥E)", tint: Palette.ink.opacity(0.65), size: 24) {
                         Panes.closeAll(in: browser)
                     }

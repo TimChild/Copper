@@ -20,7 +20,8 @@ import { arrowBox, arrowPath } from './canvas/arrows'
 import { AGENT, bareId, readEndpoint, type CanvasStore, type ShapeInput, type ShapeProps } from './canvas/doc'
 import { liveAgents, readAgents } from './canvas/agents'
 import { center, containsBox, boxesOverlap, SIDES, type Box, type Point, type Side } from './canvas/geometry'
-import { MIN_SIZE, isResizable } from './canvas/resize'
+import { MIN_SIZE, isResizable, minSizeOf } from './canvas/resize'
+import { LIVE_SIZE, frameUrl } from './canvas/frames'
 import { frameSizeFor, imageSizeFor, MAX_DATA_URL } from './canvas/images'
 import { findFreeSpot, occupied } from './placement'
 import {
@@ -114,12 +115,12 @@ const BY_TYPE: Record<ShapeType, readonly string[]> = {
   frame: [...COMMON, 'title', 'image'],
   arrow: ['color', 'z', 'from', 'to', 'label'],
   image: [...COMMON, 'src', 'naturalW', 'naturalH'],
-  link: [...COMMON, 'url', 'title', 'favicon'],
+  link: [...COMMON, 'url', 'title', 'favicon', 'live'],
 }
 /** Friendly spellings: `text` on a frame or link is its title, on an arrow its label. */
 const ALIAS: Partial<Record<ShapeType, Record<string, string>>> = {
   frame: { text: 'title', label: 'title' },
-  link: { text: 'title', label: 'title' },
+  link: { text: 'title', label: 'title', embed: 'live' },
   arrow: { text: 'label', title: 'label' },
   sticky: { title: 'text' },
   text: { title: 'text' },
@@ -241,6 +242,10 @@ function cleanProps(type: ShapeType, raw: Record<string, unknown>, store: Canvas
       case 'url':
         out.url = validUrl(value)
         break
+      case 'live':
+        if (typeof value !== 'boolean') fail('`live` must be true or false')
+        out.live = value
+        break
       case 'favicon':
         if (typeof value !== 'string') fail('`favicon` must be a data: or https: URL')
         if (value) {
@@ -284,9 +289,11 @@ export function frameChildren(shapes: readonly Shape[], frame: Box & { id: strin
 // ---- the ops ----------------------------------------------------------------
 
 function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): { id: string; anchor: Point } {
-  const raw = isObject(op.shape) ? op.shape : fail('`add` needs `shape:{type, …}`')
+  let raw = isObject(op.shape) ? op.shape : fail('`add` needs `shape:{type, …}`')
+  // `web` (or `iframe`): a live web frame, which is a link with `live` — one shape type, so older clients still show it.
+  if (raw.type === 'web' || raw.type === 'iframe') raw = { ...raw, type: 'link', live: raw.live ?? raw.embed ?? true, embed: undefined }
   const type = raw.type
-  if (!isShapeType(type)) return fail('`shape.type` must be sticky, text, frame, arrow, image or link')
+  if (!isShapeType(type)) return fail('`shape.type` must be sticky, text, frame, arrow, image, link or web')
   let id: string | undefined
   if (raw.id !== undefined) {
     if (typeof raw.id !== 'string' || !ID.test(raw.id)) fail('`shape.id` must be 1–64 of A–Z a–z 0–9 _ - : .')
@@ -331,11 +338,14 @@ function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): 
   if (type === 'link') {
     if (!props.url) fail('a link needs `url`')
     if (!props.title) input.title = hostOf(props.url!)
+    if (props.live && !frameUrl(props.url)) fail('a live frame needs an http(s) `url`')
   }
-  const size = { w: input.w ?? SHAPE_SIZE[type].w, h: input.h ?? SHAPE_SIZE[type].h }
+  const base = type === 'link' && props.live ? LIVE_SIZE : SHAPE_SIZE[type]
+  const size = { w: input.w ?? base.w, h: input.h ?? base.h }
   if (isResizable(type)) {
-    size.w = Math.max(size.w, MIN_SIZE[type].w)
-    size.h = Math.max(size.h, MIN_SIZE[type].h)
+    const min = minSizeOf({ type, live: props.live })
+    size.w = Math.max(size.w, min.w)
+    size.h = Math.max(size.h, min.h)
   }
   input.w = size.w
   input.h = size.h
@@ -369,9 +379,23 @@ function opUpdate(op: Record<string, unknown>, ctx: OpsContext): string {
   const shape = needShape(ctx, op.id)
   const raw = isObject(op.patch) ? op.patch : isObject(op.props) ? op.props : fail('`update` needs `patch:{…}`')
   const props = cleanProps(shape.type, raw, ctx.store, shape.id)
+  if (shape.type === 'link' && props.live && !frameUrl(props.url ?? shape.url)) fail('a live frame needs an http(s) `url`')
+  // A new address without a new name: the old page's name and icon would be wrong. The host
+  // stands in, and a live frame puts the page's own name back once it has loaded.
+  if (shape.type === 'link' && props.url && props.url !== shape.url) {
+    if (props.title === undefined) props.title = hostOf(props.url)
+    if (props.favicon === undefined && shape.favicon && hostOf(props.url) !== hostOf(shape.url ?? '')) props.favicon = ''
+  }
   if (isResizable(shape.type)) {
-    if (props.w !== undefined) props.w = Math.max(props.w, MIN_SIZE[shape.type].w)
-    if (props.h !== undefined) props.h = Math.max(props.h, MIN_SIZE[shape.type].h)
+    const live = props.live ?? shape.live
+    const min = minSizeOf({ type: shape.type, live })
+    // Turning a small card live makes it a frame worth looking at.
+    if (shape.type === 'link' && props.live && !shape.live) {
+      props.w ??= Math.max(shape.w, LIVE_SIZE.w)
+      props.h ??= Math.max(shape.h, LIVE_SIZE.h)
+    }
+    if (props.w !== undefined) props.w = Math.max(props.w, min.w)
+    if (props.h !== undefined) props.h = Math.max(props.h, min.h)
   }
   if (shape.type === 'arrow') {
     const from = props.from ?? shape.from
@@ -408,7 +432,7 @@ function opResize(op: Record<string, unknown>, ctx: OpsContext): string {
   const w = op.w ?? shape.w
   const h = op.h ?? shape.h
   if (!finite(w) || !finite(h) || w <= 0 || h <= 0) fail('`w` and `h` must be positive numbers')
-  const min = MIN_SIZE[shape.type as keyof typeof MIN_SIZE]
+  const min = minSizeOf(shape as Shape & { type: keyof typeof MIN_SIZE })
   ctx.store.update(shape.id, { w: Math.max(w as number, min.w), h: Math.max(h as number, min.h) }, AGENT)
   return shape.id
 }
@@ -569,6 +593,8 @@ export interface ShapeSummary {
   title?: string
   label?: string
   url?: string
+  /** link: shown live (the site in a frame) rather than as a card. */
+  live?: boolean
   fontSize?: number
   align?: string
   from?: Endpoint
@@ -690,6 +716,7 @@ export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead 
       case 'link':
         sum.url = s.url
         sum.title = clip(s.title, full)
+        if (s.live) sum.live = true
         break
     }
     if (s.type !== 'arrow') {

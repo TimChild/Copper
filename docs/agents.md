@@ -71,7 +71,7 @@ Playwright MCP's names and argument shapes. `ref`s come from
 | `browser_wait_for` | `text`, `textGone`, `time` |
 | `browser_get_text`, `browser_find`, `browser_console_messages` | reading without a snapshot; refs for text you name; console since load |
 | `browser_resize`, `browser_close` | the window; the tab |
-| `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove`, `suggest` |
+| `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove` |
 | `browser_perf_probe` | Samples the current tab for rAF loops, DOM churn, animations, filters, canvases, timers, long tasks, and slow resources (`seconds`, `top`, `format`) |
 
 ### Saved sign-in (no-secret contract)

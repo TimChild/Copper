@@ -11,14 +11,10 @@ struct IntelligencePage: View {
     @ObservedObject var browser: Browser
     @ObservedObject var brain = Intelligence.shared
     @ObservedObject var account = ClaudeAccount.shared
-    @ObservedObject var groups = Groups.shared
-    @ObservedObject var grouper = Grouper.shared
 
     @State private var testing = false
     @State private var verdict: String?
     @State private var pasted = ""
-    @State private var newPattern = ""
-    @State private var newGroup = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -50,61 +46,7 @@ struct IntelligencePage: View {
                 }
             }
 
-            Caption("Tab groups")
-            Card {
-                Line("Group new tabs", "A second after a page lands, Copper weighs it against the groups you have. Ask puts a line under the tab; Automatic just does it.") {
-                    Segmented(options: Intelligence.GroupingMode.allCases.map { ($0, $0.title) }, selection: $brain.keys.grouping)
-                }
-                Rule()
-                Line("Take Jev's word from", String(format: "%.0f%% confidence. Below it a model is asked, or nothing happens.", brain.keys.threshold * 100)) {
-                    Slider(value: $brain.keys.threshold, in: 0.3...0.95, step: 0.05).frame(width: 140)
-                }
-                Rule()
-                Line("Last decision", grouper.lastNote.isEmpty ? "Nothing weighed yet" : grouper.lastNote) {
-                    Pill("Ask about this tab") {
-                        guard let tab = browser.active else { return }
-                        browser.tuning = false
-                        grouper.suggest(for: tab, in: browser, forced: true)
-                    }
-                    .disabled(browser.active?.isBlank ?? true)
-                }
-            }
-
-            Caption("Rules — these sites always go here, no model asked")
-            Card {
-                ForEach(groups.rules) { rule in
-                    HStack(spacing: 10) {
-                        Text(rule.pattern).font(.system(size: 12, design: .monospaced)).foregroundStyle(Palette.ink)
-                        Image(systemName: "arrow.right").font(.system(size: 9)).foregroundStyle(Palette.faint)
-                        Text(rule.group).font(.system(size: 12)).foregroundStyle(Palette.ink)
-                        Spacer()
-                        Button { groups.rules.removeAll { $0.id == rule.id } } label: {
-                            Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.muted)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    Rule()
-                }
-                HStack(spacing: 8) {
-                    TextField("github.com or *.atlassian.net", text: $newPattern)
-                        .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced))
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    Image(systemName: "arrow.right").font(.system(size: 9)).foregroundStyle(Palette.faint)
-                    TextField("Group name", text: $newGroup)
-                        .textFieldStyle(.plain).font(.system(size: 12))
-                        .frame(width: 140)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                        .onSubmit(addRule)
-                    Pill("Add", filled: true, action: addRule)
-                        .disabled(newPattern.trimmingCharacters(in: .whitespaces).isEmpty || newGroup.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 9)
-            }
-
-            Text("Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone. For grouping, only a tab's address and title and the names and sites of your groups are sent — never page contents.")
+            Text("Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone.")
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -226,15 +168,6 @@ struct IntelligencePage: View {
         guard !value.isEmpty else { return }
         pasted = ""
         account.complete(pasted: value)
-    }
-
-    private func addRule() {
-        let pattern = newPattern.trimmingCharacters(in: .whitespaces)
-        let group = newGroup.trimmingCharacters(in: .whitespaces)
-        guard !pattern.isEmpty, !group.isEmpty else { return }
-        groups.rules.append(GroupRule(pattern: pattern, group: group))
-        newPattern = ""
-        newGroup = ""
     }
 
     private func test() {

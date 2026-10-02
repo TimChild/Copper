@@ -15,7 +15,7 @@ semantics exactly; add what you need *beside* them, never rename.
      with the account token.
 2. A model picker — **Haiku / Sonnet / Opus**, default **Sonnet**, nothing else (no
    Fable) — in the agent pane's header (the ⌘E sidebar chat) and in Settings. One
-   choice for the whole app: the pane, Jev's text/extract helper, the tab grouper.
+   choice for the whole app: the pane and Jev's text/extract helper.
 3. Simple and easy. Sign-in is one click in Settings or from the pane's empty state.
 4. Validated live, then merged to `fork`, pushed, and released through the tap.
 
@@ -61,7 +61,7 @@ semantics exactly; add what you need *beside* them, never rename.
 | `schema` (wave 0) | `Sources/Search/Fork/Intelligence.swift` additions; stub `Fork/ClaudeAccount.swift`; stub `Fork/Claude.swift` |
 | `oauth` | `Sources/Search/Fork/ClaudeAccount.swift` (replaces the stub) |
 | `api` | `Sources/Search/Fork/Claude.swift` (replaces the stub) |
-| `core` | `Fork/Intelligence.swift` (`Router.ask` dispatch), `Fork/Agent/Agent.swift`, `Fork/MCP/Ultrafast.swift` guards, `Fork/Grouper.swift` guard |
+| `core` | `Fork/Intelligence.swift` (`Router.ask` dispatch), `Fork/Agent/Agent.swift`, `Fork/MCP/Ultrafast.swift` guards |
 | `ui` | `Fork/SettingsFork.swift`, `Fork/Agent/AgentPane.swift` |
 | `cli-docs` | `Fork/MCP/CLI.swift`, `Fork/MCP/MCP.swift` (one route), `Fork/Fork.swift` (bench `ai`), `docs/*.md`, `README.md`, `CHANGELOG.md`, `skill/copper-cli/SKILL.md` |
 
@@ -243,7 +243,7 @@ moment"; 503/529 → "Claude is overloaded right now"; otherwise `error.message`
 - `Agent.run`: carry `reply["_blocks"]` into the assistant message it appends; `modelName` →
   `Intelligence.shared.modelName`; `ready` → `Intelligence.shared.modelReady`; the not-ready
   note: "Not set up yet — sign in with your Claude account or add an API key in Settings › Intelligence."
-- `Ultrafast.fieldText` / `jev_extract` / `Grouper` guards → `modelReady` (hop to the main
+- `Ultrafast.fieldText` / `jev_extract` guards → `modelReady` (hop to the main
   actor where the caller is not on it), messages say "the model (Settings › Intelligence)".
 - `Agent.Config.model` stays decodable but is no longer used.
 

@@ -12,7 +12,7 @@ The Claude account lane is only for the account you sign in. Copper does not cop
 
 ## The picker
 
-The picker has three choices: **Haiku**, **Sonnet** and **Opus**. Sonnet is the default. One choice applies to the agent pane, Jev's text and extract helper, and the tab grouper. The model name for each choice is editable for each lane. The defaults are `claude-haiku-4-5`, `claude-sonnet-5` and `claude-opus-5-5` for the Claude account lane, and `haiku`, `sonnet` and `opus` for the API-key lane.
+The picker has three choices: **Haiku**, **Sonnet** and **Opus**. Sonnet is the default. One choice applies to the agent pane and Jev's text and extract helper. The model name for each choice is editable for each lane. The defaults are `claude-haiku-4-5`, `claude-sonnet-5` and `claude-opus-5-5` for the Claude account lane, and `haiku`, `sonnet` and `opus` for the API-key lane.
 
 Jev (TypeSafe) is separate and unchanged. Its key and endpoint remain the Jev fast lane; the picker controls the model used when Copper needs a model response.
 
@@ -25,7 +25,7 @@ Copper never puts a token in status output, the CLI output, or a transcript.
 
 ## What leaves the Mac
 
-With the API-key lane, Copper sends the prompts and the page or tab information needed by the feature to the gateway address you configured. With the Claude account lane, model requests go directly to Anthropic's Messages API. Jev requests go to the TypeSafe endpoint when Jev is enabled. The account token stays in `claude.json`; the agent link never carries it. Ordinary page requests still go only to the sites you open.
+With the API-key lane, Copper sends the prompts and the page information needed by the agent or Jev helper to the gateway address you configured. With the Claude account lane, model requests go directly to Anthropic's Messages API. Jev requests go to the TypeSafe endpoint when Jev is enabled. The account token stays in `claude.json`; the agent link never carries it. Ordinary page requests still go only to the sites you open.
 
 ## CLI and bench
 

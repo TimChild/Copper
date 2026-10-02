@@ -364,6 +364,10 @@ enum Fork {
             case "upgrade":
                 Updates.shared.upgrade()
                 return Updates.shared.status
+            case "pill":
+                // The sidebar's update pill, forced into each state (Fork/UpdatePill.swift).
+                let words = (request["arg"] as? String ?? "").split(separator: " ").map(String.init)
+                return UpdatePill.shared.bench(words, in: browser)
             default: return ["error": "unknown updates operation \(op)"]
             }
         case "drive":
@@ -454,14 +458,18 @@ enum Fork {
                 let card = HandCards(hands: Array(all)).background(Palette.ground)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous)).padding(14).background(Palette.wash)
                 view = which == "hands-dark" ? AnyView(card.environment(\.colorScheme, .dark)) : AnyView(card)
-            default: return ["error": "render bitwarden|drive|agent|agent-dark|hands|hands-dark PATH"]
+            case "pill", "pill-dark":
+                // Every update pill state on every space (Fork/UpdatePill.swift).
+                view = AnyView(UpdatePillSheet(browser: browser, dark: which == "pill-dark"))
+            default: return ["error": "render bitwarden|drive|agent|agent-dark|hands|hands-dark|pill|pill-dark PATH"]
             }
-            if ["drive", "agent", "agent-dark"].contains(which) {
+            let pane = ["drive", "agent", "agent-dark"].contains(which)
+            if pane || which.hasPrefix("pill") {
                 // The pane's rows are in a ScrollView, which ImageRenderer
                 // leaves out: drawn through a hosting view instead, whole.
-                let size = NSSize(width: AgentPane.width, height: 720)
-                let host = NSHostingView(rootView: view.background(Palette.ground))
-                host.frame = NSRect(origin: .zero, size: size)
+                // The pills' shadows and materials want a real view too.
+                let host = NSHostingView(rootView: pane ? AnyView(view.background(Palette.ground)) : view)
+                host.frame = NSRect(origin: .zero, size: pane ? NSSize(width: AgentPane.width, height: 720) : host.fittingSize)
                 let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
                 if which == "agent-dark" { window.appearance = NSAppearance(named: .darkAqua) }
                 window.contentView = host

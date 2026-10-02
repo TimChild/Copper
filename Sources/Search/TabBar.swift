@@ -111,6 +111,7 @@ struct TabBar: View {
                         ExtensionSlot()
                         Helm(browser: browser)
                             .padding(.trailing, 8)
+                        UpdateToolbarPill(browser: browser) // Fork (update-pill)
                         if downloads.doorShowing {
                             DownloadsDoor(browser: browser, size: 26, arrowEdge: .bottom)
                                 .transition(.scale(scale: 0.8).combined(with: .opacity))

@@ -80,6 +80,10 @@ struct SideBar: View {
             column
                 .modifier(SpaceSlideBand(browser: browser))
 
+            // Fork (update-pill): Arc's update button, just above the foot,
+            // only while there is a newer Copper (Fork/UpdatePill.swift).
+            UpdatePillSlot(browser: browser)
+
             SlideInk(browser: browser) { tint in SpaceStrip(browser: browser, tint: tint) { foot(tint) } }
         }
         .frame(width: prefs.sideWidth)

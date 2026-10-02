@@ -121,6 +121,15 @@ jobs:
             const fs = require("fs");
             const e = process.env;
             const base = `https://github.com/${e.GITHUB_REPOSITORY}/releases`;
+            // What is new: the first paragraph of NOTES.md, the gist the
+            // CHANGELOG hands it when a version ships. The sidebar update pill
+            // shows it under What is New (Fork/UpdatePill.swift). Optional.
+            // (No apostrophes in here: this is a single-quoted shell string.)
+            let notes = "";
+            try {
+              const first = fs.readFileSync("NOTES.md", "utf8").split(/\n\s*\n/).find((p) => p.trim());
+              notes = (first || "").split("\n").map((l) => l.trim()).filter(Boolean).join(" ");
+            } catch {}
             const manifest = {
               schemaVersion: 1,
               product: "copper",
@@ -137,6 +146,7 @@ jobs:
               archiveUrl: `${base}/download/${e.TAG}/${e.ZIP_NAME}`,
               latestUrl: `${base}/latest/download/copper-macos-arm64.zip`,
               installer: "copper-install.sh",
+              notes,
             };
             fs.writeFileSync(`${e.OUT}/copper-version.json`, JSON.stringify(manifest, null, 2) + "\n");
           '

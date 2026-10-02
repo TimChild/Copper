@@ -46,6 +46,25 @@ describe('window.copperCanvas', () => {
     expect(() => api.zoomTo(['a'])).not.toThrow()
   })
 
+  it('sets share capability and ignores unknown fields', () => {
+    api.setShare({ canShare: true, members: 3, reason: 'unused', ignored: true })
+    expect(c.getShare()).toEqual({ canShare: true, members: 3, reason: 'unused' })
+    api.setShare('{"canShare":false,"reason":"Sign in to share","ignored":42}')
+    expect(c.getShare()).toEqual({ canShare: false, reason: 'Sign in to share' })
+    api.setShare(null)
+    expect(c.getShare()).toBeNull()
+    expect(() => api.setShare({ canShare: 'yes' })).not.toThrow()
+  })
+
+  it('returns live presence with a cursor and never throws before init', () => {
+    expect(api.presence()).toEqual([])
+    api.init({ docId: 'x', me: { id: 'u1', name: 'Ada', color: '#f00' } })
+    expect(api.presence()).toEqual([])
+    api.setAgent({ id: 'agent:scout', name: 'Scout', color: '#0f0', cursor: { x: 8, y: 9 }, status: 'thinking' })
+    expect(api.presence()).toContainEqual({ id: 'agent:scout', name: 'Scout', color: '#0f0', kind: 'agent', cursor: { x: 8, y: 9 } })
+    api.setShare({ canShare: true })
+  })
+
   it('takes the host status as JSON or a value, and logs bad ones', () => {
     api.setStatus('{"mode":"shared-offline","pending":5}')
     expect(c.getHostStatus()).toEqual({ mode: 'shared-offline', pending: 5 })

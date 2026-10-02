@@ -4,10 +4,19 @@
  * browser, tests) messages go to `window.__copperHost`, a test double that
  * records them and can forward them to a callback.
  */
+export interface HostPresencePerson {
+  id: string
+  name: string
+  color: string
+  kind: 'human' | 'agent'
+}
+
 export type PageMessage =
   | { type: 'ready'; version: string }
   | { type: 'update'; b64: string }
   | { type: 'selection'; ids: string[] }
+  | { type: 'share' }
+  | { type: 'presence'; people: readonly HostPresencePerson[] }
   | { type: 'ws'; b64: string }
   | { type: 'wsOpen'; url: string }
   | { type: 'wsClose' }

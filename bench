@@ -88,6 +88,11 @@
     ./bench backdrop                   the column's animated scenes: WebContent pid, hidden, and
                                        the page's status() (clock time, wall, key, frames, fading)
     ./bench canvas list|open [ID]|read [ID]|apply JSON|create NAME|invites|accept|decline INVITE|hosts
+    ./bench canvas link [ID]|join LINK|presence [ID]|parsetest
+                                       the Share sheet from the bench: link makes/reuses the invite
+                                       link for ID (default: the front canvas), join opens an invite
+                                       link the way clicking it would, presence prints who
+                                       copperCanvas.presence() says is in the room right now
                                        canvases: the canvas_* tools, the pages behind them (ready, room,
                                        store), the cloud invites
     ./bench canvas rename ID -> NAME|delete ID|leave ID|members ID

@@ -143,6 +143,7 @@ export function Board({ session }: { session: Session }) {
   const selection = useMemo(() => new Set(selectionList), [selectionList])
   const sync = useSyncExternalStore(controller.subscribe, () => session.status)
   const hostStatus = useSyncExternalStore(controller.subscribe, controller.getHostStatus)
+  const share = useSyncExternalStore(controller.subscribe, controller.getShare)
   const status = useMemo(
     () => statusView({ kind: cfg.kind, online: cfg.online, sync, host: hostStatus, readOnly }),
     [cfg.kind, cfg.online, sync, hostStatus, readOnly]
@@ -1296,7 +1297,10 @@ export function Board({ session }: { session: Session }) {
     const up = (e: KeyboardEvent) => {
       if (e.key === ' ') setSpace(false)
     }
-    const blur = () => setSpace(false)
+    const blur = () => {
+      setSpace(false)
+      awareness.setLocalStateField('cursor', null)
+    }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
     window.addEventListener('blur', blur)
@@ -1305,7 +1309,7 @@ export function Board({ session }: { session: Session }) {
       window.removeEventListener('keyup', up)
       window.removeEventListener('blur', blur)
     }
-  }, [])
+  }, [awareness])
 
   // ---- clipboard and drops ---------------------------------------------------------
 
@@ -1657,25 +1661,26 @@ export function Board({ session }: { session: Session }) {
           />
         )}
 
-        <TitleBar
-          name={cfg.name}
-          kind={cfg.kind}
-          status={status}
-          readOnly={readOnly}
+        <TitleBar name={cfg.name} kind={cfg.kind} status={status} readOnly={readOnly} />
+        <TopRight
+          onSearch={() => (search.open ? search.close() : search.show())}
+          searchOpen={search.open}
+          onHelp={() => setHelp(true)}
+          share={share}
           peers={peers}
           agents={agents}
           onPeer={peer => {
-            if (!peer.cursor) return
             const { w, h } = sizeRef.current
-            flight.fly(revealView({ ...peer.cursor, w: 1, h: 1 }, view, w, h))
+            if (peer.cursor) flight.fly(revealView({ ...peer.cursor, w: 1, h: 1 }, view, w, h))
+            else if (peer.selection.length) zoomToIds(peer.selection)
           }}
           onAgent={agent => {
             if (!agent.cursor) return
             const { w, h } = sizeRef.current
             flight.fly(revealView({ ...agent.cursor, w: 1, h: 1 }, view, w, h))
           }}
+          onShare={() => postToHost({ type: 'share' })}
         />
-        <TopRight onSearch={() => (search.open ? search.close() : search.show())} searchOpen={search.open} onHelp={() => setHelp(true)} />
         <SearchBox search={search} onReveal={revealHit} />
 
         <Toolbar

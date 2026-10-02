@@ -17,6 +17,7 @@ final class CanvasUI: ObservableObject {
         case new
         case rename(String)
         case invite(String)
+        case share(String)
         case members(String)
         case delete(String)
     }
@@ -55,6 +56,12 @@ final class CanvasUI: ObservableObject {
 
     /// "New canvas…" from ⌘K or the menu: the card, at its name field — or,
     /// with no sidebar to hang it from, an untitled canvas straight away.
+    func openShare(_ id: String, in browser: Browser? = nil) {
+        guard Canvases.shared.entry(id) != nil else { return }
+        popoverOpen = true
+        mode = .share(id)
+    }
+
     func newCanvas(in browser: Browser) {
         if browser.prefs.sidebar, !browser.folded {
             popoverOpen = true
@@ -120,6 +127,8 @@ struct CanvasPopover: View {
                 } }
             case .invite(let id):
                 if let entry = canvases.entry(id) { CanvasInviteForm(entry: entry) }
+            case .share(let id):
+                if let entry = canvases.entry(id) { CanvasShareSheet(entry: entry) }
             case .members(let id):
                 if let entry = canvases.entry(id) { CanvasMembers(entry: entry) }
             case .delete(let id):
@@ -252,7 +261,7 @@ struct CanvasPopover: View {
 /// The card's own buttons, drawn the same in a key window, a window behind
 /// and a picture: outlined, filled in ink (the one you came to press), or
 /// filled red (it destroys something).
-private struct CanvasButtonStyle: ButtonStyle {
+struct CanvasButtonStyle: ButtonStyle {
     enum Kind { case plain, primary, destructive }
     let kind: Kind
     @Environment(\.isEnabled) private var enabled
@@ -287,7 +296,7 @@ private struct CanvasExplain: View {
 
 /// The canvas a form or a confirmation is about, whole: a long name wraps
 /// instead of being cut off where the decision is made.
-private struct CanvasSubject: View {
+struct CanvasSubject: View {
     let name: String
     var body: some View {
         Text(name)
@@ -306,7 +315,7 @@ private struct CanvasSubject: View {
 }
 
 /// A form's short title — what is being done, never the name it is done to.
-private struct CanvasFormTitle: View {
+struct CanvasFormTitle: View {
     let text: String
     var body: some View {
         Text(text).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(1)
@@ -447,8 +456,8 @@ struct CanvasRow: View {
         if !entry.isPersonal && !away {
             Divider()
             if entry.isOwner { Button("Rename…") { ui.mode = .rename(entry.id) }.disabled(entry.isShared && !canvases.cloudReady) }
+            Button("Share…") { ui.mode = .share(entry.id) }
             if entry.isShared && canvases.cloudReady {
-                Button("Invite…") { ui.mode = .invite(entry.id) }
                 Button("Members…") { ui.mode = .members(entry.id) }
             }
             Divider()

@@ -54,6 +54,7 @@ struct CanvasTabMenu: View {
                 Button("Rename Canvas…") { CanvasRenaming.shared.ask(tab, in: browser) }
                     .disabled(entry.isShared && !canvases.cloudReady)
             }
+            Button("Share…") { CanvasUI.shared.openShare(entry.id, in: browser) }
             Button(CanvasDelete.leaving(entry) ? "Leave Canvas…" : "Delete Canvas…", role: .destructive) {
                 CanvasDelete.ask(id, in: browser)
             }

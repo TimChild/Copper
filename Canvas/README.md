@@ -113,6 +113,9 @@ copperCanvas.setAgent({ id: "agent:scout", name: "Scout", color: "#2b9348",
                         cursor: { x: 120, y: 40 }, status: "thinking" })   // partial patches merge
 copperCanvas.setAgent({ id: "agent:scout", remove: true })
 copperCanvas.setStatus({ mode: "shared-offline", pending: 3 })  // what the title pill says; see below
+copperCanvas.setShare({ canShare: true, members: 2 }) // show/enables the native Share button
+copperCanvas.setShare({ canShare: false, reason: "Sign in to share" }) // disabled with a tooltip
+copperCanvas.presence()                       // [{id,name,color,kind,cursor:{x,y}|null}] for everyone else
 copperCanvas.theme("dark")                  // "light" | "dark" | "system" (default: system)
 
 await copperCanvas.importLegacy({           // an Easels board onto this canvas (see below)
@@ -187,6 +190,15 @@ Without `setStatus` the page derives the pill as before from `init` and the sock
 "Connecting", "Live", "Offline" — except that a `kind: "shared"` board initialised with
 `online: false` reads "Offline · changes saved on this Mac" rather than "On this Mac".
 
+### Sharing and presence
+
+`setShare({canShare, members?, reason?})` controls the Share pill in the top-right chrome. It is
+hidden until called, disabled (with `reason` as its tooltip) when `canShare` is false, and emits
+`{"type":"share"}` when clicked so Copper can open its native Share sheet. Extra fields are ignored;
+`setShare(null)` hides the pill. `presence()` returns current human awareness peers and live agents,
+excluding this page, with each person's world-space cursor (or `null`). Human names and colours come
+from `init.me`, which is also published in awareness.
+
 ### Ops semantics
 
 - One transaction per call, ops in order; a bad op is skipped and reported, the rest apply.
@@ -213,6 +225,8 @@ Without `setStatus` the page derives the pill as before from `init` and the sock
 | `{"type":"ready","version"}` | the API is installed; call `init` |
 | `{"type":"update","b64"}` | after every local transaction (user, agent ops, presence, meta) — not for `init.state`, `applyUpdate` or server frames |
 | `{"type":"selection","ids"}` | the user's selection changed |
+| `{"type":"share"}` | the Share pill was clicked; Copper opens its native sheet |
+| `{"type":"presence","people":[{"id","name","color","kind"}]}` | everyone else in the room, diffed and debounced (≤500 ms) |
 | `{"type":"ws","b64"}` | a frame for the relayed socket |
 | `{"type":"wsOpen","url"}` / `{"type":"wsClose"}` | open / close the relayed socket |
 | `{"type":"openUrl","url"}` | a link card was opened or a link in a note clicked (the page never navigates) |

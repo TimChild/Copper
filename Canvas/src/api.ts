@@ -21,6 +21,10 @@ export interface CopperCanvasApi {
   setAgent(agent: unknown): void
   /** `{mode: 'local'|'personal-synced'|'shared-live'|'shared-offline', pending?}`; `null` clears. */
   setStatus(status: unknown): void
+  /** Shows/enables the native Share action; `null` hides it. */
+  setShare(share: unknown): void
+  /** Live people other than this page, including current world cursors. */
+  presence(): Array<{ id: string; name: string; color: string; kind: 'human' | 'agent'; cursor: { x: number; y: number } | null }>
   theme(mode: 'light' | 'dark' | string): void
   exportState(): string
   /**
@@ -103,6 +107,8 @@ export function createApi(c: Controller = controller): CopperCanvasApi {
     zoomTo: guard('zoomTo', (ids: unknown) => void c.zoomTo(idList(ids)), undefined),
     setAgent: guard('setAgent', (agent: unknown) => c.setAgent(agent), undefined),
     setStatus: guard('setStatus', (status: unknown) => void c.setHostStatus(status), undefined),
+    setShare: guard('setShare', (share: unknown) => void c.setShare(share), undefined),
+    presence: guard('presence', () => c.presence(), []),
     theme: guard('theme', (mode: string) => void setTheme(mode), undefined),
     exportState: guard('exportState', () => c.exportState(), ''),
     importLegacy: async (payload: unknown): Promise<ImportResult> => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
 import { CanvasStore } from '../doc'
@@ -6,7 +6,9 @@ import { applyOps } from '../../ops'
 import { seedOps } from '../debug'
 import { LaserTrails } from '../laser'
 import { TOOL_KEYS } from '../components/Chrome'
+import { Controller } from '../../controller'
 import { involvesOthers, readPeers, samePeers, syncRemoteLasers, type AwarenessChanges } from '../use-presence'
+import { createPresenceReporter, facepilePeople, hostPresence, mergePresence } from '../presence'
 
 const T0 = 1_700_000_000_000
 
@@ -21,6 +23,46 @@ function relay(from: Awareness, to: Awareness): AwarenessChanges {
   to.off('change', grab)
   return seen
 }
+
+describe('presence messages', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('debounces and diffs people, ignoring cursor-only changes', () => {
+    vi.useFakeTimers()
+    const posted: unknown[] = []
+    const reporter = createPresenceReporter(people => posted.push(people), 400)
+    const ada = { id: 'ada', name: 'Ada', color: '#2f6fdf', kind: 'human' as const }
+    reporter.update([ada])
+    reporter.update([ada])
+    vi.advanceTimersByTime(399)
+    expect(posted).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(posted).toEqual([[ada]])
+    reporter.update([ada])
+    vi.advanceTimersByTime(500)
+    expect(posted).toHaveLength(1)
+    reporter.update([])
+    vi.advanceTimersByTime(400)
+    expect(posted).toEqual([[ada], []])
+  })
+
+  it('orders a facepile and reports overflow after four circles', () => {
+    const people = Array.from({ length: 6 }, (_, i) => ({
+      id: `p${i}`,
+      name: `Person ${i}`,
+      color: `#${i}${i}${i}`,
+      kind: 'human' as const,
+      cursor: null,
+      selection: [],
+    }))
+    const out = facepilePeople(people)
+    expect(out.shown.map(p => p.id)).toEqual(['p0', 'p1', 'p2', 'p3'])
+    expect(out.overflow).toBe(2)
+    expect(hostPresence(mergePresence(people.slice(0, 1), []))).toEqual([
+      { id: 'p0', name: 'Person 0', color: '#000', kind: 'human' },
+    ])
+  })
+})
 
 describe('presence re-renders', () => {
   it('ignores changes that only involve this client', () => {
@@ -46,6 +88,29 @@ describe('presence re-renders', () => {
     ada.setLocalStateField('cursor', { x: 11, y: 20 })
     relay(ada, me)
     expect(samePeers(before, readPeers(me))).toBe(false)
+  })
+})
+
+describe('two-client awareness presence', () => {
+  it('shows client A with its cursor in client B presence()', () => {
+    const a = new Controller()
+    const b = new Controller()
+    try {
+      a.init({ docId: 'room', name: 'Board', kind: 'shared', me: { id: 'a', name: 'Ada', color: '#2f6fdf' } })
+      b.init({ docId: 'room', name: 'Board', kind: 'shared', me: { id: 'b', name: 'Bea', color: '#d6336c' } })
+      const source = a.session!.awareness
+      const target = b.session!.awareness
+      applyAwarenessUpdate(target, encodeAwarenessUpdate(source, [source.clientID]), 'relay')
+      source.setLocalStateField('cursor', { x: 42, y: 84 })
+      applyAwarenessUpdate(target, encodeAwarenessUpdate(source, [source.clientID]), 'relay')
+      expect(b.presence()).toContainEqual({ id: 'a', name: 'Ada', color: '#2f6fdf', kind: 'human', cursor: { x: 42, y: 84 } })
+      source.setLocalState(null)
+      applyAwarenessUpdate(target, encodeAwarenessUpdate(source, [source.clientID]), 'relay')
+      expect(b.presence()).toEqual([])
+    } finally {
+      a.session?.destroy()
+      b.session?.destroy()
+    }
   })
 })
 

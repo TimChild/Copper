@@ -33,10 +33,12 @@ import {
   Trash2,
   Type,
   Undo2,
+  UsersRound,
   X,
 } from 'lucide-react'
 import { COLOR_LABEL, SHAPE_COLORS, initials, swatchOf } from '../colors'
 import type { StatusView } from '../status'
+import { facepilePeople, mergePresence } from '../presence'
 import type { CanvasAgent, NamedColor, Shape, ShapeColor } from '../types'
 import type { PeerView } from './Overlays'
 import { AgentDot } from './Overlays'
@@ -389,9 +391,9 @@ function Avatar({
   return (
     <button
       type="button"
-      aria-label={agent ? `${name}, ${agent.status}` : name}
+      aria-label={agent ? `${name}, agent, ${agent.status}` : name}
       onClick={onClick}
-      className="tip-host tip-below relative -ml-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-surface text-[11px] font-semibold text-white first:ml-0"
+      className="tip-host tip-below relative -ml-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-surface text-[11px] font-semibold text-white first:ml-0 outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
       style={{ background: color }}
     >
       {agent ? <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> : initials(name)}
@@ -399,6 +401,7 @@ function Avatar({
       {agent && <AgentDot agent={agent} className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-surface" />}
       <span className="tip tip-below flex items-center gap-1.5 rounded-lg bg-[#1d1d1f] px-2 py-1 text-[11.5px] font-medium text-white shadow-2 dark:bg-[#f2f2ef] dark:text-[#1d1d1f]">
         {name}
+        {agent && <span className="opacity-70">agent</span>}
         {agent && agent.status !== 'idle' && <span className="opacity-70">{agent.status}…</span>}
       </span>
     </button>
@@ -410,24 +413,14 @@ export function TitleBar({
   kind,
   status,
   readOnly,
-  peers,
-  agents,
-  onPeer,
-  onAgent,
 }: {
   name: string
   kind: string
   status: StatusView
   readOnly: boolean
-  peers: readonly PeerView[]
-  agents: readonly CanvasAgent[]
-  onPeer: (peer: PeerView) => void
-  onAgent: (agent: CanvasAgent) => void
 }) {
   const s = status
   const dot = TONE_DOT[s.tone]
-  const people = dedupePeers(peers)
-  const shown = people.slice(0, 5)
   const warn = s.tone === 'warning' && !s.pulse
   return (
     <div className="pointer-events-none absolute left-3 right-[120px] top-3 flex min-w-0 items-center gap-2">
@@ -469,26 +462,6 @@ export function TitleBar({
           </span>
         </span>
       </Panel>
-      {(shown.length > 0 || agents.length > 0) && (
-        <Panel className="pointer-events-auto flex shrink-0 items-center gap-1 py-1 pl-1.5 pr-1.5">
-          <div className="flex items-center">
-            {shown.map(p => (
-              <Avatar key={p.id} name={p.name} color={p.color} onClick={() => onPeer(p)} />
-            ))}
-            {people.length > shown.length && (
-              <span className="-ml-1.5 flex h-7 w-7 items-center justify-center rounded-full border-2 border-surface bg-surface-3 text-[10.5px] font-semibold text-ink-2">
-                +{people.length - shown.length}
-              </span>
-            )}
-          </div>
-          {agents.length > 0 && shown.length > 0 && <Divider />}
-          <div className="flex items-center">
-            {agents.slice(0, 4).map(a => (
-              <Avatar key={a.id} name={a.name} color={a.color || 'var(--accent)'} agent={a} onClick={() => onAgent(a)} />
-            ))}
-          </div>
-        </Panel>
-      )}
     </div>
   )
 }
@@ -500,9 +473,98 @@ export function dedupePeers(peers: readonly PeerView[]): PeerView[] {
   return [...seen.values()]
 }
 
-export function TopRight({ onSearch, searchOpen, onHelp }: { onSearch: () => void; searchOpen: boolean; onHelp: () => void }) {
+export interface ShareButtonState {
+  canShare: boolean
+  members?: number
+  reason?: string
+}
+
+export function Facepile({
+  peers,
+  agents,
+  onPeer,
+  onAgent,
+}: {
+  peers: readonly PeerView[]
+  agents: readonly CanvasAgent[]
+  onPeer: (peer: PeerView) => void
+  onAgent: (agent: CanvasAgent) => void
+}) {
+  const all = mergePresence(
+    dedupePeers(peers).map(peer => ({ ...peer, kind: 'human' as const })),
+    agents
+  )
+  const { shown, overflow } = facepilePeople(all, 4)
+  if (all.length === 0) return null
   return (
-    <Panel className="pointer-events-auto absolute right-3 top-3 flex items-center gap-0.5 p-1">
+    <div className="hidden max-w-[148px] shrink-0 items-center px-0.5 min-[640px]:flex" data-testid="canvas-facepile">
+      {shown.map(person => {
+        const agent = person.kind === 'agent' ? agents.find(candidate => candidate.id === person.id) : undefined
+        const peer = person.kind === 'human' ? peers.find(candidate => candidate.id === person.id && candidate.clientId === person.clientId) : undefined
+        return (
+          <Avatar
+            key={`${person.kind}:${person.id}:${person.clientId ?? ''}`}
+            name={person.name}
+            color={person.color}
+            ring={person.kind === 'human'}
+            agent={agent}
+            onClick={() => (peer ? onPeer(peer) : agent ? onAgent(agent) : undefined)}
+          />
+        )
+      })}
+      {overflow > 0 && (
+        <span className="-ml-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-surface bg-surface-3 text-[10.5px] font-semibold text-ink-2">
+          +{overflow}
+        </span>
+      )}
+    </div>
+  )
+}
+
+export function ShareButton({ share, onShare }: { share: ShareButtonState | null; onShare: () => void }) {
+  if (!share) return null
+  const disabled = !share.canShare
+  return (
+    <button
+      type="button"
+      aria-label="Share canvas"
+      disabled={disabled}
+      title={disabled ? share.reason || 'Sharing is unavailable' : 'Share canvas'}
+      onClick={onShare}
+      className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-accent px-2.5 text-[12px] font-semibold text-accent-ink outline-none transition-colors hover:bg-accent-strong focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-45"
+    >
+      <UsersRound className="h-3.5 w-3.5" aria-hidden="true" />
+      <span>Share</span>
+      {typeof share.members === 'number' && share.members > 1 && <span className="rounded-full bg-accent-ink/15 px-1.5 text-[10.5px] tabular-nums">{share.members}</span>}
+    </button>
+  )
+}
+
+export function TopRight({
+  onSearch,
+  searchOpen,
+  onHelp,
+  share,
+  peers,
+  agents,
+  onPeer,
+  onAgent,
+  onShare,
+}: {
+  onSearch: () => void
+  searchOpen: boolean
+  onHelp: () => void
+  share: ShareButtonState | null
+  peers: readonly PeerView[]
+  agents: readonly CanvasAgent[]
+  onPeer: (peer: PeerView) => void
+  onAgent: (agent: CanvasAgent) => void
+  onShare: () => void
+}) {
+  return (
+    <Panel className="pointer-events-auto absolute right-3 top-3 flex max-w-[calc(100vw-24px)] items-center gap-0.5 p-1">
+      <Facepile peers={peers} agents={agents} onPeer={onPeer} onAgent={onAgent} />
+      <ShareButton share={share} onShare={onShare} />
       <IconButton size="sm" label="Search" keys={`${MOD}F`} tipBelow tipEnd active={searchOpen} onClick={onSearch}>
         <Search className="h-4 w-4" />
       </IconButton>

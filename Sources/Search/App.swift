@@ -264,6 +264,7 @@ private struct MenuLine: View {
 struct ContentView: View {
     @ObservedObject var browser: Browser
     @ObservedObject private var recent = Recent.shared
+    @ObservedObject private var canvases = Canvases.shared
 
     @State private var keys: Any?
     @State private var window: NSWindow?
@@ -338,6 +339,10 @@ struct ContentView: View {
     private var bars: some View {
         VStack(spacing: 8) {
             announcement
+            if let invite = canvases.newInvite {
+                inviteBanner(invite)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if let ask = browser.asking {
                 captureAsking(ask)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -356,6 +361,58 @@ struct ContentView: View {
         .animation(Motion.settle, value: browser.veiling)
         .animation(Motion.settle, value: browser.asking)
         .animation(Motion.settle, value: browser.offering)
+        .animation(Motion.settle, value: canvases.newInvite)
+    }
+
+    /// A new invite, said once until it is answered: "<owner> invited you to
+    /// “<name>” · Open". Accepting joins and opens it in one step — the
+    /// person who sent it already knows you were asked.
+    private func inviteBanner(_ invite: Canvases.Invite) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "person.crop.circle.badge.plus")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Palette.muted)
+            Text(invite.from.isEmpty
+                 ? "You were invited to “\(invite.canvasName)”"
+                 : "\(invite.from) invited you to “\(invite.canvasName)”")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+            Button("Open") { openInvite(invite) }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.ground)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(Palette.ink, in: Capsule())
+            Button {
+                Task { try? await canvases.answer(invite, accept: false) }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.muted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .padding(.vertical, 9)
+        .background(Palette.ground, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 20, y: 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Invitation to \(invite.canvasName)\(invite.from.isEmpty ? "" : " from \(invite.from)")")
+    }
+
+    private func openInvite(_ invite: Canvases.Invite) {
+        Task {
+            do {
+                try await canvases.answer(invite, accept: true)
+                if let entry = canvases.entry(invite.canvasId) { CanvasHost.show(entry.id, in: browser, foreground: true) }
+            } catch {
+                browser.announce(Canvases.explain(error))
+            }
+        }
     }
 
     /// The address field: raised over a page by ⌘L or ⌘K, and standing on its

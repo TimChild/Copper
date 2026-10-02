@@ -4,6 +4,7 @@ New code lives in `Sources/Search/Fork/` and never appears here. This table is o
 
 | patch | touches | why | upstream status | drop when |
 |---|---|---|---|---|
+| canvas-share-links | `build.sh`; `Sources/Search/Links.swift`; `Sources/Search/Browser.swift`; `Sources/Search/Address.swift`; `Sources/Search/App.swift` | Native Copper canvas invite URL scheme, join interception, and invite banner | fork-only | never |
 | developer-shortcuts | `App.swift` View menu and key monitor; `Tab.swift` cache-only per-site hard reload + inspector preference; `Browser.swift` hard reload / inspector actions; `Fork/Inspect.swift` private WebKit inspector bridge; `Fork/CommandBar.swift` commands; `Bench.swift` + `bench` verbs; `Settings.swift` shortcut list; `TabBar.swift` reload tooltip; `README.md` keyboard map; `Fork/Spaces.swift` moved Flow shortcut | Chrome-style hard reload and Web Inspector element picker, while making room for Reading mode | fork-only | never |
 | updater-off | `Updater.swift` `checkIfDue()` guard | a Copper build must not replace itself with upstream Search | fork-only | Copper has its own feed + signing identity (then repoint, keep the guard) |
 | app-identity | `Store.swift` folder + `ownContainer`, `Vault.swift` label, `build.sh` NAME/APP/bundle id, `Icon/icon.swift` + `Icon/plate.jpg` (Copper's own icon), `CHANGELOG.md` "Added (Copper)" block at the top | coexist with upstream Search: separate Application Support, keychain items, WebKit container | fork-only | never |

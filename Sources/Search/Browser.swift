@@ -111,18 +111,43 @@ final class Browser: NSObject, ObservableObject {
     /// The address field, raised over a page by ⌘L. A blank tab shows it
     /// without being asked — there is nothing else for that tab to show.
     @Published var editing = false
+    /// Fork (new-tab-launcher): what the field holds and offers, in an object
+    /// of its own. Published from the browser, every letter typed told every
+    /// view watching the browser — the sidebar, the tab strip, the menus — to
+    /// draw again; now only the views that draw the field and its rows hear
+    /// it, by observing `field` (Omnibox, AddressField, Fork/CommandPalette).
+    final class Field: ObservableObject {
+        @Published var typed = ""
+        @Published var offers: [OmniboxSuggestion] = []
+        @Published var ending: String?
+        @Published var picked: Int?
+    }
+    let field = Field()
+
     /// What is in the field. Every change re-reads the history, because the
     /// list under the field and the grey ending inside it are both just
     /// answers to this string.
-    @Published var typed = "" { didSet { guess() } }
+    var typed: String {
+        get { field.typed }
+        set { field.typed = newValue; guess() }
+    }
 
     let history: History
     /// What the field is offering, best first.
-    @Published private(set) var offers: [OmniboxSuggestion] = []
+    private(set) var offers: [OmniboxSuggestion] {
+        get { field.offers }
+        set { field.offers = newValue }
+    }
     /// The rest of the best match, drawn grey after the caret. Tab takes it.
-    @Published private(set) var ending: String?
+    private(set) var ending: String? {
+        get { field.ending }
+        set { field.ending = newValue }
+    }
     /// Which row the arrow keys have walked to, if any.
-    @Published var picked: Int?
+    var picked: Int? {
+        get { field.picked }
+        set { field.picked = newValue }
+    }
     /// Bumped when what was typed isn't an address and can't be searched for.
     @Published private(set) var refusals = 0
     /// Bumped whenever the cursor should go back into the field.
@@ -635,7 +660,7 @@ final class Browser: NSObject, ObservableObject {
 
     /// The last few places, for the History menu.
     var recentlyVisited: [History.Trace] {
-        Array(history.everything().prefix(8))
+        history.recent(8) // Fork (new-tab-launcher): was everything().prefix(8), a sort of all history per read
     }
 
     // MARK: - the camera and the microphone

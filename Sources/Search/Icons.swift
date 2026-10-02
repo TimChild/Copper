@@ -20,6 +20,8 @@ final class Favicons {
     private var memory: [String: NSImage] = [:]
     private var busy: Set<String> = []
     private var missing: Set<String> = []
+    /// Fork (new-tab-launcher): keys with no file on disk; see `known`.
+    private var absent: Set<String> = []
 
     private static var folder: URL { Store.folder.appendingPathComponent("icons", isDirectory: true) }
     private static func file(_ key: String) -> URL { folder.appendingPathComponent(key + ".png") }
@@ -44,7 +46,13 @@ final class Favicons {
 
     private func known(_ key: String) -> NSImage? {
         if let hit = memory[key] { return hit }
-        guard let image = NSImage(contentsOf: Favicons.file(key)) else { return nil }
+        // Fork (new-tab-launcher): a file found missing once is not looked
+        // for again. ⌘T draws a mark for every row on every keystroke, and
+        // in the dark each one asks for an "@dark" file most sites never
+        // had — a failed disk read per row per redraw. An icon that arrives
+        // later goes into `memory`, which is read first.
+        guard !absent.contains(key) else { return nil }
+        guard let image = NSImage(contentsOf: Favicons.file(key)) else { absent.insert(key); return nil }
         memory[key] = image
         return image
     }

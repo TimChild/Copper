@@ -33,6 +33,15 @@ struct CommandPalette: View {
     @ObservedObject private var marks = Marks.ticker
     /// ⌘T's groups and their headings (Fork/Launcher).
     @ObservedObject private var launcher = Launcher.shared
+    /// What is typed and offered. The browser no longer announces it to
+    /// every view it has; see `Browser.Field`.
+    @ObservedObject private var state: Browser.Field
+
+    init(browser: Browser, over: Bool) {
+        self.browser = browser
+        self.over = over
+        _state = ObservedObject(wrappedValue: browser.field)
+    }
 
     /// Fixed so the card's height can be worked out before it is drawn: a
     /// scroll view left to size itself takes all the room it is offered,
@@ -58,7 +67,10 @@ struct CommandPalette: View {
                 .offset(x: -inset / 2, y: top)
         }
         .background(WindowRuler { place = $0 })
-        .animation(Motion.settle, value: browser.offers)
+        // ⌘T's rows change on every letter, and as Google and history land.
+        // A spring on each of those kept the card resizing for a third of a
+        // second behind every keystroke — it read as lag, not as motion.
+        .animation(browser.launching ? nil : Motion.settle, value: browser.offers)
         // Every row that names a site wants that site's mark, and most of
         // these rows have no page behind them to ask. See Fork/Marks.
         .onAppear { Marks.want(browser.offers.map(\.url)) }

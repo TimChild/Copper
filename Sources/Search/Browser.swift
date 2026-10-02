@@ -887,6 +887,7 @@ final class Browser: NSObject, ObservableObject {
             Heat.shared.start(for: self)
         }
 
+        CanvasImport.prepare() // Fork (canvas-hooks): every easel has a canvas before the session names one
         let saved = Session.read()
         Spaces.shared.restore(saved, into: self)
         guard !tabs.isEmpty else {
@@ -1265,7 +1266,6 @@ final class Browser: NSObject, ObservableObject {
     func close(_ tab: Tab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         Grouper.shared.forget(tab.id) // Fork
-        Easels.closing(tab) // Fork: a board's last save, before its view goes
         signedInWith[tab.id] = nil
         if tab.pin == nil { CanvasHost.forget(tab) } // Fork (canvas): its room closes with it
 
@@ -1420,7 +1420,7 @@ final class Browser: NSObject, ObservableObject {
     /// order it came in.
     @discardableResult
     func open(_ url: URL, foreground: Bool, atEnd: Bool = false) -> Tab {
-        if let board = Easels.already(url, in: self, foreground: foreground) { return board } // Fork: one tab per board
+        if let board = CanvasTabs.already(url, in: self, foreground: foreground) { return board } // Fork (canvas-hooks): one tab per board
         // An extension's own page is served only to a view built from that
         // extension's configuration.
         let url = Browser.page(url)
@@ -1449,9 +1449,8 @@ final class Browser: NSObject, ObservableObject {
     }
 
     /// The configuration for an extension's page, or nil for anything else.
-    /// (Fork: or a board's, for an easel's address — Fork/Easel.)
+    /// (Fork: or a canvas tab's, for a canvas's address — Fork/Canvas.)
     static func extensionConfiguration(for url: URL) -> WKWebViewConfiguration? {
-        if let easel = Easels.configuration(for: url) { return easel } // Fork: easels
         if let canvas = CanvasHost.configuration(for: url) { return canvas } // Fork (canvas)
         guard #available(macOS 15.4, *) else { return nil }
         let url = Extensions.current(url)
@@ -1847,7 +1846,7 @@ final class Browser: NSObject, ObservableObject {
         }
         guard !summoning else {
             offers = CommandBar.offers(for: typed, open: openPages(matching: typed), in: self)
-            ending = history.completion(for: typed, among: offers)
+            ending = history.completion(for: typed, among: offers.filter { !CanvasLinks.isCanvas($0.url) }) // Fork (canvas-hooks): "canvas" never carries on into a canvas's id
             // The most recent page is already chosen, so ⌘K then Return is the
             // whole gesture.
             picked = offers.isEmpty ? nil : 0
@@ -2108,9 +2107,6 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.allow)
             return
         }
-        // Fork: easels — only Copper opens a board, and a board's tab shows nothing else.
-        if let verdict = Easels.police(action, in: webView, browser: self) { decisionHandler(verdict); return }
-
         // An extension's OAuth sign-in coming back: the address is the
         // answer, handed to the extension, and never loaded.
         if ExtensionAuth.intercept(url, browser: self) {
@@ -2167,7 +2163,6 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         for action: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        if Easels.refusesWindow(for: action, from: webView, in: self) { return nil } // Fork: easels
         let from = tab(for: webView)?.id ?? activeID
         let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
         adopt(tab)

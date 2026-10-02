@@ -669,8 +669,8 @@ final class Spaces: ObservableObject {
         keep()
     }
 
-    /// A tab closed for good wherever its row is — a deleted board's tab in
-    /// a space no window is showing (Fork/Easel).
+    /// A tab closed for good wherever its row is — a deleted canvas's tab in
+    /// a space no window is showing (Fork/Canvas).
     func drop(_ tab: Tab) {
         for (id, row) in rows where row.contains(where: { $0 === tab }) {
             rows[id] = row.filter { $0 !== tab }
@@ -793,14 +793,15 @@ final class Spaces: ObservableObject {
         // pin that has it), so the legacy active index still finds its tab.
         var made: [Tab?] = []
         for entry in entries {
-            guard let url = URL(string: entry.url) else { made.append(nil); continue }
+            // Fork (canvas-hooks): an easel's address is its canvas's now; one that never moved is dropped.
+            guard let url = URL(string: entry.url).flatMap(CanvasImport.restored) else { made.append(nil); continue }
             if entry.pin != nil, let key = pinKey(url), let known = pins.first(where: { pinKey($0) == key }) {
                 made.append(known)
                 continue
             }
-            let tab = building(for: id) { Tab(configuration: Easels.configuration(for: url)) } // Fork: easels
+            let tab = building(for: id) { Tab(configuration: CanvasHost.configuration(for: url)) } // Fork (canvas-hooks): a canvas tab is built from its own configuration
             browser.prepare(tab)
-            tab.restore(url: url, title: Easels.rowTitle(for: url, kept: entry.title))
+            tab.restore(url: url, title: CanvasTabs.rowTitle(for: url, kept: entry.title))
             if let pin = entry.pin {
                 tab.pin = pin
                 pins.append(tab)
@@ -954,8 +955,10 @@ final class Spaces: ObservableObject {
                 .map(\.element)
             : (saved.pins ?? []).enumerated().map { (index: -1, entry: $0.element) }
         var kept: [String: Tab] = [:]
+        var boards = Set<String>() // Fork (canvas-hooks): one tab per canvas, even from a file that had two
         for (i, entry) in sources {
-            guard let url = URL(string: entry.url) else { continue }
+            guard let url = URL(string: entry.url).flatMap(CanvasImport.restored) else { continue } // Fork (canvas-hooks): easels → canvases
+            if let board = CanvasLinks.id(from: url), !boards.insert(board).inserted { continue }
             let key = pinKey(url) ?? url.absoluteString
             // Upstream's file has no `active` flag — its `active` index does.
             let wasActive = entry.active == true || (legacy && entry.space == nil && i == saved.active)
@@ -967,9 +970,9 @@ final class Spaces: ObservableObject {
                 continue
             }
             let made = home(entry.space, else: current)
-            let tab = building(for: made) { Tab(configuration: Easels.configuration(for: url)) } // Fork: a pinned board
+            let tab = building(for: made) { Tab(configuration: CanvasHost.configuration(for: url)) } // Fork (canvas-hooks): a pinned canvas
             browser.prepare(tab)
-            tab.restore(url: url, title: Easels.rowTitle(for: url, kept: entry.title))
+            tab.restore(url: url, title: CanvasTabs.rowTitle(for: url, kept: entry.title))
             tab.pin = entry.pin ?? (tab.monogram.isEmpty ? "•" : tab.monogram)
             Sections.shared.restore(tab, saved: true, seen: entry.seen)
             Groups.shared.restore(tab, group: entry.group)
@@ -981,14 +984,14 @@ final class Spaces: ObservableObject {
         }
 
         for (i, entry) in saved.tabs.enumerated() {
-            guard entry.pin == nil, let url = URL(string: entry.url) else { continue }
+            guard entry.pin == nil, let url = URL(string: entry.url).flatMap(CanvasImport.restored) else { continue } // Fork (canvas-hooks): easels → canvases
+            if let board = CanvasLinks.id(from: url), !boards.insert(board).inserted { continue }
             let id = entry.space.flatMap { s in all.first { $0.id == s }?.id } ?? current
-            // A board's tab is built from its own configuration (Fork/Easel);
+            // A canvas's tab is built from its own configuration (Fork/Canvas);
             // it has to be there when the view is made, long before it wakes.
-            let tab = building(for: id) { Tab(configuration: Easels.configuration(for: url) ?? CanvasHost.configuration(for: url)) } // Fork: a board (easel or canvas) is built from its own configuration
+            let tab = building(for: id) { Tab(configuration: CanvasHost.configuration(for: url)) } // Fork (canvas-hooks)
             browser.prepare(tab)
-            tab.restore(url: url, title: Easels.rowTitle(for: url, kept: entry.title)) // Fork: a board's name is the index's
-            if CanvasLinks.isCanvas(url) { tab.icon = CanvasPage.icon } // Fork (canvas): the board's mark before it wakes
+            tab.restore(url: url, title: CanvasTabs.rowTitle(for: url, kept: entry.title)) // Fork (canvas-hooks): a canvas's name is the registry's, and it wears the mark
             // No flag at all is an upstream-shaped file: everything in it is
             // something you kept, so the whole column comes back as Saved.
             Sections.shared.restore(tab, saved: entry.saved ?? true, seen: entry.seen)
@@ -1031,9 +1034,9 @@ extension Session.Entry {
         // A sleeping tab holds its address in `pending`; asking for it there
         // too means a pin can never be written out of existence by whatever
         // its web view happens to be showing.
-        // A board is a real page too (Fork/Easel): it comes back from its own file.
+        // A canvas is a real page too (Fork/Canvas): it comes back from its own history.
         guard let url = tab.pending ?? tab.address,
-              url.scheme?.hasPrefix("http") == true || Easels.id(of: url) != nil
+              url.scheme?.hasPrefix("http") == true || CanvasLinks.isCanvas(url)
         else { return nil }
         self.init(url: url.absoluteString, title: tab.title, pin: tab.pin)
     }
@@ -1061,7 +1064,6 @@ struct ForkCommands: Commands {
             // ⌘⇧C is Copy Address; O for "open the board".
             Button("Canvas") { CanvasHost.show(Canvases.personalID, in: browser) }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
-            Button("New Canvas…") { CanvasUI.shared.newCanvas(in: browser) }
             // Jev's timeline had no way back once closed; and with two or
             // three panes open there was no one move that put them all away.
             Button(trace.paneOpen ? "Close Driver Timeline" : "Driver Timeline") { trace.paneOpen.toggle() }

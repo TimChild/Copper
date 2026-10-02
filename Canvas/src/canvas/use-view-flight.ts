@@ -3,7 +3,7 @@
  * change (a pan, a wheel, a zoom button) mid-flight wins and ends the flight.
  * With reduced motion the view jumps.
  */
-import { useCallback, useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, type Dispatch, type RefObject, type SetStateAction } from 'react'
 import type { View } from './geometry'
 import { flightMs, flightView } from './search'
 
@@ -64,5 +64,7 @@ export function useViewFlight(view: View, setView: Dispatch<SetStateAction<View>
   )
 
   useEffect(() => cancel, [cancel])
-  return { fly, cancel }
+  // Stable: the board's actions depend on it, and a new object per render
+  // would re-render every shape on every pan.
+  return useMemo(() => ({ fly, cancel }), [fly, cancel])
 }

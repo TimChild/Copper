@@ -2,7 +2,8 @@
 
 The infinite whiteboard Copper shows at `copper://canvas/<id>`: stickies (markdown), text, frames
 (optionally holding an image), arrows that attach to shapes or their sides, images, and link cards;
-select, multi-select, marquee, move, resize, undo/redo, search, live cursors and agent presence.
+select, multi-select, marquee, move, resize, undo/redo, search, live cursors, a laser pointer
+everyone on the board sees, and agent presence. Boards from Easels come over through `importLegacy`.
 
 It is a Vite + React 19 + TypeScript + Tailwind v4 page, built with **bun** into one self-contained
 file, **`dist/canvas.html`** (≈ 500 KB; every script and style inlined, no fonts or other requests).
@@ -25,7 +26,7 @@ bun run dev            # then open http://localhost:5173/?dev=1
 | Param | Effect |
 |---|---|
 | `empty=1` | start from a blank board |
-| `peers=1` | a simulated collaborator's cursor and selection (awareness) |
+| `peers=1` | a simulated collaborator's cursor and selection (awareness); with `laser=1` she circles a note with the laser every few seconds |
 | `agent=1` | a simulated agent that thinks, then writes notes through `apply` |
 | `online=1` | the relayed sync socket against an in-page server (`src/dev-relay.ts`) |
 | `theme=dark\|light` | force a theme (otherwise `prefers-color-scheme`) |
@@ -113,7 +114,56 @@ copperCanvas.setAgent({ id: "agent:scout", name: "Scout", color: "#2b9348",
 copperCanvas.setAgent({ id: "agent:scout", remove: true })
 copperCanvas.setStatus({ mode: "shared-offline", pending: 3 })  // what the title pill says; see below
 copperCanvas.theme("dark")                  // "light" | "dark" | "system" (default: system)
+
+await copperCanvas.importLegacy({           // an Easels board onto this canvas (see below)
+  doc: "AVji…",                             // base64 of the board's doc.yjs
+  files: { "9f2c…": "data:image/webp;base64,…" },   // fileId → data: URL
+  title: "Launch plan",                     // optional
+})                                          // → {imported: 9, skipped: 3, error?: "…", already?: true}
 ```
+
+### Importing an Easels board
+
+`importLegacy(payload)` brings a board from Easels (the whiteboard Canvas replaced) onto the open
+canvas. `payload` is an object or its JSON string:
+
+| Field | |
+|---|---|
+| `doc` | base64 of the legacy Yjs document: what Easels kept in `easels/<id>/doc.yjs` (one `Y.encodeStateAsUpdate`). A stream of updates works too — a list of base64 updates, or one buffer of `4-byte big-endian length + bytes` or `varuint length + bytes` records. |
+| `files` | `{ [fileId]: dataURL }` for the pictures in `easels/<id>/files/`; keys may be `fileId` or `file:fileId`. A bare base64 PNG/JPEG/GIF/WebP or an `https:` URL is accepted too. |
+| `title` | optional; else the document's own `meta.title` |
+
+It returns a **Promise** (pictures are measured first) that always resolves, never rejects:
+
+```js
+{ imported: 9,      // shapes written (a frame and the picture placed in it count as two)
+  skipped: 3,       // legacy entries not brought over: unknown types, arrows with a missing end, pictures
+  error: "1 picture could not be imported (gone-file)",   // only when something the old board showed is missing,
+                    // or nothing could be read (bad JSON, not a Yjs update, read-only, no init)
+  already: true }   // only when this exact document was imported into this canvas before (nothing written)
+```
+
+What it does:
+
+- **One transaction**, origin `import`: posted to the host as one `{"type":"update"}` and relayed
+  like any local change, but **not on the undo stack** (a stray ⌘Z must not empty a migrated board).
+- **sticky** → sticky (same box, colour, markdown body as a `Y.Text`; `fontSize: 14`, the size Easels
+  drew notes at). **frame** → frame (its `text` is the title). A frame with a picture (`image:
+  "file:<id>"`) also gets an **image** shape inside it, `object-fit: contain` within an 8 px inset,
+  natural size read from the image header (PNG, JPEG, GIF, WebP, SVG), else by decoding it, else the
+  frame's size; data URLs over 2 MB are re-encoded smaller. **arrow** (`from`/`to` = `shape:<id>`) →
+  arrow with `{ref}` ends and its text as the label, in the default colour (Easels drew arrows in one
+  colour); an arrow whose end is missing is skipped, as Easels did not draw it either.
+- Ids are kept so arrows resolve; an id the canvas already uses gets a fresh one and the arrows
+  follow. Colours: palette names as they are, `#hex` passed through, `rgb()` / common colour words
+  to the nearest palette colour. `by` is dropped. Stacking: frames, then pictures, then notes and
+  arrows, all above what the canvas already holds.
+- If the import would land on shapes already on the canvas it is moved beside them. The board then
+  flies to what came over.
+- `meta.name` becomes `title` when the canvas has none yet (empty, "Canvas", "Untitled canvas"…).
+  The title pill still shows the host's `init.name`.
+- The document's fingerprint is kept in `meta.importedLegacy`; importing the same bytes again into
+  the same canvas answers `{imported: 0, skipped: 0, already: true}` and writes nothing.
 
 ### Connection status
 
@@ -181,7 +231,11 @@ One Y.Doc per canvas (see `src/canvas/types.ts`):
 - `agents: Y.Map<agentId, {name, color, cursor:{x,y}|null, status:'idle'|'thinking'|'writing',
   updatedAt}>` — whole values; entries older than 2 minutes are hidden, never deleted.
 - `meta: Y.Map` — `name`, `createdBy` (written once by the page that made the canvas).
-- Awareness (human cursors): `{user:{id,name,color}, name, color, cursor:{x,y}|null, selection:[ids]}`.
+- Awareness (human cursors): `{user:{id,name,color}, name, color, cursor:{x,y}|null, selection:[ids],
+  laser: LaserWire|null}`. `laser` is the stroke someone is drawing with the laser pointer (**K**):
+  `{id, color, start, end|null, pts:[x, y, dt, …]}` in world coordinates, at most 400 points, sent
+  ≤ 30×/s while drawing and kept ~3 s after release so peers see it hold and fade. It is never written
+  to the document; receivers re-anchor the sender's clock to their own (`src/canvas/laser/`).
 
 Undo is a `Y.UndoManager` on `shapes` tracking the page's own origins (`local`, `agent`); stored
 and relayed updates are never undone.
@@ -201,10 +255,29 @@ src/
   host-bridge.ts    page → host framing (webkit handler, or the __copperHost double)
   bridge-socket.ts  BridgeSocket, the WebSocketPolyfill for y-websocket
   ops.ts            apply + read (the agent contract)
+  canvas/legacy.ts  reading an Easels document for importLegacy
   placement.ts      free-slot placement near the viewport centre
   theme.ts          light / dark / system
   dev.ts, dev-relay.ts   ?dev=1 host double and in-page sync server
   canvas/           doc model, geometry, arrows, search, markdown, images, presence, and the UI
+  canvas/laser/     the laser pointer: trails, awareness wire format, canvas renderer
+  canvas/debug.ts   render counters; ?dev=1 adds window.__canvasDebug (seed a big board, frame times)
+```
+
+## Staying fast
+
+A pan or zoom re-renders the board shell, never the shapes: every shape view is memoised on its
+plain shape, and the board's actions (and the view flight they use) keep their identity across
+renders. Wheel and pinch events move the view once per animation frame however many arrive; the
+viewport's page rect is cached, so pointer and wheel events never force layout; the shape layer is
+promoted (`will-change: transform`) only while the view moves. Awareness changes that only involve
+this page (our own cursor and laser) and peer updates that move nothing drawn (a peer's laser, the
+15 s renewal) re-render nothing. Measure with `?dev=1`:
+
+```js
+__canvasDebug.seed({ stickies: 150, frames: 12, arrows: 50 })
+__canvasDebug.perf.start(); /* pan, drag, … */ __canvasDebug.perf.stop()
+// → { frames, p50, p95, max, over16, over33, boardRenders, shapeRenders }
 ```
 
 Not in this version: comments/reactions (the `comments` map is left alone), multi-shape resize,

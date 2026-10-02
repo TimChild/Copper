@@ -8,10 +8,23 @@ import { Awareness } from 'y-protocols/awareness'
 import { WebsocketProvider } from 'y-websocket'
 import { BridgeSocket } from './bridge-socket'
 import { fromBase64, toBase64 } from './canvas/base64'
-import { CanvasStore, HOST, INIT, PRESENCE, bareId } from './canvas/doc'
+import { CanvasStore, HOST, IMPORT, INIT, PRESENCE, bareId, newId } from './canvas/doc'
 import { writeAgent, isStatus, type AgentPatch } from './canvas/agents'
 import { colorFor } from './canvas/colors'
 import { visibleWorld, type Box, type Point, type View } from './canvas/geometry'
+import { pictureForImport } from './canvas/images'
+import {
+  DEFAULT_NAMES,
+  decodeLegacyDoc,
+  fingerprint,
+  parseLegacyPayload,
+  pictureSrc,
+  planLegacyImport,
+  readLegacyShapes,
+  sniffImageSize,
+  type Picture,
+} from './canvas/legacy'
+import { occupied } from './placement'
 import { parseHostStatus, sameHostStatus, type HostStatus, type SyncStatus } from './canvas/status'
 import type { Me } from './canvas/types'
 import { hostLog, postToHost } from './host-bridge'
@@ -31,6 +44,21 @@ export interface InitConfig {
 }
 
 export type { HostStatus, SyncStatus }
+
+/** What `copperCanvas.importLegacy` resolves to. */
+export interface ImportResult {
+  /** Shapes written to the canvas (a frame and the picture placed in it are two). */
+  imported: number
+  /** Legacy entries that did not come over (unknown types, arrows with a missing end, pictures). */
+  skipped: number
+  /** Set when something the old board showed is not on the canvas, or nothing could be read. */
+  error?: string
+  /** This document was imported into this canvas before; nothing was written again. */
+  already?: true
+}
+
+/** Meta key listing the fingerprints of legacy documents already imported. */
+export const IMPORTED_KEY = 'importedLegacy'
 
 /** How long an agent shows "writing" after its last op. */
 export const WRITING_MS = 1500
@@ -91,6 +119,7 @@ export class Session {
       color: cfg.me.color,
       cursor: null,
       selection: [],
+      laser: null,
     })
     // Every local change goes to the host, which stores it (offline) and the
     // provider relays it (online). What the host or the server sent is theirs.
@@ -361,6 +390,82 @@ export class Controller {
     // Drop anything that vanished from the selection.
     if (this.selection.length) this.setSelection(this.selection)
     return { applied: out.applied, ids: out.ids, errors: out.errors }
+  }
+
+  // ---- legacy import -------------------------------------------------------------
+
+  /**
+   * `copperCanvas.importLegacy`: bring an Easels board onto this canvas in one
+   * transaction (origin `import`: stored and synced like any local change,
+   * not on the undo stack). Never rejects.
+   */
+  async importLegacy(raw: unknown): Promise<ImportResult> {
+    const s = this.session
+    if (!s) return { imported: 0, skipped: 0, error: 'copperCanvas.init has not been called' }
+    if (s.cfg.readOnly) return { imported: 0, skipped: 0, error: 'this canvas is read-only' }
+    let payload
+    let legacy
+    try {
+      payload = parseLegacyPayload(raw)
+      const doc = decodeLegacyDoc(payload.doc)
+      legacy = readLegacyShapes(doc)
+      doc.destroy()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { imported: 0, skipped: 0, error: msg.startsWith('importLegacy') ? msg : `importLegacy: ${msg}` }
+    }
+    const mark = fingerprint(payload.doc)
+    const seen = s.store.meta.get(IMPORTED_KEY)
+    if (Array.isArray(seen) && seen.includes(mark)) return { imported: 0, skipped: 0, already: true }
+
+    // Pictures first (the only part that waits), then everything in one go.
+    const wanted = new Set(legacy.shapes.flatMap(sh => (sh.type === 'frame' && sh.fileId ? [sh.fileId] : [])))
+    // Easels named files `<uuid>.<ext>`; a host may key them with or without the extension.
+    const stem = (name: string) => name.replace(/^file:/, '').replace(/\.[a-z0-9]{2,5}$/i, '')
+    const byStem = new Map(Object.entries(payload.files).map(([k, v]) => [stem(k), v] as const))
+    const pictures = new Map<string, Picture>()
+    await Promise.all(
+      [...wanted].map(async fileId => {
+        const value = payload.files[fileId] ?? payload.files[`file:${fileId}`] ?? byStem.get(stem(fileId))
+        if (!value) return
+        try {
+          const pic = await pictureForImport(value, sniffImageSize, pictureSrc)
+          if (pic) pictures.set(fileId, pic)
+        } catch {
+          // counted as missing below
+        }
+      })
+    )
+    if (this.session !== s) {
+      return { imported: 0, skipped: legacy.shapes.length + legacy.skipped, error: 'the canvas was replaced (init) during the import' }
+    }
+
+    const existing = s.store.liveAll().filter(sh => sh.type !== 'arrow')
+    const plan = planLegacyImport(legacy.shapes, {
+      taken: id => s.store.shapes.has(id),
+      existing: existing.map(occupied),
+      zBase: s.store.maxZ() + 1,
+      pictures,
+      newId,
+    })
+    const title = payload.title ?? legacy.title
+    s.doc.transact(() => {
+      for (const input of plan.inputs) s.store.create(input, IMPORT)
+      const name = s.store.meta.get('name')
+      if (title && (typeof name !== 'string' || !name.trim() || DEFAULT_NAMES.includes(name.trim().toLowerCase())))
+        s.store.meta.set('name', title)
+      s.store.meta.set(IMPORTED_KEY, [...(Array.isArray(seen) ? seen : []), mark].slice(-50))
+    }, IMPORT)
+    hostLog('info', `importLegacy: ${plan.inputs.length} shapes, ${plan.skipped + legacy.skipped} skipped`)
+    // Show what came over (the board may have been looking elsewhere, or at nothing).
+    if (plan.inputs.length) this.zoomTo(plan.inputs.map(i => i.id))
+
+    const result: ImportResult = { imported: plan.inputs.length, skipped: plan.skipped + legacy.skipped }
+    if (plan.missingPictures.length) {
+      const n = plan.missingPictures.length
+      result.error = `${n} picture${n === 1 ? '' : 's'} could not be imported (${plan.missingPictures.slice(0, 5).join(', ')})`
+    }
+    return result
   }
 
   read(raw: unknown): CanvasRead {

@@ -115,6 +115,52 @@ export async function imageFromUrl(src: string): Promise<StoredImage> {
   return { src, naturalW: img.naturalWidth || 320, naturalH: img.naturalHeight || 240 }
 }
 
+/** A `data:` URL as a Blob (for re-encoding one that is too big). */
+export function dataUrlBlob(src: string): Blob {
+  const comma = src.indexOf(',')
+  const head = src.slice(5, comma)
+  const type = head.split(';')[0] || 'application/octet-stream'
+  const body = src.slice(comma + 1)
+  if (/;base64$/i.test(head)) {
+    const bin = atob(body.replace(/\s/g, ''))
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return new Blob([bytes], { type })
+  }
+  return new Blob([decodeURIComponent(body)], { type })
+}
+
+/**
+ * A picture handed over by the host (an Easels file) made ready for the doc:
+ * re-encoded when it is over the data-URL limit, with its natural size read
+ * from the header, else by decoding it (0 × 0 when neither works in time).
+ * Null when it cannot be used.
+ */
+export async function pictureForImport(
+  value: string,
+  sniff: (src: string) => { w: number; h: number } | null,
+  toSrc: (value: string) => string | null,
+  timeoutMs = 4000
+): Promise<StoredImage | null> {
+  const src = toSrc(value)
+  if (!src) return null
+  if (src.startsWith('data:') && src.length > MAX_DATA_URL) {
+    try {
+      return await imageFromFile(dataUrlBlob(src))
+    } catch {
+      return null
+    }
+  }
+  const sniffed = sniff(src)
+  if (sniffed) return { src, naturalW: sniffed.w, naturalH: sniffed.h }
+  if (typeof Image === 'undefined') return { src, naturalW: 0, naturalH: 0 }
+  const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs))
+  const decoded = await Promise.race([loadImage(src).catch(() => null), timeout])
+  return decoded
+    ? { src, naturalW: decoded.naturalWidth || 0, naturalH: decoded.naturalHeight || 0 }
+    : { src, naturalW: 0, naturalH: 0 }
+}
+
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg)(\?.*)?$/i
 export const looksLikeImageUrl = (url: string) => /^https:\/\//i.test(url) && IMAGE_EXT.test(url)
 

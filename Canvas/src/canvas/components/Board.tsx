@@ -38,6 +38,7 @@ import {
   type Side,
   type View,
 } from '../geometry'
+import { countRender } from '../debug'
 import { gridBackground } from '../grid'
 import { growFor } from '../overflow'
 import { imageFile, imageFromFile, imageFromUrl, imageSizeFor, isUrlText, looksLikeImageUrl, urlFrom } from '../images'
@@ -45,7 +46,8 @@ import { MIN_SIZE, isResizable, resizeBox, resizeBoxKeepAspect, type Handle } fr
 import { arrowLabelBox, revealView, type SearchResult } from '../search'
 import { statusView } from '../status'
 import { SHAPE_SIZE, isRefEndpoint, type Endpoint, type NamedColor, type Shape, type ShapeColor } from '../types'
-import { useLiveAgents, usePeers } from '../use-presence'
+import { LaserCanvas, LaserTrails } from '../laser'
+import { useLiveAgents, usePeers, useRemoteLasers } from '../use-presence'
 import { useBoardSearch } from '../use-search'
 import { useViewFlight } from '../use-view-flight'
 import {
@@ -100,6 +102,7 @@ type Gesture =
   | { kind: 'frame'; start: Point; startScreen: Point; box?: Box }
   | { kind: 'arrow'; from: Endpoint; startScreen: Point; moved: boolean }
   | { kind: 'arrow-end'; id: string; end: 'from' | 'to'; other: Endpoint | undefined }
+  | { kind: 'laser' }
 
 interface Draft {
   from: Endpoint
@@ -116,6 +119,14 @@ const SEND_MS = 50
 /** Screen px the tool bar takes at the bottom (its panel and margin). */
 const TOOLBAR_PX = 68
 const DOUBLE_MS = 350
+/** The layer stays promoted until the view has rested this long. */
+const SETTLE_MS = 150
+/** How long a released laser stroke stays in awareness (its hold and fade, and a margin). */
+const LASER_LINGER_MS = 3200
+/** Laser cursor: a small glowing dot. */
+const LASER_CURSOR = `url("data:image/svg+xml;utf8,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><defs><radialGradient id='g'><stop offset='0' stop-color='#ff5a36' stop-opacity='0.55'/><stop offset='1' stop-color='#ff5a36' stop-opacity='0'/></radialGradient></defs><circle cx='12' cy='12' r='12' fill='url(#g)'/><circle cx='12' cy='12' r='3.5' fill='#ff5a36'/><circle cx='12' cy='12' r='2' fill='white' fill-opacity='0.9'/></svg>"
+)}") 12 12, crosshair`
 
 const isTextField = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.isContentEditable || el.closest('input, textarea, select') !== null)
@@ -123,6 +134,7 @@ const isTextField = (el: EventTarget | null) =>
 const sortZ = (a: Shape, b: Shape) => a.z - b.z || a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
 export function Board({ session }: { session: Session }) {
+  countRender('boardRenders')
   const { store, awareness, cfg } = session
   const readOnly = cfg.readOnly
   const me = cfg.me
@@ -137,8 +149,18 @@ export function Board({ session }: { session: Session }) {
   )
   const peers = usePeers(awareness)
   const agents = useLiveAgents(store.agents)
+  /** Laser strokes, ours and everyone else's (from awareness); never in the doc. */
+  const trails = useMemo(() => new LaserTrails(), [])
+  useRemoteLasers(awareness, trails)
+  const laserSent = useRef(0)
+  const laserLinger = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const viewport = useRef<HTMLDivElement>(null)
+  /** The viewport's page rect, read once and dropped when it can change: pointer and wheel events never force layout. */
+  const rectCache = useRef<DOMRect | null>(null)
+  const viewportRect = () => (rectCache.current ??= viewport.current!.getBoundingClientRect())
+  const layer = useRef<HTMLDivElement>(null)
+  const hoverRef = useRef<string | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [view, setView] = useState<View>({ x: 0, y: 0, z: 1 })
   const flight = useViewFlight(view, setView, viewport)
@@ -190,6 +212,33 @@ export function Board({ session }: { session: Session }) {
     setToasts(t => [...t.slice(-2), { id, text, tone }])
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), ms)
   }, [])
+
+  // ---- laser ------------------------------------------------------------------
+
+  /** Put our stroke in awareness, at most ~30 times a second (peers draw it). */
+  const publishLaser = useCallback(
+    (force = false) => {
+      const now = performance.now()
+      if (!force && now - laserSent.current < 33) return
+      laserSent.current = now
+      awareness.setLocalStateField('laser', trails.localWire())
+    },
+    [awareness, trails]
+  )
+
+  // Leaving the laser mid-stroke drops the stroke; leaving the board forgets it.
+  useEffect(() => {
+    if (tool === 'laser' || gesture.current?.kind !== 'laser') return
+    gesture.current = null
+    trails.cancel()
+    awareness.setLocalStateField('laser', null)
+  }, [tool, trails, awareness])
+  useEffect(
+    () => () => {
+      if (laserLinger.current) clearTimeout(laserLinger.current)
+    },
+    []
+  )
 
   // ---- geometry of what is on the board --------------------------------------
 
@@ -243,6 +292,7 @@ export function Board({ session }: { session: Session }) {
     const el = viewport.current
     if (!el) return
     const measure = () => {
+      rectCache.current = null
       const w = el.clientWidth
       const h = el.clientHeight
       setSize(prev => (prev.w === w && prev.h === h ? prev : { w, h }))
@@ -259,6 +309,36 @@ export function Board({ session }: { session: Session }) {
     return () => ro.disconnect()
   }, [store])
 
+  useEffect(() => {
+    const drop = () => {
+      rectCache.current = null
+    }
+    window.addEventListener('resize', drop)
+    window.addEventListener('scroll', drop, true)
+    return () => {
+      window.removeEventListener('resize', drop)
+      window.removeEventListener('scroll', drop, true)
+    }
+  }, [])
+
+  // While the view moves the layer is promoted (will-change), so a pan or zoom
+  // composites instead of repainting every note; it settles back once the
+  // view has rested, so text is drawn crisp at the new zoom.
+  const settled = useRef(true)
+  useLayoutEffect(() => {
+    const el = layer.current
+    if (!el) return
+    if (settled.current) {
+      settled.current = false
+      return
+    }
+    el.style.willChange = 'transform'
+    const timer = setTimeout(() => {
+      el.style.willChange = ''
+    }, SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [view])
+
   const fitAll = useCallback(() => {
     const boxes = [...live.list.filter(s => s.type !== 'arrow'), ...live.arrows.map(a => arrowBox(a.path))]
     const { w, h } = sizeRef.current
@@ -267,7 +347,15 @@ export function Board({ session }: { session: Session }) {
 
   const zoomToIds = useCallback(
     (ids: readonly string[]) => {
-      const boxes = ids.map(boundsOf).filter((b): b is Box => !!b)
+      // Shapes written a moment ago (an import, an agent's ops) may not be rendered yet: read the doc.
+      const boxes = ids
+        .map(id => {
+          const b = boundsOf(id)
+          if (b) return b
+          const s = store.live(id)
+          return s && s.type !== 'arrow' ? s : null
+        })
+        .filter((b): b is Box => !!b)
       const u = unionBox(boxes)
       if (!u) return false
       const { w, h } = sizeRef.current
@@ -275,7 +363,7 @@ export function Board({ session }: { session: Session }) {
       flight.fly(target)
       return true
     },
-    [boundsOf, flight]
+    [boundsOf, flight, store]
   )
 
   const zoomRef = useRef(zoomToIds)
@@ -653,7 +741,7 @@ export function Board({ session }: { session: Session }) {
   )
 
   const localPoint = (e: { clientX: number; clientY: number }): Point => {
-    const rect = viewport.current!.getBoundingClientRect()
+    const rect = viewportRect()
     return { x: e.clientX - rect.left, y: e.clientY - rect.top }
   }
 
@@ -701,6 +789,15 @@ export function Board({ session }: { session: Session }) {
       return
     }
     if (e.button !== 0) return
+    if (tool === 'laser') {
+      e.currentTarget.setPointerCapture(e.pointerId)
+      if (laserLinger.current) clearTimeout(laserLinger.current)
+      laserLinger.current = null
+      trails.begin(c, me.color)
+      gesture.current = { kind: 'laser' }
+      publishLaser(true)
+      return
+    }
     const hitId = target.closest('[data-id]')?.getAttribute('data-id') ?? null
     const part = target.closest('[data-part]')?.getAttribute('data-part') ?? null
     if (editing && hitId === editing.id) return
@@ -836,10 +933,22 @@ export function Board({ session }: { session: Session }) {
         } else setArrowHover(null)
       }
       const id = (e.target as Element).closest?.('[data-id]')?.getAttribute('data-id') ?? null
-      setHover(prev => (prev === id ? prev : id))
+      // Compared here: even an updater that keeps the value costs the board a render.
+      if (hoverRef.current !== id) {
+        hoverRef.current = id
+        setHover(id)
+      }
       return
     }
     switch (g.kind) {
+      case 'laser': {
+        // A fast circle brings several points per frame: keep them all, so the trail stays round.
+        const batch = e.nativeEvent.getCoalescedEvents?.() ?? []
+        if (batch.length > 1) for (const ev of batch) trails.move(screenToWorld(view, localPoint(ev)))
+        else trails.move(c)
+        publishLaser()
+        return
+      }
       case 'pan':
         setView({ ...g.view, x: g.view.x + p.x - g.start.x, y: g.view.y + p.y - g.start.y })
         return
@@ -913,6 +1022,15 @@ export function Board({ session }: { session: Session }) {
     if (!g) return
     const c = screenToWorld(view, localPoint(e))
     switch (g.kind) {
+      case 'laser':
+        trails.end()
+        publishLaser(true)
+        // Peers keep it through its hold and fade; then it leaves awareness.
+        laserLinger.current = setTimeout(() => {
+          laserLinger.current = null
+          awareness.setLocalStateField('laser', null)
+        }, LASER_LINGER_MS)
+        return
       case 'pan':
         setPanning(false)
         return
@@ -974,6 +1092,7 @@ export function Board({ session }: { session: Session }) {
 
   const onPointerLeave = () => {
     pointer.current = null
+    hoverRef.current = null
     setHover(null)
     awareness.setLocalStateField('cursor', null)
   }
@@ -997,6 +1116,20 @@ export function Board({ session }: { session: Session }) {
   useEffect(() => {
     const el = viewport.current
     if (!el) return
+    // A trackpad sends up to 120 wheel events a second: they move the view
+    // once per frame, however many arrive.
+    let pending: ((v: View) => View)[] = []
+    let frame = 0
+    const move = (fn: (v: View) => View) => {
+      pending.push(fn)
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        const steps = pending
+        pending = []
+        setView(v => steps.reduce((acc, step) => step(acc), v))
+      })
+    }
     const onWheel = (e: WheelEvent) => {
       const t = e.target as HTMLElement | null
       if (t?.closest('textarea') && t.scrollHeight > t.clientHeight) return
@@ -1005,12 +1138,12 @@ export function Board({ session }: { session: Session }) {
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1
       const dx = e.deltaX * unit
       const dy = e.deltaY * unit
-      const rect = el.getBoundingClientRect()
+      const rect = viewportRect()
       const p = { x: e.clientX - rect.left, y: e.clientY - rect.top }
       if (e.ctrlKey || e.metaKey) {
         const step = Math.max(-60, Math.min(60, dy))
-        setView(v => zoomAt(v, Math.exp(-step * 0.009), p))
-      } else setView(v => ({ ...v, x: v.x - dx, y: v.y - dy }))
+        move(v => zoomAt(v, Math.exp(-step * 0.009), p))
+      } else move(v => ({ ...v, x: v.x - dx, y: v.y - dy }))
     }
     let gestureZoom = 1
     const onGestureStart = (e: Event) => {
@@ -1020,15 +1153,17 @@ export function Board({ session }: { session: Session }) {
     const onGestureChange = (e: Event) => {
       e.preventDefault()
       const g = e as Event & { scale: number; clientX: number; clientY: number }
-      const rect = el.getBoundingClientRect()
+      const rect = viewportRect()
       const p = { x: g.clientX - rect.left, y: g.clientY - rect.top }
-      setView(v => zoomTo(v, gestureZoom * g.scale, p))
+      const z = gestureZoom * g.scale
+      move(v => zoomTo(v, z, p))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     el.addEventListener('gesturestart', onGestureStart)
     el.addEventListener('gesturechange', onGestureChange)
     el.addEventListener('gestureend', onGestureStart)
     return () => {
+      cancelAnimationFrame(frame)
       el.removeEventListener('wheel', onWheel)
       el.removeEventListener('gesturestart', onGestureStart)
       el.removeEventListener('gesturechange', onGestureChange)
@@ -1148,7 +1283,7 @@ export function Board({ session }: { session: Session }) {
       }
       const next = TOOL_KEYS[key]
       if (next && !e.shiftKey) {
-        if (readOnly && next !== 'select' && next !== 'hand') return
+        if (readOnly && next !== 'select' && next !== 'hand' && next !== 'laser') return
         e.preventDefault()
         if (next === 'image') openImagePicker(null)
         else if (next === 'link') setLinkAt(center0())
@@ -1401,8 +1536,15 @@ export function Board({ session }: { session: Session }) {
   const anchorBox = anchorTarget ? live.boxOf(anchorTarget.id) : null
   const selectedArrowPath = single?.type === 'arrow' && !draft ? live.arrowById.get(single.id) : undefined
 
-  const cursor =
-    panning ? 'grabbing' : tool === 'hand' || space ? 'grab' : tool === 'select' ? 'default' : 'crosshair'
+  const cursor = panning
+    ? 'grabbing'
+    : tool === 'hand' || space
+      ? 'grab'
+      : tool === 'laser'
+        ? LASER_CURSOR
+        : tool === 'select'
+          ? 'default'
+          : 'crosshair'
   const grid = gridBackground(view)
 
   return (
@@ -1435,6 +1577,7 @@ export function Board({ session }: { session: Session }) {
         onDrop={onDrop}
       >
         <div
+          ref={layer}
           className="absolute left-0 top-0 origin-top-left"
           style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}
         >
@@ -1491,6 +1634,7 @@ export function Board({ session }: { session: Session }) {
           <PeerCursors peers={peers} zoom={view.z} />
           <AgentCursors agents={agents} zoom={view.z} />
         </div>
+        <LaserCanvas trails={trails} view={view} />
 
         {shapes.size === 0 && !editId && <EmptyHint readOnly={readOnly} />}
         {hintAt && <EditHint at={hintAt} above={hintAt.above} />}

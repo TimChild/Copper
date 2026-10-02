@@ -26,8 +26,10 @@ export const HOST = 'host'
 export const PRESENCE = 'presence'
 /** Bookkeeping the page writes on its own (canvas meta). */
 export const INIT = 'init'
+/** A board brought over from Easels (`importLegacy`): stored and synced, never undone. */
+export const IMPORT = 'import'
 
-export type Origin = typeof LOCAL | typeof AGENT | typeof INIT | typeof PRESENCE
+export type Origin = typeof LOCAL | typeof AGENT | typeof INIT | typeof PRESENCE | typeof IMPORT
 
 /** Props a caller may set on a shape (everything but its id and type). */
 export type ShapeProps = Partial<Omit<Shape, 'id' | 'type'>>

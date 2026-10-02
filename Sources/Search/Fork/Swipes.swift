@@ -142,12 +142,12 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
     private static var fired = false
     private static var monitor: Any?
     /// Where the fingers came down: a gesture is the column's only if it
-    /// started over the column. One that started on the page — an easel's
+    /// started over the column. One that started on the page — a canvas's
     /// pan, a map — stays the page's wherever the pointer ends up, so the
     /// column never starts sliding out of the middle of somebody's pan.
     private static var startedOverSidebar = false
     /// Gestures this monitor turned down because they started on the page,
-    /// for the bench (`easels scroll --app` checks a board's pan is one).
+    /// for the bench (`canvas scroll --app` checks a board's pan is one).
     private(set) static var leftToPage = 0
 
     static func watch(_ browser: Browser) {
@@ -168,7 +168,7 @@ enum SwipeDirection: String, CaseIterable, Identifiable {
         guard let window = event.window, let owner = Windows.owner(of: window) else { return event }
         // Where a trackpad gesture began decides whose it is: one that began
         // on the page — a board's two-finger pan above all — is never the
-        // column's, wherever the fingers then wander. (Fork: easels)
+        // column's, wherever the fingers then wander. (Fork: canvas)
         if event.type == .scrollWheel, event.momentumPhase == [], event.phase == .began || event.phase == .mayBegin {
             startedOverSidebar = overSidebar(event.locationInWindow, in: owner)
             if !startedOverSidebar, event.phase == .began { leftToPage += 1 }

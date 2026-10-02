@@ -294,6 +294,8 @@ struct CommandPalette: View {
                 glyph(offer.glyph.isEmpty ? "command" : offer.glyph)
             case .search:
                 glyph("magnifyingglass")
+            case _ where CanvasLinks.isCanvas(offer.url):
+                glyph("scribble.variable") // Fork (canvas): an open canvas wears the Canvas mark here too
             default:
                 // The same mark the sidebar row wears — icon or tinted letter
                 // chip — so a site looks like itself on both surfaces. On

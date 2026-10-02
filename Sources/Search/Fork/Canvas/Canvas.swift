@@ -51,14 +51,16 @@ enum CanvasLinks {
         return url
     }
 
-    /// "Canvas › Personal", for the sidebar's address pill and the tab's title.
+    /// "Canvas · Personal", for the address pill and ⌘T's open row.
     @MainActor static func label(_ url: URL) -> String? {
         guard let id = id(from: url) else { return nil }
-        if let entry = Canvases.shared.entry(id) { return title(entry.name) }
-        return id == Canvases.personalID ? title("Personal") : "Canvas"
+        if let entry = Canvases.shared.entry(id) { return "Canvas · \(entry.name)" }
+        return id == Canvases.personalID ? "Canvas · Personal" : "Canvas"
     }
 
-    static func title(_ name: String) -> String { "Canvas › \(name)" }
+    /// The tab's title: the canvas's name, as a board's row says it. The
+    /// row wears the Canvas mark, so the word itself would only repeat it.
+    static func title(_ name: String) -> String { name }
 }
 
 // MARK: - colours
@@ -301,9 +303,12 @@ final class Canvases: ObservableObject {
 
     /// A canvas on this Mac only — what "New canvas" makes when signed out.
     @discardableResult
-    func createLocal(named name: String) -> Entry {
+    /// Dated as given when it stands for something older (an easel brought
+    /// over by CanvasImport), so the newest-first lists keep their order.
+    func createLocal(named name: String, createdAt: Date? = nil, updatedAt: Date? = nil) -> Entry {
         let now = Date()
-        let entry = Entry(id: UUID().uuidString.lowercased(), name: Canvases.clean(name), kind: .local, remoteId: nil, createdAt: now, updatedAt: now)
+        let entry = Entry(id: UUID().uuidString.lowercased(), name: Canvases.clean(name), kind: .local, remoteId: nil,
+                          createdAt: createdAt ?? now, updatedAt: updatedAt ?? createdAt ?? now)
         all.append(entry)
         save()
         return entry

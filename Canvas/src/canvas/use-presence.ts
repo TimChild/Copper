@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { Awareness } from 'y-protocols/awareness'
 import type * as Y from 'yjs'
 import { liveAgents, readAgents } from './agents'
+import type { LaserTrails, LaserWire } from './laser'
 import { colorFor } from './colors'
 import type { CanvasAgent } from './types'
 import type { PeerView } from './components/Overlays'
@@ -27,15 +28,50 @@ export function readPeers(awareness: Awareness): PeerView[] {
   return out.sort((a, b) => a.name.localeCompare(b.name) || a.clientId - b.clientId)
 }
 
+export interface AwarenessChanges {
+  added: number[]
+  updated: number[]
+  removed: number[]
+}
+
+/**
+ * Whether a `change` involves anyone but `self`. y-protocols reports the
+ * local client too, so our own cursor (30 Hz) and laser would otherwise
+ * re-render the board while nobody else is here.
+ */
+export function involvesOthers(changes: AwarenessChanges | undefined, self: number): boolean {
+  if (!changes) return true
+  for (const ids of [changes.added, changes.updated, changes.removed]) for (const id of ids ?? []) if (id !== self) return true
+  return false
+}
+
+/** Same people, same order, same cursors and selections: nothing to redraw. */
+export function samePeers(a: readonly PeerView[], b: readonly PeerView[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i]!
+    const q = b[i]!
+    if (p.clientId !== q.clientId || p.id !== q.id || p.name !== q.name || p.color !== q.color) return false
+    if ((p.cursor?.x ?? null) !== (q.cursor?.x ?? null) || (p.cursor?.y ?? null) !== (q.cursor?.y ?? null)) return false
+    if (p.selection.length !== q.selection.length || p.selection.some((id, j) => id !== q.selection[j])) return false
+  }
+  return true
+}
+
 export function usePeers(awareness: Awareness): PeerView[] {
   const [peers, setPeers] = useState<PeerView[]>(() => readPeers(awareness))
   useEffect(() => {
     let frame = 0
-    const onChange = () => {
-      if (frame) return
+    let shown: PeerView[] = []
+    const onChange = (changes?: AwarenessChanges) => {
+      if (frame || !involvesOthers(changes, awareness.clientID)) return
       frame = requestAnimationFrame(() => {
         frame = 0
-        setPeers(readPeers(awareness))
+        const next = readPeers(awareness)
+        // A peer's laser or a renewal changes awareness without moving anything we draw.
+        if (samePeers(shown, next)) return
+        shown = next
+        setPeers(next)
       })
     }
     awareness.on('change', onChange)
@@ -85,4 +121,30 @@ export function useLiveAgents(map: Y.Map<unknown>): CanvasAgent[] {
   }, [])
   // A fresh write is always live: its updatedAt is ahead of the (stale) clock.
   return useMemo(() => liveAgents(all, now), [all, now])
+}
+
+/**
+ * Mirror every other client's `laser` (a `LaserWire` in awareness) into the
+ * trails, which draw them; null, or the client leaving, lets the stroke fade.
+ */
+export function syncRemoteLasers(awareness: Awareness, trails: LaserTrails, changes: AwarenessChanges) {
+  const states = awareness.getStates()
+  for (const id of [...changes.added, ...changes.updated]) {
+    if (id === awareness.clientID) continue
+    const state = states.get(id) as { laser?: LaserWire | null } | undefined
+    trails.setRemote(id, state?.laser ?? null)
+  }
+  for (const id of changes.removed) if (id !== awareness.clientID) trails.setRemote(id, null)
+}
+
+export function useRemoteLasers(awareness: Awareness, trails: LaserTrails) {
+  useEffect(() => {
+    const onChange = (changes: AwarenessChanges) => syncRemoteLasers(awareness, trails, changes)
+    // Someone may be pointing already.
+    syncRemoteLasers(awareness, trails, { added: [...awareness.getStates().keys()], updated: [], removed: [] })
+    awareness.on('change', onChange)
+    return () => {
+      awareness.off('change', onChange)
+    }
+  }, [awareness, trails])
 }

@@ -137,6 +137,14 @@ final class Launcher: ObservableObject {
         // wearing its space so you know a switch is coming.
         groups.append(("Switch to Tab", open))
 
+        // Fork (canvas): canvases by name — "canvas" alone, all of them.
+        var boards: [Suggestion] = []
+        for row in CanvasTabs.offers(for: query) where keep(row) {
+            boards.append(row)
+            if boards.count == 3 { break }
+        }
+        groups.append(("Canvases", boards))
+
         // History, ranked away from the keystroke. Until this query's ranking
         // is in, the last one's rows that still match stand in for it.
         let hits = visited.query == needle ? visited.rows

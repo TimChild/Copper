@@ -138,6 +138,7 @@ final class Tab: ObservableObject, Identifiable {
     }
 
     private func adoptIcon() {
+        if let mark = CanvasTabs.mark(for: pending ?? address) { icon = mark; return } // Fork (canvas-hooks): a board wears the Canvas mark
         guard let host = address?.host()?.lowercased() else { return }
         icon = Favicons.shared.cached(host)
     }
@@ -319,7 +320,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.add(forms, name: FormRelay.name)
         controller.addScriptMessageHandler(passkeys, contentWorld: .page, name: Passkeys.name)
         Shield.shared.protect(controller)
-        Easels.dress(web) // Fork: a board keeps only what it uses — no pinch, no swipe, no web-page handlers (Fork/Easel/EaselLean)
+        CanvasHost.dress(web) // Fork (canvas-hooks): a board keeps only what it uses — no pinch, no swipe, no web-page handlers (Fork/Canvas/CanvasLean)
         built = web
         arm(hiding: veils)
 
@@ -398,7 +399,7 @@ final class Tab: ObservableObject, Identifiable {
     func arm(hiding css: String) {
         veils = css
         guard let built else { return }
-        if Easels.arm(built) { return } // Fork: a board gets one small script, not every page's
+        if CanvasHost.arm(built) { return } // Fork (canvas-hooks): a board gets one small script, not every page's
         let controller = built.configuration.userContentController
         controller.removeAllUserScripts()
         controller.addUserScript(
@@ -677,7 +678,7 @@ final class Tab: ObservableObject, Identifiable {
     }
 
     func go(to url: URL) {
-        if Easels.reroute(self, to: url) { return } // Fork: a board opens in its own tab, and keeps it
+        if CanvasTabs.reroute(self, to: url) { return } // Fork (canvas-hooks): a board opens in its own tab, and keeps it
         // Set straight away rather than waiting for the observer: the tab has to
         // stop being blank in the same frame the field disappears, or the empty
         // state flashes back for an instant on its way out.
@@ -1292,11 +1293,11 @@ final class PageView: WKWebView {
         """
     }
 
-    /// Fork: an easel's view (Easels.dress) — its pan and zoom are the board's.
+    /// Fork (canvas-hooks): a canvas tab's view (CanvasHost.dress) — its pan and zoom are the board's.
     var board = false
 
     override func scrollWheel(with event: NSEvent) {
-        if board { return boardScroll(event) } // Fork: easels — no swipe tracking, no ask, no disc
+        if board { return boardScroll(event) } // Fork (canvas-hooks): no swipe tracking, no ask, no disc
         onTouch?()
         // The page gets every event first and scrolls as it always did. The
         // swipe is only read, never taken.

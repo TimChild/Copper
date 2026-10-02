@@ -53,8 +53,6 @@ enum Marks {
     /// The host a URL's mark is filed under — the same spelling upstream
     /// files a tab's under, so `cached` here and there agree.
     static func key(for url: URL) -> String? {
-        // A board's mark is Copper's own, filed under its host (Fork/Easel).
-        if url.scheme == Easels.scheme { return Easels.markKey }
         guard url.scheme?.hasPrefix("http") == true,
               let host = url.host()?.lowercased(), host.contains(".") else { return nil }
         return host

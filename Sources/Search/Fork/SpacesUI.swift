@@ -355,7 +355,7 @@ struct SpaceStrip<Tools: View>: View {
 
     /// A space, and its page open at once, so it gets a name, an icon and
     /// a colour instead of being "Space 9". Right-click for the other new
-    /// things — a board, in this space's Saved block (Fork/Easel).
+    /// things — a canvas, in this space's Saved block (Fork/Canvas).
     private var plus: some View {
         Button(action: newSpace) {
             Image(systemName: "plus")
@@ -365,11 +365,11 @@ struct SpaceStrip<Tools: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("New Space — right-click for New Easel")
+        .help("New Space — right-click for New Canvas")
         .contextMenu {
             Button("New Space", action: newSpace)
                 .keyboardShortcut("n", modifiers: [.control])
-            Button("New Easel") { Easels.newEasel(in: browser) }
+            Button("New Canvas") { CanvasTabs.newCanvas(in: browser) }
                 .keyboardShortcut("e", modifiers: [.control, .shift])
         }
     }
@@ -443,9 +443,9 @@ struct SpaceMenu: View {
             if space.id != spaces.current(in: browser) { spaces.select(space.id, in: browser) }
             browser.launch()
         }
-        Button("New Easel in Space") {
+        Button("New Canvas in Space") {
             if space.id != spaces.current(in: browser) { spaces.select(space.id, in: browser) }
-            Easels.newEasel(in: browser)
+            CanvasTabs.newCanvas(in: browser)
         }
         // A pin is already in every space, so it has nowhere to move to.
         if let tab = browser.active, tab.pin == nil, space.id != spaces.current(in: browser) {

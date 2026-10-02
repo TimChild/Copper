@@ -10,16 +10,91 @@ agents and the `copper` CLI all read and write the same boards. Implementation:
 
 ## Using it
 
+Canvas is Copper's one board. (It used to have two: Easels, a local-only board with a format of
+its own, was folded into Canvas on 2026-10-01 — see [What happened to easels](#what-happened-to-easels).)
+
+### Opening one
+
+- **⌘K › New Canvas** (or ⌘T, typing "canvas"), or **File › New Canvas** (⌃⇧E, Arc's): a canvas
+  in a new tab in front. A blank tab in front takes it instead, the way ⌘T reuses one. A canvas
+  made this way is **local** — on this Mac, called *Untitled canvas* — whether or not you are
+  signed in; sharing stays an upgrade, from the door's **New canvas** (signed in, it makes a shared
+  one; ⌘K says **New Shared Canvas…** for it) and the invite flow.
+- **From the sidebar**, where Arc keeps its new things: right-click the **New Tab** row (New Tab /
+  New Canvas), right-click the **plus** at the foot (New Space / New Canvas; a click on it still
+  makes a space), or **New Canvas in Space** on a space's menu (its header, its chip, ⌘K's space
+  rows).
 - **Sidebar › Canvas door** (at the foot, beside Bookmarks and Extensions): Personal, *My
   canvases*, *Shared with me*, *Waiting for you* (invites, with Accept / Decline) and **New
-  canvas**. Click a row to open it — an open canvas is switched to, never opened twice. Right-click
-  a row: Open, Open in Background, Copy Link, Rename…, Invite…, Members…, Leave… / Delete….
-- **View › Canvas ⌘⇧O** opens Personal; **View › New Canvas…**; ⌘K / ⌘T: *Open Personal canvas*,
-  *New canvas…*, *Open canvas <name>*. Typing or pasting `copper://canvas/<id>` (or just
-  `copper://canvas` for Personal) into the address field works too.
-- The tab reads **Canvas › <name>** in the row and the address pill. It restores with the session,
-  sleeps and wakes like any tab (the board comes back from disk), and links clicked on the board
-  open in a tab of their own — a canvas tab never navigates away by itself.
+  canvas**. Click a row to open it. Right-click a row: Open, Open in Background, Copy Link,
+  Rename…, Invite…, Members…, Leave… / Delete….
+- **⌘K / ⌘T**, typing a canvas's name: an **Open Canvas · <name>** row for each match, three at
+  most. `canvas` alone (or `canvases`, or `canv`) lists them all, newest first; `canvas plan`
+  narrows to names with "plan" in them. An open canvas also shows up in tab search like any tab,
+  wearing the Canvas mark. **View › Canvas ⌘⇧O** opens Personal.
+- Its address, `copper://canvas/<id>` (or just `copper://canvas` for Personal), typed or pasted
+  into the field or the ⌘T card. An easel's old address, `copper-easel://easel/<id>`, opens the
+  canvas that easel became.
+
+However it is opened, a canvas's tab — the first time it loads — joins the current space's
+**Saved** block at the bottom and is selected, the way Arc pins a board. Today's archive never
+takes it, and the sweep passes over a canvas even when somebody drags it down into Today. A canvas
+whose tab is already in the sidebar stays where it is (opening it goes to it). Session restore puts
+each canvas tab back in its space and its block.
+
+A canvas has **one tab**. Opening one that is already open — in this space, another space, or
+another window — goes to that tab (the other window comes forward, the other space is switched
+to). Only the bench's own tabs are exempt. This is `CanvasTabs.show`, and `CanvasTabs.already`
+(`Browser.open`) and `CanvasTabs.reroute` (`Tab.go`) send every other way of opening one there.
+
+### Its tab
+
+An ordinary tab in every other way. The sidebar row (and a favourite's square, and ⌘K's row) wears
+the **Canvas mark** (`CanvasPage.icon`) where a site wears its icon; the title is the canvas's
+name — a sleeping or restored row says the registry's name, so a rename made while it slept shows
+at once. The address pill says **Canvas · <name>**. It sleeps after half an hour and wakes from
+disk, comes back after a relaunch, sits in split view, and moves between spaces. Links clicked on
+the board open in a tab of their own; an address typed into a canvas tab's field opens beside it —
+a canvas tab only ever shows its board.
+
+### Its row
+
+Right-click a canvas's row (or its square, if it is a favourite, or its pill in the top bar): the
+canvas's own items come first, then Copper's tab items as for any tab. Personal has neither.
+
+- **Rename Canvas…** opens a name field on the row, as a folder's Rename… does (a sheet where there
+  is no row: a favourite's square, the top bar). Return keeps it, Escape or a click away leaves
+  it. It is `Canvases.rename`, the door's Rename: a shared canvas is renamed on the cloud (and so
+  needs it signed in — the item is greyed out without), every tab holding the canvas retitles, and
+  an open board is told the new name (`copperCanvas.rename` when the page has it; otherwise the
+  page is checkpointed and reloaded under the new name).
+- **Delete Canvas…** asks first, in a sheet that says what happens: a local canvas — *Permanently
+  deletes this canvas and everything on it from this Mac* —, a shared one you own — *…for every
+  member* —, or, for a shared canvas somebody else owns, **Leave Canvas…** — *It stays for everyone
+  else. Someone will have to invite you again.* Cancel is the default; Return confirms nothing. It
+  is `Canvases.delete` / `Canvases.leave`, the door's: every tab showing the canvas closes — this
+  row, a favourite, a row in another space or window — and its history on this Mac goes.
+
+### What a canvas tab is spared
+
+Every tab is built for the open web; a canvas is Copper's own page, so its tab is built lean
+(`CanvasLean.swift`; `defaults write <domain> canvas.lean -bool NO` builds it like any tab, for
+the bench's before-and-after). Only what the bridge does not need goes:
+
+| every tab gets | on a canvas tab |
+|---|---|
+| back/forward swipe in `PageView.scrollWheel` (the sideways tracker, the page asked, the disc, `onTouch` per event) | **off**: the event goes to WebKit and nothing else; `onTouch` once per gesture |
+| `Swipe.watch` / `Swipe.calm` scripts in every frame | off |
+| `ScrollRelay`, `VeilRelay` (hide something), `ImageRelay` (Copper's image menu), `StoreRelay` (Web Store mender), the passkey shim | **off**, handlers too |
+| `FormRelay`'s sign-in watcher (a `MutationObserver` over the document, capture listeners) | off; a 20-line script reports focus changes only, so Tab still goes to a sticky or a title |
+| the ad blocker's rule list | off |
+| WebKit's pinch magnification | off (the board zooms itself) |
+| the `canvas` message handler, `callAsyncJavaScript`, the first-frame fade, the sleep picture, sleep after half an hour, the title/address/progress observers, the audio watch | **kept** |
+
+`bench canvas lean` reads the page back: the bridge is there, the page's API is there, the host is
+ready, and the web-page scripts are not. A canvas tab has no Chrome extensions (its configuration
+is CanvasHost's, made for it, never an extension's).
+
 - Signed out, everything cloud-shaped is hidden and the card says, in one line, that sharing lives
   at **Settings › Cloud**. New canvases are then local to this Mac. Shared canvases already kept
   here stay listed under **Signed out** with a line saying what that means: they open offline and
@@ -66,6 +141,47 @@ field for it yet). `Canvases.room(for:)` gives Personal a room only when
 `CloudSync.shared.syncs(.canvas)` and the row's `account` is the account signed in; with every
 switch off nothing on the Personal board leaves the Mac. Shared canvases are cloud documents by
 definition and keep their room whenever their account is signed in.
+
+## What happened to easels
+
+Copper had a second board, **Easels** (local only, its own Yjs schema, served from a
+`copper-easel://` scheme of its own). It was folded into Canvas: Canvas is the engine — it syncs,
+shares, invites and has the agent tools — and Easels gave it its ways in, its row and its lean tab
+(the sections above). The Easel engine, its scheme and its web bundle are gone; what is left is
+`CanvasImport.swift`, which brings each easel a Mac still has into a canvas the first time a
+build with Canvas-only starts:
+
+1. **Before the session is restored**, every easel in `easels/index.json` that
+   `easels/migrated.json` doesn't list gets a **local canvas with the same name and dates** (an
+   easel still called *Untitled Easel* becomes *Untitled canvas*), and the mapping is written down.
+   From then on an easel's old address — in the session file, a favourite, a bookmark, a link, the
+   address field — is that canvas's; one whose easel never became a canvas is dropped from the
+   session ("That easel isn't in Canvas yet" when opened by hand).
+2. **A moment after the window is up**, each easel not yet done is loaded into its canvas's page
+   in a view nobody sees (the same configuration, bridge and `CanvasHost` a canvas tab uses, so
+   every update goes to the canvas's history the ordinary way), and the page is handed the old
+   document and its pictures: `copperCanvas.importLegacy({doc: <base64 of doc.yjs>, files:
+   {<fileId>: <data: URL>}, title})`, which turns stickies, frames (title and picture), arrows
+   (`from`/`to` = `shape:<id>`, the label) into canvas shapes in one transaction and answers
+   `{imported, skipped, error?, already?}`. The page is then checkpointed (its whole document
+   written as `snapshot.bin`) and let go. Fifteen seconds an easel at most; one at a time.
+3. An easel is **done** when its board came over — wholly, or as far as it ever will (a picture
+   that can't be read is said in `error`, not retried). A failure (a corrupt `doc.yjs`, a page
+   that didn't come up) is logged (`canvas` category, "easel import: …"), stays not done, and is
+   tried again on the next launch into the same canvas. The page remembers which documents it has
+   imported (`meta.importedLegacy`), so a retry never puts a board's shapes on twice. A canvas
+   deleted after its easel was done is never brought back.
+
+**The easel folders are never deleted.** `easels/` (index, `viewer.json`, every `<id>/doc.yjs` and
+`files/`) stays where it was, beside `migrated.json`:
+
+```
+easels/migrated.json   {"easels": {<easel id>: {canvas, done, imported, skipped, error?, tries, at}}}
+```
+
+Removing an entry (or the file) and relaunching runs that easel's import again — into its old
+canvas if it still exists, else a new one. `bench canvas import` shows the records;
+`bench canvas import run` runs whatever is not done, now.
 
 ## The cloud
 
@@ -217,7 +333,21 @@ $C shot /tmp/canvas.png
 ./bench --world canvasE canvas invites | accept INVITE | decline INVITE      # INVITE: id or canvas name
 ./bench --world canvasE canvas rename ID -> NAME | delete ID | leave ID | members ID
 ./bench --world canvasE canvas ui mode new | picture /tmp/card.png [dark]  # the card, drawn off screen
+./bench --world canvasE canvas new | tabs [ID] | menu [press] | flush ID    # ⌘K's New Canvas; every canvas's tabs (window, space, section, row, asleep, lean, mark, pill)
+./bench --world canvasE canvas click X Y [N] | draw X,Y X,Y …               # real mouse input on the board in front, page CSS px
+./bench --world canvasE canvas scroll DX DY [STEPS] [--zoom] [--app] | scroll stats   # a trackpad gesture (CGEvent, phased, 8 ms apart)
+./bench --world canvasE canvas perf start | stop | lean                     # rAF frame times + wheel lag; what the tab was spared
+./bench --world canvasE canvas ask-rename ID | ask-delete ID | answer rename NAME|delete|leave|cancel | sheet
+./bench --world canvasE canvas rowmenu ID /tmp/menu.png | picture /tmp/window.png   # the row's menu; the window with its popover/sheet
+./bench --world canvasE canvas import [status|run]                          # the easel migration
 ```
+
+`canvas scroll` makes each event with CGEvent and gives it the board's window, so it is what a
+trackpad's is to AppKit and WebKit; `--app` sends it through `NSApp.sendEvent` so the app's
+monitors (the space swipe) see it first. Headless, the row's sheets are held open for `canvas
+answer` instead of being declined (every other alert is), and `canvas picture` draws a held sheet
+where it would hang; `canvas rowmenu` reads the real menu, puts it away at once, and draws its items
+over the row (a parked window's menu would otherwise open on somebody else's screen).
 
 Don't open the card's popover in a headless probe (`canvas ui open`): AppKit can loop on an
 off-screen popover's constraints and abort the run — draw it with `ui picture` instead.

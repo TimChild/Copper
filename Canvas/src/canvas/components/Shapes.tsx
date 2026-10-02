@@ -7,6 +7,7 @@ import { memo, useLayoutEffect, useRef, useState, type CSSProperties, type RefOb
 import { ChevronsDown, ChevronsUp, ExternalLink, Globe } from 'lucide-react'
 import type { ArrowPath } from '../arrows'
 import { hueOf, inkOn, paperOf, strokeOf } from '../colors'
+import { countRender } from '../debug'
 import { toggleTask } from '../markdown-lite'
 import { STICKY_PAD_Y, growFor, overflows } from '../overflow'
 import { STICKY_FONT, TEXT_FONT, isNamedColor, type Shape } from '../types'
@@ -86,6 +87,7 @@ function useContentHeight(ref: RefObject<HTMLDivElement | null>, active: boolean
 }
 
 export const StickyView = memo(function StickyView({ shape, editing }: ViewProps) {
+  countRender('shapeRenders')
   const board = useBoard()
   const font = shape.fontSize ?? STICKY_FONT
   const bodyRef = useRef<HTMLDivElement>(null)

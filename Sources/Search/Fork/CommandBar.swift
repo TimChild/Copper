@@ -34,7 +34,7 @@ enum CommandBar {
         var list: [Command] = [
             .init(id: "new-tab", name: "New Tab", glyph: "plus") { $0.newTab() },
             .init(id: "new-private", name: "New Private Tab", glyph: "eyeglasses") { $0.newShyTab() },
-            .init(id: "new-easel", name: "New Easel", glyph: "scribble.variable") { Easels.newEasel(in: $0) },
+            .init(id: "new-canvas", name: "New Canvas", glyph: "scribble.variable") { CanvasTabs.newCanvas(in: $0) }, // Fork (canvas): a local one, in front
             .init(id: "reopen", name: "Reopen Closed Tab", glyph: "arrow.uturn.backward") { $0.reopen() },
             .init(id: "close", name: "Close Tab", glyph: "xmark") { b in if let t = b.active { b.close(t) } },
             .init(id: "pin", name: "Pin Tab", glyph: "pin") { b in if let t = b.active { b.pin(t) } },
@@ -69,8 +69,6 @@ enum CommandBar {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SpaceEditing.shared.open(id) }
             },
             .init(id: "edit-space", name: "Edit Space", glyph: "slider.horizontal.3") { b in SpaceEditing.shared.open(Spaces.shared.current(in: b)) },
-            .init(id: "canvas-personal", name: "Open Personal canvas", glyph: "scribble.variable") { CanvasHost.show(Canvases.personalID, in: $0) },
-            .init(id: "canvas-new", name: "New canvas…", glyph: "plus.square.on.square") { CanvasUI.shared.newCanvas(in: $0) },
             .init(id: "next-space", name: "Next Space", glyph: "chevron.right") { Spaces.shared.step(1, in: $0) },
             .init(id: "prev-space", name: "Previous Space", glyph: "chevron.left") { Spaces.shared.step(-1, in: $0) },
         ]
@@ -89,11 +87,9 @@ enum CommandBar {
         if Spaces.shared.all.count > 1 {
             list.append(.init(id: "delete-space", name: "Delete Space…", glyph: "trash") { b in SpaceDelete.ask(Spaces.shared.current(in: b), in: b) })
         }
-        // Every other canvas by name: "Open canvas Roadmap". (Fork/Canvas/)
-        for entry in Canvases.shared.visible where !entry.isPersonal {
-            list.append(.init(id: "canvas-open-\(entry.id)", name: "Open canvas \(entry.name)", glyph: entry.isShared ? "person.2" : "scribble.variable") {
-                CanvasHost.show(entry.id, in: $0)
-            })
+        // Fork (canvas): signed in, a canvas to share — the door's New, at its name field.
+        if Canvases.shared.cloudReady {
+            list.append(.init(id: "canvas-new-shared", name: "New Shared Canvas…", glyph: "person.2") { CanvasUI.shared.newCanvas(in: $0) })
         }
         for space in Spaces.shared.all where space.id != Spaces.shared.current(in: browser) {
             // The space's own symbol when it has one; an emoji has no place
@@ -168,11 +164,11 @@ enum CommandBar {
         }
         marks.forEach { add($0, base: 700) }
 
-        // Boards, by title (Fork/Easel), matched their own way: "easel"
-        // alone lists them, "easel plan" narrows to titles with "plan" in
-        // them. Below bookmarks, above history; a board already open is the
+        // Canvases, by name (Fork/Canvas), matched their own way: "canvas"
+        // alone lists them, "canvas plan" narrows to names with "plan" in
+        // them. Below bookmarks, above history; a canvas already open is the
         // open-page row above and this one folds into it.
-        for (index, row) in Easels.offers(for: typed).enumerated() {
+        for (index, row) in CanvasTabs.offers(for: typed).enumerated() {
             ranked.append((row, 650 - Double(index)))
         }
 
@@ -322,7 +318,7 @@ enum CommandBar {
     }
 
     private static func hint(for row: Suggestion) -> String {
-        if row.kind != .open, row.url.scheme == Easels.scheme { return "Open Easel" }
+        if row.kind != .open, CanvasLinks.isCanvas(row.url) { return "Open" } // Fork (canvas): "Open Canvas · <name>"
         switch row.kind {
         case .open: return "Switch to Tab"
         case .command: return "Run"
@@ -337,6 +333,7 @@ enum CommandBar {
     private static func shortDetail(_ row: Suggestion) -> String {
         switch row.kind {
         case .command, .search: return ""
+        case _ where CanvasLinks.isCanvas(row.url): return "Canvas" // Fork (canvas): not its address's "host"
         default:
             let full = row.url.host() ?? row.title
             let host = full.hasPrefix("www.") ? String(full.dropFirst(4)) : full

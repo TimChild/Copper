@@ -7,6 +7,8 @@ created: 2026-10-01
 parent: docs/plans/2026-10-01-easels.md
 ---
 
+> superseded: folded into Canvas (2026-10-01) — see [docs/canvas.md](../canvas.md#what-happened-to-easels).
+
 # Easels P1: local, no account
 
 Anyone can make an easel with no sign-in. It lives on this Mac only; sharing (P4) is an upgrade

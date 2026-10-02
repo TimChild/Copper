@@ -131,7 +131,7 @@ final class Sections: ObservableObject {
 
     /// Everything in Today nobody has looked at inside the window, closed the
     /// ordinary way. The row you are on is never taken out from under you,
-    /// and neither is a board (Fork/Easel): it lives in Saved, and one
+    /// and neither is a canvas (Fork/Canvas): it lives in Saved, and one
     /// dragged into Today is still a board, not a page to tidy away.
     @discardableResult
     func sweep(in browser: Browser, olderThan override: Double? = nil) -> Int {
@@ -140,7 +140,7 @@ final class Sections: ObservableObject {
         // Nor a row on another window's stage (Fork: windows — the row is shared).
         let stale = browser.tabs.filter {
             $0.pin == nil && !isSaved($0) && $0.id != browser.activeID && !$0.isBlank && lastSeen($0) < cutoff
-                && Easels.showing($0) == nil
+                && CanvasTabs.showing($0) == nil
                 && !Spaces.shared.shown($0, outside: browser)
         }
         for tab in stale { browser.close(tab) }

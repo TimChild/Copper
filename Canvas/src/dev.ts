@@ -2,7 +2,7 @@
  * `?dev=1` outside Copper: stand in for the host. Records page → host
  * messages on `window.__copperHost`, initialises a demo canvas, seeds it
  * through the same ops an agent would use, and can simulate:
- *   `&peers=1`  a collaborator's cursor moving around (awareness)
+ *   `&peers=1`  a collaborator's cursor moving around (awareness); `&laser=1` she uses the laser
  *   `&agent=1`  an agent at work (presence + ops)
  *   `&online=1` the relayed sync socket, against an in-page server
  *   `&empty=1`  start from a blank board
@@ -16,6 +16,8 @@ import { CanvasStore } from './canvas/doc'
 import { controller } from './controller'
 import { DevRelay } from './dev-relay'
 import { hostDouble, type PageMessage } from './host-bridge'
+import { createFrameSampler, counters, seedOps } from './canvas/debug'
+import { LaserTrails } from './canvas/laser'
 import { applyOps } from './ops'
 import { setTheme } from './theme'
 
@@ -139,25 +141,48 @@ export function startDev(params: URLSearchParams) {
   })
   const status = params.get('status')
   if (status) window.copperCanvas!.setStatus({ mode: status, pending: Number(params.get('pending') ?? 0) })
-  if (params.get('peers') === '1') simulatePeer()
+  if (params.get('peers') === '1') simulatePeer(params.get('laser') === '1')
   if (params.get('agent') === '1') simulateAgent()
   ;(window as unknown as { __dev: unknown }).__dev = { relay, controller }
+  ;(window as unknown as { __canvasDebug: unknown }).__canvasDebug = {
+    counters,
+    perf: createFrameSampler(),
+    seed: (opts?: Parameters<typeof seedOps>[0]) => window.copperCanvas!.apply({ ops: seedOps(opts), as: { id: 'seed', name: 'Seed' } }),
+  }
 }
 
-/** A collaborator wandering the board (awareness only). */
-function simulatePeer() {
+/**
+ * A collaborator wandering the board (awareness only). With `&laser=1` she
+ * circles things with the laser pointer every few seconds.
+ */
+function simulatePeer(laser = false) {
   const session = controller.session
   if (!session) return
   const ghost = new Awareness(new Y.Doc())
+  const trails = new LaserTrails()
   let t = 0
+  let beam = 0
   const tick = () => {
     t += 0.03
+    const cursor = { x: Math.round(-200 + Math.cos(t) * 260), y: Math.round(-40 + Math.sin(t * 1.3) * 160) }
+    if (laser) {
+      // Every ~4 s: a 1.2 s loop around the "Ideas" frame's first note.
+      beam = (beam + 1) % 66
+      const a = (beam / 20) * Math.PI * 2
+      const at = { x: -420 + Math.cos(a) * 150, y: -150 + Math.sin(a) * 110 }
+      if (beam === 0) trails.begin(at, '#2f6fdf')
+      else if (beam < 20) trails.move(at)
+      else if (beam === 20) trails.end()
+      cursor.x = Math.round(beam <= 20 ? at.x : cursor.x)
+      cursor.y = Math.round(beam <= 20 ? at.y : cursor.y)
+    }
     ghost.setLocalState({
       user: { id: 'ada', name: 'Ada', color: '#2f6fdf' },
       name: 'Ada',
       color: '#2f6fdf',
-      cursor: { x: Math.round(-200 + Math.cos(t) * 260), y: Math.round(-40 + Math.sin(t * 1.3) * 160) },
+      cursor,
       selection: ['s5'],
+      laser: laser ? trails.localWire() : null,
     })
     applyAwarenessUpdate(session.awareness, encodeAwarenessUpdate(ghost, [ghost.clientID]), 'dev')
   }

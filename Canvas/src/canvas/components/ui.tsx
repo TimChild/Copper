@@ -84,9 +84,9 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   )
 })
 
-export function Divider({ vertical = true }: { vertical?: boolean }) {
+export function Divider({ vertical = true, className }: { vertical?: boolean; className?: string }) {
   return vertical ? (
-    <span className="mx-1 h-5 w-px shrink-0 bg-line-2" aria-hidden="true" />
+    <span className={cn('mx-1 h-5 w-px shrink-0 bg-line-2', className)} aria-hidden="true" />
   ) : (
     <span className="my-1 h-px w-full bg-line" aria-hidden="true" />
   )

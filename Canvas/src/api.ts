@@ -4,7 +4,7 @@
  * the host, and `apply`/`read` answer with a JSON string.
  */
 import { BridgeSocket } from './bridge-socket'
-import { VERSION, controller, type Controller } from './controller'
+import { VERSION, controller, type Controller, type ImportResult } from './controller'
 import { hostLog } from './host-bridge'
 import { setTheme } from './theme'
 
@@ -23,6 +23,11 @@ export interface CopperCanvasApi {
   setStatus(status: unknown): void
   theme(mode: 'light' | 'dark' | string): void
   exportState(): string
+  /**
+   * Bring an Easels board onto this canvas: `{doc: base64, files: {fileId: dataURL}, title?}`
+   * (or that as JSON). Resolves `{imported, skipped, error?, already?}`; never rejects.
+   */
+  importLegacy(payload: unknown): Promise<ImportResult>
 }
 
 declare global {
@@ -100,6 +105,17 @@ export function createApi(c: Controller = controller): CopperCanvasApi {
     setStatus: guard('setStatus', (status: unknown) => void c.setHostStatus(status), undefined),
     theme: guard('theme', (mode: string) => void setTheme(mode), undefined),
     exportState: guard('exportState', () => c.exportState(), ''),
+    importLegacy: async (payload: unknown): Promise<ImportResult> => {
+      try {
+        const out = await c.importLegacy(payload)
+        if (out.error) hostLog('warn', `importLegacy: ${out.error}`)
+        return out
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        hostLog('error', `importLegacy: ${msg}`)
+        return { imported: 0, skipped: 0, error: msg }
+      }
+    },
   }
 }
 

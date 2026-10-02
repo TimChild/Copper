@@ -147,7 +147,7 @@ enum CanvasTools {
             let host = try await open(entry, in: browser, foreground: false)
             let data = try await host.picture()
             Tools.summary?.line = "Screenshot of \(entry.name)"
-            return [.image(data, mime: "image/png"), .text("Canvas › \(entry.name)")]
+            return [.image(data, mime: "image/png"), .text("Canvas · \(entry.name)")]
 
         default:
             throw Failure(text: "Unknown tool \(name)")
@@ -318,7 +318,8 @@ enum CanvasTools {
                     }
                     answer(["popover": ui.popoverOpen, "mode": "\(ui.mode)"])
                 default:
-                    answer(["error": "canvas list|open ID|read [ID]|apply JSON|create NAME|invites|accept|decline INVITE|rename ID NAME|delete ID|leave ID|members ID|hosts|ui open|close|mode …|picture PATH"])
+                    // The tab, the row and the board (CanvasBench.swift).
+                    benchTabs(request, in: browser, answer: answer)
                 }
             } catch {
                 answer(["error": (error as? Tools.Failure)?.text ?? "\(error)"])

@@ -258,11 +258,11 @@ final class CanvasHost {
 
     static func hosts(of id: String) -> [CanvasHost] { all.filter { $0.canvasId == id } }
 
-    /// The tab showing this canvas — in this window's row, or parked in
-    /// another space — whether or not its page is up yet.
+    /// The tab showing this canvas — in this window's row, another window,
+    /// or parked in a space nobody is looking at — whether or not its page is
+    /// up yet. There is only ever one (CanvasTabs.show).
     static func tab(showing id: String, in browser: Browser) -> Tab? {
-        let here = browser.tabs + (browser.primary ? Spaces.shared.parkedTabs : [])
-        return here.first { tab in (tab.pending ?? tab.address).flatMap(CanvasLinks.id(from:)) == id }
+        browser.tabs.first { CanvasTabs.showing($0) == id } ?? CanvasTabs.tab(showing: id)
     }
 
     /// The canvas in front: the active tab, when it is one.
@@ -270,26 +270,13 @@ final class CanvasHost {
         browser.active.flatMap { ($0.pending ?? $0.address).flatMap(CanvasLinks.id(from:)) }
     }
 
-    /// Bring a canvas up: its tab if one is open (switched to when in front
-    /// is asked for), else a new tab — the blank one in front, if that is
-    /// what is showing.
+    /// Bring a canvas up: its tab wherever it is (switched to when in front
+    /// is asked for — another window comes forward, another space is gone
+    /// to), else a new tab — the blank one in front, if that is what is
+    /// showing. See CanvasTabs.show.
     @discardableResult
     static func show(_ id: String, in browser: Browser, foreground: Bool = true) -> Tab {
-        if let tab = tab(showing: id, in: browser) {
-            if foreground {
-                if browser.tabs.contains(where: { $0.id == tab.id }) { browser.select(tab) } else { _ = Spaces.shared.reveal(tab.id, in: browser) }
-            }
-            return tab
-        }
-        let url = CanvasLinks.url(id)
-        if foreground, let blank = browser.active, blank.isBlank, !blank.floating {
-            browser.replaceBlank(blank, with: url)
-            browser.landed()
-            return browser.active ?? blank
-        }
-        let tab = browser.open(url, foreground: foreground)
-        if foreground { browser.landed() }
-        return tab
+        CanvasTabs.show(id, in: browser, foreground: foreground)
     }
 
     // MARK: the web view
@@ -307,8 +294,17 @@ final class CanvasHost {
         if Store.testing, !Store.measuring { config.preferences.inactiveSchedulingPolicy = .none }
         config.userContentController.add(CanvasRelay.shared, name: handler)
         attached.add(config.userContentController)
+        made.add(config.userContentController)
         return config
     }
+
+    /// Controllers of the configurations made here: a view built from one is
+    /// a canvas tab's, and shows its board and nothing else (CanvasTabs,
+    /// CanvasLean). WebKit's copy of a configuration keeps the controller.
+    private static let made = NSHashTable<WKUserContentController>.weakObjects()
+
+    /// Built from a canvas tab's configuration.
+    static func isBoard(_ web: WKWebView) -> Bool { made.contains(web.configuration.userContentController) }
 
     private static func attach(_ web: WKWebView) {
         let controller = web.configuration.userContentController
@@ -338,10 +334,18 @@ final class CanvasHost {
         let popup = action.targetFrame == nil
         let tab = host(showing: web)?.tab ?? browser.tab(for: web) ?? (browser.primary ? Spaces.shared.parkedTabs.first { $0.built === web } : nil)
 
+        // An easel's old address: its canvas, if it moved; nothing if not.
+        var url = url
+        if CanvasImport.isLegacy(url) {
+            guard let moved = CanvasImport.translate(url) else { return true }
+            url = moved
+        }
+
         if let id = CanvasLinks.id(from: url) {
-            guard let tab, main, !popup else {
-                // A link to a canvas from a page, or from a frame: the canvas,
-                // in a tab of its own.
+            // Only a canvas tab's own view loads a canvas, in its main frame.
+            // A link to one from a website, a frame, a popup — or a tab some
+            // older path handed one — gets the canvas in a tab of its own.
+            guard let tab, main, !popup, isBoard(web) || tab.bench else {
                 show(id, in: browser, foreground: true)
                 return true
             }
@@ -1072,25 +1076,43 @@ final class CanvasHost {
         CanvasPresence.shared.recount()
     }
 
+    /// Renamed here or on the cloud: every page holding it retitles its tab,
+    /// and a sleeping row is retitled now (CanvasTabs.retitle).
+    ///
+    /// The board's own header shows the name it was given in `init`: a page
+    /// that can be told a new one (`copperCanvas.rename`) is told; one that
+    /// can't is checkpointed and reloaded, so it comes back under the new name.
     static func renamed(_ id: String) {
         guard let entry = Canvases.shared.entry(id) else { return }
         for host in hosts(of: id) where host.isReady {
-            Task { try? await host.call("document.title = t", ["t": CanvasLinks.title(entry.name)]) }
+            Task {
+                let told = try? await host.call("""
+                    document.title = t;
+                    const c = window.copperCanvas;
+                    if (c && typeof c.rename === 'function') { await c.rename(t); return true; }
+                    return false;
+                    """, ["t": CanvasLinks.title(entry.name)])
+                if told as? Bool != true { host.restartPage() }
+            }
         }
+        CanvasTabs.retitle(id)
     }
 
-    /// Deleted or left: its tabs close.
+    /// Deleted or left: its tabs close — in this row, a favourite, another
+    /// window, or a space nobody is looking at.
     static func removed(_ id: String) {
         for host in hosts(of: id) {
             if let tab = host.tab { forget(tab) }
         }
-        // Every row's tab on it, loaded or not. (One parked in another space
-        // stays until it is opened, and then says the canvas has gone.)
         for browser in Windows.all {
             for tab in browser.tabs where (tab.pending ?? tab.address).flatMap(CanvasLinks.id(from:)) == id {
-                if tab.pin != nil { tab.pin = nil }
+                // A favourite is only put down by Close; it has to come out.
+                if tab.pin != nil { browser.unpin(tab) }
                 browser.close(tab)
             }
+        }
+        for tab in Spaces.shared.parkedTabs where (tab.pending ?? tab.address).flatMap(CanvasLinks.id(from:)) == id {
+            Spaces.shared.drop(tab)
         }
     }
 

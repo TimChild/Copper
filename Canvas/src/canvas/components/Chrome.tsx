@@ -42,7 +42,7 @@ import type { PeerView } from './Overlays'
 import { AgentDot } from './Overlays'
 import { Divider, EDIT_HINT_ID, IconButton, Kbd, MOD, Panel, Tip, cn } from './ui'
 
-export type Tool = 'select' | 'hand' | 'sticky' | 'text' | 'frame' | 'arrow' | 'image' | 'link'
+export type Tool = 'select' | 'hand' | 'sticky' | 'text' | 'frame' | 'arrow' | 'image' | 'link' | 'laser'
 
 export const TOOL_KEYS: Record<string, Tool> = {
   v: 'select',
@@ -55,6 +55,16 @@ export const TOOL_KEYS: Record<string, Tool> = {
   x: 'arrow',
   i: 'image',
   l: 'link',
+  k: 'laser',
+}
+
+/** The laser pointer: a beam with a spark at its tip. */
+function LaserIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" className={className} aria-hidden="true">
+      <path d="M3 13L9.5 6.5M11.5 4.5l.01-.01M11.5 1.5v1.5M14.5 4.5H13M13.6 2.4l-1.1 1.1M13.6 6.6l-1.1-1.1M9.4 2.4l1.1 1.1" />
+    </svg>
+  )
 }
 
 const TOOLS: { tool: Tool; label: string; key: string; icon: ReactNode; edit?: boolean }[] = [
@@ -66,7 +76,11 @@ const TOOLS: { tool: Tool; label: string; key: string; icon: ReactNode; edit?: b
   { tool: 'arrow', label: 'Arrow', key: 'A', icon: <ArrowUpRight className="h-[18px] w-[18px]" />, edit: true },
   { tool: 'image', label: 'Image', key: 'I', icon: <ImageIcon className="h-[18px] w-[18px]" />, edit: true },
   { tool: 'link', label: 'Link', key: 'L', icon: <Link2 className="h-[18px] w-[18px]" />, edit: true },
+  { tool: 'laser', label: 'Laser pointer', key: 'K', icon: <LaserIcon className="h-[18px] w-[18px]" /> },
 ]
+
+/** Tool buttons narrow with the window, so the whole bar fits down to 320 px. */
+const NARROW_TOOL = 'max-[479px]:w-8 max-[399px]:w-7'
 
 function Swatch({
   color,
@@ -112,23 +126,23 @@ export function Toolbar({
   const tools = readOnly ? TOOLS.filter(t => !t.edit) : TOOLS
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3">
-      <Panel role="toolbar" aria-label="Tools" className="pointer-events-auto relative flex max-w-full items-center gap-0.5 p-1">
+      <Panel role="toolbar" aria-label="Tools" className="pointer-events-auto relative flex max-w-full items-center gap-0.5 p-1 max-[399px]:gap-0">
         {tools.map((t, i) => (
           <span key={t.tool} className="contents">
-            {i === 2 && <Divider />}
-            <IconButton label={t.label} keys={t.key} active={tool === t.tool} onClick={() => onTool(t.tool)}>
+            {(i === 2 || (t.tool === 'laser' && i > 2)) && <Divider className="max-[399px]:hidden" />}
+            <IconButton label={t.label} keys={t.key} active={tool === t.tool} onClick={() => onTool(t.tool)} className={NARROW_TOOL}>
               {t.icon}
             </IconButton>
           </span>
         ))}
         {!readOnly && (
           <>
-            <Divider />
+            <Divider className="max-[399px]:hidden" />
             <button
               type="button"
               aria-label="Note colour"
               aria-expanded={palette}
-              className="tip-host flex h-9 w-9 items-center justify-center rounded-[10px] hover:bg-surface-2"
+              className={cn('tip-host flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] hover:bg-surface-2', NARROW_TOOL)}
               onClick={() => setPalette(p => !p)}
             >
               <span className="h-[20px] w-[20px] rounded-full border border-black/10 dark:border-white/20" style={{ background: swatchOf(color) }} />
@@ -694,6 +708,7 @@ const SHORTCUTS: [string, string[]][] = [
   ['Arrow', ['A']],
   ['Image', ['I']],
   ['Link', ['L']],
+  ['Laser pointer (everyone sees it)', ['K']],
   ['Edit the selected note', ['↵']],
   ['New note beside / below', [`${MOD}↵`, `⇧${MOD}↵`]],
   ['Delete', ['⌫']],

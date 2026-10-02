@@ -53,7 +53,7 @@ struct AppCommands: Commands {
                 .keyboardShortcut("n")
             Button("New Private Tab") { browser.newShyTab() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
-            Button("New Easel") { Easels.newEasel(in: browser) } // Fork: easels — ⌃⇧E is Arc's, and free here
+            Button("New Canvas") { CanvasTabs.newCanvas(in: browser) } // Fork (canvas): ⌃⇧E is Arc's, and free here
                 .keyboardShortcut("e", modifiers: [.control, .shift])
             Button("Reopen Closed Tab") { browser.reopen() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])

@@ -60,6 +60,7 @@ final class Favicons {
     func relook(_ tabs: [Tab]) {
         missing = []
         for tab in tabs {
+            if let mark = CanvasTabs.mark(for: tab.pending ?? tab.address) { tab.icon = mark; continue } // Fork (canvas-hooks): the Canvas mark, in either look
             guard let host = tab.address?.host()?.lowercased() else { continue }
             tab.icon = cached(host)
             fetch(for: tab)

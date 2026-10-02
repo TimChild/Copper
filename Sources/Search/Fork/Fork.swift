@@ -64,7 +64,6 @@ enum Fork {
             if request["op"] as? String == "servers" { Task { await Servers.shared.reload() }; return ["reloading": true] }
             return MCP.shared.bench(request)
         case "windows": return Windows.bench(request)
-        case "easels": return Easels.bench(request, in: browser)
         case "ai":
             // `ai` reports; `ai mode off|ask|auto`; `ai lane key|claude`; `ai tier haiku|sonnet|opus`;
             // `ai last` is the grouper's last note.

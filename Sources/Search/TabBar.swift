@@ -625,7 +625,7 @@ struct TabMenu: View {
     let close: () -> Void
 
     var body: some View {
-        EaselMenu(browser: browser, tab: tab) // Fork: easels — Rename Easel… / Delete Easel… first, on a board's row
+        CanvasTabMenu(browser: browser, tab: tab) // Fork (canvas): Rename Canvas… / Delete Canvas… first, on a canvas's row
         if tab.pin == nil {
             Button("Pin") { browser.pin(tab) }
                 .disabled(tab.isBlank)

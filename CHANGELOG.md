@@ -11,6 +11,14 @@ in [ROADMAP.md](ROADMAP.md).
 
 ## Unreleased
 
+### Fixed
+
+- **Animated sidebars draw again.** Canvas's resources joined the same bundle as the backdrop scene under a folder named `Resources`, which NSBundle took for the bundle's resource root; the scene files were looked up under it and never found, so every animated space fell back to its still gradient. The lookup now tries the bundle's root as well.
+
+### Removed
+
+- **Smart grouping.** The second-after-landing judges (rules, Jev, the router, same-site), the *Group into …?* chip, Settings › Intelligence › Tab groups and Rules, ⌃G, `groups suggest` and `ai mode` are gone. Groups themselves stay — by hand, by drag, ⌃⇧G and the `groups` tools — and Jev mode in Settings › Agents is untouched.
+
 <!-- cloud -->
 ### Added (Copper Cloud)
 

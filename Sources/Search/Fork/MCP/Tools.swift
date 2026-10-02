@@ -173,7 +173,7 @@ enum Tools {
             tool("browser_resize", "Resize the browser window", ["width": number("Width"), "height": number("Height")], required: ["width", "height"]),
             tool("browser_close", "Close the current tab"),
             tool("browser_groups", "Copper's tab groups: list them, or move the current tab into one", [
-                "action": string("list, assign, remove, suggest", ["enum": ["list", "assign", "remove", "suggest"]]),
+                "action": string("list, assign, remove", ["enum": ["list", "assign", "remove"]]),
                 "group": string("Group name for assign (created if new)"),
             ], required: ["action"]),
         ] + Probe.catalogue
@@ -474,9 +474,6 @@ enum Tools {
         case "remove":
             if let tab = browser.active { groups.remove(tab) }
             return [.text("Removed from its group")]
-        case "suggest":
-            if let tab = browser.active { Grouper.shared.suggest(for: tab, in: browser, forced: true) }
-            return [.text("Asked; the suggestion will appear under the tab")]
         default:
             let lines = groups.all.map { g in "- \(g.name): " + groups.members(of: g.id, in: browser).map { "[\($0.title)]" }.joined(separator: ", ") }
             return [.text(lines.isEmpty ? "No groups" : lines.joined(separator: "\n"))]

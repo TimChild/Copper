@@ -12,7 +12,7 @@ The Claude account lane is only for the account you sign in. Copper does not cop
 
 ## The picker
 
-The picker has three choices: **Haiku**, **Sonnet** and **Opus**. Sonnet is the default. One choice applies to the agent pane, Jev's text and extract helper, and the tab grouper. The model name for each choice is editable for each lane. The defaults are `claude-haiku-4-5`, `claude-sonnet-5` and `claude-opus-5-5` for the Claude account lane, and `haiku`, `sonnet` and `opus` for the API-key lane.
+The picker has three choices: **Haiku**, **Sonnet** and **Opus**. Sonnet is the default. One choice applies to the agent pane and Jev's text and extract helper. The model name for each choice is editable for each lane. The defaults are `claude-haiku-4-5`, `claude-sonnet-5` and `claude-opus-5-5` for the Claude account lane, and `haiku`, `sonnet` and `opus` for the API-key lane.
 
 Jev (TypeSafe) is separate and unchanged. Its key and endpoint remain the Jev fast lane; the picker controls the model used when Copper needs a model response.
 

@@ -131,7 +131,7 @@
                                        spaces by index or name; --keep moves a deleted space's tabs
                                        to its neighbour; colours are Graphite Copper Orange Yellow
                                        Green Teal Blue Indigo Pink Red
-    ./bench groups [new NAME|assign ID NAME|remove ID|suggest ID|dissolve NAME]
+    ./bench groups [new NAME|assign ID NAME|remove ID|dissolve NAME]
     ./bench groups [toggle NAME|inside PARENT NAME|plan [today]]
                                        folders: fold or open one (by its whole "A › B" name or
                                        its last part), or make one inside another
@@ -158,7 +158,7 @@
     ./bench storage status             the last import's report so far
     ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
                                        the MCP server agents drive the window through; setup bridges terminal agents
-    ./bench ai [mode off|ask|auto]   which model lanes have keys, and the grouper's last note
+    ./bench ai [lane key|claude|tier haiku|sonnet|opus]   which model lanes have keys
     ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
     ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
     ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark] [CODE]|bookmark URL [TITLE]|pin URL|open URL

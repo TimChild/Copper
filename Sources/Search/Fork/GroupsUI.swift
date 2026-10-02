@@ -3,8 +3,8 @@ import SwiftUI
 // How groups look in the column: Arc's folders. A header where a run of
 // grouped tabs starts — chevron, folder glyph in the group's colour, the
 // name, and the count only while it is shut — its rows stepped in under it,
-// and, under a tab that has just landed, one line asking whether it belongs
-// somewhere. Which folder sits inside which is read out of the names by
+
+// Which folder sits inside which is read out of the names by
 // `FolderTree` (Fork/Folders.swift). The rows themselves are upstream's
 // SideRow, untouched; this only decides what goes between them and how far
 // in each one starts.
@@ -13,7 +13,6 @@ struct GroupedRows: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
     @ObservedObject var groups = Groups.shared
-    @ObservedObject var grouper = Grouper.shared
     let pill: Namespace.ID
     let tint: SpaceTint
     /// The sidebar draws the loose list as two blocks (Saved, Today); each
@@ -90,11 +89,6 @@ struct GroupedRows: View {
                                     .offset(x: CGFloat(depth - 1) * Folders.step + SideBar.rowInset + 7.5)
                             }
                         }
-                        if let asked = grouper.suggestion, asked.tab == tab.id {
-                            SuggestionChip(suggestion: asked)
-                        } else if grouper.thinking == tab.id {
-                            ThinkingChip()
-                        }
                     }
                     .offset(y: held ? travel - CGFloat(index - from) * step : 0)
                     .zIndex(held ? 1 : 0)
@@ -104,8 +98,6 @@ struct GroupedRows: View {
             }
         }
         .coordinateSpace(name: "rows")
-        .animation(Motion.quick, value: grouper.suggestion)
-        .animation(Motion.quick, value: grouper.thinking)
         .onChange(of: browser.tabs.map(\.id)) { _, _ in
             groups.prune(keeping: browser.tabs + Spaces.shared.parkedTabs)
         }
@@ -297,70 +289,6 @@ struct GroupHead: View {
     }
 }
 
-/// Under a tab that just landed: where it could go, and yes or no.
-struct SuggestionChip: View {
-    @ObservedObject var grouper = Grouper.shared
-    let suggestion: Grouper.Suggestion
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 9))
-                .foregroundStyle(Palette.muted)
-            Text("Group into \(suggestion.name)?")
-                .font(.system(size: 11))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .foregroundStyle(Palette.ink.opacity(0.85))
-            Spacer(minLength: 2)
-            Button { grouper.accept() } label: {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
-                    .frame(width: 18, height: 18)
-                    .background(Palette.ink.opacity(0.08), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .help("\(suggestion.reason)   ⌃G")
-            Button { grouper.dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(Palette.muted)
-                    .frame(width: 18, height: 18)
-                    .background(Palette.ink.opacity(0.05), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .help("Not now")
-        }
-        .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .frame(height: 24)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Palette.wash.opacity(0.7))
-        )
-        .transition(.opacity.combined(with: .move(edge: .top)))
-    }
-}
-
-/// While a judge is out.
-struct ThinkingChip: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            Ring(size: 9)
-            Text("Finding a group…")
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.muted)
-            Spacer(minLength: 0)
-        }
-        .padding(.leading, 12)
-        .frame(height: 20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .transition(.opacity)
-    }
-}
-
 /// The Group submenu on a tab's context menu, in both layouts.
 struct GroupMenu: View {
     @ObservedObject var browser: Browser
@@ -370,8 +298,6 @@ struct GroupMenu: View {
     var body: some View {
         Divider()
         Menu("Group") {
-            Button("Suggest a Group") { Grouper.shared.suggest(for: tab, in: browser, forced: true) }
-                .disabled(tab.isBlank)
             Button("New Group from Tab") {
                 let group = groups.create(named: Fork.brand(tab.address?.host()))
                 groups.assign(tab, to: group, in: browser)
@@ -394,19 +320,13 @@ struct GroupMenu: View {
     }
 }
 
-/// The Groups menu in the menu bar; ⌃G is the one key to learn.
+/// The Groups menu in the menu bar; ⌃⇧G is the one key to learn.
 struct GroupCommands: Commands {
     @ObservedObject var browser: Browser
     @ObservedObject var groups = Groups.shared
-    @ObservedObject var grouper = Grouper.shared
 
     var body: some Commands {
         CommandMenu("Groups") {
-            Button(grouper.suggestion != nil ? "Accept Suggested Group" : "Suggest a Group for This Tab") {
-                grouper.act(in: browser)
-            }
-            .keyboardShortcut("g", modifiers: [.control])
-            .disabled(browser.active?.isBlank ?? true)
             Button("New Group from This Tab") {
                 guard let tab = browser.active else { return }
                 let group = groups.create(named: Fork.brand(tab.address?.host()))

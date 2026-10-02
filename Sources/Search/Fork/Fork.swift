@@ -65,13 +65,10 @@ enum Fork {
             return MCP.shared.bench(request)
         case "windows": return Windows.bench(request)
         case "ai":
-            // `ai` reports; `ai mode off|ask|auto`; `ai lane key|claude`; `ai tier haiku|sonnet|opus`;
-            // `ai last` is the grouper's last note.
+            // `ai` reports; `ai lane key|claude`; `ai tier haiku|sonnet|opus`.
             let arg = request["arg"] as? String ?? ""
             let op = request["op"] as? String ?? ""
-            if op == "mode", let mode = Intelligence.GroupingMode(rawValue: arg) {
-                Intelligence.shared.keys.grouping = mode
-            } else if op == "lane", let lane = Intelligence.Lane(rawValue: arg.lowercased()) {
+            if op == "lane", let lane = Intelligence.Lane(rawValue: arg.lowercased()) {
                 Intelligence.shared.keys.lane = lane
             } else if op == "router" {
                 // `ai router URL KEY MODEL`: a stand-in router for a probe world's agent tests.
@@ -89,8 +86,7 @@ enum Fork {
             return ["jev": Intelligence.shared.jevReady, "router": Intelligence.shared.routerReady, "routerModel": k.routerModel,
                     "routerURL": k.routerURL, "lane": k.lane.rawValue, "tier": k.tier.rawValue,
                     "model": Intelligence.shared.modelName, "modelReady": Intelligence.shared.modelReady,
-                    "claudeReady": Intelligence.shared.claudeReady, "mode": k.grouping.rawValue,
-                    "threshold": k.threshold, "last": Grouper.shared.lastNote]
+                    "claudeReady": Intelligence.shared.claudeReady]
         case "split":
             // `split` toggles; `split ID` opens beside the active tab; `split off` closes.
             let arg = request["arg"] as? String ?? ""

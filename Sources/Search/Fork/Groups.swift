@@ -27,42 +27,17 @@ struct TabGroup: Codable, Identifiable, Equatable {
     var tint: Color { hue.map { Color(hue: $0, saturation: 0.55, brightness: 0.75) } ?? Palette.muted }
 }
 
-/// A site that always lands in a group, before any model is asked.
-/// `pattern` is a host — `github.com` — or a glob over one — `*.atlassian.net`
-/// — or, with a slash in it, a prefix of the address.
-struct GroupRule: Codable, Identifiable, Equatable {
-    var id = UUID()
-    var pattern: String
-    var group: String
-
-    func matches(_ url: URL) -> Bool {
-        let pattern = pattern.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !pattern.isEmpty else { return false }
-        if pattern.contains("/") {
-            return url.absoluteString.lowercased().hasPrefix(pattern) || url.absoluteString.lowercased().contains(pattern)
-        }
-        guard let host = url.host()?.lowercased() else { return false }
-        if pattern.hasPrefix("*.") {
-            let bare = String(pattern.dropFirst(2))
-            return host == bare || host.hasSuffix("." + bare)
-        }
-        return host == pattern || host.hasSuffix("." + pattern)
-    }
-}
-
 @MainActor
 final class Groups: ObservableObject {
     static let shared = Groups()
 
     @Published private(set) var all: [TabGroup] = []
-    @Published var rules: [GroupRule] = [] { didSet { save() } }
     /// Which group each tab is in. Tabs that have gone are pruned as the
     /// column redraws; nothing else has to remember to tell us.
     @Published private(set) var membership: [Tab.ID: UUID] = [:]
 
     private struct File: Codable {
         var groups: [TabGroup]
-        var rules: [GroupRule]
     }
 
     private static var file: URL { Store.file("groups.json") }
@@ -71,13 +46,12 @@ final class Groups: ObservableObject {
         if let data = try? Data(contentsOf: Groups.file),
            let saved = try? JSONDecoder().decode(File.self, from: data) {
             all = saved.groups
-            rules = saved.rules
         }
     }
 
     private func save() {
         let file = Groups.file
-        guard let data = try? JSONEncoder().encode(File(groups: all, rules: rules)) else { return }
+        guard let data = try? JSONEncoder().encode(File(groups: all)) else { return }
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: file, options: .atomic)
     }
@@ -302,9 +276,6 @@ final class Groups: ObservableObject {
         case "remove":
             guard let t = tab(arg) else { return ["error": "no tab \(arg)"] }
             remove(t)
-        case "suggest":
-            guard let t = tab(arg) else { return ["error": "no tab \(arg)"] }
-            Grouper.shared.suggest(for: t, in: browser, forced: true)
         case "dissolve":
             guard let g = group(matching: arg) else { return ["error": "no group \(arg)"] }
             dissolve(g.id)
@@ -340,10 +311,6 @@ final class Groups: ObservableObject {
              "label": Folders.leaf(g.name), "collapsed": g.collapsed,
              "tabs": members(of: g.id, in: browser).map { String($0.id.uuidString.prefix(8)).lowercased() }]
         }
-        var out: [String: Any] = ["groups": rows]
-        if let s = Grouper.shared.suggestion {
-            out["suggestion"] = ["tab": String(s.tab.uuidString.prefix(8)).lowercased(), "name": s.name, "source": s.source, "reason": s.reason] as [String: Any]
-        }
-        return out
+        return ["groups": rows]
     }
 }

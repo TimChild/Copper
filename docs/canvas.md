@@ -338,12 +338,30 @@ mail clients, Slack, anywhere a link can be clicked, hands it to Copper. Canvas 
 **The Share sheet** (`CanvasShareSheet`) opens from the page's own Share button (the `share`
 bridge message), the sidebar canvas row's **Share…** (replacing the old **Invite…**), and the
 command bar's **Share Canvas**. It shows who is live right now (the canvas's `presence`
-messages), **Copy invite link** / **Copy web link** (the token is made once through
-`POST /v1/canvases/:id/links` and cached per canvas in `canvas/share-links.json`, 0600, never the
-keychain — later copies reuse it), **People on this cloud** (debounced `GET /v1/people?q=`, Invite
-is the existing email-invite path), **Members** (owner can remove), and **Reset link** (owner;
+messages: *Only you here* with the canvas open and nobody else in it, *N here now* counting you,
+nothing when it isn't open here and nobody is in it), **Copy invite link** / **Copy web link** (the
+token is made once through `POST /v1/canvases/:id/links` and cached per canvas in
+`canvas/share-links.json`, 0600, never the keychain — later copies reuse it), **People on this
+cloud** (*Search people or type an email*: debounced `GET /v1/people?q=`; a typed address that
+isn't a member gets its own **Invite \<email>** row; every Invite is the email-invite path,
+`POST /v1/canvases/:id/invites`), **Members** (owner can remove), and **Reset link** (owner;
 `DELETE /v1/canvases/:id/links`, drops the cached token). A local or Personal canvas explains it
-can't be shared and offers **New shared canvas** or **Connect to Copper Cloud** instead.
+can't be shared and offers **New shared canvas** or **Connect to Copper Cloud** instead. The
+sheet's state is a `CanvasShareModel` that `CanvasUI.mode` makes and drops, so `bench canvas ui
+share state|type TEXT|invite [EMAIL]|copy` reads and drives the same sheet a person sees.
+
+**Older clouds.** Share links and the people directory arrived in copper-cloud 0.3.0. Copper
+reads the instance's version from `GET /v1/info` (`Cloud.serverVersion`, once per link and again
+whenever the event stream reconnects; `Cloud.supports(.shareLinks)`), and with the version
+unknown takes a bare route-level `404 not_found` from `/v1/people` or a links route as "this
+instance hasn't got it" (`Cloud.lacks`). Against an older instance the sheet hides Copy invite
+link, Copy web link and Reset link, never calls `/v1/people`, and says one quiet line — *Invite
+links need Copper Cloud 0.3.0 — \<host> runs \<version>. You can still invite people by email.* —
+with the field titled **Invite by email**. Email invites work on every version. No failure in
+the sheet shows the server's own short text ("not found", "conflict"): `Canvases.plain` turns
+each refusal into a sentence (an address that isn't one, yourself, someone already a member, a
+canvas no longer there, a cloud that can't be reached), and a success reads *Invited \<email> —
+they'll see it in Copper*.
 
 **The join flow** (`CanvasJoinLink.parse` + `CanvasJoinFlow`) is one parser and one actor reached
 from four places: LaunchServices/AppleEvents (`Links.swift`), the address bar (`Browser.arrive` /
@@ -355,8 +373,11 @@ different cloud: Settings › Cloud opens with *"This canvas is on \<host>. Conn
 Cloud to open it."* Not signed in: the link is remembered (`canvas/pending-join.json`, 0600) and
 resumed the moment sign-in completes. Otherwise: `GET /v1/canvas-links/:token` (already a member
 → just open it), else `POST /v1/canvas-links/:token/join`, upsert the returned row, refresh, then
-open it in the **key window** (so an external open lands somewhere sane), in front. A 404 says
-*"This invite link no longer works — ask for a new one."*
+open it in the **key window** (so an external open lands somewhere sane), in front. A 404
+`link_not_found` says *"This invite link no longer works — ask for a new one."*; an instance
+before 0.3.0 (by its version, or by a bare `not_found` for the route) says *"This Copper Cloud
+doesn't support invite links yet (runs \<version>)."* `canvas_join` waits for the outcome and
+answers with it.
 
 **The new-invite banner** (`ContentView.inviteBanner` in `App.swift`) rises the moment
 `Canvases.refresh()` sees an invite id it hasn't shown before: *"\<owner> invited you to

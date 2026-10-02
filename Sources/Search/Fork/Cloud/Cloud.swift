@@ -117,6 +117,29 @@ final class Cloud: ObservableObject {
     var isLinked: Bool { link != nil }
     var isSignedIn: Bool { account != nil }
 
+    /// What the instance says it runs (`GET /v1/info` → `version`, e.g.
+    /// `"0.2.0"`): read once per link, again whenever the event stream comes
+    /// (back) up, and forgotten when the link goes. Nil until it has answered.
+    /// What a Copper can offer depends on it — share links and the people
+    /// directory arrived in 0.3.0 (`Cloud.supports`).
+    @Published private(set) var serverVersion: String?
+    /// Features this instance answered with a bare route-level `404
+    /// not_found` while its version was unknown — it doesn't have them.
+    @Published private(set) var lacking: Set<Feature> = []
+    /// The link `serverVersion` and `lacking` were learned for.
+    private var infoFor: URL?
+
+    /// Things a copper-cloud has from some version on.
+    enum Feature: String {
+        /// `/v1/canvases/:id/links`, `/v1/canvas-links/:token`, `/join/:token`.
+        case shareLinks
+        /// `GET /v1/people`.
+        case people
+
+        /// The first copper-cloud release with it.
+        var since: String { "0.3.0" }
+    }
+
     /// This Copper, as the server knows it: minted once per data folder, so
     /// each probe world is a device of its own.
     private(set) var deviceId: UUID
@@ -166,7 +189,7 @@ final class Cloud: ObservableObject {
         trust = CloudTrust(pin: saved.link?.fingerprint)
         session = Cloud.makeSession(trust)
         if fresh { save() }
-        if isSignedIn { startEvents() }
+        if isSignedIn { startEvents() } else if link != nil { Task { await self.loadInfo() } }
     }
 
     private static func defaultDeviceName() -> String {
@@ -345,6 +368,7 @@ final class Cloud: ObservableObject {
         save()
         changed()
         CloudLog.note("Connected to \(link.host)")
+        Task { await loadInfo(force: true) }
     }
 
     /// What `POST /v1/auth/pair` answers.
@@ -458,6 +482,7 @@ final class Cloud: ObservableObject {
         save()
         startEvents()
         changed()
+        Task { await loadInfo(force: true) }
     }
 
     /// The pairing refusals, in words.
@@ -500,6 +525,7 @@ final class Cloud: ObservableObject {
         }
         forgetAccount()
         link = nil
+        forgetInfo()
         reachable = false
         trust = CloudTrust(pin: nil)
         session.finishTasksAndInvalidate()
@@ -519,6 +545,68 @@ final class Cloud: ObservableObject {
         let ok = ((try? await session.data(for: request))?.1 as? HTTPURLResponse)?.statusCode == 200
         setReachable(ok)
         return ok
+    }
+
+    // MARK: - what the instance can do
+
+    /// `GET /v1/info` → `version`, kept as `serverVersion` for this link.
+    /// Asked once per link unless `force` (a reconnect, a fresh link); a
+    /// failure keeps what was known. Never posts `didChange` — nothing about
+    /// the link or the account changed, only what it is known to offer.
+    @discardableResult
+    func loadInfo(force: Bool = false) async -> String? {
+        guard let link else { return nil }
+        if infoFor != link.url { forgetInfo() }
+        if !force, infoFor == link.url, serverVersion != nil { return serverVersion }
+        guard let answer = try? await request("GET", "/v1/info"), self.link?.url == link.url else { return serverVersion }
+        let object = (try? JSONSerialization.jsonObject(with: answer.0)) as? [String: Any]
+        let version = (object?["version"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        infoFor = link.url
+        if let version, !version.isEmpty, version != serverVersion {
+            serverVersion = version
+            // A version is the better witness: what a 404 suggested goes.
+            lacking = []
+        }
+        return serverVersion
+    }
+
+    /// True or false once known; nil while the instance hasn't said (no
+    /// `/v1/info` answer yet, and no telling refusal either).
+    func supports(_ feature: Feature) -> Bool? {
+        if lacking.contains(feature) { return false }
+        guard let serverVersion else { return nil }
+        return Cloud.version(serverVersion, atLeast: feature.since)
+    }
+
+    /// The instance answered a feature's route with a bare `404 not_found`
+    /// while its version was unknown: it predates it.
+    func lacks(_ feature: Feature) {
+        guard let link else { return }
+        if infoFor != link.url { forgetInfo(); infoFor = link.url }
+        lacking.insert(feature)
+    }
+
+    private func forgetInfo() {
+        infoFor = nil
+        if serverVersion != nil { serverVersion = nil }
+        if !lacking.isEmpty { lacking = [] }
+    }
+
+    /// `"0.10.1"` against `"0.3.0"`, number by number; a pre-release or
+    /// build suffix (`-rc.1`, `+abc`) is ignored, a missing part is 0.
+    nonisolated static func version(_ text: String, atLeast minimum: String) -> Bool {
+        func numbers(_ value: String) -> [Int] {
+            let core = value.trimmingCharacters(in: .whitespaces).drop { $0 == "v" || $0 == "V" }
+                .split(whereSeparator: { $0 == "-" || $0 == "+" }).first.map(String.init) ?? ""
+            return core.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        }
+        let have = numbers(text), want = numbers(minimum)
+        for index in 0..<max(have.count, want.count) {
+            let a = index < have.count ? have[index] : 0
+            let b = index < want.count ? want[index] : 0
+            if a != b { return a > b }
+        }
+        return true
     }
 
     // MARK: - account (CloudAuth.swift does the asking)
@@ -767,7 +855,11 @@ final class Cloud: ObservableObject {
 
     private func deliver(_ data: Data) {
         guard let event = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
-        if event["type"] as? String == "open" { setReachable(true) }
+        if event["type"] as? String == "open" {
+            setReachable(true)
+            // Back after a gap: the instance may have been upgraded meanwhile.
+            Task { await loadInfo(force: true) }
+        }
         NotificationCenter.default.post(name: Cloud.event, object: self, userInfo: ["event": event])
     }
 }

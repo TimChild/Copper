@@ -291,6 +291,8 @@ enum CloudBench {
             out["host"] = link.host
             out["url"] = link.url.absoluteString
             out["fingerprint"] = link.fingerprint ?? NSNull()
+            out["serverVersion"] = cloud.serverVersion ?? NSNull()
+            out["shareLinks"] = cloud.supports(.shareLinks) ?? NSNull()
         }
         if let account = cloud.account {
             out["email"] = account.email

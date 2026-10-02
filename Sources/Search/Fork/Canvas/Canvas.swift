@@ -538,7 +538,11 @@ final class Canvases: ObservableObject {
         save()
     }
 
-    func invite(_ id: String, email: String) async throws {
+    /// An email invite (`POST /v1/canvases/:id/invites`, every copper-cloud
+    /// has it). True when the server made a new one (201), false when that
+    /// address already had one waiting (200).
+    @discardableResult
+    func invite(_ id: String, email: String) async throws -> Bool {
         guard let entry = entry(id) else { throw Cloud.Failure(status: 404, code: "missing", message: "No canvas \(id)") }
         guard !entry.isPersonal else { throw Cloud.Failure(status: 400, code: "personal", message: "The Personal canvas can't be shared") }
         guard cloudReady else { throw Canvases.offline }
@@ -546,8 +550,21 @@ final class Canvases: ObservableObject {
             throw Cloud.Failure(status: 400, code: "local", message: "“\(entry.name)” is on this Mac only — make a new canvas while signed in to share")
         }
         let address = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard address.contains("@"), address.count >= 3 else { throw Cloud.Failure(status: 400, code: "email", message: "That isn't an email address") }
-        _ = try await Cloud.shared.request("POST", "/v1/canvases/\(remote)/invites", json: ["email": address])
+        guard Canvases.isEmail(address) else { throw Cloud.Failure(status: 400, code: "email", message: "That isn't an email address") }
+        let (_, response) = try await Cloud.shared.request("POST", "/v1/canvases/\(remote)/invites", json: ["email": address])
+        return response.statusCode == 201
+    }
+
+    /// Shaped like an address the way copper-cloud checks one before it
+    /// takes an invite: something before one `@`, a dotted domain after it,
+    /// no spaces.
+    nonisolated static func isEmail(_ text: String) -> Bool {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (3...254).contains(value.count), !value.contains(where: { $0.isWhitespace || $0.isNewline }) else { return false }
+        let parts = value.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty else { return false }
+        let domain = parts[1]
+        return domain.contains(".") && !domain.hasPrefix(".") && !domain.hasSuffix(".")
     }
 
     func members(_ id: String) async throws -> [Member] {

@@ -28,9 +28,20 @@ final class CanvasUI: ObservableObject {
             if !popoverOpen { mode = .list; note = nil }
         }
     }
-    @Published var mode: Mode = .list
+    @Published var mode: Mode = .list {
+        didSet {
+            // The Share sheet's state lives as long as the sheet does.
+            if case .share(let id) = mode {
+                if share?.canvasId != id { share = CanvasShareModel(canvasId: id) }
+            } else if share != nil {
+                share = nil
+            }
+        }
+    }
     /// A line under the list after something worked or didn't.
     @Published var note: String?
+    /// The open Share sheet's state (CanvasShare.swift), made with the mode.
+    private(set) var share: CanvasShareModel?
 
     /// Settings › Cloud — looked up by name, so this builds whether or not
     /// the Cloud page is in this build; without it, Settings opens as it was.
@@ -143,7 +154,7 @@ struct CanvasPopover: View {
             case .invite(let id):
                 if let entry = canvases.entry(id) { CanvasInviteForm(entry: entry) }
             case .share(let id):
-                if let entry = canvases.entry(id) { CanvasShareSheet(entry: entry) }
+                if let entry = canvases.entry(id), let model = ui.share { CanvasShareSheet(entry: entry, model: model) }
             case .members(let id):
                 if let entry = canvases.entry(id) { CanvasMembers(entry: entry) }
             case .delete(let id):

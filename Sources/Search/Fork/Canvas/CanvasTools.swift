@@ -139,14 +139,24 @@ enum CanvasTools {
         case "canvas_invite":
             guard let key = args["id"] as? String, let entry = Canvases.shared.find(key) else { throw Failure(text: "no canvas \(args["id"] as? String ?? "") — canvas_list names them") }
             guard let email = args["email"] as? String, !email.isEmpty else { throw Failure(text: "email required") }
-            try await Canvases.shared.invite(entry.id, email: email)
             let address = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            let made: Bool
+            do { made = try await Canvases.shared.invite(entry.id, email: address) } catch {
+                throw Failure(text: Canvases.plain(error, while: .inviting(address)))
+            }
             Tools.summary?.line = "Invited \(address) to \(entry.name)"
-            return [.text("Invited \(address) to \(entry.name)")]
+            return [.text(made ? "Invited \(address) to \(entry.name)" : "\(address) was already invited to \(entry.name)")]
 
         case "canvas_share_link":
             let entry = try resolve(args, in: browser, fallbackToActive: false)
-            let links = try await Canvases.shared.shareLinks(entry.id)
+            let links: (link: String, webLink: String)
+            do { links = try await Canvases.shared.shareLinks(entry.id) } catch {
+                // An instance before 0.3.0 has no links: say so, and what still works.
+                if (error as? Cloud.Failure)?.code == Canvases.linksUnsupportedCode {
+                    throw Failure(text: Canvases.linksUnsupported + " (canvas_invite takes an email.)")
+                }
+                throw Failure(text: Canvases.plain(error, while: .linking))
+            }
             Tools.summary?.line = "Share link for \(entry.name)"
             return [.text(json(["link": links.link, "webLink": links.webLink]))]
 
@@ -154,14 +164,17 @@ enum CanvasTools {
             guard let text = (args["link"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
                 throw Failure(text: "link required")
             }
-            guard let url = URL(string: text), let parsed = CanvasJoinLink.parse(url) else {
+            guard let url = URL(string: text), CanvasJoinLink.parse(url) != nil else {
                 throw Failure(text: "not a canvas invite link: \(text)")
             }
-            guard CanvasJoinFlow.handle(url, in: browser) else {
+            guard let parsed = CanvasJoinFlow.accepts(url) else {
                 throw Failure(text: "couldn't open that invite — it may be for another Copper Cloud")
             }
             Tools.summary?.line = "Joining \(parsed.name ?? parsed.cloud)"
-            return [.text("Opening the invite from \(parsed.cloud)…")]
+            // Waited for, so the answer says what happened rather than that it began.
+            if let problem = await CanvasJoinFlow.join(parsed, in: browser) { throw Failure(text: problem) }
+            let opened = CanvasHost.active(in: browser).flatMap { Canvases.shared.entry($0)?.name } ?? parsed.name ?? "the canvas"
+            return [.text("Joined “\(opened)” from \(parsed.cloud)")]
 
         case "canvas_screenshot":
             let entry = try resolve(args, in: browser)
@@ -341,6 +354,27 @@ enum CanvasTools {
                         case "delete": ui.mode = .delete(id)
                         default: ui.mode = .list
                         }
+                    case "share":
+                        // `ui share state`, `ui share type TEXT` (the field, as typed),
+                        // `ui share invite [EMAIL]` (the Invite row for it, or the typed one),
+                        // `ui share copy` (Copy invite link) — on the sheet `ui mode share ID` opened.
+                        guard let model = ui.share else { answer(["error": "no Share sheet — ui mode share ID first"]); return }
+                        let rest = words.count > 2 ? words[2...].joined(separator: " ") : ""
+                        switch words.count > 1 ? words[1] : "state" {
+                        case "type": model.query = rest
+                        case "invite":
+                            guard let email = rest.isEmpty ? model.emailRow : rest else { answer(["error": "nothing to invite", "state": model.describe]); return }
+                            model.invite(email)
+                        case "copy": model.copyLink()
+                        default: break
+                        }
+                        // Let the round trip (and the debounced search) land before answering.
+                        if words.count > 1, words[1] != "state" {
+                            try? await Task.sleep(nanoseconds: 450_000_000)
+                            for _ in 0..<20 where model.working { try? await Task.sleep(nanoseconds: 150_000_000) }
+                        }
+                        answer(model.describe)
+                        return
                     case "picture":
                         guard words.count > 1 else { answer(["error": "ui picture PATH [dark]"]); return }
                         let dark = words.contains("dark")

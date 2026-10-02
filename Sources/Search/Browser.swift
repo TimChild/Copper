@@ -1286,6 +1286,40 @@ final class Browser: NSObject, ObservableObject {
         typed = ""
     }
 
+    /// Close one of Clear's tabs through the ordinary path and return the
+    /// recently-closed record it created, so Undo can remove exactly those
+    /// records without disturbing a person's other history.
+    @discardableResult
+    func closeForClear(_ tab: Tab) -> UUID? {
+        let before = Set(ghosts.map(\.id))
+        close(tab)
+        return ghosts.last(where: { !before.contains($0.id) })?.id
+    }
+
+    /// Restore the live Tab objects captured by Clear. The close itself still
+    /// went through `close(_:)`; this only puts those objects back in their
+    /// original projection positions and removes the matching ghost records.
+    func restoreClearedTabs(_ entries: [(tab: Tab, index: Int)], activeID: Tab.ID?,
+                            blankID: Tab.ID?, ghostIDs: Set<UUID>) {
+        var restored = tabs
+        if let blankID, let blank = restored.first(where: { $0.id == blankID }) {
+            restored.removeAll { $0.id == blankID }
+            blank.close()
+        }
+        let ids = Set(entries.map { $0.tab.id })
+        restored.removeAll { ids.contains($0.id) }
+        for entry in entries.sorted(by: { $0.index < $1.index }) {
+            restored.insert(entry.tab, at: min(entry.index, restored.count))
+        }
+        tabs = restored
+        ghosts.removeAll { ghostIDs.contains($0.id) }
+        if let activeID, let tab = restored.first(where: { $0.id == activeID }) {
+            self.activeID = nil
+            select(tab)
+        }
+        rememberSession()
+    }
+
     /// ⌘W, or the cross on the tab. Closing the last one leaves a blank tab
     /// behind; closing that blank tab closes the window.
     func close(_ tab: Tab) {

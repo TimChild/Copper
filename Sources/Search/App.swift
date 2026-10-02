@@ -159,6 +159,9 @@ struct AppCommands: Commands {
             Divider()
             Button("Close Other Tabs") { if let tab = browser.active { browser.closeOthers(but: tab) } }
                 .disabled(browser.tabs.count < 2)
+            Button("Clear Tabs") { ClearTabs.shared.clear(in: browser) }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+                .disabled(ClearTabs.shared.clearable(in: browser).isEmpty)
             Button("Stop Sound in Tab") { browser.pauseMedia() }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
         }
@@ -264,6 +267,7 @@ private struct MenuLine: View {
 struct ContentView: View {
     @ObservedObject var browser: Browser
     @ObservedObject private var recent = Recent.shared
+    @ObservedObject private var clearTabs = ClearTabs.shared
 
     @State private var keys: Any?
     @State private var window: NSWindow?
@@ -337,6 +341,7 @@ struct ContentView: View {
     /// Everything that rises from the bottom edge to say one thing.
     private var bars: some View {
         VStack(spacing: 8) {
+            clearTabsToast
             announcement
             if let ask = browser.asking {
                 captureAsking(ask)
@@ -354,6 +359,7 @@ struct ContentView: View {
         }
         .padding(.bottom, 30)
         .animation(Motion.settle, value: browser.veiling)
+        .animation(Motion.settle, value: clearTabs.generation)
         .animation(Motion.settle, value: browser.asking)
         .animation(Motion.settle, value: browser.offering)
     }
@@ -483,6 +489,13 @@ struct ContentView: View {
     }
 
     // MARK: - the window
+
+    /// The six-second Clear affordance, styled like the existing announcement
+    /// pill but with an actionable Undo control.
+    @ViewBuilder
+    private var clearTabsToast: some View {
+        ClearTabsToast(browser: browser)
+    }
 
     /// A line that rises from the bottom, says one thing, and leaves.
     @ViewBuilder
@@ -861,8 +874,16 @@ struct ContentView: View {
             browser.toggleHiding()
         case "u" where shifted:
             browser.reviewing.toggle()
+        case "k" where shifted:
+            guard !ClearTabs.shared.clearable(in: browser).isEmpty else { return false }
+            ClearTabs.shared.clear(in: browser)
         case "z" where !shifted:
-            // Only while pointing. Everywhere else undo belongs to the page.
+            // Clear's undo owns ⌘Z while its pill is up; otherwise only while
+            // pointing. Everywhere else undo belongs to the page.
+            if ClearTabs.shared.undoCount(in: browser) != nil {
+                ClearTabs.shared.undo(in: browser)
+                return true
+            }
             guard browser.veiling else { return false }
             browser.undoHiding()
         // ⌘+ arrives as "=" or "+" depending on the keyboard; both mean bigger.

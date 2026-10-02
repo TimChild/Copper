@@ -303,8 +303,10 @@ struct AddressField: NSViewRepresentable {
             let text = field.stringValue
 
             browser.typed = text
-            guard !deleting, let ending = browser.ending else {
-                if deleting { browser.stopCompleting() }
+            // Fork (developer-shortcuts): ⌘T and ⌘K keep their ending out of
+            // the field, for Tab to take; only the address bar draws it.
+            guard !literal, !deleting, let ending = browser.ending else {
+                if deleting, !literal { browser.stopCompleting() }
                 deleting = false
                 synced = literal ? text : browser.completed
                 return
@@ -343,6 +345,20 @@ struct AddressField: NSViewRepresentable {
                 return true
             case #selector(NSResponder.moveUp(_:)):
                 browser.walk(-1)
+                return true
+            // Fork (developer-shortcuts): Tab takes what the field is
+            // offering and leaves the caret after it — no page opens, no tab
+            // changes. With nothing on offer, Tab and ⇧Tab do nothing here
+            // rather than throw the keyboard somewhere unexpected.
+            case #selector(NSResponder.insertTab(_:)):
+                if browser.acceptCompletion() {
+                    let text = literal ? browser.typed : browser.completed
+                    synced = text
+                    control.stringValue = text
+                    textView.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+                }
+                return true
+            case #selector(NSResponder.insertBacktab(_:)):
                 return true
             case #selector(NSResponder.deleteBackward(_:)),
                  #selector(NSResponder.deleteForward(_:)):

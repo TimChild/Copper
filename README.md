@@ -87,7 +87,7 @@ The installer accepts `COPPER_NO_LAUNCH=1` / `--no-launch` for scripts that want
 | `⌘F` find · `⌘D` duplicate tab · `⇧⌘C` copy address · `⇧⌘V` paste and go | `⌘Y` history · `⇧⌘J` downloads · `⌘,` settings · `⌥⌘L` passwords |
 | `⌘E` agent pane · `⌥⌘J` driver timeline (who is driving the page, and what they are doing) · `⌥⌘E` close every pane · `⇧⌘D` split | `⌃N` new space · `⌃⌥←` `⌃⌥→` previous, next space · `⌃1`–`⌃9` jump to a space · `⌃⇧E` new canvas · `⇧⌘O` the Personal canvas |
 
-`Tab` walks along the row of tabs; `⌃Tab` does too, or flips between your most recent tabs (Settings › Tabs); `esc` puts away whatever is open. `⌘←` and `⌘→` move the caret when you are typing and go back and forward otherwise; a middle click opens a link behind the current tab; the thumb buttons on a mouse go back and forward over a page, or switch to the previous/next space over the sidebar.
+`⌃Tab` walks along the row of tabs, or flips between your most recent tabs (Settings › Tabs); plain `Tab` is the page's, and in the address field, `⌘T` and `⌘K` it takes the completion on offer; `esc` puts away whatever is open. `⌘←` and `⌘→` move the caret when you are typing and go back and forward otherwise; a middle click opens a link behind the current tab; the thumb buttons on a mouse go back and forward over a page, or switch to the previous/next space over the sidebar.
 
 ---
 

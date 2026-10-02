@@ -111,14 +111,19 @@ enum BackdropScene {
     /// bench run of `.build/release/Search` sees as its resource folder;
     /// build.sh copies the same bundle into Copper.app's Resources. Opened
     /// as a bundle rather than by path, because the toolchain decides
-    /// whether the files sit at its root or under Contents/Resources. Nil is
-    /// a build without it, and the column stays still.
+    /// whether the files sit at its root or under Contents/Resources. The
+    /// bundle's root is tried too, not only its `resourceURL`: since Canvas
+    /// copies a folder literally named `Resources` into the same bundle,
+    /// NSBundle takes that folder for the resources and Backdrop is left
+    /// beside it. Nil is a build without it, and the column stays still.
     static let folder: URL? = {
         let name = "Search_Search.bundle"
         let roots = [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap { $0 }
         let folders = roots.flatMap { root -> [URL] in
             var found: [URL] = []
-            if let inner = Bundle(url: root.appendingPathComponent(name))?.resourceURL { found.append(inner.appendingPathComponent("Backdrop")) }
+            let bundle = root.appendingPathComponent(name)
+            if let inner = Bundle(url: bundle)?.resourceURL { found.append(inner.appendingPathComponent("Backdrop")) }
+            found.append(bundle.appendingPathComponent("Backdrop"))
             found.append(root.appendingPathComponent("Backdrop"))
             return found
         }

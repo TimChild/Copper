@@ -14,6 +14,7 @@ in [ROADMAP.md](ROADMAP.md).
 ### Fixed
 
 - **Animated sidebars draw again.** Canvas's resources joined the same bundle as the backdrop scene under a folder named `Resources`, which NSBundle took for the bundle's resource root; the scene files were looked up under it and never found, so every animated space fell back to its still gradient. The lookup now tries the bundle's root as well.
+- **A canvas web link opens in Copper on a cloud served on the usual HTTPS port.** A Copper linked with a link code that names `:443` (every cloud installed with the AWS or VM installer) took the web link's landing page — and its *Open this canvas in Copper* button — for another cloud and asked you to connect to it. Port 443 and no port are now the same cloud.
 
 ### Removed
 

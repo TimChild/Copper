@@ -37,8 +37,17 @@ struct CanvasJoinLink: Equatable {
         return CanvasJoinLink(token: path[1], cloud: cloud, name: name, copper: copper)
     }
 
-    var normalizedCloud: String {
-        cloud.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    var normalizedCloud: String { Self.normalize(cloud) }
+
+    /// `host[:port]` compared the way HTTPS does: case-insensitive, and the
+    /// default port 443 is the same as none. A link code keeps an explicit
+    /// `:443` (`copper-cloud://1.2.3.4:443/…`, so the linked host reads
+    /// `1.2.3.4:443`) while a landing page served on 443 names its host
+    /// without one, so both sides of every comparison go through this.
+    static func normalize(_ cloud: String) -> String {
+        var host = cloud.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if host.hasSuffix(":443") { host.removeLast(4) }
+        return host
     }
 
     /// A pure check of `parse` against the contract's two forms and the
@@ -61,6 +70,11 @@ struct CanvasJoinLink: Equatable {
         checks.append(("join with no token is refused", parses("copper://canvas/join/?cloud=x") == nil))
         checks.append(("an unrelated scheme is refused", parses("mailto:join/tok?cloud=x") == nil))
         checks.append(("a bare host, no path, is refused", parses("https://cloud.exowatt.com") == nil))
+        checks.append(("web form on 443 matches a link code with :443",
+                       parses("https://100.57.251.123/join/tok789")?.normalizedCloud == normalize("100.57.251.123:443")))
+        checks.append(("copper form without a port matches :443",
+                       parses("copper://canvas/join/tok789?cloud=100.57.251.123")?.normalizedCloud == normalize("100.57.251.123:443")))
+        checks.append(("another port still differs", normalize("cloud.exowatt.com:8443") != normalize("cloud.exowatt.com")))
         let failed = checks.filter { !$0.1 }.map(\.0)
         return ["passed": checks.count - failed.count, "failed": failed]
     }
@@ -75,7 +89,7 @@ enum CanvasJoinFlow {
         guard let link = CanvasJoinLink.parse(url) else { return false }
         // A web landing page on another cloud belongs in the normal browser;
         // the Copper form is unambiguous and always comes here.
-        if !link.copper, Cloud.shared.link?.host.lowercased() != link.normalizedCloud { return false }
+        if !link.copper, Cloud.shared.link.map({ CanvasJoinLink.normalize($0.host) }) != link.normalizedCloud { return false }
         Task { await join(link, in: browser) }
         return true
     }
@@ -96,7 +110,7 @@ enum CanvasJoinFlow {
             CanvasUI.openCloudSettings(in: browser)
             return
         }
-        guard linked.host.lowercased() == link.normalizedCloud else {
+        guard CanvasJoinLink.normalize(linked.host) == link.normalizedCloud else {
             browser.announce("This canvas is on \(link.cloud). Connect to that Copper Cloud to open it.")
             CanvasUI.openCloudSettings(in: browser)
             return

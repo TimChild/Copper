@@ -13,6 +13,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- **Tab now accepts address-bar/command-bar autocompletion and reaches pages normally; only ⌃Tab switches tabs.** A plain Tab used to fall through to *next tab* whenever Copper couldn't tell a page field had the keyboard — a button or link, an iframe's or a code editor's field, a canvas board, or the address field with nothing listed. Now Tab and ⇧Tab always belong to the page (moving between fields, a site's own Tab-to-accept), and in the address bar, ⌘L, ⌘T and ⌘K Tab puts the completion — the grey ending, the row you arrowed to, or the first place ⌘T/⌘K offers — into the field with the caret after it, without opening anything. ⌃Tab and ⌃⇧Tab (and ⌘⇧] / ⌘⇧[) are the tab switches.
 - **Animated sidebars draw again.** Canvas's resources joined the same bundle as the backdrop scene under a folder named `Resources`, which NSBundle took for the bundle's resource root; the scene files were looked up under it and never found, so every animated space fell back to its still gradient. The lookup now tries the bundle's root as well.
 - **A canvas web link opens in Copper on a cloud served on the usual HTTPS port.** A Copper linked with a link code that names `:443` (every cloud installed with the AWS or VM installer) took the web link's landing page — and its *Open this canvas in Copper* button — for another cloud and asked you to connect to it. Port 443 and no port are now the same cloud.
 

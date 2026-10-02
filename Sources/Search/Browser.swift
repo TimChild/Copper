@@ -1890,14 +1890,16 @@ final class Browser: NSObject, ObservableObject {
         let was = picked.flatMap { offers.indices.contains($0) ? offers[$0].url : nil }
         let index = picked
         offers = rows
+        ending = completion(in: rows)
         if let index, index > 0, let was { picked = rows.firstIndex { $0.url == was } ?? min(index, rows.count - 1) }
         else { picked = rows.isEmpty ? nil : index }
     }
 
     private func guess() {
+        walked = false // Fork (developer-shortcuts)
         if launching {
             offers = Launcher.shared.rows(for: typed, in: self)
-            ending = nil
+            ending = completion(in: offers)
             // A question is answered by its first row; the empty card is a
             // list to walk down, and Return on nothing picked does nothing.
             picked = offers.isEmpty || typed.trimmingCharacters(in: .whitespaces).isEmpty ? nil : 0
@@ -1905,7 +1907,7 @@ final class Browser: NSObject, ObservableObject {
         }
         guard !summoning else {
             offers = CommandBar.offers(for: typed, open: openPages(matching: typed), in: self)
-            ending = history.completion(for: typed, among: offers.filter { !CanvasLinks.isCanvas($0.url) }) // Fork (canvas-hooks): "canvas" never carries on into a canvas's id
+            ending = completion(in: offers.filter { !CanvasLinks.isCanvas($0.url) }) // Fork (canvas-hooks): "canvas" never carries on into a canvas's id
             // The most recent page is already chosen, so ⌘K then Return is the
             // whole gesture.
             picked = offers.isEmpty ? nil : 0
@@ -1936,6 +1938,17 @@ final class Browser: NSObject, ObservableObject {
         // A row that was picked stops being the right row the moment the
         // question changes.
         picked = nil
+    }
+
+    /// Fork (developer-shortcuts): ⌘T's and ⌘K's grey ending, for Tab to take.
+    /// Their rows are commands and searches as well as places, and a command
+    /// called "Exact time" must not finish "ex" ahead of example.com, so the
+    /// ending comes from the places — open, visited, kept — and only from a
+    /// search when there is no place at all.
+    private func completion(in options: [OmniboxSuggestion]) -> String? {
+        let addresses = options.filter { ["http", "https", "file"].contains($0.url.scheme?.lowercased() ?? "") }
+        let places = addresses.filter { $0.kind != .search && $0.kind != .command }
+        return history.completion(for: typed, among: places.isEmpty ? addresses : places)
     }
 
     /// What is open, most recently looked at first, filtered by what has been
@@ -2002,15 +2015,52 @@ final class Browser: NSObject, ObservableObject {
     /// field impossible to shorten.
     func stopCompleting() { ending = nil }
 
-    /// Tab, or the right arrow at the end of the line: take what is offered.
-    func acceptEnding() {
-        guard let ending, !ending.isEmpty else { return }
-        typed += ending
+    /// Fork (developer-shortcuts): Tab. Take what the field is offering — the
+    /// row the arrows walked to, else the grey ending, else the row ⌘T or ⌘K
+    /// picked for you — and put it in the field with the caret after it, as if
+    /// it had been typed (so the rows are the ones for the new text). It only
+    /// edits the field: nothing opens, and no tab is switched to. False when
+    /// there was nothing to take.
+    @discardableResult
+    func acceptCompletion() -> Bool {
+        let row = picked.flatMap { offers.indices.contains($0) ? offers[$0] : nil }
+        let text: String
+        if walked, let row, let words = words(for: row) {
+            text = words
+        } else if let ending, !ending.isEmpty {
+            text = typed + ending
+        } else if let row, let words = words(for: row) {
+            text = words
+        } else {
+            return false
+        }
+        typed = text
+        ending = nil
+        return true
     }
+
+    /// What a row puts in the field. The address bar already shows a walked
+    /// row as its key. ⌘T's and ⌘K's rows read as titles and commands, so
+    /// there it is the place's address, or the words of a search — and
+    /// nothing for a command, whose name is not worth keeping as text.
+    private func words(for row: OmniboxSuggestion) -> String? {
+        guard summoning else { return row.key }
+        if row.kind == .search {
+            return URLComponents(url: row.url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "q" }?.value
+        }
+        guard row.kind != .command, ["http", "https", "file"].contains(row.url.scheme?.lowercased() ?? "") else { return nil }
+        return Address.pretty(row.url) + (row.url.query.map { "?" + $0 } ?? "")
+    }
+
+    /// Fork (developer-shortcuts): the arrows have moved since the last
+    /// keystroke, so the row they are on is what Tab takes.
+    private var walked = false
 
     /// The arrow keys walk the list, and walking off the top lets go of it.
     func walk(_ step: Int) {
         guard !offers.isEmpty else { return }
+        walked = true // Fork (developer-shortcuts)
         switch picked {
         case nil:
             picked = step > 0 ? 0 : offers.count - 1

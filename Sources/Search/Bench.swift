@@ -461,6 +461,12 @@ final class Bench {
             // Who has the keyboard, and the last link click WebKit reported
             // (its button number and modifiers) — for the mouse-button work. (Fork)
             out["firstResponder"] = Links.window?.firstResponder.map { "\(type(of: $0))" } ?? ""
+            // Fork (developer-shortcuts): what a field with the keyboard
+            // actually shows, and where its caret is — for Tab completion.
+            if let editor = Links.window?.firstResponder as? NSTextView {
+                out["editorText"] = editor.string
+                out["editorSelection"] = [editor.selectedRange().location, editor.selectedRange().length]
+            }
             out["lastLinkClick"] = MouseButtons.lastLinkClick
             out["panes"] = ["agent": Agent.shared.open, "jev": Drive.shared.paneOpen, "split": Split.shared.on]
             // The column folded away, out for a look, and the lights with it (see Fold.swift).

@@ -840,27 +840,19 @@ struct ContentView: View {
             return Panes.escape(event, in: browser)
         }
 
-        // Tab walks the row and comes round to the first again; ⇧Tab walks it
-        // the other way. Other browsers give Tab to the page — here the row is
-        // the only thing there is to move between, so it gets the key.
-        //
-        // Except while an address is being typed. Then the list under the field
-        // is what there is to move through, and Return takes whatever the walk
-        // landed on.
+        // Fork (developer-shortcuts): plain Tab and ⇧Tab are never a tab
+        // switch. They belong to whoever has the keyboard — the page, a field
+        // in it, a site's own Tab-to-accept, a native field — and in the
+        // address field, ⌘T and ⌘K they take the completion on offer (see
+        // AddressField). Only ⌃Tab and ⌃⇧Tab walk the row, from anywhere.
         if event.keyCode == 48, !flags.contains(.command), !flags.contains(.option) {
             if browser.editingTab != nil { return true }
-            // Filling something in on the page: the key belongs to the field,
-            // which may well be offering a completion to take with it.
-            if !browser.fieldShowing, browser.active?.typing == true { return false }
-            if browser.fieldShowing, !browser.offers.isEmpty {
-                browser.walk(flags.contains(.shift) ? -1 : 1)
-                return true
-            }
-            if !browser.fieldShowing, flags.contains(.control), browser.prefs.tabSwitching == .recent {
+            guard flags.contains(.control) else { return false }
+            if !browser.fieldShowing, browser.prefs.tabSwitching == .recent {
                 Recent.shared.step(flags.contains(.shift) ? -1 : 1, in: browser)
-                return true
+            } else {
+                browser.step(flags.contains(.shift) ? -1 : 1)
             }
-            browser.step(flags.contains(.shift) ? -1 : 1)
             return true
         }
 

@@ -28,8 +28,14 @@ export const PRESENCE = 'presence'
 export const INIT = 'init'
 /** A board brought over from Easels (`importLegacy`): stored and synced, never undone. */
 export const IMPORT = 'import'
+/**
+ * A live frame's page changed under the person using it (`frames.ts`): synced
+ * and stored, never undone — ⌘Z after browsing should undo the last edit to
+ * the board, not the last link clicked inside a site.
+ */
+export const FRAME = 'frame'
 
-export type Origin = typeof LOCAL | typeof AGENT | typeof INIT | typeof PRESENCE | typeof IMPORT
+export type Origin = typeof LOCAL | typeof AGENT | typeof INIT | typeof PRESENCE | typeof IMPORT | typeof FRAME
 
 /** Props a caller may set on a shape (everything but its id and type). */
 export type ShapeProps = Partial<Omit<Shape, 'id' | 'type'>>
@@ -126,6 +132,7 @@ export function readShape(id: string, m: unknown): Shape | null {
     shape.url = str(m.get('url')) ?? ''
     const favicon = str(m.get('favicon'))
     if (favicon) shape.favicon = favicon
+    if (m.get('live') === true) shape.live = true
   }
   return shape
 }

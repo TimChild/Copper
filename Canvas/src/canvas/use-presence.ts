@@ -10,13 +10,14 @@ import type { PeerView } from './components/Overlays'
 
 /** Peers' awareness states (never our own), read tolerantly. */
 export function readPeers(awareness: Awareness): PeerView[] {
-  return readHumanPresence(awareness).map(({ clientId, id, name, color, cursor, selection }) => ({
+  return readHumanPresence(awareness).map(({ clientId, id, name, color, cursor, selection, frame }) => ({
     clientId: clientId!,
     id,
     name,
     color,
     cursor,
     selection,
+    frame: frame ?? null,
   }))
 }
 
@@ -44,6 +45,7 @@ export function samePeers(a: readonly PeerView[], b: readonly PeerView[]): boole
     const p = a[i]!
     const q = b[i]!
     if (p.clientId !== q.clientId || p.id !== q.id || p.name !== q.name || p.color !== q.color) return false
+    if ((p.frame ?? null) !== (q.frame ?? null)) return false
     if ((p.cursor?.x ?? null) !== (q.cursor?.x ?? null) || (p.cursor?.y ?? null) !== (q.cursor?.y ?? null)) return false
     if (p.selection.length !== q.selection.length || p.selection.some((id, j) => id !== q.selection[j])) return false
   }

@@ -265,6 +265,8 @@ export interface PeerView {
   color: string
   cursor: Point | null
   selection: string[]
+  /** The live frame they are using, if any. */
+  frame?: string | null
 }
 
 /** People's pointers: an arrow and a name tag in their colour, screen-sized. */

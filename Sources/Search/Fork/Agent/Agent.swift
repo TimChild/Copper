@@ -84,6 +84,13 @@ final class Agent: ObservableObject {
     /// Drive keeps only the latest run; a card for an earlier one reads the
     /// run as it was when the next began.
     @Published private(set) var kept: [UUID: Drive.Run] = [:]
+    /// Which activities and driver cards are open, by their id. Kept here
+    /// rather than in the view so closing the pane does not fold them.
+    @Published var expanded: Set<UUID> = []
+
+    func toggle(expanded id: UUID) {
+        if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
+    }
 
     /// The model's side of the conversation, in the wire shape.
     private var messages: [[String: Any]] = []
@@ -138,6 +145,7 @@ final class Agent: ObservableObject {
         status = ""
         items = []
         kept = [:]
+        expanded = []
         messages = []
     }
 
@@ -793,11 +801,145 @@ final class Agent: ObservableObject {
         case "clear": clear()
         case "stop": stop()
         case "selftest": return ["failures": Agent.sealedSelfTest() + Claude.selfTest()]
+        case "seed":
+            if let error = seed(request["arg"] as? String ?? "chat", in: browser) { return ["error": error] }
+        case "expand":
+            if (request["arg"] as? String) == "none" {
+                expanded = []
+            } else {
+                expanded = Set(items.map(\.id) + items.compactMap(\.run))
+            }
         default: break
         }
-        let rows = items.map { ["kind": "\($0.kind)", "tool": $0.tool, "text": $0.text, "ok": $0.ok] as [String: Any] }
-        return ["open": open, "busy": busy, "status": status, "model": modelName,
+        let rows = items.map { ["kind": "\($0.kind)", "tool": $0.tool, "text": $0.text, "ok": $0.ok, "title": $0.title,
+                                "warning": $0.warning, "aside": $0.aside, "running": $0.running] as [String: Any] }
+        return ["open": open, "busy": busy, "status": status, "model": modelName, "draft": draft,
                 "lane": Intelligence.shared.lane.rawValue, "tier": Intelligence.shared.tier.rawValue, "items": rows,
                 "servers": Servers.shared.all.map { ["name": $0.name, "state": $0.state, "tools": $0.tools.count] as [String: Any] }]
+    }
+
+    /// `bench agent seed SCENARIO`: a made-up conversation, so the pane can
+    /// be pictured without a model or a network — every kind of row it
+    /// draws, with believable times. Nil, or what was wrong with the ask.
+    private func seed(_ scenario: String, in browser: Browser) -> String? {
+        clear()
+        open = true
+        let now = Date()
+        func at(_ t: Double) -> Date { now.addingTimeInterval(t) }
+        func user(_ text: String, _ t: Double) { items.append(Item(kind: .user, text: text, at: at(t))) }
+        func answer(_ text: String, _ t: Double, aside: Bool = false) { items.append(Item(kind: .assistant, text: text, at: at(t), aside: aside)) }
+        func step(_ tool: String, _ title: String, _ ms: Double, _ t: Double, ok: Bool = true, text: String = "", warning: String = "", running: Bool = false) {
+            items.append(Item(kind: .tool, text: text, tool: tool, ok: ok, ms: ms, at: at(t), running: running, title: title, warning: warning))
+        }
+        func cycle(_ n: Int, _ t: Double, _ phases: [(Drive.Phase.Kind, String, String?, Double)], _ outcome: Drive.Outcome?) -> Drive.Cycle {
+            var cursor = at(t)
+            var rows: [Drive.Phase] = []
+            for (kind, title, detail, ms) in phases {
+                let end = ms < 0 ? nil : cursor.addingTimeInterval(ms / 1000)
+                rows.append(Drive.Phase(id: UUID(), kind: kind, title: title, detail: detail, started: cursor, ended: end))
+                cursor = end ?? cursor
+            }
+            return Drive.Cycle(id: UUID(), number: n, started: at(t), phases: rows, outcome: outcome, ended: outcome == nil ? nil : cursor)
+        }
+        func run(_ driver: Drive.Driver, _ who: Drive.Who, goal: String, _ t: Double, ended: Double?, status: Drive.Status, note: String,
+                 cycles: [Drive.Cycle], thought: String? = nil) -> Drive.Run {
+            Drive.Run(id: UUID(), driver: driver, who: who, goal: goal, tabID: browser.active?.id ?? UUID(), started: at(t),
+                      ended: ended.map(at), status: status, note: note, cycles: cycles,
+                      url: browser.active?.address?.absoluteString ?? "", title: browser.active?.title ?? "",
+                      thought: thought, thoughtAt: thought == nil ? nil : at(t))
+        }
+        func summary() {
+            user("Summarise this page", -190)
+            step("browser_get_text", "Read the page's text", 380, -188)
+            answer("""
+            **Hacker News**, front page right now:
+
+            - **Copper ships one agent pane** — 412 points, 180 comments
+            - A deep dive into WebKit's new process model
+            - `sqlite-vec` reaches 1.0
+
+            Most of the talk under the first is about *seeing what an agent does* while it drives.
+            """, -184)
+        }
+        func monkeys() {
+            user("create 100 notes with different monkey species and then draw lines between the closest related", -120)
+            step("canvas_read", "Read 5 shapes on Personal", 210, -117)
+            step("canvas_apply", "Changing the canvas", 0, -95, ok: false, text: "→ Cut off at the output limit — not run")
+            items.append(Item(kind: .note, text: "The model's reply ran past its output limit (16,000 tokens) while it was writing a canvas apply call, so that call was not run. Asking it to split the work into smaller calls.", ok: false, at: at(-95)))
+            answer("Splitting it up: 40 species at a time, then the arrows.", -80, aside: true)
+            step("canvas_apply", "40 operations applied on Personal", 1400, -72)
+            step("canvas_apply", "40 operations applied on Personal", 1300, -61)
+            step("canvas_apply", "20 operations applied on Personal", 800, -52)
+            step("canvas_apply", "58 operations applied, 2 failed on Personal", 1100, -40,
+                 warning: "2 of 60 not applied — op 7 (connect): `from`: no shape n107")
+            step("canvas_apply", "2 operations applied on Personal", 300, -31)
+            answer("""
+            Done — **100 monkey species** on Personal, grouped by family:
+
+            1. Great apes and gibbons
+            2. Old World monkeys — macaques, baboons, colobus
+            3. New World monkeys — capuchins, howlers, marmosets
+
+            **60 arrows** join the closest relatives. Two named a note that wasn't there yet; I sent those again.
+            """, -29)
+        }
+        switch scenario {
+        case "empty":
+            return nil
+        case "chat", "cutoff":
+            summary()
+            monkeys()
+        case "running":
+            summary()
+            user("Group these notes into frames by theme", -6)
+            step("canvas_read", "Read 105 shapes on Personal", 180, -5)
+            answer("Five themes stand out — a frame for each.", -3.5, aside: true)
+            step("canvas_apply", "Changing the canvas · 12 ops", 0, -2.5, running: true)
+            busy = true
+            status = "Changing the canvas · 12 ops…"
+        case "jev":
+            summary()
+            user("Find a nonstop flight SFO → JFK on Friday under $300", -14)
+            step("jev_run", "Jev: nonstop SFO → JFK, Friday, under $300", 0, -12, running: true)
+            busy = true
+            status = "Jev is driving…"
+            var picked = Drive.Outcome(operation: "CLICK", label: "Nonstop only", probability: 0.94, pageChanged: true)
+            picked.candidates = ["[12] checkbox Nonstop only", "[14] button 1 stop", "[3] link Explore"]
+            let typed = Drive.Outcome(operation: "TYPE_TEXT", label: "Where to?", text: "JFK", probability: 0.97, pageChanged: true)
+            Drive.shared.seed(run(.jev, .jev(for: .plain(.pane)), goal: "nonstop SFO → JFK, Friday, under $300", -12, ended: nil, status: .running, note: "", cycles: [
+                cycle(1, -11.5, [(.observe, "Reading the page", "41 controls · Google Flights", 420), (.ask, "Asking Jev", nil, 210), (.act, "Typing JFK", nil, 380), (.settle, "Waiting for the page", nil, 600)], typed),
+                cycle(2, -9.5, [(.observe, "Reading the page", "58 controls", 380), (.ask, "Asking Jev", nil, 190), (.act, "Clicking Search", nil, 300), (.settle, "Waiting for the page", nil, 1400)],
+                      Drive.Outcome(operation: "CLICK", label: "Search", probability: 0.99, pageChanged: true)),
+                cycle(3, -6.5, [(.observe, "Reading the page", "112 controls · results", 520), (.ask, "Asking Jev", nil, 230), (.act, "Clicking Nonstop only", nil, 280), (.settle, "Waiting for the page", nil, 900)], picked),
+                cycle(4, -3.5, [(.observe, "Reading the page", "96 controls", 460), (.ask, "Asking Jev", nil, -1)], nil),
+            ]), live: true)
+        case "driver":
+            summary()
+            let claude = Drive.Who(key: "seed:cc", agent: "Claude Code", thread: "copper · flights", seed: "seed:cc")
+            Drive.shared.seed(run(.jev, .jev(for: claude), goal: "Find the cheapest nonstop SFO → JFK this Friday", -160, ended: -141, status: .done, note: "Found 3 under $300", cycles: [
+                cycle(1, -159, [(.observe, "Reading the page", nil, 400), (.ask, "Asking Jev", nil, 200), (.act, "Typing JFK", nil, 300)],
+                      Drive.Outcome(operation: "TYPE_TEXT", label: "Where to?", text: "JFK", probability: 0.97, pageChanged: true)),
+                cycle(2, -156, [(.observe, "Reading the page", nil, 400), (.ask, "Asking Jev", nil, 200), (.act, "Clicking Search", nil, 300)],
+                      Drive.Outcome(operation: "CLICK", label: "Search", probability: 0.99, pageChanged: true)),
+                cycle(3, -150, [(.observe, "Reading the page", nil, 500), (.ask, "Asking Jev", nil, 200)],
+                      Drive.Outcome(operation: "DONE", label: "", probability: 0.92)),
+            ]), live: false)
+            let phi = Drive.Who(key: "seed:phi", agent: "phi", thread: "monkey board", seed: "seed:phi")
+            var applied = Drive.Outcome(operation: "CANVAS", label: "")
+            applied.result = "40 operations applied on Personal"
+            var read = Drive.Outcome(operation: "READ", label: "")
+            read.result = "Read 45 shapes on Personal"
+            Drive.shared.seed(run(.agent("phi"), phi, goal: "", -40, ended: nil, status: .running, note: "", cycles: [
+                cycle(1, -38, [(.act, "Reading the canvas", "Checking what is already on the board", 240)], read),
+                cycle(2, -30, [(.act, "Changing the canvas · 40 ops", "Adding the next 40 species", 1300)], applied),
+                cycle(3, -18, [(.act, "Clicking Fit to screen", nil, 300)],
+                      Drive.Outcome(operation: "CLICK", label: "Fit to screen", pageChanged: false)),
+                cycle(4, -9, [(.act, "Changing the canvas · 12 ops", "Joining relatives", 900)],
+                      Drive.Outcome(operation: "CANVAS", label: "", error: "op 3 (connect): `to`: no shape n140")),
+            ], thought: "Adding the last 20 species, then the arrows between relatives."), live: true)
+        default:
+            return "seed chat|running|jev|driver|cutoff|empty"
+        }
+        return nil
     }
 }

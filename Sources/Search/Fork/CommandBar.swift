@@ -65,7 +65,7 @@ enum CommandBar {
             .init(id: "clear-history", name: "Clear History", glyph: "trash") { $0.clearHistory() },
             .init(id: "split", name: Split.shared.on ? "Close Split View" : "Split View", glyph: "rectangle.split.2x1") { Split.shared.toggle(in: $0) },
             .init(id: "agent", name: Agent.shared.open ? "Close Agent" : "Agent", glyph: "sparkles") { _ in Agent.shared.toggle() },
-            .init(id: "jev-trace", name: Drive.shared.paneOpen ? "Close Driver Timeline" : "Driver Timeline", glyph: "waveform.path") { _ in Drive.shared.paneOpen.toggle() },
+            .init(id: "jev-trace", name: "Driver Timeline", glyph: "waveform.path") { _ in Agent.shared.reveal() },
             .init(id: "close-panes", name: "Close All Panes", glyph: "xmark.square") { Panes.closeAll(in: $0) },
             .init(id: "ask-page", name: "Ask About This Page", glyph: "text.bubble") { Agent.shared.askOnPage(in: $0) },
             .init(id: "new-space", name: "New Space", glyph: "square.on.square") { b in

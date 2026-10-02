@@ -60,7 +60,7 @@ enum Fork {
         case "passkeys": return PasskeysBench.handle(request)
         case "agent":
             // `agent ask TEXT` / `agent chat|open|close|clear` are the pane's; the rest is the server's.
-            if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear", "stop", "selftest"].contains(op) { return Agent.shared.bench(request, in: Windows.current) }
+            if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear", "stop", "selftest", "seed", "expand"].contains(op) { return Agent.shared.bench(request, in: Windows.current) }
             if request["op"] as? String == "servers" { Task { await Servers.shared.reload() }; return ["reloading": true] }
             return MCP.shared.bench(request)
         case "windows": return Windows.bench(request)
@@ -443,7 +443,10 @@ enum Fork {
             let view: AnyView
             switch which {
             case "bitwarden": view = AnyView(BitwardenCard(browser: browser).frame(width: 460).padding(12).background(Palette.wash))
-            case "drive": view = AnyView(DrivePane(browser: browser).frame(height: 560))
+            // The agent pane, driver cards and all (the driver timeline is
+            // part of it now), at its own width.
+            case "drive", "agent": view = AnyView(AgentPane(browser: browser).frame(height: 720))
+            case "agent-dark": view = AnyView(AgentPane(browser: browser).frame(height: 720).environment(\.colorScheme, .dark))
             case "hands", "hands-dark":
                 // The hover card for every hand out, as the badge's popover draws it.
                 let all = Drive.shared.hands.values.sorted { $0.last > $1.last }
@@ -451,15 +454,21 @@ enum Fork {
                 let card = HandCards(hands: Array(all)).background(Palette.ground)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous)).padding(14).background(Palette.wash)
                 view = which == "hands-dark" ? AnyView(card.environment(\.colorScheme, .dark)) : AnyView(card)
-            default: return ["error": "render bitwarden|drive|hands|hands-dark PATH"]
+            default: return ["error": "render bitwarden|drive|agent|agent-dark|hands|hands-dark PATH"]
             }
-            if which == "drive" {
+            if ["drive", "agent", "agent-dark"].contains(which) {
                 // The pane's rows are in a ScrollView, which ImageRenderer
                 // leaves out: drawn through a hosting view instead, whole.
-                let host = NSHostingView(rootView: view.frame(width: 360).background(Palette.ground))
-                host.frame = NSRect(origin: .zero, size: NSSize(width: 360, height: 560))
+                let size = NSSize(width: AgentPane.width, height: 720)
+                let host = NSHostingView(rootView: view.background(Palette.ground))
+                host.frame = NSRect(origin: .zero, size: size)
                 let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                if which == "agent-dark" { window.appearance = NSAppearance(named: .darkAqua) }
                 window.contentView = host
+                host.layoutSubtreeIfNeeded()
+                // A turn of the run loop, so the scroll view has laid out and
+                // been scrolled to its end before the picture is taken.
+                RunLoop.main.run(until: Date().addingTimeInterval(0.4))
                 host.layoutSubtreeIfNeeded()
                 guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return ["error": "no image"] }
                 host.cacheDisplay(in: host.bounds, to: picture)

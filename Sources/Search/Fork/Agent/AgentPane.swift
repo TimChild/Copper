@@ -386,6 +386,8 @@ struct AgentPane: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 290)
+                // Setting up is the one thing to do, so it sits with the words.
+                if !agent.ready { signIn.padding(.top, 6) }
             }
             .padding(.horizontal, 24)
             Spacer(minLength: 20)
@@ -397,8 +399,6 @@ struct AgentPane: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 4)
-            } else {
-                signIn.padding(.bottom, 14)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -145,6 +145,7 @@ struct AppCommands: Commands {
                         .disabled(tab.isBlank)
                 } else {
                     Button("Change Letter") { browser.editLetter(tab) }
+                    PinSpaceButton(browser: browser, tab: tab) // Fork: per-space pins
                     Button("Unpin Tab") { browser.unpin(tab) }
                 }
             }

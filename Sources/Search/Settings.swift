@@ -242,6 +242,11 @@ struct SettingsPanel: View {
                 Segmented(options: SwipeDirection.allCases.map { ($0, $0.title) }, selection: $prefs.swipeDirection)
             }
             Rule()
+            // Fork (per-space pins)
+            Line("Each space has its own pins", "A new pin stays in the space you pinned it in. Right-click a pin to show it in every space, or keep it to this one") {
+                Switch(on: $prefs.perSpacePins)
+            }
+            Rule()
             Line("Sleep tabs you aren't using",  "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
                 Switch(on: $prefs.sleepsTabs)
             }

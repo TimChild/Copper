@@ -78,6 +78,16 @@ final class Preferences: ObservableObject {
     @Published var sleepsTabs: Bool {
         didSet { store.set(sleepsTabs, forKey: "tabs.sleep") }
     }
+    /// Fork (per-space pins): each space shows the pins kept to it as well
+    /// as the ones in every space, and a new pin is kept to the space it was
+    /// pinned in. Off: one set of pins for every space, as before.
+    @Published var perSpacePins: Bool {
+        didSet {
+            guard perSpacePins != oldValue else { return }
+            store.set(perSpacePins, forKey: Spaces.perSpacePinsKey)
+            Spaces.shared.pinScopeChanged()
+        }
+    }
     /// The ad blocker. On unless turned off; there is nothing else to it.
     @Published var shielded: Bool {
         didSet { store.set(shielded, forKey: "shield") }
@@ -158,6 +168,7 @@ final class Preferences: ObservableObject {
         tabSwitching = store.string(forKey: "tabs.switching").flatMap(TabSwitching.init) ?? .row
         swipeDirection = store.string(forKey: "spaces.swipe").flatMap(SwipeDirection.init) ?? .system
         sleepsTabs = store.object(forKey: "tabs.sleep") as? Bool ?? true
+        perSpacePins = store.bool(forKey: Spaces.perSpacePinsKey)
         shielded = store.object(forKey: "shield") as? Bool ?? true
         // Offered by default only in a build that can actually do them —
         // one with Apple's browser entitlement and its profile embedded. A

@@ -14,6 +14,12 @@ import WebKit
 // window's `tabs` is that set followed by its space's row — the same Tab
 // objects in each, so a pin is one page wherever it shows, and pinning,
 // unpinning or reordering in any window reaches every window on every space.
+//
+// With "each space has its own pins" on (Settings › Tabs), a pin may also be
+// kept to one space (`pinOnly`): it stays in the one ordered set, and only
+// the projections of other spaces leave it out. Pins kept to no space are in
+// every space either way, so turning the setting off shows them all again
+// and turning it back on restores each pin's place.
 
 struct Space: Codable, Identifiable, Equatable {
     var id = UUID()
@@ -134,6 +140,16 @@ final class Spaces: ObservableObject {
     /// next launch has to build it with the same one or it comes back signed
     /// out. Written as the pin's `space` in session.json; nothing else reads it.
     private var pinHome: [Tab.ID: UUID] = [:]
+    /// The one space a pin is kept to, when "each space has its own pins" is
+    /// on; a pin missing here is in every space. Written as the pin's `only`
+    /// in session.json, and travels with it to other Macs (CloudApply).
+    private var pinOnly: [Tab.ID: UUID] = [:]
+
+    /// Settings › Tabs › "Each space has its own pins". Read from the store
+    /// each time, so the setting (and Cloud's copy of it) needs no wiring at
+    /// launch; Preferences calls `pinScopeChanged` when it flips.
+    var perSpacePins: Bool { Store.settings.bool(forKey: Spaces.perSpacePinsKey) }
+    nonisolated static let perSpacePinsKey = "pins.perSpace"
     private var currentByBrowser: [ObjectIdentifier: UUID] = [:]
     private var activeByBrowserSpace: [ObjectIdentifier: [UUID: Tab.ID]] = [:]
     private var updating = 0
@@ -148,7 +164,46 @@ final class Spaces: ObservableObject {
     func row(_ id: UUID) -> [Tab] { rows[id] ?? [] }
     /// The projection a window draws: global pins first, then that space's
     /// loose tabs. Callers should use this rather than assembling the row.
-    func projection(_ id: UUID) -> [Tab] { pins + row(id) }
+    func projection(_ id: UUID) -> [Tab] { pins(in: id) + row(id) }
+
+    /// The pins a window on space `id` shows: every one, or — with "each
+    /// space has its own pins" on — those kept to it and those kept to none.
+    func pins(in id: UUID) -> [Tab] {
+        guard perSpacePins else { return pins }
+        return pins.filter { pinOnly[$0.id].map { $0 == id } ?? true }
+    }
+
+    /// The one space a pin is kept to, or nil when it is in every space.
+    func pinSpace(_ tab: Tab) -> UUID? { pinOnly[tab.id] }
+
+    /// The space a pin counts as for Cloud: the one it is kept to, else the
+    /// one it was made in, else the first — never the space a window happens
+    /// to be on, which is what made two Macs on different spaces each send
+    /// the other the same pins again (CloudApply).
+    func pinAnchor(_ tab: Tab) -> UUID {
+        for id in [pinOnly[tab.id], pinHome[tab.id]] {
+            if let id, all.contains(where: { $0.id == id }) { return id }
+        }
+        return all[0].id
+    }
+
+    /// Keep a pin to one space, or (nil) let it be in every space.
+    func setPinSpace(_ tab: Tab, only id: UUID?) {
+        guard pins.contains(where: { $0.id == tab.id }) else { return }
+        let next = id.flatMap { id in all.contains { $0.id == id } ? id : nil }
+        guard pinOnly[tab.id] != next else { return }
+        pinOnly[tab.id] = next
+        objectWillChange.send()
+        publishAll()
+        keep()
+    }
+
+    /// The setting flipped: every window draws its pins again.
+    func pinScopeChanged() {
+        objectWillChange.send()
+        publishAll()
+        keep()
+    }
     func current(in browser: Browser) -> UUID { currentByBrowser[ObjectIdentifier(browser)] ?? current }
     func space(in browser: Browser) -> Space { all.first { $0.id == current(in: browser) } ?? all[0] }
     func spaceID(of tab: Tab) -> UUID? {
@@ -308,11 +363,13 @@ final class Spaces: ObservableObject {
     func tabsChanged(_ browser: Browser) {
         guard updating == 0, let id = currentByBrowser[ObjectIdentifier(browser)] else { return }
         let observedPins = browser.tabs.filter { $0.pin != nil }
-        let pinOrderChanged = observedPins.map(\.id) != pins.map(\.id)
+        let merged = mergedPins(observed: observedPins, in: id)
+        let pinOrderChanged = merged.map(\.id) != pins.map(\.id)
         rows[id] = browser.tabs.filter { $0.pin == nil }
         if pinOrderChanged {
-            pins = observedPins
+            pins = merged
             pinHome = pinHome.filter { key, _ in pins.contains { $0.id == key } }
+            pinOnly = pinOnly.filter { key, _ in pins.contains { $0.id == key } }
         }
         // A tab put in among the pins (opened beside a pin that was active,
         // say) goes to the head of the loose tabs, so every window draws the
@@ -326,6 +383,30 @@ final class Spaces: ObservableObject {
         // changes; this catches the rest without a write per keystroke.
         keep()
         if !browser.primary { Windows.keep(browser) }
+    }
+
+    /// The whole set of pins after a window on space `id` changed the ones
+    /// it shows: the ones it shows take their places in its order, the ones
+    /// other spaces keep to themselves stay where they were, and a pin new
+    /// to the set goes on the end (kept to this space, when pins are per
+    /// space).
+    private func mergedPins(observed: [Tab], in id: UUID) -> [Tab] {
+        let shown = Set(pins(in: id).map(\.id))
+        let observedIDs = Set(observed.map(\.id))
+        var queue = observed.filter { shown.contains($0.id) }[...]
+        var out: [Tab] = []
+        for pin in pins {
+            if !shown.contains(pin.id) { out.append(pin); continue }
+            // Shown here but gone from the window: unpinned or closed.
+            guard observedIDs.contains(pin.id), let next = queue.popFirst() else { continue }
+            out.append(next)
+        }
+        let known = Set(pins.map(\.id))
+        for tab in observed where !known.contains(tab.id) {
+            out.append(tab)
+            if perSpacePins { pinOnly[tab.id] = id }
+        }
+        return out
     }
 
     /// Hand a projected row to every window looking at that space. A window
@@ -545,6 +626,8 @@ final class Spaces: ObservableObject {
         rows[from]?.removeAll { $0.id == tab.id }
         pins.append(tab)
         pinHome[tab.id] = from
+        // Each space its own pins: this one is the window's space's.
+        if perSpacePins { pinOnly[tab.id] = current(in: browser) }
         objectWillChange.send()
         publishAll()
         keep()
@@ -559,6 +642,7 @@ final class Spaces: ObservableObject {
         for window in browsers where window.editingPin == tab.id { window.editingPin = nil }
         pins.remove(at: index)
         pinHome.removeValue(forKey: tab.id)
+        pinOnly.removeValue(forKey: tab.id)
         tab.pin = nil
         let id = current(in: browser)
         rows[id, default: []].insert(tab, at: 0)
@@ -584,13 +668,20 @@ final class Spaces: ObservableObject {
     }
 
     /// A pin to another place in the grid. The order is one for every
-    /// space, so every window's row changes with it.
-    func movePin(_ tab: Tab, to index: Int) {
+    /// space, so every window's row changes with it. `index` is a place in
+    /// the grid `browser` shows, which with per-space pins is only some of
+    /// them: the pin goes beside the one standing there.
+    func movePin(_ tab: Tab, to index: Int, in browser: Browser? = nil) {
         guard let from = pins.firstIndex(where: { $0.id == tab.id }), !pins.isEmpty else { return }
-        let to = min(max(0, index), pins.count - 1)
-        guard from != to else { return }
+        let grid = browser.map { pins(in: current(in: $0)) } ?? pins
+        guard let here = grid.firstIndex(where: { $0.id == tab.id }) else { return }
+        let place = min(max(0, index), grid.count - 1)
+        guard place != here else { return }
+        let target = grid[place]
         let item = pins.remove(at: from)
-        pins.insert(item, at: to)
+        guard let at = pins.firstIndex(where: { $0.id == target.id }) else { pins.insert(item, at: from); return }
+        // Moving right lands after the pin there, moving left before it.
+        pins.insert(item, at: place > here ? at + 1 : at)
         objectWillChange.send()
         publishAll()
         keep()
@@ -637,6 +728,8 @@ final class Spaces: ObservableObject {
         // were kept; otherwise to the neighbour the sheet named.
         let landing = kept ?? neighbour(of: id)?.id ?? all[i == 0 ? 1 : i - 1].id
         let row = rows.removeValue(forKey: id) ?? []
+        // Pins kept to it are not lost with it: they are in every space now.
+        pinOnly = pinOnly.filter { $0.value != id }
         // Windows on the space leave it before anything in its row closes,
         // so no stage is holding a view that is being torn down.
         let affected = browsers.filter { current(in: $0) == id }
@@ -912,7 +1005,8 @@ final class Spaces: ObservableObject {
         }
         for tab in pins {
             let made = pinHome[tab.id].flatMap { id in all.contains { $0.id == id } ? id : nil }
-            guard let entry = written(tab, space: made, active: mainActive) else { continue }
+            guard var entry = written(tab, space: made, active: mainActive) else { continue }
+            entry.only = pinOnly[tab.id].flatMap { id in all.contains { $0.id == id } ? id : nil }
             pinEntries.append(entry)
         }
         return .init(tabs: entries, active: activeIndex, spaces: all, space: mainSpace, pins: pinEntries)
@@ -933,6 +1027,7 @@ final class Spaces: ObservableObject {
         _ = register(browser, at: current)
         pins = []
         pinHome = [:]
+        pinOnly = [:]
         var restored: [UUID: (tabs: [Tab], active: Tab.ID?)] = [:]
         var splits: [UUID: [Tab.ID]] = [:]
         var activePin: Tab.ID?
@@ -979,6 +1074,7 @@ final class Spaces: ObservableObject {
             if let token = entry.split { splits[token, default: []].append(tab.id) }
             pins.append(tab)
             pinHome[tab.id] = made
+            if let only = entry.only, all.contains(where: { $0.id == only }) { pinOnly[tab.id] = only }
             kept[key] = tab
             if wasActive { activePin = tab.id }
         }
@@ -1182,6 +1278,20 @@ extension Spaces {
         case "scroll": return ["slide": SideScrollElasticity.script(arg)]
         case "preview": return ["preview": SpacePreview.bench(words, find: find, in: browser)]
         case "profile": profile(current(in: browser), named: arg)
+        case "pin-space":
+            // `pin-space PIN SPACE|all`: keep a pin to one space, or let it
+            // be in every space — the pin's menu, by script.
+            guard words.count >= 2, let tab = pins.first(where: { $0.id.uuidString.lowercased().hasPrefix(words[0].lowercased()) }) else {
+                return ["error": "spaces pin-space PIN SPACE|all"]
+            }
+            let target = words.dropFirst().joined(separator: " ")
+            if target.lowercased() == "all" { setPinSpace(tab, only: nil) }
+            else if let id = find(target) { setPinSpace(tab, only: id) }
+            else { return ["error": "no space \(target)"] }
+        case "perpins":
+            // `perpins on|off`: Settings › Tabs › "Each space has its own pins".
+            guard ["on", "off"].contains(arg) else { return ["error": "spaces perpins on|off", "perSpacePins": perSpacePins] }
+            browser.prefs.perSpacePins = arg == "on"
         case "theme":
             if let error = benchTheme(words, find: find) { return ["error": error] }
         case "picture":
@@ -1199,7 +1309,7 @@ extension Spaces {
             return ["path": value]
         default: break
         }
-        return ["pins": pins.map(describePin), "pinCount": pins.count,
+        return ["pins": pins.map(describePin), "pinCount": pins.count, "perSpacePins": perSpacePins,
                 "spaces": all.enumerated().map { i, s in
             ["index": i, "name": s.name, "current": s.id == current(in: browser), "profile": s.profile ?? "shared",
              "tabs": count(of: s.id, in: browser), "hue": s.hue ?? -1, "colour": SpaceColour.nearest(s.hue).name,
@@ -1210,7 +1320,8 @@ extension Spaces {
     private func describePin(_ tab: Tab) -> [String: Any] {
         ["id": String(tab.id.uuidString.prefix(8)).lowercased(),
          "title": tab.title, "url": tab.address?.absoluteString ?? tab.pending?.absoluteString ?? "",
-         "letter": tab.pin ?? ""]
+         "letter": tab.pin ?? "",
+         "only": pinOnly[tab.id].flatMap { id in all.first { $0.id == id }?.name } ?? ""]
     }
 
     /// A theme in one line, for the bench's list.
@@ -1315,6 +1426,8 @@ extension Spaces {
         all[i].id = new
         if current == old { current = new }
         if let row = rows.removeValue(forKey: old) { rows[new] = row }
+        pinHome = pinHome.mapValues { $0 == old ? new : $0 }
+        pinOnly = pinOnly.mapValues { $0 == old ? new : $0 }
         for (key, value) in currentByBrowser where value == old { currentByBrowser[key] = new }
         for key in activeByBrowserSpace.keys {
             if let active = activeByBrowserSpace[key]?.removeValue(forKey: old) { activeByBrowserSpace[key]?[new] = active }
@@ -1325,14 +1438,27 @@ extension Spaces {
 
     /// A kept tab, asleep, at the end of its section in the space's row;
     /// every window looking at that space sees it at once.
+    ///
+    /// A pin joins the one set of pins (kept to `only`, when given), not the
+    /// space's row: there it would be a second copy of the pins every space
+    /// shows the moment a window looked at that space.
     @discardableResult
-    func cloudOpen(_ url: URL, title: String, pin: String?, in id: UUID, browser: Browser) -> Tab? {
+    func cloudOpen(_ url: URL, title: String, pin: String?, in id: UUID, only: UUID? = nil, browser: Browser) -> Tab? {
         guard browser.primary, all.contains(where: { $0.id == id }) else { return nil }
         let tab = building(for: id) { Tab() }
         browser.prepare(tab)
         tab.restore(url: url, title: title)
         tab.pin = pin
         Sections.shared.restore(tab, saved: true, seen: nil)
+        if pin != nil {
+            pins.append(tab)
+            pinHome[tab.id] = id
+            if let only, all.contains(where: { $0.id == only }) { pinOnly[tab.id] = only }
+            objectWillChange.send()
+            publishAll()
+            keep()
+            return tab
+        }
         var row = rows[id] ?? []
         let at = pin == nil ? row.count : row.lastIndex(where: { $0.pin != nil }).map { $0 + 1 } ?? 0
         row.insert(tab, at: at)
@@ -1353,6 +1479,18 @@ extension Spaces {
             viewer.close(tab)
             return
         }
+        // A pin kept to a space no window is on is in no window's row.
+        if let index = pins.firstIndex(where: { $0.id == tab.id }) {
+            pins.remove(at: index)
+            pinHome.removeValue(forKey: tab.id)
+            pinOnly.removeValue(forKey: tab.id)
+            Sections.shared.forget(tab.id)
+            tab.close()
+            objectWillChange.send()
+            publishAll()
+            keep()
+            return
+        }
         guard let from = spaceID(of: tab) else { return }
         rows[from]?.removeAll { $0.id == tab.id }
         Sections.shared.forget(tab.id)
@@ -1361,4 +1499,23 @@ extension Spaces {
         objectWillChange.send()
         keep()
     }
+
+    /// A pin here already showing `url` that none of `taken` stands for —
+    /// what another Mac's pin is, rather than a new one to open beside it.
+    func cloudPin(matching url: URL, excluding taken: Set<Tab.ID>) -> Tab? {
+        guard let key = pinKey(url) else { return nil }
+        return pins.first { !taken.contains($0.id) && pinKey($0) == key }
+    }
+
+    /// Another Mac kept this pin to a space, or let it go everywhere.
+    func cloudPinSpace(_ tab: Tab, only id: UUID?) {
+        guard pins.contains(where: { $0.id == tab.id }) else { return }
+        let next = id.flatMap { id in all.contains { $0.id == id } ? id : nil }
+        guard pinOnly[tab.id] != next else { return }
+        pinOnly[tab.id] = next
+        objectWillChange.send()
+        publishAll()
+        keep()
+    }
 }
+

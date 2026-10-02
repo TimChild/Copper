@@ -631,6 +631,7 @@ struct TabMenu: View {
                 .disabled(tab.isBlank)
         } else {
             Button("Change Letter") { browser.editLetter(tab) }
+            PinSpaceButton(browser: browser, tab: tab) // Fork: per-space pins
             Button("Unpin") { browser.unpin(tab) }
         }
         Divider()

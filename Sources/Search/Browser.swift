@@ -1448,7 +1448,7 @@ final class Browser: NSObject, ObservableObject {
         if tab.pin != nil {
             // Fork: global pins — the pins lead every row, so a pin's index
             // is its place in the grid, and the order is one for every space.
-            Spaces.shared.movePin(tab, to: index)
+            Spaces.shared.movePin(tab, to: index, in: self)
             return
         }
         guard let here = tabs.firstIndex(where: { $0.id == tab.id }),

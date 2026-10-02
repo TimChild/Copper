@@ -34,6 +34,9 @@ enum CloudDocs {
         var pinned: Bool
         /// The pin's letter, as the column draws it.
         var pin: String?
+        /// The one space a pin is kept to (per-space pins); nil is every
+        /// space. Older builds ignore it and show the pin everywhere.
+        var only: UUID? = nil
     }
 
     /// The safe settings, by key; see `CloudSettingsKeys`.
@@ -255,6 +258,7 @@ enum CloudSettingsKeys {
         "shield",           // block ads and trackers
         "autocorrect",      // correct spelling in pages
         "sections.archive", // when Today rows are archived
+        "pins.perSpace",    // each space has its own pins
     ]
 
     /// Only the allowed keys, and only values of the expected shape.

@@ -19,26 +19,45 @@ enum CloudApply {
         let space: UUID
         let pinned: Bool
         let url: URL
+        /// A pin's one space (per-space pins), or nil for every space.
+        var only: UUID? = nil
     }
 
-    /// The pinned and Saved tabs of every space, in row order.
+    /// The pins once, then the Saved tabs of every space in row order.
+    ///
+    /// The pins are read from the one set, each under a space that doesn't
+    /// move (`Spaces.pinAnchor`). They used to be read off the head of the
+    /// current space's row and filed under that space, so a Mac switching
+    /// spaces renamed every pin, and two Macs on different spaces each took
+    /// the other's pins for new ones and opened them again — the same pins
+    /// three and four times over.
     private static func kept(_ browser: Browser) -> [Kept] {
         let spaces = Spaces.shared
         var out: [Kept] = []
+        for tab in spaces.pins where !tab.shy && !tab.bench {
+            guard let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true else { continue }
+            out.append(Kept(tab: tab, space: spaces.pinAnchor(tab), pinned: true, url: url, only: spaces.pinSpace(tab)))
+        }
         for space in spaces.all {
             let row = space.id == spaces.current ? browser.tabs : (spaces.parkedRow(space.id) ?? [])
-            for tab in row where !tab.shy && !tab.bench {
+            for tab in row where !tab.shy && !tab.bench && tab.pin == nil {
                 guard let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true else { continue }
-                let pinned = tab.pin != nil
-                guard pinned || Sections.shared.isSaved(tab) else { continue }
-                out.append(Kept(tab: tab, space: space.id, pinned: pinned, url: url))
+                guard Sections.shared.isSaved(tab) else { continue }
+                out.append(Kept(tab: tab, space: space.id, pinned: false, url: url))
             }
         }
         return out
     }
 
+    /// The part of a key that says where a tab is kept: its space and
+    /// section for a Saved tab; for a pin, only that it is a pin — a pin is
+    /// one tab wherever it shows, so no space belongs in its name.
+    private static func section(space: UUID, pinned: Bool) -> String {
+        pinned ? "pin|" : "\(space.uuidString.lowercased())|saved|"
+    }
+
     private static func stem(space: UUID, pinned: Bool, url: URL) -> String {
-        "\(space.uuidString.lowercased())|\(pinned ? "pin" : "saved")|\(url.host()?.lowercased() ?? "")"
+        section(space: space, pinned: pinned) + (url.host()?.lowercased() ?? "")
     }
 
     /// This Mac's spaces document. `base` is the last one synced: a tab it
@@ -53,7 +72,7 @@ enum CloudApply {
         // to another site is still the same pin.
         for item in list {
             if let key = tabKeys[item.tab.id], !used.contains(key),
-               key.hasPrefix("\(item.space.uuidString.lowercased())|\(item.pinned ? "pin" : "saved")|") {
+               key.hasPrefix(section(space: item.space, pinned: item.pinned)) {
                 keyFor[item.tab.id] = key
                 used.insert(key)
             }
@@ -83,10 +102,11 @@ enum CloudApply {
         let tabs = list.compactMap { item -> CloudDocs.KeptTab? in
             guard let key = keyFor[item.tab.id] else { return nil }
             if let was = baseBy[key] {
-                return CloudDocs.KeptTab(key: key, space: item.space, url: was.url, title: was.title, pinned: item.pinned, pin: item.tab.pin ?? was.pin)
+                return CloudDocs.KeptTab(key: key, space: item.space, url: was.url, title: was.title, pinned: item.pinned,
+                                         pin: item.tab.pin ?? was.pin, only: item.only)
             }
             return CloudDocs.KeptTab(key: key, space: item.space, url: item.url.absoluteString,
-                                     title: item.tab.title, pinned: item.pinned, pin: item.tab.pin)
+                                     title: item.tab.title, pinned: item.pinned, pin: item.tab.pin, only: item.only)
         }
         // Sorted, not in row order: dragging a pin along the row is this
         // Mac's business, and two Macs that order a row differently must
@@ -129,13 +149,30 @@ enum CloudApply {
         for (key, _) in localKeys where !docKeys.contains(key) && baseKeys.contains(key) {
             if let id = byKey[key], let tab = live[id] { shelf.cloudClose(tab, browser: browser) }
         }
-        // Kept tabs new in the document: open them, asleep.
+        // Kept tabs new in the document: open them, asleep — except a pin
+        // this Mac already has under another key (an older build's, or one
+        // both Macs made): that pin answers to the document's key from now
+        // on, rather than gaining a twin.
+        // Pins that already answer to one of the document's keys.
+        var claimed = Set(doc.tabs.compactMap { entry in byKey[entry.key] })
         for entry in doc.tabs where localKeys[entry.key] == nil {
             guard let url = URL(string: entry.url), url.scheme?.hasPrefix("http") == true else { continue }
-            let pin = entry.pinned ? (entry.pin ?? Address.pretty(url).prefix(1).uppercased()) : nil
-            if let tab = shelf.cloudOpen(url, title: entry.title, pin: pin, in: entry.space, browser: browser) {
-                tabKeys[tab.id] = entry.key
+            if entry.pinned, let twin = shelf.cloudPin(matching: url, excluding: claimed) {
+                tabKeys[twin.id] = entry.key
+                claimed.insert(twin.id)
+                shelf.cloudPinSpace(twin, only: entry.only)
+                continue
             }
+            let pin = entry.pinned ? (entry.pin ?? Address.pretty(url).prefix(1).uppercased()) : nil
+            if let tab = shelf.cloudOpen(url, title: entry.title, pin: pin, in: entry.space, only: entry.only, browser: browser) {
+                tabKeys[tab.id] = entry.key
+                claimed.insert(tab.id)
+            }
+        }
+        // A pin kept to another space on another Mac, or let go to every one.
+        for entry in doc.tabs where entry.pinned && localKeys[entry.key] != nil {
+            guard let id = byKey[entry.key], let tab = shelf.pins.first(where: { $0.id == id }) else { continue }
+            if shelf.pinSpace(tab) != entry.only { shelf.cloudPinSpace(tab, only: entry.only) }
         }
 
         // Spaces gone from the document, last: their kept tabs are already
@@ -162,6 +199,7 @@ enum CloudApply {
             "shield": String(p.shielded),
             "autocorrect": String(p.autocorrect),
             "sections.archive": Sections.shared.archive.rawValue,
+            "pins.perSpace": String(p.perSpacePins),
         ]
         return CloudDocs.Settings(values: CloudSettingsKeys.filter(values))
     }
@@ -179,6 +217,7 @@ enum CloudApply {
         if let v = bool("shield"), v != p.shielded { p.shielded = v }
         if let v = bool("autocorrect"), v != p.autocorrect { p.autocorrect = v }
         if let v = values["sections.archive"].flatMap(Sections.Archive.init(rawValue:)), v != Sections.shared.archive { Sections.shared.archive = v }
+        if let v = bool("pins.perSpace"), v != p.perSpacePins { p.perSpacePins = v }
     }
 
     // MARK: - bookmarks

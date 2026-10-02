@@ -487,6 +487,7 @@ final class CanvasHost {
         stopRoom()
         store.flush()
         appearance = nil
+        Canvases.shared.clearPresence(for: canvasId)
         if let tab { CanvasHost.hosts[tab.id] = nil }
         // The handler stays on the view: the page may come Back, and the
         // relay answers nobody but a host's own page in the meantime.
@@ -498,6 +499,7 @@ final class CanvasHost {
         guard let host = hosts.removeValue(forKey: tab.id) else { return }
         host.stopRoom()
         host.store.flush()
+        Canvases.shared.clearPresence(for: host.canvasId)
         detach(tab.built)
         CanvasPresence.shared.recount()
     }
@@ -521,6 +523,16 @@ final class CanvasHost {
             keep(update)
         case "selection":
             selection = (body["ids"] as? [Any])?.compactMap { $0 as? String } ?? []
+        case "share":
+            CanvasUI.shared.openShare(canvasId, in: browser ?? Windows.all.first)
+        case "presence":
+            let people = (body["people"] as? [[String: Any]] ?? []).compactMap { value -> Canvases.PresencePerson? in
+                guard let id = value["id"] as? String, !id.isEmpty else { return nil }
+                return Canvases.PresencePerson(id: id, name: value["name"] as? String ?? id,
+                                               color: value["color"] as? String ?? CanvasColors.stable(id),
+                                               kind: value["kind"] as? String ?? "human")
+            }
+            Canvases.shared.setPresence(people, for: canvasId)
         case "ws":
             guard let b64 = body["b64"] as? String, let frame = Data(base64Encoded: b64) else { return }
             room?.send(frame)
@@ -670,6 +682,7 @@ final class CanvasHost {
         }
         CanvasPresence.shared.recount()
         statusNow()
+        shareNow()
         // A board opened from a log is folded into one snapshot straight
         // away: the next open hands the page the whole document in `init`
         // (so it sees its own name and history at once) and replays nothing.
@@ -802,6 +815,18 @@ final class CanvasHost {
     func zoom(to ids: [String]) async throws {
         try await waitReady()
         try await call("window.copperCanvas.zoomTo(ids)", ["ids": ids])
+    }
+
+    /// The room as `copperCanvas.presence()` reports it right now — used by
+    /// `bench canvas presence` and anything checking cursors land, not just
+    /// the debounced `presence` message the Share sheet keeps.
+    func presence() async throws -> [[String: Any]] {
+        try await waitReady()
+        let raw = try await call("return JSON.stringify(window.copperCanvas.presence());")
+        guard let text = raw as? String, let data = text.data(using: .utf8),
+              let value = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
+        else { return [] }
+        return value
     }
 
     /// The board as it looks, for an agent that wants to see it.
@@ -1014,6 +1039,24 @@ final class CanvasHost {
         web.callAsyncJavaScript(body, arguments: arguments, in: nil, in: .page, completionHandler: nil)
     }
 
+    /// Tell the page whether the native Share surface is available. Keep the
+    /// guard here: older bundled pages simply do not have setShare yet.
+    private func shareNow() {
+        guard isReady else { return }
+        let entry = self.entry
+        let canShare = entry?.isShared == true && Canvases.shared.cloudReady
+        let reason: String? = canShare ? nil : (entry?.isPersonal == true ? "Personal canvases can't be shared" : entry?.isLocal == true ? "This canvas is on this Mac only" : "Sign in to Copper Cloud to share")
+        var value: [String: Any] = ["canShare": canShare]
+        if let members = entry?.members { value["members"] = members }
+        if let reason { value["reason"] = reason }
+        post("const c = window.copperCanvas; if (c && typeof c.setShare === 'function') c.setShare(s);", ["s": value])
+    }
+
+    /// Entry/member/cloud changes should update every open tab immediately.
+    static func shareChanged(_ id: String) {
+        for host in hosts(of: id) { host.shareNow() }
+    }
+
     // MARK: the board's status line
 
     /// What the page's status says: `local` (Personal or a local canvas, on
@@ -1071,6 +1114,7 @@ final class CanvasHost {
                 host.restartPage()
             } else {
                 host.statusNow()
+                host.shareNow()
             }
         }
         CanvasPresence.shared.recount()

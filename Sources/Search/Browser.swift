@@ -1286,11 +1286,44 @@ final class Browser: NSObject, ObservableObject {
         typed = ""
     }
 
+    /// Close one of Clear's tabs through the ordinary path and return the
+    /// recently-closed record it created, so Undo can remove exactly those
+    /// records without disturbing a person's other history.
+    @discardableResult
+    func closeForClear(_ tab: Tab) -> UUID? {
+        let before = Set(ghosts.map(\.id))
+        close(tab)
+        return ghosts.last(where: { !before.contains($0.id) })?.id
+    }
+
+    /// Restore the live Tab objects captured by Clear. The close itself still
+    /// went through `close(_:)`; this only puts those objects back in their
+    /// original projection positions and removes the matching ghost records.
+    func restoreClearedTabs(_ entries: [(tab: Tab, index: Int)], activeID: Tab.ID?,
+                            blankID: Tab.ID?, ghostIDs: Set<UUID>) {
+        var restored = tabs
+        if let blankID, let blank = restored.first(where: { $0.id == blankID }) {
+            restored.removeAll { $0.id == blankID }
+            blank.close()
+        }
+        let ids = Set(entries.map { $0.tab.id })
+        restored.removeAll { ids.contains($0.id) }
+        for entry in entries.sorted(by: { $0.index < $1.index }) {
+            restored.insert(entry.tab, at: min(entry.index, restored.count))
+        }
+        tabs = restored
+        ghosts.removeAll { ghostIDs.contains($0.id) }
+        if let activeID, let tab = restored.first(where: { $0.id == activeID }) {
+            self.activeID = nil
+            select(tab)
+        }
+        rememberSession()
+    }
+
     /// ⌘W, or the cross on the tab. Closing the last one leaves a blank tab
     /// behind; closing that blank tab closes the window.
     func close(_ tab: Tab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
-        Grouper.shared.forget(tab.id) // Fork
         signedInWith[tab.id] = nil
         if tab.pin == nil { CanvasHost.forget(tab) } // Fork (canvas): its room closes with it
 
@@ -1500,6 +1533,7 @@ final class Browser: NSObject, ObservableObject {
     /// the page rather than staying behind as an empty one; otherwise the
     /// page gets a tab of its own, in front.
     func arrive(_ url: URL) {
+        if CanvasJoinFlow.handle(url, in: self) { return }
         if let active, active.isBlank, typed.isEmpty, !active.floating {
             active.go(to: url)
             editing = false
@@ -2112,6 +2146,7 @@ final class Browser: NSObject, ObservableObject {
             refusals += 1
             return
         }
+        if CanvasJoinFlow.handle(url, in: self) { editing = false; typed = ""; return }
         (active ?? tabs.first)?.go(to: url)
         editing = false
         typed = ""
@@ -2191,6 +2226,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // Fork (canvas): copper://canvas/<id> loads the canvas page here, and
         // a canvas page goes nowhere else (Fork/Canvas/CanvasHost.swift).
         if CanvasHost.decide(action, url: url, in: webView, browser: self) {
+            decisionHandler(.cancel)
+            return
+        }
+        // Canvas join links are consumed by native Copper, including links
+        // clicked inside ordinary pages. A different cloud's HTTPS landing
+        // page remains a normal web navigation.
+        if CanvasJoinFlow.handle(url, in: self) {
             decisionHandler(.cancel)
             return
         }
@@ -2396,7 +2438,6 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         Favicons.shared.fetch(for: tab)
         guard !tab.shy, !tab.bench else { return }
         history.record(url, title: tab.title)
-        Grouper.shared.landed(tab, in: self) // Fork: where does this tab belong?
     }
 
     private func fail(_ webView: WKWebView, _ error: Error) {

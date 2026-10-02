@@ -11,10 +11,14 @@ describe('host bridge framing', () => {
     postToHost({ type: 'update', b64: 'AAEC' })
     postToHost({ type: 'selection', ids: ['a', 'b'] })
     postToHost({ type: 'openUrl', url: 'https://x.dev' })
+    postToHost({ type: 'share' })
+    postToHost({ type: 'presence', people: [{ id: 'u2', name: 'Bea', color: '#f00', kind: 'human' }] })
     expect(postMessage.mock.calls.map(c => c[0])).toEqual([
       '{"type":"update","b64":"AAEC"}',
       '{"type":"selection","ids":["a","b"]}',
       '{"type":"openUrl","url":"https://x.dev"}',
+      '{"type":"share"}',
+      '{"type":"presence","people":[{"id":"u2","name":"Bea","color":"#f00","kind":"human"}]}',
     ])
     for (const [json] of postMessage.mock.calls) expect(typeof json).toBe('string')
   })
@@ -25,6 +29,8 @@ describe('host bridge framing', () => {
       { type: 'ws', b64: 'AA==' },
       { type: 'wsOpen', url: 'ws://bridge/x' },
       { type: 'wsClose' },
+      { type: 'share' },
+      { type: 'presence', people: [{ id: 'u2', name: 'Bea', color: '#f00', kind: 'human' }] },
       { type: 'log', level: 'warn', msg: 'm' },
     ] as const)
       expect(JSON.parse(frame(msg))).toEqual(msg)

@@ -283,6 +283,18 @@ final class Bench {
             Launcher.shared.bench(request, in: browser, answer: answer)
 
         case "tabs":
+            if let op = request["op"] as? String {
+                switch op {
+                case "clear":
+                    let count = ClearTabs.shared.clear(in: browser)
+                    answer(["cleared": count, "undo": count > 0])
+                case "undo":
+                    answer(["restored": ClearTabs.shared.undo(in: browser)])
+                default:
+                    answer(["error": "unknown tabs operation \(op)"])
+                }
+                return
+            }
             answer(["tabs": browser.tabs.map(describe)])
 
         case "pin", "unpin", "reorder":
@@ -631,6 +643,9 @@ final class Bench {
             if #available(macOS 15.4, *), let on = request["extensions"] as? Bool { Extensions.shared.menuOpen = on }
             // `ui addressHover on`: the address pill as under the pointer. (Fork)
             if let on = request["addressHover"] as? Bool { SideAddressHover.shared.forced = on }
+            // `ui clearHover on`: make the hover-only Clear affordance visible
+            // for deterministic screenshots in a probe world.
+            if let on = request["clearHover"] as? Bool { ClearTabsDividerHover.shared.forced = on }
             answer(["ok": true])
 
         case "extensions", "ext-add", "ext-folder", "ext-press", "ext-remove", "ext-reload", "ext-page", "ext-popup", "ext-menu", "ext-pin", "ext-shot", "ext-answer", "ext-enable":

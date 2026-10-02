@@ -71,7 +71,7 @@ Playwright MCP's names and argument shapes. `ref`s come from
 | `browser_wait_for` | `text`, `textGone`, `time` |
 | `browser_get_text`, `browser_find`, `browser_console_messages` | reading without a snapshot; refs for text you name; console since load |
 | `browser_resize`, `browser_close` | the window; the tab |
-| `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove`, `suggest` |
+| `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove` |
 | `browser_perf_probe` | Samples the current tab for rAF loops, DOM churn, animations, filters, canvases, timers, long tasks, and slow resources (`seconds`, `top`, `format`) |
 
 ### Saved sign-in (no-secret contract)
@@ -135,9 +135,11 @@ agent on|off|rotate`.
 ### Canvases
 
 `canvas_list`, `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`,
-`canvas_create`, `canvas_invite`, `canvas_screenshot` read and draw on the user's whiteboards
-(`copper://canvas/<id>` tabs) — the same tools for every client and for ⌘E, each write attributed
-to the agent that made it. Read before you write. See [canvas.md](canvas.md).
+`canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot` read and
+draw on the user's whiteboards (`copper://canvas/<id>` tabs) — the same tools for every client and
+for ⌘E, each write attributed to the agent that made it. `canvas_share_link` makes (or reuses) a
+canvas's invite link; `canvas_join` opens one, the way clicking it would. Read before you write.
+See [canvas.md](canvas.md).
 
 ## Jev mode — hand over a goal
 

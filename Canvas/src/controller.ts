@@ -26,6 +26,7 @@ import {
 } from './canvas/legacy'
 import { occupied } from './placement'
 import { parseHostStatus, sameHostStatus, type HostStatus, type SyncStatus } from './canvas/status'
+import { createPresenceReporter, hostPresence, readPresence } from './canvas/presence'
 import type { Me } from './canvas/types'
 import { hostLog, postToHost } from './host-bridge'
 import { applyOps, readCanvas, type ApplyResult, type CanvasRead } from './ops'
@@ -44,6 +45,12 @@ export interface InitConfig {
 }
 
 export type { HostStatus, SyncStatus }
+
+export interface ShareConfig {
+  canShare: boolean
+  members?: number
+  reason?: string
+}
 
 /** What `copperCanvas.importLegacy` resolves to. */
 export interface ImportResult {
@@ -64,6 +71,23 @@ export const IMPORTED_KEY = 'importedLegacy'
 export const WRITING_MS = 1500
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+export function parseShare(raw: unknown): ShareConfig | null {
+  let v = raw
+  if (typeof v === 'string') v = v.trim() ? JSON.parse(v) : null
+  if (v === null || v === undefined) return null
+  if (!isObject(v) || typeof v.canShare !== 'boolean') throw new Error('setShare: expected {canShare, members?, reason?}')
+  const out: ShareConfig = { canShare: v.canShare }
+  if (v.members !== undefined && v.members !== null) {
+    const n = Number(v.members)
+    if (Number.isFinite(n) && n >= 0) out.members = Math.floor(n)
+  }
+  if (typeof v.reason === 'string' && v.reason.trim()) out.reason = v.reason.trim().slice(0, 400)
+  return out
+}
+
+export const sameShare = (a: ShareConfig | null, b: ShareConfig | null) =>
+  a === b || (!!a && !!b && a.canShare === b.canShare && (a.members ?? 0) === (b.members ?? 0) && (a.reason ?? '') === (b.reason ?? ''))
 
 export function parseInit(raw: unknown): InitConfig {
   let v = raw
@@ -100,6 +124,10 @@ export class Session {
   readonly provider: WebsocketProvider | null
   status: SyncStatus
   private onUpdate: (update: Uint8Array, origin: unknown) => void
+  private readonly presenceReporter: ReturnType<typeof createPresenceReporter>
+  private readonly reportPresence = () => {
+    this.presenceReporter.update(hostPresence(readPresence(this.awareness, this.store.agents)))
+  }
 
   constructor(cfg: InitConfig, onStatus: () => void) {
     this.cfg = cfg
@@ -121,6 +149,10 @@ export class Session {
       selection: [],
       laser: null,
     })
+    this.presenceReporter = createPresenceReporter(people => postToHost({ type: 'presence', people }), 400)
+    this.awareness.on('change', this.reportPresence)
+    this.store.agents.observeDeep(this.reportPresence)
+    this.reportPresence()
     // Every local change goes to the host, which stores it (offline) and the
     // provider relays it (online). What the host or the server sent is theirs.
     this.onUpdate = (update, origin) => {
@@ -164,6 +196,9 @@ export class Session {
   }
 
   destroy() {
+    this.presenceReporter.dispose()
+    this.awareness.off('change', this.reportPresence)
+    this.store.agents.unobserveDeep(this.reportPresence)
     try {
       this.awareness.setLocalState(null)
     } catch {
@@ -203,6 +238,8 @@ export class Controller {
   private version = 0
   /** What the host last said about the board's connection; outlives `init`. */
   private hostStatus: HostStatus | null = null
+  /** Share capability supplied by Copper; null keeps the Share button hidden. */
+  private share: ShareConfig | null = null
 
   subscribe = (fn: Listener) => {
     this.listeners.add(fn)
@@ -251,6 +288,22 @@ export class Controller {
   // ---- host status --------------------------------------------------------------
 
   getHostStatus = () => this.hostStatus
+  getShare = () => this.share
+
+  /** `copperCanvas.setShare`: idempotent and tolerant of extra fields. */
+  setShare(raw: unknown): ShareConfig | null {
+    const next = parseShare(raw)
+    if (sameShare(next, this.share)) return this.share
+    this.share = next
+    this.emit()
+    return next
+  }
+
+  /** Current live room members, excluding this page, with their cursors. */
+  presence() {
+    const s = this.need()
+    return readPresence(s.awareness, s.store.agents).map(({ id, name, color, kind, cursor }) => ({ id, name, color, kind, cursor }))
+  }
 
   /**
    * `copperCanvas.setStatus`: idempotent; `null` clears it. Kept across

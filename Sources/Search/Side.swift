@@ -18,6 +18,7 @@ struct SideBar: View {
     @ObservedObject private var spaces = Spaces.shared
     @ObservedObject private var sections = Sections.shared
     @ObservedObject private var downloads = Downloads.shared
+    @ObservedObject private var clearTabs = ClearTabs.shared
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var still
@@ -294,12 +295,19 @@ struct SideBar: View {
     private var column: some View {
         let kept = looseRows.filter { sections.isSaved($0.tab) }
         let today = looseRows.filter { !sections.isSaved($0.tab) }
+        let clearCount = clearTabs.clearable(in: browser).count
         return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: SideBar.gap) {
                     SpaceHeader(browser: browser)
                     rows(kept, homeless: true)
-                    if !today.isEmpty { divider }
+                    if !today.isEmpty {
+                        if clearCount > 0 {
+                            ClearTabsDivider(browser: browser, tint: tint, count: clearCount)
+                        } else {
+                            divider
+                        }
+                    }
                     newTab
                     rows(today)
                 }

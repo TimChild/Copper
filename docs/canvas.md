@@ -27,7 +27,7 @@ its own, was folded into Canvas on 2026-10-01 — see [What happened to easels](
 - **Sidebar › Canvas door** (at the foot, beside Bookmarks and Extensions): Personal, *My
   canvases*, *Shared with me*, *Waiting for you* (invites, with Accept / Decline) and **New
   canvas**. Click a row to open it. Right-click a row: Open, Open in Background, Copy Link,
-  Rename…, Invite…, Members…, Leave… / Delete….
+  Rename…, Share…, Members…, Leave… / Delete….
 - **⌘K / ⌘T**, typing a canvas's name: an **Open Canvas · <name>** row for each match, three at
   most. `canvas` alone (or `canvases`, or `canv`) lists them all, newest first; `canvas plan`
   narrows to names with "plan" in them. An open canvas also shows up in tab search like any tab,
@@ -255,6 +255,8 @@ Page → host, `window.webkit.messageHandlers.canvas.postMessage({...})`:
 | `{type:"ready"}` | `init(...)`, then `applyUpdate` for each logged update, `theme(...)`, `document.title`, then opens the room if there is one |
 | `{type:"update", b64}` | appends to `updates.log`, hands it to any other tab on the same canvas; compacts when due |
 | `{type:"selection", ids}` | kept for the tools |
+| `{type:"share"}` | the page's own Share button was clicked — opens the native Share sheet |
+| `{type:"presence", people:[{id,name,color,kind}]}` | debounced (≤500 ms) on every change; kept per canvas for the Share sheet's "N here now" faces |
 | `{type:"ws", b64}` | sent on the room's socket |
 | `{type:"wsOpen"}` / `{type:"wsClose"}` | the page's socket wants / no longer wants the room — answered with `wsState("open")` when the room is up |
 | `{type:"openUrl", url}` | http(s) in a new tab in front; `copper://canvas/…` switches to that canvas |
@@ -272,6 +274,11 @@ arguments, never pasted into source), so a function may return a value or a prom
 - `copperCanvas.exportState() → b64` (optional; without it the log is simply never compacted)
 - `copperCanvas.setStatus({mode: "local"|"personal-synced"|"shared-live"|"shared-offline", pending})`
   (optional; called only when `typeof setStatus === 'function'`)
+- `copperCanvas.setShare({canShare, members?, reason?})` — shows/enables the page's own Share
+  button; called after `ready` and whenever the entry, its membership or the cloud link changes
+  (guarded: `typeof setShare === 'function'`, for a bundled page older than this)
+- `copperCanvas.presence() → [{id,name,color,kind,cursor}]` (read, not pushed — used by `bench
+  canvas presence` and anything checking live cursors, not just the Share sheet's faces)
 
 `me` is the cloud account (`userId`, display name) when signed in, else this Mac's persona (the
 macOS full name, a stable colour). `docId` is the server's canvas id when there is one.
@@ -294,6 +301,8 @@ shows on the board.
 | `canvas_focus` | `id?`, `shapeIds` | — (zooms the view to them) |
 | `canvas_create` | `name` | the new canvas's summary (shared when signed in, local otherwise) |
 | `canvas_invite` | `id`, `email` | — (cloud only; Personal and local canvases refuse with a reason) |
+| `canvas_share_link` | `id` | `{link, webLink}` — makes the canvas's invite link once, then reuses it |
+| `canvas_join` | `link` | opens a `copper://canvas/join/...` or `https://<cloud>/join/...` link in this window, as if it had been clicked |
 | `canvas_screenshot` | `id?` | PNG of the canvas tab |
 
 `id?` omitted means the canvas tab in front, else Personal. Every schema also takes `reason`.
@@ -310,7 +319,50 @@ label?}`, `clear {confirm:true}`. Colours: yellow, pink, blue, green, purple, gr
 copper tools | grep canvas_
 copper call canvas_apply '{"reason":"jot it down","ops":[{"op":"add","shape":{"type":"sticky","text":"hello"}}]}'
 copper call canvas_read '{"reason":"what is on the board"}'
+copper call canvas_share_link '{"reason":"invite a teammate","id":"Roadmap"}'
 ```
+
+## Sharing a canvas (invite links, Share sheet, join flow)
+
+*Native Swift: `Sources/Search/Fork/Canvas/CanvasShare.swift`. Server:
+`copper-cloud`'s `/v1/canvases/:id/links`, `/v1/canvas-links/:token`, `/join/:token` (not under
+`/v1`, no instance-key gate — a tiny static landing page), `/v1/people`.*
+
+**Link formats.** Copy invite link gives `copper://canvas/join/<token>?cloud=<host[:port]>&n=<url-encoded
+name>`; Copy web link gives `https://<host[:port]>/join/<token>`. `copper` is registered as its own
+macOS URL scheme (`build.sh`'s Info.plist — a second `CFBundleURLTypes` entry, "Copper link",
+separate from the "Web address" http/https one, `CFBundleTypeRole` Viewer) alongside http/https, so
+mail clients, Slack, anywhere a link can be clicked, hands it to Copper. Canvas ids are UUIDs or
+`personal`, so `copper://canvas/join/...` can never collide with `copper://canvas/<id>`.
+
+**The Share sheet** (`CanvasShareSheet`) opens from the page's own Share button (the `share`
+bridge message), the sidebar canvas row's **Share…** (replacing the old **Invite…**), and the
+command bar's **Share Canvas**. It shows who is live right now (the canvas's `presence`
+messages), **Copy invite link** / **Copy web link** (the token is made once through
+`POST /v1/canvases/:id/links` and cached per canvas in `canvas/share-links.json`, 0600, never the
+keychain — later copies reuse it), **People on this cloud** (debounced `GET /v1/people?q=`, Invite
+is the existing email-invite path), **Members** (owner can remove), and **Reset link** (owner;
+`DELETE /v1/canvases/:id/links`, drops the cached token). A local or Personal canvas explains it
+can't be shared and offers **New shared canvas** or **Connect to Copper Cloud** instead.
+
+**The join flow** (`CanvasJoinLink.parse` + `CanvasJoinFlow`) is one parser and one actor reached
+from four places: LaunchServices/AppleEvents (`Links.swift`), the address bar (`Browser.arrive` /
+`Browser.go`), an in-page link click (`Browser`'s `WKNavigationDelegate`, which cancels the
+navigation), and any tab navigating to the `https://.../join/<token>` form when its host\[:port]
+is the cloud this Copper is linked to (a different cloud's landing page is left to load as an
+ordinary page, which is where its own "Open in Copper" button lives). Not linked, or linked to a
+different cloud: Settings › Cloud opens with *"This canvas is on \<host>. Connect to that Copper
+Cloud to open it."* Not signed in: the link is remembered (`canvas/pending-join.json`, 0600) and
+resumed the moment sign-in completes. Otherwise: `GET /v1/canvas-links/:token` (already a member
+→ just open it), else `POST /v1/canvas-links/:token/join`, upsert the returned row, refresh, then
+open it in the **key window** (so an external open lands somewhere sane), in front. A 404 says
+*"This invite link no longer works — ask for a new one."*
+
+**The new-invite banner** (`ContentView.inviteBanner` in `App.swift`) rises the moment
+`Canvases.refresh()` sees an invite id it hasn't shown before: *"\<owner> invited you to
+“\<name>” · Open"*, with a dismiss × that declines without opening. **Open** accepts and opens
+the canvas in one step — it is a shortcut over the sidebar's existing Accept/Decline invite rows,
+not a second invite system.
 
 ## Testing it
 
@@ -340,6 +392,10 @@ $C shot /tmp/canvas.png
 ./bench --world canvasE canvas ask-rename ID | ask-delete ID | answer rename NAME|delete|leave|cancel | sheet
 ./bench --world canvasE canvas rowmenu ID /tmp/menu.png | picture /tmp/window.png   # the row's menu; the window with its popover/sheet
 ./bench --world canvasE canvas import [status|run]                          # the easel migration
+./bench --world canvasE canvas link [ID]                                    # make/reuse the invite link for ID (default: the front canvas): {link, webLink}
+./bench --world canvasE canvas join LINK                                    # open an invite link the way clicking it would
+./bench --world canvasE canvas presence [ID]                                # copperCanvas.presence() for ID right now: who's in the room, with cursors
+./bench --world canvasE canvas parsetest                                    # self-test of the join-link parser (pure, no network, no window)
 ```
 
 `canvas scroll` makes each event with CGEvent and gives it the board's window, so it is what a

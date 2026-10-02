@@ -27,7 +27,7 @@ enum CanvasTools {
     private static let which = string("Canvas id or name (from canvas_list); omit for the canvas tab in front, else Personal")
 
     static let names: Set<String> = ["canvas_list", "canvas_open", "canvas_read", "canvas_apply", "canvas_select",
-                                     "canvas_focus", "canvas_create", "canvas_invite", "canvas_screenshot"]
+                                     "canvas_focus", "canvas_create", "canvas_invite", "canvas_share_link", "canvas_join", "canvas_screenshot"]
 
     static var catalogue: [[String: Any]] {
         [
@@ -56,6 +56,8 @@ enum CanvasTools {
             tool("canvas_invite", "Invite someone by email to a shared canvas (needs Copper Cloud; the Personal canvas is never shared)", [
                 "id": string("Canvas id or name"), "email": string("Their email address"),
             ], required: ["id", "email"]),
+            tool("canvas_share_link", "Create or reuse the invite link for a shared canvas", ["id": string("Canvas id or name")], required: ["id"]),
+            tool("canvas_join", "Open a Copper canvas invite link in the current window", ["link": string("copper://canvas/join/... or https://cloud/join/...")], required: ["link"]),
             tool("canvas_screenshot", "A PNG of a canvas as it looks in its tab", ["id": which]),
         ]
     }
@@ -142,6 +144,25 @@ enum CanvasTools {
             Tools.summary?.line = "Invited \(address) to \(entry.name)"
             return [.text("Invited \(address) to \(entry.name)")]
 
+        case "canvas_share_link":
+            let entry = try resolve(args, in: browser, fallbackToActive: false)
+            let links = try await Canvases.shared.shareLinks(entry.id)
+            Tools.summary?.line = "Share link for \(entry.name)"
+            return [.text(json(["link": links.link, "webLink": links.webLink]))]
+
+        case "canvas_join":
+            guard let text = (args["link"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+                throw Failure(text: "link required")
+            }
+            guard let url = URL(string: text), let parsed = CanvasJoinLink.parse(url) else {
+                throw Failure(text: "not a canvas invite link: \(text)")
+            }
+            guard CanvasJoinFlow.handle(url, in: browser) else {
+                throw Failure(text: "couldn't open that invite — it may be for another Copper Cloud")
+            }
+            Tools.summary?.line = "Joining \(parsed.name ?? parsed.cloud)"
+            return [.text("Opening the invite from \(parsed.cloud)…")]
+
         case "canvas_screenshot":
             let entry = try resolve(args, in: browser)
             let host = try await open(entry, in: browser, foreground: false)
@@ -224,7 +245,8 @@ enum CanvasTools {
     // MARK: - the bench
 
     /// `bench canvas list | open ID | apply JSON | read [ID] | invites | hosts
-    /// | create NAME | ui open|close`. Async — the page answers in its own time.
+    /// | create NAME | link [ID] | join LINK | presence [ID] | ui open|close`.
+    /// Async — the page answers in its own time.
     @MainActor
     static func bench(_ request: [String: Any], in browser: Browser, answer: @escaping ([String: Any]) -> Void) {
         let op = request["op"] as? String ?? "list"
@@ -288,6 +310,19 @@ enum CanvasTools {
                     answer(content(try await call("canvas_list", [:], in: browser)))
                 case "hosts":
                     answer(["hosts": CanvasHost.all.map(\.describe), "page": CanvasPage.file?.path ?? "missing"])
+                case "link":
+                    answer(content(try await call("canvas_share_link", arg.isEmpty ? [:] : ["id": arg], in: browser)))
+                case "join":
+                    answer(content(try await call("canvas_join", ["link": arg], in: browser)))
+                case "presence":
+                    let entry = try resolve(arg.isEmpty ? [:] : ["id": arg], in: browser)
+                    let host = try await open(entry, in: browser, foreground: false)
+                    let people = try await host.presence()
+                    answer(["canvas": entry.id, "people": people])
+                case "parsetest":
+                    // The join-link parser is pure: a self-test, not a probe
+                    // round trip — `bench canvas parsetest` runs it standing still.
+                    answer(CanvasJoinLink.selfTest())
                 case "ui":
                     // `ui open|close`, `ui mode list|new|rename ID|invite ID|members ID|delete ID`,
                     // `ui picture PATH [dark]` — the card drawn off screen, whole.
@@ -301,6 +336,7 @@ enum CanvasTools {
                         case "new": ui.mode = .new
                         case "rename": ui.mode = .rename(id)
                         case "invite": ui.mode = .invite(id)
+                        case "share": ui.mode = .share(id)
                         case "members": ui.mode = .members(id)
                         case "delete": ui.mode = .delete(id)
                         default: ui.mode = .list
@@ -308,7 +344,7 @@ enum CanvasTools {
                     case "picture":
                         guard words.count > 1 else { answer(["error": "ui picture PATH [dark]"]); return }
                         let dark = words.contains("dark")
-                        guard let picture = CanvasUI.picture(browser: browser, dark: dark),
+                        guard let picture = await CanvasUI.picture(browser: browser, dark: dark),
                               let png = picture.representation(using: .png, properties: [:])
                         else { answer(["error": "could not draw the card"]); return }
                         try png.write(to: URL(fileURLWithPath: words[1]))

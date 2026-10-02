@@ -72,10 +72,6 @@ final class Intelligence: ObservableObject {
         /// The small model Jev mode asks to write field values (TYPE_TEXT).
         /// Empty means the router model; a small fast one is the point.
         var textModel = ""
-        /// Grouping: off, suggest and wait, or just do it.
-        var grouping: GroupingMode = .ask
-        /// Jev's confidence has to clear this before its pick is taken as is.
-        var threshold: Double = 0.6
 
         init() {}
 
@@ -107,20 +103,6 @@ final class Intelligence: ObservableObject {
             }
             routerModels = decodedRouter
             textModel = try c.decodeIfPresent(String.self, forKey: .textModel) ?? fresh.textModel
-            grouping = try c.decodeIfPresent(GroupingMode.self, forKey: .grouping) ?? fresh.grouping
-            threshold = try c.decodeIfPresent(Double.self, forKey: .threshold) ?? fresh.threshold
-        }
-    }
-
-    enum GroupingMode: String, Codable, CaseIterable, Identifiable {
-        case off, ask, auto
-        var id: String { rawValue }
-        var title: String {
-            switch self {
-            case .off: return "Off"
-            case .ask: return "Ask"
-            case .auto: return "Automatic"
-            }
         }
     }
 

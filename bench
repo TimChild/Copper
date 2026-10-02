@@ -2,6 +2,7 @@
 """Drive the Copper you already have open, from the shell.
 
     ./bench tabs                       every tab, yours and the bench's
+    ./bench tabs clear|undo             clear loose tabs in this window's current space, or undo it
     ./bench open URL                   a bench tab at the end of the row → its id
     ./bench pin ID [LETTER] [--window N]
                                        pin a tab: it joins the one set of pins every space shows
@@ -88,6 +89,11 @@
     ./bench backdrop                   the column's animated scenes: WebContent pid, hidden, and
                                        the page's status() (clock time, wall, key, frames, fading)
     ./bench canvas list|open [ID]|read [ID]|apply JSON|create NAME|invites|accept|decline INVITE|hosts
+    ./bench canvas link [ID]|join LINK|presence [ID]|parsetest
+                                       the Share sheet from the bench: link makes/reuses the invite
+                                       link for ID (default: the front canvas), join opens an invite
+                                       link the way clicking it would, presence prints who
+                                       copperCanvas.presence() says is in the room right now
                                        canvases: the canvas_* tools, the pages behind them (ready, room,
                                        store), the cloud invites
     ./bench canvas rename ID -> NAME|delete ID|leave ID|members ID
@@ -131,7 +137,7 @@
                                        spaces by index or name; --keep moves a deleted space's tabs
                                        to its neighbour; colours are Graphite Copper Orange Yellow
                                        Green Teal Blue Indigo Pink Red
-    ./bench groups [new NAME|assign ID NAME|remove ID|suggest ID|dissolve NAME]
+    ./bench groups [new NAME|assign ID NAME|remove ID|dissolve NAME]
     ./bench groups [toggle NAME|inside PARENT NAME|plan [today]]
                                        folders: fold or open one (by its whole "A › B" name or
                                        its last part), or make one inside another
@@ -158,7 +164,7 @@
     ./bench storage status             the last import's report so far
     ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
                                        the MCP server agents drive the window through; setup bridges terminal agents
-    ./bench ai [mode off|ask|auto]   which model lanes have keys, and the grouper's last note
+    ./bench ai [lane key|claude|tier haiku|sonnet|opus]   which model lane is active and ready
     ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
     ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
     ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark] [CODE]|bookmark URL [TITLE]|pin URL|open URL
@@ -186,7 +192,7 @@
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, folded on|off, peek on|off,
                                        tabswitch row|recent, page general|tabs (which Settings page), focus none (the keyboard to the window itself), width N (the sidebar),
-                                       addressHover on|off (the sidebar's address pill as under the pointer)
+                                       addressHover on|off (the sidebar's address pill as under the pointer), clearHover on|off (force the Clear divider visible)
 
 Needs Settings › General › "Let a script drive Copper" switched on in the
 running app. IDs are the first characters of a tab's id, as `tabs` prints
@@ -282,6 +288,10 @@ def main(argv):
         request["go"] = "--go" in args
     elif verb == "summon":
         request["text"] = args[0] if args else ""
+    elif verb == "tabs":
+        if len(args) > 1 or (args and args[0] not in ("clear", "undo")):
+            sys.exit("usage: bench tabs [clear|undo]")
+        if args: request["op"] = args[0]
     elif verb == "newtab":
         flags = {"--go", "--keep", "--json", "--type"}
         rest, i = [], 0
@@ -545,6 +555,11 @@ def main(argv):
             print(f"{'●' if s['current'] else ' '} {s['name']:22} {s['saved']:4} saved  {s['today']:4} today")
         for t in answer.get("today", []):
             print(f"    {t['id']}  {t['seen']}h  {t['title'] or '—'}")
+    elif verb == "tabs" and request.get("op"):
+        if "cleared" in answer:
+            print(f"cleared {answer['cleared']} tab(s)")
+        if "restored" in answer:
+            print(f"restored {answer['restored']} tab(s)")
     elif verb == "tabs":
         for tab in answer.get("tabs", []):
             mark = "⚗" if tab.get("bench") else ("●" if tab.get("active") else " ")

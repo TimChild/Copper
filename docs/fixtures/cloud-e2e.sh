@@ -123,6 +123,60 @@ check "C is linked and signed in as A via the pairing code" 'B cloudc cloud stat
 check "the pairing code works only once" '{ B cloudc cloud pair "$PLINK" 2>&1 || true; } | grep -qi "error\|used\|pairing"' 'true'
 kill "$(cat /tmp/copper-cloudc.pid)" 2>/dev/null || true
 
+echo "== canvas share links: join, live presence, reset, landing page, directory"
+LINK_CREATE=$(B clouda canvas create "Link Roadmap $STAMP"); echo "$LINK_CREATE" | head -c 300; echo
+LINK_CID=$(echo "$LINK_CREATE" | json 'd.get("id") or (d.get("canvas") or {}).get("id") or ""')
+check "A created a link-shared canvas" '[ -n "$LINK_CID" ]' 'echo "$LINK_CREATE"'
+B clouda canvas open "$LINK_CID" >/dev/null; sleep 2
+B clouda canvas apply "{\"id\":\"$LINK_CID\",\"ops\":[{\"op\":\"add\",\"shape\":{\"type\":\"sticky\",\"text\":\"link from A $STAMP\",\"x\":40,\"y\":40}}]}" >/dev/null
+SHARE=$(B clouda canvas link "$LINK_CID"); echo "$SHARE" | head -c 500; echo
+INVITE_LINK=$(echo "$SHARE" | json 'd.get("link") or ""')
+WEB_LINK=$(echo "$SHARE" | json 'd.get("webLink") or ""')
+check "canvas link returns copper and web links" 'echo "$INVITE_LINK" | grep -q "^copper://canvas/join/" && echo "$WEB_LINK" | grep -q "^https://127.0.0.1:8445/join/" && echo "$INVITE_LINK" | grep -q "127.0.0.1:8445"' 'echo "$SHARE"'
+check "B is not invited before joining" '! B cloudb canvas list | grep -q "$LINK_CID"' 'B cloudb canvas list | head -c 500'
+B cloudb canvas join "$INVITE_LINK" | head -c 300; echo; sleep 6
+check "B joins from copper invite as editor" 'B cloudb canvas list | grep -q "$LINK_CID" && B cloudb canvas list | grep -q editor' 'B cloudb canvas list | head -c 600'
+B cloudb canvas open "$LINK_CID" >/dev/null; sleep 4
+check "B reads A sticky after link join" 'B cloudb canvas read "$LINK_CID" | grep -q "link from A $STAMP"' 'B cloudb canvas read "$LINK_CID" | head -c 500'
+B clouda canvas apply "{\"id\":\"$LINK_CID\",\"ops\":[{\"op\":\"add\",\"shape\":{\"type\":\"sticky\",\"text\":\"live from A $STAMP\",\"x\":280,\"y\":40}}]}" >/dev/null; sleep 4
+check "A edits arrive live at B" 'B cloudb canvas read "$LINK_CID" | grep -q "live from A $STAMP"' 'B cloudb canvas read "$LINK_CID" | head -c 600'
+B cloudb canvas apply "{\"id\":\"$LINK_CID\",\"ops\":[{\"op\":\"add\",\"shape\":{\"type\":\"sticky\",\"text\":\"live from B $STAMP\",\"x\":520,\"y\":40}}]}" >/dev/null; sleep 4
+check "B edits arrive live at A" 'B clouda canvas read "$LINK_CID" | grep -q "live from B $STAMP"' 'B clouda canvas read "$LINK_CID" | head -c 600'
+# Drive real pointermove events through the page bridge so native presence reports a cursor.
+ATAB=$(B clouda canvas tabs "$LINK_CID" | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("canvases") or [{}])[0].get("tabs", [{}])[0].get("tab", ""))')
+BTAB=$(B cloudb canvas tabs "$LINK_CID" | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("canvases") or [{}])[0].get("tabs", [{}])[0].get("tab", ""))')
+check "A and B canvas tabs are addressable" '[ -n "$ATAB" ] && [ -n "$BTAB" ]' 'B clouda tabs; B cloudb tabs'
+B clouda eval "$ATAB" "(() => { const b=document.querySelector('[role=application]'); if (!b) return false; for (const [x,y] of [[120,140],[280,220],[420,300]]) b.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:x,clientY:y,pointerId:1,pointerType:'mouse'})); return true })()" >/dev/null; sleep 4
+check "B sees A named human cursor" 'B cloudb canvas presence "$LINK_CID" | json "any(p.get(\"name\")==\"Alice\" and p.get(\"kind\")==\"human\" and p.get(\"cursor\") is not None for p in d.get(\"people\",[]))" | grep -q True' 'B cloudb canvas presence "$LINK_CID"'
+B cloudb eval "$BTAB" "(() => { const b=document.querySelector('[role=application]'); if (!b) return false; for (const [x,y] of [[180,160],[340,240],[500,320]]) b.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:x,clientY:y,pointerId:2,pointerType:'mouse'})); return true })()" >/dev/null; sleep 4
+check "A sees B named human cursor" 'B clouda canvas presence "$LINK_CID" | json "any(p.get(\"name\")==\"Bob\" and p.get(\"kind\")==\"human\" and p.get(\"cursor\") is not None for p in d.get(\"people\",[]))" | grep -q True' 'B clouda canvas presence "$LINK_CID"'
+B cloudb canvas join "$INVITE_LINK" >/dev/null; sleep 3
+check "joining the same link is idempotent" 'B cloudb canvas list | python3 -c "import json,sys; rows=json.load(sys.stdin).get(\"canvases\",[]); x=[r for r in rows if r.get(\"id\")==\"$LINK_CID\"]; print(len(x)==1 and x[0].get(\"role\")==\"editor\")" | grep -q True' 'B cloudb canvas list | head -c 700'
+B cloudb canvas join "$WEB_LINK" >/dev/null; sleep 3
+check "web invite form also opens in Copper" 'B cloudb canvas list | grep -q "$LINK_CID"' 'B cloudb canvas list | head -c 500'
+# Use the documented auth API for the owner reset and the people directory checks.
+KEY=$(python3 -c 'from urllib.parse import urlparse,parse_qs; import sys; print(parse_qs(urlparse(sys.argv[1]).fragment)["k"][0])' "$LINK")
+HOST="https://127.0.0.1:8445"; H="X-Copper-Instance: $KEY"
+ATOKEN=$(curl -ksS -H "$H" -H 'Content-Type: application/json' -d "{\"email\":\"$A_EMAIL\",\"password\":\"$PW\",\"device\":{\"name\":\"e2e-reset\"}}" "$HOST/v1/auth/login" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token", ""))')
+BTOKEN=$(curl -ksS -H "$H" -H 'Content-Type: application/json' -d "{\"email\":\"$B_EMAIL\",\"password\":\"$PW\",\"device\":{\"name\":\"e2e-directory\"}}" "$HOST/v1/auth/login" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token", ""))')
+TOKEN=$(python3 -c 'from urllib.parse import urlparse; import sys; print(urlparse(sys.argv[1]).path.rstrip("/").split("/")[-1])' "$INVITE_LINK")
+LANDING=$(mktemp /tmp/copper-join.XXXXXX); LANDING_HEADERS=$(mktemp /tmp/copper-join-headers.XXXXXX)
+curl -ksS -D "$LANDING_HEADERS" -o "$LANDING" "$HOST/join/$TOKEN"
+check "join landing page is an HTML handoff" 'grep -q "Open this canvas in Copper" "$LANDING" && grep -qi "^cache-control: no-store" "$LANDING_HEADERS" && grep -qi "^referrer-policy: no-referrer" "$LANDING_HEADERS"' 'cat "$LANDING_HEADERS"; head -c 500 "$LANDING"'
+check "join landing page reveals no canvas name" '! grep -q "Link Roadmap $STAMP" "$LANDING"' 'cat "$LANDING"'
+check "B people directory lists A" 'curl -ksS -H "$H" -H "Authorization: Bearer $BTOKEN" "$HOST/v1/people?q=Alice" | grep -q "Alice"' 'curl -ksS -H "$H" -H "Authorization: Bearer $BTOKEN" "$HOST/v1/people?q=Alice"'
+DELETE_STATUS=$(curl -ksS -o /dev/null -w '%{http_code}' -X DELETE -H "$H" -H "Authorization: Bearer $ATOKEN" "$HOST/v1/canvases/$LINK_CID/links")
+check "owner reset revokes every share link" '[ "$DELETE_STATUS" = 204 ]' "echo reset status $DELETE_STATUS"
+C_TOKEN=$(curl -ksS -H "$H" -H 'Content-Type: application/json' -d "{\"email\":\"c-$STAMP@example.com\",\"password\":\"$PW\",\"display_name\":\"Charlie\",\"device\":{\"name\":\"e2e-third\"}}" "$HOST/v1/auth/signup" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token", ""))')
+OLD_JOIN=$(curl -ksS -o /tmp/copper-old-join.json -w '%{http_code}' -X POST -H "$H" -H "Authorization: Bearer $C_TOKEN" "$HOST/v1/canvas-links/$TOKEN/join")
+check "revoked link rejects a third account" '[ "$OLD_JOIN" = 404 ] && grep -q "link_not_found" /tmp/copper-old-join.json' 'cat /tmp/copper-old-join.json'
+rm -f "$LANDING" "$LANDING_HEADERS"
+# Keep both tabs present for the native visual pass; open Share on A and capture B presence.
+B clouda canvas ui mode share "$LINK_CID" >/dev/null; B clouda canvas ui open >/dev/null; sleep 2
+"$ROOT/bench" --world clouda window /tmp/wave-share-A.png >/dev/null 2>&1 || true
+"$ROOT/bench" --world cloudb window /tmp/wave-presence-B.png >/dev/null 2>&1 || true
+
+# The old section plus this section should finish with no failures.
 echo "== done: $PASS passed, $FAIL failed"
-for w in clouda cloudb; do kill "$(cat /tmp/copper-$w.pid)" 2>/dev/null || true; done
+for w in clouda cloudb cloudc; do [ -f "/tmp/copper-$w.pid" ] && kill "$(cat /tmp/copper-$w.pid)" 2>/dev/null || true; done
 [ "$FAIL" -eq 0 ]

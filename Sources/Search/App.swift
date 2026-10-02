@@ -159,6 +159,9 @@ struct AppCommands: Commands {
             Divider()
             Button("Close Other Tabs") { if let tab = browser.active { browser.closeOthers(but: tab) } }
                 .disabled(browser.tabs.count < 2)
+            Button("Clear Tabs") { ClearTabs.shared.clear(in: browser) }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+                .disabled(ClearTabs.shared.clearable(in: browser).isEmpty)
             Button("Stop Sound in Tab") { browser.pauseMedia() }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
         }
@@ -264,6 +267,8 @@ private struct MenuLine: View {
 struct ContentView: View {
     @ObservedObject var browser: Browser
     @ObservedObject private var recent = Recent.shared
+    @ObservedObject private var canvases = Canvases.shared
+    @ObservedObject private var clearTabs = ClearTabs.shared
 
     @State private var keys: Any?
     @State private var window: NSWindow?
@@ -337,7 +342,12 @@ struct ContentView: View {
     /// Everything that rises from the bottom edge to say one thing.
     private var bars: some View {
         VStack(spacing: 8) {
+            clearTabsToast
             announcement
+            if let invite = canvases.newInvite {
+                inviteBanner(invite)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if let ask = browser.asking {
                 captureAsking(ask)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -354,8 +364,61 @@ struct ContentView: View {
         }
         .padding(.bottom, 30)
         .animation(Motion.settle, value: browser.veiling)
+        .animation(Motion.settle, value: clearTabs.generation)
         .animation(Motion.settle, value: browser.asking)
         .animation(Motion.settle, value: browser.offering)
+        .animation(Motion.settle, value: canvases.newInvite)
+    }
+
+    /// A new invite, said once until it is answered: "<owner> invited you to
+    /// “<name>” · Open". Accepting joins and opens it in one step — the
+    /// person who sent it already knows you were asked.
+    private func inviteBanner(_ invite: Canvases.Invite) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "person.crop.circle.badge.plus")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Palette.muted)
+            Text(invite.from.isEmpty
+                 ? "You were invited to “\(invite.canvasName)”"
+                 : "\(invite.from) invited you to “\(invite.canvasName)”")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+            Button("Open") { openInvite(invite) }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.ground)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(Palette.ink, in: Capsule())
+            Button {
+                Task { try? await canvases.answer(invite, accept: false) }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.muted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .padding(.vertical, 9)
+        .background(Palette.ground, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 20, y: 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Invitation to \(invite.canvasName)\(invite.from.isEmpty ? "" : " from \(invite.from)")")
+    }
+
+    private func openInvite(_ invite: Canvases.Invite) {
+        Task {
+            do {
+                try await canvases.answer(invite, accept: true)
+                if let entry = canvases.entry(invite.canvasId) { CanvasHost.show(entry.id, in: browser, foreground: true) }
+            } catch {
+                browser.announce(Canvases.explain(error))
+            }
+        }
     }
 
     /// The address field: raised over a page by ⌘L or ⌘K, and standing on its
@@ -483,6 +546,13 @@ struct ContentView: View {
     }
 
     // MARK: - the window
+
+    /// The six-second Clear affordance, styled like the existing announcement
+    /// pill but with an actionable Undo control.
+    @ViewBuilder
+    private var clearTabsToast: some View {
+        ClearTabsToast(browser: browser)
+    }
 
     /// A line that rises from the bottom, says one thing, and leaves.
     @ViewBuilder
@@ -853,8 +923,16 @@ struct ContentView: View {
             browser.toggleHiding()
         case "u" where shifted:
             browser.reviewing.toggle()
+        case "k" where shifted:
+            guard !ClearTabs.shared.clearable(in: browser).isEmpty else { return false }
+            ClearTabs.shared.clear(in: browser)
         case "z" where !shifted:
-            // Only while pointing. Everywhere else undo belongs to the page.
+            // Clear's undo owns ⌘Z while its pill is up; otherwise only while
+            // pointing. Everywhere else undo belongs to the page.
+            if ClearTabs.shared.undoCount(in: browser) != nil {
+                ClearTabs.shared.undo(in: browser)
+                return true
+            }
             guard browser.veiling else { return false }
             browser.undoHiding()
         // ⌘+ arrives as "=" or "+" depending on the keyboard; both mean bigger.

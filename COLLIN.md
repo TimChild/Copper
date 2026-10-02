@@ -22,7 +22,7 @@ Copper is Collin's fork of [Search](https://github.com/driceroland/Search), the 
 | 2. Profiles per space | Tier 1 | **shipped** (space context menu › Profile) |
 | 3. Split view (2–4 panes) | Tier 1 | **shipped**, 2 panes (`Fork/Split.swift`, ⌘⇧D) |
 | 4. Command bar | Tier 1 | **shipped** (`Fork/CommandBar.swift`, ⌘K) |
-| 5. Folders in the sidebar | Tier 2 | **shipped** as tab groups (`Fork/Groups.swift`, `GroupsUI.swift`) with model-assisted grouping (`Grouper.swift`, `Intelligence.swift`) |
+| 5. Folders in the sidebar | Tier 2 | **shipped** as manual tab groups (`Fork/Groups.swift`, `GroupsUI.swift`); automatic grouping was removed |
 | Flow (move in from Chrome/Arc) | Copper | **shipped** (Felipe): one-button import sheet, spaces/tabs/bookmarks/history/passwords/cookies/extensions core, command bar, Settings, menu and `bench flow` |
 | Copper passkeys (agent/auth lane) | Copper | **in progress**: unentitled WebAuthn polyfill, keychain P-256 credentials, Touch ID bridge, Settings list, and `bench passkeys`; Chrome import uses the same store |
 | 6. Auto-archive | Tier 2 | **shipped** as part of the Sections piece: Today rows close through the normal path after 12h/24h/48h/never (`Fork/Sections.swift`, Settings, `bench sections archive`) |

@@ -196,6 +196,8 @@ struct AgentPane: View {
             .padding(.horizontal, 10).padding(.vertical, 7)
             .background(Palette.hover, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
+        case .drive:
+            EmptyView()
         case .note:
             Text(item.text)
                 .font(.system(size: 11)).foregroundStyle(item.ok ? Palette.muted : Color.orange.opacity(0.9))

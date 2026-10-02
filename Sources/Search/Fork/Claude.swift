@@ -188,6 +188,10 @@ enum Claude {
             ])
         }
         if !calls.isEmpty { message["tool_calls"] = calls }
+        // Why the reply ended, in the router's words as well as Anthropic's:
+        // "max_tokens" means it was cut off, possibly in the middle of a
+        // tool call whose input is then incomplete (Agent.cutOff).
+        if let stop = payload["stop_reason"] as? String { message["_stop"] = stop }
         return message
     }
 
@@ -390,6 +394,8 @@ enum Claude {
         check(chat["role"] as? String == "assistant" && chat["content"] as? String == "done" &&
               (chat["tool_calls"] as? [[String: Any]])?.count == 1 &&
               arrayOfBlocks(chat["_blocks"]).count == 3, "payload chat message")
+        let cut = chatMessage(from: ["content": [["type": "text", "text": "half"]], "stop_reason": "max_tokens"])
+        check(cut["_stop"] as? String == "max_tokens", "stop reason carried through")
 
         let mappedTools = tools(fromChat: [[
             "type": "function", "function": ["name": "lookup", "description": "Find it"],

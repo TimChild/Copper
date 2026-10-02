@@ -187,27 +187,34 @@ agents`), or the agent in Copper's own pane.
   driving*, *@dev-s · agents is driving* — and a warm 1.5 pt ring just inside
   the page's edge. The dot is solid while a call is in flight and breathes
   while the driver thinks between calls. Both go when the driver lets go.
-- **The driver timeline** (⌥⌘J, ⌘K › *Driver Timeline*, or click the pill):
-  a pane beside the page with one row per thing the driver did — *Clicking
-  Search button · 600 ms · CLICK → page changed*, *Typing into Email field
-  “…” · TYPE*, *Reading the page's controls · READ*, a failed call in red
-  with its error — and, under the header, the latest thing the driver said
-  about what it is doing. For a Jev run the rows are its cycles (read → ask →
-  act → settle) as before.
+- **The driver's card** in the agent pane (⌥⌘J, ⌘K › *Driver Timeline*, or
+  click the pill — the pane opens by itself when a run begins). There is one
+  pane beside the page, the agent's (⌘E), and a run lands in its
+  conversation as a live card: who (*phi · monkey board · Personal*, *Jev ·
+  for Claude Code*), the goal, the latest thing the driver said about what it
+  is doing, its last few steps in words — *Read 45 shapes on Personal*,
+  *Clicking Fit to screen*, a failed call in red with its error — with the
+  time each took, a ticking clock, and Stop. *Details* opens the whole
+  timeline: every cycle numbered, each phase with its time, the operation
+  chip and what it came to (*CLICK → page changed*), how sure Jev was and the
+  moves it was offered. A finished run's card stays where it happened, with
+  how it ended (*Done — Found 3 under $300*, *Stopped by you*). A Jev run the
+  pane's own agent starts with `jev_run` is no card: its moves nest under that
+  step in the agent's activity row (below).
 - **On the page**, the same trail Jev draws: the element about to be clicked
   or typed into is outlined and named, a pointer glides to it, a numbered
   dot marks the press, the typed value rises beside the field (masked when
   the field sounds like a secret), a chevron marks a scroll.
-- **Stop** (the pill's square, or the pane's) takes the browser back. A Jev
+- **Stop** (the pill's square, or the card's) takes the browser back. A Jev
   run ends before its next action. An agent's next tool calls are refused for
   30 s with *Stopped by the user in Copper: they took the browser back. Do not
   retry; tell them what you were doing and wait…* — the refused attempts show
-  in the timeline — and *Let it back in* on the pane's footer ends the
-  refusal early.
+  in the card — and *Let it back in* on the card's footer ends the refusal
+  early.
 
 **`reason`.** Every `browser_*` tool takes an optional `reason` string: one
 short sentence on what the agent is doing and why. It is never acted on; it
-is shown to the user in the timeline, over the calls that follow. The server's
+is shown to the user on the driver's card, over the calls that follow. The server's
 `instructions` ask agents to pass it on each call, together with `element`
 (Playwright's own human-readable element description) for anything they click
 or type into — those two are what the rows are made of. The agent in the
@@ -216,9 +223,12 @@ shown instead.
 
 An agent's run stays live for 30 s after its last call — agents think between
 calls — and ends on its own after that (*Let go · 7 calls*); the same driver
-back within three minutes continues the same timeline. `./bench drive
+back within three minutes continues the same card. `./bench drive
 [status|stop|resume|clear|pane on|off]` reads and drives all of this from a
-script; `./bench render drive PATH` draws the pane to a PNG on its own.
+script (`pane on|off` opens or closes the agent pane); `./bench render drive
+PATH` (or `agent`, `agent-dark`) draws the pane to a PNG on its own, and
+`./bench agent seed driver` fills it with a finished Jev card and a live
+agent's, for pictures.
 Design and verification record: [plans/2026-09-30-driver-timeline.md](plans/2026-09-30-driver-timeline.md).
 
 ## The agent in the window — ⌘E
@@ -254,15 +264,37 @@ What it has in hand:
   `server__tool` and are routed back by that prefix. Connected at launch
   and on *Reload*; the row under the card says which answered.
 
-Tool calls are chips in the transcript — name, the arguments that matter,
-the first line of the answer, the time it took — so you can see the
-agent's hands. Stop with the square; clear with the bin. Every question
-carries the current tab's address, title and first 3000 characters unless
-*Page in front of every question* is off. `./bench agent ask TEXT`,
-`./bench agent chat`, `./bench agent servers`.
+The pane reads like ChatGPT's. Your questions sit on the right in soft
+bubbles; the answers are full-width text, with the model's markdown drawn
+(headings, lists, bold, `code`, code blocks). Between them, one quiet row
+per question for what the agent did — *Worked for 12 s · 6 steps*, *· 1
+failed* in red when something did — which opens to the steps: an icon, the
+step in words (*Read 5 shapes on Personal*, *40 operations applied on
+Personal*), its time, a failure and `canvas_apply`'s turned-away ops (*2 of
+60 not applied — op 7 (connect): no shape n107*) in red under it, and what
+the model said between calls in grey. While it works the row is the step in
+flight, shimmering, with a clock, and the send button is Stop. A note that
+something went wrong (a reply cut off at the output limit, a timeout, an
+empty reply) is an orange callout, never a silence. Outside drivers' cards
+(above) arrive in the same conversation.
+
+The composer grows with what you type: Return sends, ⇧Return breaks the
+line. The chip under it is the page in front of every question (the tab's
+address, title and first 3000 characters, or the canvas by name) — click it
+to leave the page out. The terminal glyph copies the draft as a `/jev`
+command. An empty pane offers three or four things to ask, different on a
+canvas; before a model is set up it offers *Sign in with Claude* and *Use an
+API key*. Scrolled up while more arrives, *Jump to latest* takes you back.
+The header has the model pill (Haiku, Sonnet, Opus, and the access line),
+how many tools your MCP servers add, New chat and close. Drag the pane's
+left edge to make it wider. `./bench agent ask TEXT`, `./bench agent chat`,
+`./bench agent servers`, `./bench agent seed chat|running|jev|driver|empty`
+and `./bench agent expand all|none` for pictures.
 
 Files: `Fork/Agent/Agent.swift` (the loop), `Fork/Agent/Servers.swift`
-(the client), `Fork/Agent/AgentPane.swift` (the pane). The pane rides in
+(the client), `Fork/Agent/AgentPane.swift` (the pane),
+`Fork/Agent/AgentActivity.swift` (the activity row, markdown),
+`Fork/MCP/DriveCard.swift` (driver cards, the pill). The pane rides in
 `SplitStage`; no upstream file changed.
 
 ## Your agents — let them use this browser

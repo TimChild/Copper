@@ -2280,6 +2280,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         for action: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
+        if CanvasHost.popup(action, from: webView, browser: self) { return nil } // Fork (canvas-hooks): a window from a board's live frame is an ordinary tab (Fork/Canvas/CanvasFrames)
         let from = tab(for: webView)?.id ?? activeID
         let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
         adopt(tab)

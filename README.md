@@ -150,7 +150,7 @@ copper session restore                 # previous backup; add --quit if Copper i
 
 Use `copper extract "…"` for structured reads, `copper shot` for a screenshot, and `copper --json …` when a script needs the result object. Jev actions return a claim of DONE; verify the page yourself. `copper session list` reports both `session.json` and the one retained `session.previous.json` backup with tab/space counts and mtimes. `copper session restore [PATH]` saves the current file as `session.replaced-<timestamp>.json`, then restores a chosen file and relaunches Copper; it refuses to touch a running browser unless `--quit` is explicit.
 
-Model access lives in Settings › Intelligence: choose an API-key gateway or a Claude account, then pick Haiku, Sonnet or Opus. The same model choice serves the agent pane, Jev helpers and tab grouper; see [docs/intelligence.md](docs/intelligence.md).
+Model access lives in Settings › Intelligence: choose an API-key gateway or a Claude account, then pick Haiku, Sonnet or Opus. The same model choice serves the agent pane and Jev helpers; see [docs/intelligence.md](docs/intelligence.md).
 
 ### Agent links
 

@@ -1290,7 +1290,6 @@ final class Browser: NSObject, ObservableObject {
     /// behind; closing that blank tab closes the window.
     func close(_ tab: Tab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
-        Grouper.shared.forget(tab.id) // Fork
         signedInWith[tab.id] = nil
         if tab.pin == nil { CanvasHost.forget(tab) } // Fork (canvas): its room closes with it
 
@@ -2346,7 +2345,6 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         Favicons.shared.fetch(for: tab)
         guard !tab.shy, !tab.bench else { return }
         history.record(url, title: tab.title)
-        Grouper.shared.landed(tab, in: self) // Fork: where does this tab belong?
     }
 
     private func fail(_ webView: WKWebView, _ error: Error) {

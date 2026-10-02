@@ -113,6 +113,106 @@ is CanvasHost's, made for it, never an extension's).
   *Joining…* in the row while the answer is on its way, and stays — with the reason, in the row —
   until the server has said yes.
 
+## Live web frames
+
+A link on the board can show the site itself instead of its card: an `<iframe>` under a slim title
+bar, which you and everyone else on the board can use at the same time.
+
+- **Making one.** The link prompt (the link tool, or `L`) has **Live** (⌥↵) beside Add; a link you
+  paste or drop lands as a card with a *Link added · Show live* toast; any link card's selection bar
+  has **Show live** (and a live one **Show as card**). Agents add `{type:'web', url}` (or a link
+  with `live:true`; `embed` and `iframe` are accepted spellings); it is 960×640 by default and
+  never smaller than 320×200. A live link is still a `link` in the document — a page from before
+  frames shows it as a card and keeps the flag.
+- **Using one.** Until it is in use a frame is a shape like any other: a transparent shield lies
+  over the page, so it selects, drags, resizes, marquees and zooms with the board. Click the
+  selected frame (or double-click it, or ↵) and the shield comes off: the page scrolls, takes
+  clicks and the keyboard. **Esc** (when the site didn't use it), a click on the board or another
+  shape gives the board back. The bar has Back / Forward (this frame's own pages, not the board's
+  history), Reload, the address (editable while in use), **Sign in**, **Open in a tab** and **Show
+  as card**.
+- **Together.** Where a frame is — its `url`, `title` and `favicon` — is the shape's, so it syncs
+  like any edit: when the person using a frame follows a link, everyone else's frame goes there
+  too. Only the person using a frame writes its address (a frame that is following someone, or
+  redirecting on its own — to a sign-in page, another locale — never writes it), and browsing is
+  never an undo step. Whoever is using a frame shows on it: a ring and a name tag in their colour.
+  Scroll position, what is typed into the page and the page's own state are each person's.
+- **Cheap when idle.** At most six frames have a real iframe at once: the one in use, then the
+  ones on screen and at least 260 px wide, nearest the middle first; the rest show a placeholder
+  (favicon, title, host) until you come closer.
+
+### Privacy: one address, your own cookies
+
+What a live frame shares is **where it is, never who it is signed in as.** Each person's Copper
+loads the site with their own cookie jar — the board's view uses the store of the space it was
+opened in (its profile's, if the space wears one), the same one a tab there uses. Nobody's
+cookies, storage or page contents travel through the board; the board only carries the address
+and title, which everyone on it can read (the same as a link card). So a private page — a doc,
+an inbox — shows each person their own view of it, or a sign-in page if they have no access.
+
+### Which sites stay signed out, and why
+
+The board is a local file (`file://`), so to the browser every site in a frame is a
+**third-party, cross-site** frame. WebKit then sends a frame only the cookies marked
+`SameSite=None` (and unmarked ones); `SameSite=Lax` and `Strict` cookies — which most sign-ins
+use now — are never sent to a frame, whatever the board does, and storage (localStorage,
+IndexedDB) is partitioned, so the frame doesn't see what the site stored in a tab. Measured on
+macOS 26 with WebKit's own settings:
+
+- Public pages (Wikipedia, docs, news, dashboards with public links) work fully.
+- Sites whose session cookie is `SameSite=None` (apps made to be embedded often are) are signed
+  in as you, once you have signed in to them in a tab.
+- Sites with Lax/Strict session cookies (GitHub and Google among them) show signed out in a
+  frame however you sign in. **Sign in** in the bar opens the frame's page in a tab — where it is
+  the site itself, with every cookie, your passwords and passkeys — and the frame reloads when you
+  come back to the board, picking up whatever of that sign-in a frame may carry. For the rest,
+  **Open in a tab**. Passwords and passkeys are not offered inside a frame (Copper's passkeys
+  answer only the site you are on, and the board is not that site).
+- Sites that refuse to be framed (`X-Frame-Options`, `frame-ancestors`) load anyway in the board —
+  the board's view, and only it, turns on WebKit's `IgnoreIframeEmbeddingProtectionsEnabled`. A
+  page that still shows nothing — one that hides itself when framed, a load that never arrives —
+  gets a card: *\<host> doesn't allow embedding · Open in tab · Try again · Show as card*.
+
+What would change it, and why Copper doesn't: turning off WebKit's third-party cookie blocking
+(`_setThirdPartyCookieBlockingMode:` on the store) works, but for the whole store — every tab of
+the space, every tracker on every page — so it stays off. Serving the board from a custom scheme
+instead of `file://` changes nothing: the board would still be cross-site to every site.
+`_setShouldRelaxThirdPartyCookieBlocking:` is Safari's alone (WebKit throws for anyone else), and
+the `IsThirdPartyCookieBlockingDisabled` feature has no effect for an app.
+
+### How it works
+
+- **Page** (`Canvas/src/canvas/frames.ts`, `components/WebFrame.tsx`): the iframe is sandboxed
+  (`allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox
+  allow-modals allow-downloads allow-storage-access-by-user-activation
+  allow-top-navigation-by-user-activation` — never `allow-top-navigation`, so a frame-buster can't
+  take the tab), `allow="fullscreen; clipboard-write; autoplay; encrypted-media;
+  picture-in-picture"` (no camera, mic or location), and named `copper-frame:<shape id>:<nonce>`;
+  the nonce is made per mount and never leaves the page. The page's CSP allows `frame-src https:
+  http:` and still `connect-src 'none'`.
+- **Host** (`Sources/Search/Fork/Canvas/CanvasFrames.swift`): a user script in every subframe of
+  the board, in a content world of its own (`CopperCanvasFrames`, out of the site's reach), reads
+  the frame's name at document start — before the site's scripts can change it — and, only in a
+  frame directly on the board with a `copper-frame:` name, reports to its own handler
+  (`copperFrame`): `nav` (address, title, https icon; on load, history changes, and a 1 s check
+  while visible), `escape` (Esc the site didn't use) and `blank` (the page hid itself). The
+  handler drops anything from the main frame or another web view, an address not on the origin
+  WebKit says the frame is on, or a name that isn't the board's, and hands the rest to the page:
+  `copperCanvas.frameEvent({name, kind, url?, title?, icon?})`. After `init` the host says
+  `copperCanvas.frameHost({reports: true})`; from then on a frame that loads without reporting
+  shows the "doesn't allow embedding" card. The `canvas` handler still answers the main frame
+  only, so a framed site can't speak for the board.
+- **Popups.** A window a frame opens (`window.open`, "Sign in with…") and a `target=_blank` or
+  `_top` link are ordinary tabs in front (`CanvasHost.popup`, `CanvasHost.decide`), never a view
+  built from the board's configuration; the opener link is lost, so a popup sign-in finishes in
+  the tab.
+- **Not in a frame:** the ad blocker (a board's view carries no content rules), Copper's password
+  and passkey helpers, extensions, and the hide-something picker — a frame is the site as WebKit
+  shows it. A frame that is a PDF or another document no script runs in may show the "doesn't
+  allow embedding" card; Open in tab shows it.
+- `./bench canvas frames [ID]` shows what the host passed on, whether the embedding preference is
+  on, and the board's cookie store.
+
 ## Where things are kept
 
 `Application Support/Copper/canvas/` (a probe world's own folder under `SEARCH_PROBE`):
@@ -277,6 +377,9 @@ arguments, never pasted into source), so a function may return a value or a prom
 - `copperCanvas.setShare({canShare, members?, reason?})` — shows/enables the page's own Share
   button; called after `ready` and whenever the entry, its membership or the cloud link changes
   (guarded: `typeof setShare === 'function'`, for a bundled page older than this)
+- `copperCanvas.frameEvent({name, kind:"nav"|"escape"|"blank", url?, title?, icon?}) → bool` and
+  `frameHost({reports})` — live web frames' reports ([Live web frames](#live-web-frames)); from
+  the `copperFrame` handler, in its own content world, never the `canvas` one
 - `copperCanvas.presence() → [{id,name,color,kind,cursor}]` (read, not pushed — used by `bench
   canvas presence` and anything checking live cursors, not just the Share sheet's faces)
 

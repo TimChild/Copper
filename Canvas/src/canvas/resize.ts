@@ -35,6 +35,14 @@ export const MIN_SIZE = {
 export type ResizableType = keyof typeof MIN_SIZE
 export const isResizable = (type: string): type is ResizableType => type in MIN_SIZE
 
+/** A live web frame (a link with `live`) keeps room for its title bar and a usable page. */
+export const LIVE_MIN = { w: 320, h: 200 } as const satisfies Size
+
+/** The smallest this shape may get: its type's, or a live frame's. */
+export function minSizeOf(shape: { type: ResizableType; live?: boolean }): Size {
+  return shape.type === 'link' && shape.live ? LIVE_MIN : MIN_SIZE[shape.type]
+}
+
 /**
  * The box after dragging `handle` by `delta` (world px) from `start`. The
  * opposite edge/corner stays put; sizes clamp at `min`, and a dragged edge

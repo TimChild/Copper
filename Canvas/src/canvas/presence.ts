@@ -14,6 +14,8 @@ export interface PresencePerson {
   kind: PresenceKind
   cursor: Point | null
   selection: string[]
+  /** The live web frame (shape id) they are using right now, if any. */
+  frame?: string | null
   /** Yjs awareness client id; absent for document-backed agents. */
   clientId?: number
 }
@@ -40,12 +42,14 @@ export function readHumanPresence(awareness: Awareness): PresencePerson[] {
     const rawCursor = s.cursor as Record<string, unknown> | null | undefined
     const cursor = rawCursor && finite(rawCursor.x) && finite(rawCursor.y) ? { x: rawCursor.x, y: rawCursor.y } : null
     const selection = Array.isArray(s.selection) ? s.selection.filter((x): x is string => typeof x === 'string') : []
-    out.push({ id, name, color, kind: 'human', cursor, selection, clientId })
+    const frame = typeof s.frame === 'string' && s.frame ? s.frame : null
+    out.push({ id, name, color, kind: 'human', cursor, selection, frame, clientId })
   })
   const unique = new Map<string, PresencePerson>()
   for (const person of out) {
     const previous = unique.get(person.id)
-    if (!previous || (person.cursor && !previous.cursor)) unique.set(person.id, person)
+    // Two windows of one person: the one using a frame, else the one with a cursor.
+    if (!previous || (person.frame && !previous.frame) || (!previous.frame && person.cursor && !previous.cursor)) unique.set(person.id, person)
   }
   return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name) || (a.clientId ?? 0) - (b.clientId ?? 0))
 }

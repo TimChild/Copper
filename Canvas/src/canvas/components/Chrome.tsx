@@ -22,9 +22,11 @@ import {
   Lock,
   Maximize,
   Minus,
+  MonitorPlay,
   MousePointer2,
   PencilLine,
   Plus,
+  RectangleHorizontal,
   Redo2,
   Search,
   SendToBack,
@@ -588,6 +590,7 @@ export function SelectionBar({
   onDelete,
   onRemoveImage,
   onOpen,
+  onLive,
   below,
 }: {
   at: { x: number; y: number }
@@ -601,6 +604,8 @@ export function SelectionBar({
   onDelete: () => void
   onRemoveImage: () => void
   onOpen: () => void
+  /** A link: show the site live (true) or as its card (false); absent when it can't be live. */
+  onLive?: (live: boolean) => void
   below: boolean
 }) {
   const single = shapes.length === 1 ? shapes[0]! : null
@@ -667,7 +672,17 @@ export function SelectionBar({
       {single?.type === 'link' && (
         <>
           <Divider />
-          <IconButton size="sm" label="Open link" keys="↵" className="rounded-full" onClick={onOpen}>
+          {onLive &&
+            (single.live ? (
+              <IconButton size="sm" label="Show as card" className="rounded-full" onClick={() => onLive(false)}>
+                <RectangleHorizontal className="h-4 w-4" />
+              </IconButton>
+            ) : (
+              <IconButton size="sm" label="Show live" className="rounded-full" onClick={() => onLive(true)}>
+                <MonitorPlay className="h-4 w-4" />
+              </IconButton>
+            ))}
+          <IconButton size="sm" label={single.live ? 'Open in a tab' : 'Open link'} keys={single.live ? undefined : '↵'} className="rounded-full" onClick={onOpen}>
             <ExternalLink className="h-4 w-4" />
           </IconButton>
         </>
@@ -703,20 +718,24 @@ export function SelectionBar({
   )
 }
 
-/** Ask for an address; Enter puts a link card on the board. */
-export function LinkPrompt({ onSubmit, onClose }: { onSubmit: (url: string) => void; onClose: () => void }) {
+/** Ask for an address; Enter puts a link card on the board, ⌥Enter (or "Live") the site itself. */
+export function LinkPrompt({ onSubmit, onClose }: { onSubmit: (url: string, live: boolean) => void; onClose: () => void }) {
   const ref = useRef<HTMLInputElement>(null)
   const [value, setValue] = useState('')
   const [error, setError] = useState('')
   useEffect(() => ref.current?.focus(), [])
-  const submit = () => {
+  const submit = (live = false) => {
     const v = value.trim()
     if (!v) return onClose()
     const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(v) ? v : `https://${v}`
     try {
       const u = new URL(withScheme)
       if (!['http:', 'https:', 'mailto:', 'copper:'].includes(u.protocol)) throw new Error('scheme')
-      onSubmit(u.toString())
+      if (live && u.protocol !== 'http:' && u.protocol !== 'https:') {
+        setError('Only web pages can be shown live.')
+        return
+      }
+      onSubmit(u.toString(), live)
     } catch {
       setError('That does not look like a web address.')
     }
@@ -745,9 +764,22 @@ export function LinkPrompt({ onSubmit, onClose }: { onSubmit: (url: string) => v
             onKeyDown={e => {
               e.stopPropagation()
               if (e.key === 'Escape') onClose()
+              if (e.key === 'Enter' && e.altKey) {
+                e.preventDefault()
+                submit(true)
+              }
             }}
             className="h-8 min-w-0 flex-1 bg-transparent text-[13.5px] text-ink outline-none placeholder:text-ink-4"
           />
+          <button
+            type="button"
+            title="Show the site itself on the board (⌥↵)"
+            className="flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12.5px] font-semibold text-ink-2 hover:bg-surface-2 hover:text-ink"
+            onClick={() => submit(true)}
+          >
+            <MonitorPlay className="h-3.5 w-3.5" aria-hidden="true" />
+            Live
+          </button>
           <button type="submit" className="h-7 shrink-0 rounded-lg bg-accent px-2.5 text-[12.5px] font-semibold text-accent-ink hover:bg-accent-strong">
             Add
           </button>
@@ -785,6 +817,8 @@ const SHORTCUTS: [string, string[]][] = [
   ['Zoom to fit / selection', ['⇧1', '⇧2']],
   ['Zoom to 100%', ['⇧0']],
   ['Bold / italic in a note', [`${MOD}B`, `${MOD}I`]],
+  ['Use a live web frame', ['Double-click', '↵']],
+  ['Back to the board from a frame', ['Esc']],
 ]
 
 export function ShortcutsSheet({ onClose }: { onClose: () => void }) {
@@ -857,6 +891,8 @@ export interface Toast {
   id: number
   text: string
   tone: 'info' | 'error'
+  /** One button on the toast (e.g. "Show live" after a link is dropped). */
+  action?: { label: string; run: () => void }
 }
 
 export function Toasts({ toasts }: { toasts: readonly Toast[] }) {
@@ -866,11 +902,21 @@ export function Toasts({ toasts }: { toasts: readonly Toast[] }) {
         <div
           key={t.id}
           className={cn(
-            'pop-in rounded-full px-3.5 py-1.5 text-[12.5px] font-medium shadow-2',
+            'pop-in flex items-center rounded-full px-3.5 py-1.5 text-[12.5px] font-medium shadow-2',
             t.tone === 'error' ? 'bg-danger text-white' : 'bg-[#1d1d1f] text-white dark:bg-[#f2f2ef] dark:text-[#1d1d1f]'
           )}
         >
           {t.text}
+          {t.action && (
+            <button
+              type="button"
+              className="pointer-events-auto -my-0.5 -mr-1.5 ml-2.5 rounded-full bg-white/15 px-2.5 py-0.5 text-[12px] font-semibold hover:bg-white/25 dark:bg-black/10 dark:hover:bg-black/20"
+              onPointerDown={e => e.stopPropagation()}
+              onClick={t.action.run}
+            >
+              {t.action.label}
+            </button>
+          )}
         </div>
       ))}
     </div>

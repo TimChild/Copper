@@ -59,7 +59,7 @@ function InlineField({
   )
 }
 
-const place = (s: Pick<Shape, 'x' | 'y' | 'w' | 'h'>) => ({
+export const place = (s: Pick<Shape, 'x' | 'y' | 'w' | 'h'>) => ({
   width: s.w,
   height: s.h,
   transform: `translate(${s.x}px, ${s.y}px)`,
@@ -300,7 +300,7 @@ export const ImageView = memo(function ImageView({ shape }: { shape: Shape }) {
   )
 })
 
-function hostLabel(url: string) {
+export function hostLabel(url: string) {
   try {
     const u = new URL(url)
     return (u.hostname || u.protocol.replace(':', '')).replace(/^www\./, '')

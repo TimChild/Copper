@@ -21,7 +21,8 @@ import WebKit
 // - `arm` (Tab.arm(hiding:), every time a tab is re-armed): every user script
 //   off, and one small one in their place that says whether the caret is in
 //   something that takes typing — the one thing the sign-in watcher told
-//   Copper that a board needs, since Tab belongs to Copper unless it is.
+//   Copper that a board needs, since Tab belongs to Copper unless it is —
+//   and the live web frames' reporter (CanvasFrames), in subframes only.
 // - `PageView.boardScroll` (PageView.scrollWheel): the event to WebKit and
 //   nothing else — no swipe tracking, no ask, no disc. Only the first event
 //   of a gesture counts as touching the page.
@@ -52,8 +53,9 @@ extension CanvasHost {
             controller.removeScriptMessageHandler(forName: name)
         }
         controller.removeScriptMessageHandler(forName: Passkeys.name, contentWorld: .page)
-        // Nothing third-party ever loads on a board, and the blocker's
-        // cosmetic rules are a stylesheet matched on every style pass.
+        // Nothing third-party loads on the board itself, and the blocker's
+        // cosmetic rules are a stylesheet matched on every style pass. (A
+        // live web frame is a site's own page, shown unblocked: CanvasFrames.)
         controller.removeAllContentRuleLists()
     }
 
@@ -64,6 +66,8 @@ extension CanvasHost {
         controller.removeAllUserScripts()
         controller.removeAllContentRuleLists()
         controller.addUserScript(WKUserScript(source: typing, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // Live web frames say where they are (CanvasFrames), from their own world.
+        controller.addUserScript(frameScript)
         return true
     }
 

@@ -42,7 +42,8 @@ import { countRender } from '../debug'
 import { gridBackground } from '../grid'
 import { growFor } from '../overflow'
 import { imageFile, imageFromFile, imageFromUrl, imageSizeFor, isUrlText, looksLikeImageUrl, urlFrom } from '../images'
-import { MIN_SIZE, isResizable, resizeBox, resizeBoxKeepAspect, type Handle } from '../resize'
+import { MIN_SIZE, isResizable, minSizeOf, resizeBox, resizeBoxKeepAspect, type Handle } from '../resize'
+import { LIVE_SIZE, framesToMount, frameUrl } from '../frames'
 import { arrowLabelBox, revealView, type SearchResult } from '../search'
 import { statusView } from '../status'
 import { SHAPE_SIZE, isRefEndpoint, type Endpoint, type NamedColor, type Shape, type ShapeColor } from '../types'
@@ -83,6 +84,7 @@ import {
 } from './Overlays'
 import { SearchBox } from './SearchBox'
 import { ArrowLabel, ArrowLayer, FrameView, ImageView, LinkView, StickyView, TextView, type DrawnArrow } from './Shapes'
+import { WebFrame, type FrameUser } from './WebFrame'
 import { cn } from './ui'
 
 type Gesture =
@@ -96,8 +98,10 @@ type Gesture =
       hit: string
       last: number
       next?: Map<string, Partial<Shape>>
+      /** Pressed the shield of the frame that was already the selection: a click (no drag) puts it in use. */
+      shield?: boolean
     }
-  | { kind: 'resize'; id: string; handle: Handle; start: Point; box: Box; type: Shape['type']; at?: Box; last: number }
+  | { kind: 'resize'; id: string; handle: Handle; start: Point; box: Box; type: Shape['type']; live?: boolean; at?: Box; last: number }
   | { kind: 'marquee'; start: Point; startScreen: Point; base: string[]; additive: boolean; frameClick?: string; moved: boolean }
   | { kind: 'frame'; start: Point; startScreen: Point; box?: Box }
   | { kind: 'arrow'; from: Endpoint; startScreen: Point; moved: boolean }
@@ -130,6 +134,8 @@ const LASER_CURSOR = `url("data:image/svg+xml;utf8,${encodeURIComponent(
 
 const isTextField = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.isContentEditable || el.closest('input, textarea, select') !== null)
+
+const NO_USERS: readonly FrameUser[] = []
 
 const sortZ = (a: Shape, b: Shape) => a.z - b.z || a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
@@ -208,11 +214,52 @@ export function Board({ session }: { session: Session }) {
     setDraft(null)
   }, [])
 
-  const toast = useCallback((text: string, tone: Toast['tone'] = 'info', ms = 2600) => {
+  const toast = useCallback((text: string, tone: Toast['tone'] = 'info', ms = 2600, action?: Toast['action']) => {
     const id = Date.now() + Math.random()
-    setToasts(t => [...t.slice(-2), { id, text, tone }])
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), ms)
+    const dismiss = () => setToasts(t => t.filter(x => x.id !== id))
+    const act = action && { label: action.label, run: () => (dismiss(), action.run()) }
+    setToasts(t => [...t.slice(-2), { id, text, tone, ...(act ? { action: act } : {}) }])
+    setTimeout(dismiss, ms)
   }, [])
+
+  // ---- live web frames ------------------------------------------------------------
+
+  /** The live frame in use here (its shield is off and it has the keyboard). */
+  const [activeFrame, setActiveFrame] = useState<string | null>(null)
+  const activeId = activeFrame && shapes.get(activeFrame)?.live ? activeFrame : null
+  // Everyone sees who is using which frame (a ring and a name on it).
+  useEffect(() => {
+    awareness.setLocalStateField('frame', activeId)
+  }, [awareness, activeId])
+  const activate = useCallback(
+    (id: string) => {
+      const s = store.get(id)
+      if (!s?.live || !frameUrl(s.url)) return
+      controller.setSelection([id])
+      setActiveFrame(id)
+    },
+    [store]
+  )
+  const deactivate = useCallback(() => {
+    setActiveFrame(null)
+    viewport.current?.focus({ preventScroll: true })
+  }, [])
+  /** A link as its card, or as the site itself: one undo step, sized for what it has become. */
+  const setLive = useCallback(
+    (id: string, on: boolean) => {
+      const s = store.get(id)
+      if (!s || s.type !== 'link' || readOnly) return
+      if (on && !frameUrl(s.url)) return
+      store.undo.stopCapturing()
+      if (on) store.update(id, { live: true, w: Math.max(s.w, LIVE_SIZE.w), h: Math.max(s.h, LIVE_SIZE.h) }, LOCAL)
+      else {
+        store.update(id, { live: false, w: SHAPE_SIZE.link.w, h: SHAPE_SIZE.link.h }, LOCAL)
+        if (activeFrame === id) setActiveFrame(null)
+      }
+      store.undo.stopCapturing()
+    },
+    [store, readOnly, activeFrame]
+  )
 
   // ---- laser ------------------------------------------------------------------
 
@@ -466,16 +513,27 @@ export function Board({ session }: { session: Session }) {
   )
 
   const addLink = useCallback(
-    (url: string, at: Point, title?: string) => {
+    (url: string, at: Point, title?: string, { live = false, offer = false }: { live?: boolean; offer?: boolean } = {}) => {
+      const canLive = !!frameUrl(url)
+      const size = live && canLive ? LIVE_SIZE : SHAPE_SIZE.link
       const id = createAt(
-        { type: 'link', url, title: title?.trim() || hostOf(url), color: 'white', w: SHAPE_SIZE.link.w, h: SHAPE_SIZE.link.h },
+        { type: 'link', url, title: title?.trim() || hostOf(url), color: 'white', w: size.w, h: size.h, ...(live && canLive ? { live: true } : {}) },
         at,
         { free: true }
       )
       select([id])
+      // A dropped or pasted address lands as a card; the site itself is one click away.
+      if (offer && canLive && !live && !readOnly)
+        toast('Link added', 'info', 5000, {
+          label: 'Show live',
+          run: () => {
+            setLive(id, true)
+            zoomRef.current([id])
+          },
+        })
       return id
     },
-    [createAt, select]
+    [createAt, select, toast, readOnly, setLive]
   )
 
   const addImageUrl = useCallback(
@@ -497,7 +555,7 @@ export function Board({ session }: { session: Session }) {
       if (!trimmed) return
       if (isUrlText(trimmed)) {
         if (looksLikeImageUrl(trimmed)) void addImageUrl(trimmed, at)
-        else addLink(trimmed, at)
+        else addLink(trimmed, at, undefined, { offer: true })
         return
       }
       const long = trimmed.length > 160
@@ -760,7 +818,8 @@ export function Board({ session }: { session: Session }) {
     const s = live.byId.get(hitId)
     if (!s) return
     if (s.type === 'link') {
-      if (s.url) openUrl(s.url)
+      if (s.live && frameUrl(s.url)) activate(s.id)
+      else if (s.url) openUrl(s.url)
       return
     }
     if (s.type === 'frame' && part !== 'frame-title' && s.image) return
@@ -782,6 +841,8 @@ export function Board({ session }: { session: Session }) {
     const c = screenToWorld(view, p)
     flight.cancel()
     setLinkAt(null)
+    // A press anywhere but the frame in use (its bar) hands the keyboard back to the board.
+    if (activeId && target.closest('[data-id]')?.getAttribute('data-id') !== activeId) setActiveFrame(null)
     if (e.button === 1 || tool === 'hand' || space) {
       e.preventDefault()
       e.currentTarget.setPointerCapture(e.pointerId)
@@ -874,10 +935,14 @@ export function Board({ session }: { session: Session }) {
         }
         ids = [...ids, hitId]
       } else if (!selection.has(hitId)) ids = [hitId]
+      const shield = part === 'web-shield' && !e.shiftKey && selectionList.length === 1 && selectionList[0] === hitId
       select(ids)
-      if (readOnly) return
+      if (readOnly) {
+        if (shield) activate(hitId)
+        return
+      }
       store.undo.stopCapturing()
-      gesture.current = { kind: 'move', start: c, startScreen: p, origins: moving(ids), moved: false, hit: hitId, last: 0 }
+      gesture.current = { kind: 'move', start: c, startScreen: p, origins: moving(ids), moved: false, hit: hitId, last: 0, shield }
       return
     }
     if (!e.shiftKey) select([])
@@ -894,6 +959,7 @@ export function Board({ session }: { session: Session }) {
       id: s.id,
       handle,
       type: s.type,
+      live: s.live,
       start: screenToWorld(view, localPoint(e)),
       box: { x: s.x, y: s.y, w: s.w, h: s.h },
       last: 0,
@@ -969,7 +1035,7 @@ export function Board({ session }: { session: Session }) {
         return
       }
       case 'resize': {
-        const min = MIN_SIZE[g.type as keyof typeof MIN_SIZE]
+        const min = minSizeOf({ type: g.type as keyof typeof MIN_SIZE, live: g.live })
         const delta = { x: c.x - g.start.x, y: c.y - g.start.y }
         const keep = g.type === 'image' ? !e.shiftKey : e.shiftKey
         const box = keep ? resizeBoxKeepAspect(g.box, g.handle, delta, min) : resizeBox(g.box, g.handle, delta, min)
@@ -1038,6 +1104,7 @@ export function Board({ session }: { session: Session }) {
       case 'move':
         if (g.moved && g.next) store.moveMany([...g.next.entries()] as [string, Record<string, unknown>][], LOCAL)
         else if (!g.moved && !e.shiftKey && selectionList.length > 1 && selection.has(g.hit)) select([g.hit])
+        else if (!g.moved && g.shield) activate(g.hit)
         store.undo.stopCapturing()
         setDrag(null)
         return
@@ -1226,7 +1293,8 @@ export function Board({ session }: { session: Session }) {
         return
       }
       if (e.key === 'Escape') {
-        if (pendingFrom || draft) {
+        if (activeId) deactivate()
+        else if (pendingFrom || draft) {
           setPendingFrom(null)
           setDraft(null)
         } else if (linkAt) setLinkAt(null)
@@ -1244,7 +1312,8 @@ export function Board({ session }: { session: Session }) {
         if (!only) return
         e.preventDefault()
         if (only.type === 'link') {
-          if (only.url) openUrl(only.url)
+          if (only.live && frameUrl(only.url)) activate(only.id)
+          else if (only.url) openUrl(only.url)
         } else startEdit(only.id)
         return
       }
@@ -1384,7 +1453,7 @@ export function Board({ session }: { session: Session }) {
         if (link) {
           e.preventDefault()
           if (looksLikeImageUrl(link.url)) void addImageUrl(link.url, at)
-          else addLink(link.url, at, link.title)
+          else addLink(link.url, at, link.title, { offer: true })
           return
         }
         if (text.trim()) {
@@ -1435,7 +1504,7 @@ export function Board({ session }: { session: Session }) {
     const link = urlFrom(e.dataTransfer)
     if (link) {
       if (looksLikeImageUrl(link.url)) void addImageUrl(link.url, at)
-      else addLink(link.url, at, link.title)
+      else addLink(link.url, at, link.title, { offer: true })
       return
     }
     const text = e.dataTransfer.getData('text/plain')
@@ -1477,8 +1546,27 @@ export function Board({ session }: { session: Session }) {
   )
   const editId = editing?.id ?? null
 
+  // Which live frames get a real iframe: on screen, big enough to read, a few at most.
+  const [mountedFrames, setMountedFrames] = useState<ReadonlySet<string>>(() => new Set())
+  const liveFrames = boxes.filter(s => s.type === 'link' && s.live)
+  const wantMounted = framesToMount(liveFrames, {
+    visible: visibleWorld(view, size.w || 1, size.h || 1),
+    zoom: view.z,
+    active: activeId,
+    mounted: mountedFrames,
+  })
+  if (wantMounted.size !== mountedFrames.size || [...wantMounted].some(id => !mountedFrames.has(id))) setMountedFrames(wantMounted)
+  const frameUsers = new Map<string, FrameUser[]>()
+  for (const p of peers) {
+    if (!p.frame) continue
+    const list = frameUsers.get(p.frame) ?? []
+    list.push({ clientId: p.clientId, name: p.name, color: p.color })
+    frameUsers.set(p.frame, list)
+  }
+
   const single = selected.length === 1 ? selected[0]! : null
   const busy = !!(drag || draft || frameDraft || panning)
+  const frameBusy = busy || !!marquee
   const resizable = tool === 'select' && single && !readOnly && isResizable(single.type) && editId !== single.id ? single : null
   const selectedBoxes = selected.filter(s => s.type !== 'arrow' && s.id !== editId)
   const editShape = editId ? live.byId.get(editId) : undefined
@@ -1595,6 +1683,19 @@ export function Board({ session }: { session: Session }) {
               <TextView key={s.id} shape={s} editing={editId === s.id} />
             ) : s.type === 'image' ? (
               <ImageView key={s.id} shape={s} />
+            ) : s.live ? (
+              <WebFrame
+                key={s.id}
+                shape={s}
+                selected={selection.has(s.id)}
+                active={activeId === s.id}
+                mounted={wantMounted.has(s.id)}
+                busy={frameBusy}
+                zoom={view.z}
+                users={frameUsers.get(s.id) ?? NO_USERS}
+                onDeactivate={deactivate}
+                onLive={setLive}
+              />
             ) : (
               <LinkView key={s.id} shape={s} selected={selection.has(s.id)} />
             )
@@ -1658,6 +1759,7 @@ export function Board({ session }: { session: Session }) {
             onDelete={removeSelected}
             onRemoveImage={() => single && store.update(single.id, { image: null } as unknown as Partial<Shape>)}
             onOpen={() => single?.url && openUrl(single.url)}
+            onLive={single?.type === 'link' && frameUrl(single.url) ? on => setLive(single.id, on) : undefined}
           />
         )}
 
@@ -1722,8 +1824,8 @@ export function Board({ session }: { session: Session }) {
         />
         {linkAt && (
           <LinkPrompt
-            onSubmit={url => {
-              addLink(url, linkAt)
+            onSubmit={(url, live) => {
+              addLink(url, linkAt, undefined, { live })
               setLinkAt(null)
               viewport.current?.focus({ preventScroll: true })
             }}

@@ -27,7 +27,9 @@ function renameHtml(to: string): Plugin {
 /**
  * The page never talks to the network: the shipped build allows no
  * connections at all (the host relays the sync socket over the bridge). Dev
- * keeps a socket open for hot reload. Images may come from https URLs.
+ * keeps a socket open for hot reload. Images may come from https URLs, and
+ * live web frames (`canvas/frames.ts`) show http(s) pages — those documents
+ * are the sites' own, under their own policies; this one still connects nowhere.
  */
 function csp(): Plugin {
   const policy = (dev: boolean) =>
@@ -36,6 +38,7 @@ function csp(): Plugin {
       `script-src ${dev ? "'self' 'unsafe-inline'" : "'unsafe-inline'"}`,
       "style-src 'self' 'unsafe-inline'",
       'img-src data: blob: https: http:',
+      'frame-src https: http:',
       `connect-src ${dev ? "'self' ws: wss:" : "'none'"}`,
       'font-src data:',
       "base-uri 'none'",

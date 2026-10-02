@@ -26,6 +26,14 @@ export interface CopperCanvasApi {
   /** Live people other than this page, including current world cursors. */
   presence(): Array<{ id: string; name: string; color: string; kind: 'human' | 'agent'; cursor: { x: number; y: number } | null }>
   theme(mode: 'light' | 'dark' | string): void
+  /**
+   * A live frame's report from the host's subframe script:
+   * `{name, kind: 'nav'|'escape'|'blank', url?, title?, icon?}` (`canvas/frames.ts`).
+   * False when no frame on the board has that name.
+   */
+  frameEvent(event: unknown): boolean
+  /** `{reports: true}`: the host reports every frame's loads, so silence means it didn't load. */
+  frameHost(cfg: unknown): void
   exportState(): string
   /**
    * Bring an Easels board onto this canvas: `{doc: base64, files: {fileId: dataURL}, title?}`
@@ -110,6 +118,8 @@ export function createApi(c: Controller = controller): CopperCanvasApi {
     setShare: guard('setShare', (share: unknown) => void c.setShare(share), undefined),
     presence: guard('presence', () => c.presence(), []),
     theme: guard('theme', (mode: string) => void setTheme(mode), undefined),
+    frameEvent: guard('frameEvent', (event: unknown) => c.frameEvent(event), false),
+    frameHost: guard('frameHost', (cfg: unknown) => c.frameHost(cfg), undefined),
     exportState: guard('exportState', () => c.exportState(), ''),
     importLegacy: async (payload: unknown): Promise<ImportResult> => {
       try {

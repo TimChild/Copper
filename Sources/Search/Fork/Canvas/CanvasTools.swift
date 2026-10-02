@@ -344,7 +344,7 @@ enum CanvasTools {
                     case "picture":
                         guard words.count > 1 else { answer(["error": "ui picture PATH [dark]"]); return }
                         let dark = words.contains("dark")
-                        guard let picture = CanvasUI.picture(browser: browser, dark: dark),
+                        guard let picture = await CanvasUI.picture(browser: browser, dark: dark),
                               let png = picture.representation(using: .png, properties: [:])
                         else { answer(["error": "could not draw the card"]); return }
                         try png.write(to: URL(fileURLWithPath: words[1]))

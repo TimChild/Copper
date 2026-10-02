@@ -39,7 +39,17 @@ final class CanvasUI: ObservableObject {
     }
 
     /// The card drawn off screen at its own size, for `bench canvas ui picture`.
-    static func picture(browser: Browser, dark: Bool) -> NSBitmapImageRep? {
+    ///
+    /// Built fresh and drawn off screen, so whatever the card's own views
+    /// fetch on appear (members, the people search) is a `.task` that has
+    /// only just been scheduled when layout first settles — a bare
+    /// `cacheDisplay` right after `layoutSubtreeIfNeeded` would always catch
+    /// it before the network round trip lands and draw those rows empty.
+    /// Async so the caller can let the run loop turn: re-measuring a fixed
+    /// handful of times over ~900 ms gives a same-machine fetch room to
+    /// finish and the view room to re-render with it before the final
+    /// capture.
+    static func picture(browser: Browser, dark: Bool) async -> NSBitmapImageRep? {
         let host = NSHostingView(rootView: CanvasPopover(browser: browser)
             .padding(16)
             .background(Color(nsColor: dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.9, alpha: 1)))
@@ -49,6 +59,11 @@ final class CanvasUI: ObservableObject {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = host
         host.layoutSubtreeIfNeeded()
+        for _ in 0..<6 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            host.frame = NSRect(origin: .zero, size: host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+        }
         guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
         host.cacheDisplay(in: host.bounds, to: picture)
         return picture

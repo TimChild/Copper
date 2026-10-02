@@ -1499,6 +1499,7 @@ final class Browser: NSObject, ObservableObject {
     /// the page rather than staying behind as an empty one; otherwise the
     /// page gets a tab of its own, in front.
     func arrive(_ url: URL) {
+        if CanvasJoinFlow.handle(url, in: self) { return }
         if let active, active.isBlank, typed.isEmpty, !active.floating {
             active.go(to: url)
             editing = false
@@ -2061,6 +2062,7 @@ final class Browser: NSObject, ObservableObject {
             refusals += 1
             return
         }
+        if CanvasJoinFlow.handle(url, in: self) { editing = false; typed = ""; return }
         (active ?? tabs.first)?.go(to: url)
         editing = false
         typed = ""
@@ -2140,6 +2142,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // Fork (canvas): copper://canvas/<id> loads the canvas page here, and
         // a canvas page goes nowhere else (Fork/Canvas/CanvasHost.swift).
         if CanvasHost.decide(action, url: url, in: webView, browser: self) {
+            decisionHandler(.cancel)
+            return
+        }
+        // Canvas join links are consumed by native Copper, including links
+        // clicked inside ordinary pages. A different cloud's HTTPS landing
+        // page remains a normal web navigation.
+        if CanvasJoinFlow.handle(url, in: self) {
             decisionHandler(.cancel)
             return
         }

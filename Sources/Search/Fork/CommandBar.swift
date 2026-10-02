@@ -35,6 +35,9 @@ enum CommandBar {
             .init(id: "new-tab", name: "New Tab", glyph: "plus") { $0.newTab() },
             .init(id: "new-private", name: "New Private Tab", glyph: "eyeglasses") { $0.newShyTab() },
             .init(id: "new-canvas", name: "New Canvas", glyph: "scribble.variable") { CanvasTabs.newCanvas(in: $0) }, // Fork (canvas): a local one, in front
+            .init(id: "share-canvas", name: "Share Canvas", glyph: "square.and.arrow.up") { browser in
+                if let id = CanvasHost.active(in: browser) { CanvasUI.shared.openShare(id, in: browser) }
+            },
             .init(id: "reopen", name: "Reopen Closed Tab", glyph: "arrow.uturn.backward") { $0.reopen() },
             .init(id: "close", name: "Close Tab", glyph: "xmark") { b in if let t = b.active { b.close(t) } },
             .init(id: "pin", name: "Pin Tab", glyph: "pin") { b in if let t = b.active { b.pin(t) } },

@@ -62,14 +62,14 @@ final class Links: NSObject, NSApplicationDelegate {
 
     @objc private func handle(getURL event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let text = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-              let url = URL(string: text), url.scheme?.lowercased().hasPrefix("http") == true
+              let url = URL(string: text), ["http", "https", "copper"].contains(url.scheme?.lowercased() ?? "")
         else { return }
         Links.take(url)
     }
 
     /// Files and anything else the system opens with the app.
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme?.lowercased().hasPrefix("http") == true {
+        for url in urls where ["http", "https", "copper"].contains(url.scheme?.lowercased() ?? "") {
             Links.take(url)
         }
     }

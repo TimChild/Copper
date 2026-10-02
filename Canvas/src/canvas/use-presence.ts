@@ -4,28 +4,20 @@ import type { Awareness } from 'y-protocols/awareness'
 import type * as Y from 'yjs'
 import { liveAgents, readAgents } from './agents'
 import type { LaserTrails, LaserWire } from './laser'
-import { colorFor } from './colors'
+import { readHumanPresence } from './presence'
 import type { CanvasAgent } from './types'
 import type { PeerView } from './components/Overlays'
 
-const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
-
 /** Peers' awareness states (never our own), read tolerantly. */
 export function readPeers(awareness: Awareness): PeerView[] {
-  const out: PeerView[] = []
-  awareness.getStates().forEach((state, clientId) => {
-    if (clientId === awareness.clientID || !state) return
-    const s = state as Record<string, unknown>
-    const user = (s.user && typeof s.user === 'object' ? s.user : s) as Record<string, unknown>
-    const name = typeof user.name === 'string' && user.name ? user.name : 'Someone'
-    const id = typeof user.id === 'string' && user.id ? user.id : `client:${clientId}`
-    const color = typeof user.color === 'string' && user.color ? user.color : colorFor(id)
-    const c = s.cursor as Record<string, unknown> | null | undefined
-    const cursor = c && finite(c.x) && finite(c.y) ? { x: c.x, y: c.y } : null
-    const selection = Array.isArray(s.selection) ? s.selection.filter((x): x is string => typeof x === 'string') : []
-    out.push({ clientId, id, name, color, cursor, selection })
-  })
-  return out.sort((a, b) => a.name.localeCompare(b.name) || a.clientId - b.clientId)
+  return readHumanPresence(awareness).map(({ clientId, id, name, color, cursor, selection }) => ({
+    clientId: clientId!,
+    id,
+    name,
+    color,
+    cursor,
+    selection,
+  }))
 }
 
 export interface AwarenessChanges {

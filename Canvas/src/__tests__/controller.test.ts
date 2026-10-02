@@ -107,6 +107,27 @@ describe('Controller', () => {
     expect(c.session!.store.agents.get('agent')).toMatchObject({ status: 'writing' })
   })
 
+  it('debounces presence messages and only emits when people change', () => {
+    vi.useFakeTimers()
+    init()
+    messages = []
+    c.setAgent({ id: 'agent:presence', name: 'Scout', color: '#0f0', cursor: { x: 5, y: 6 }, status: 'thinking' })
+    expect(messages.filter(m => m.type === 'presence')).toHaveLength(0)
+    vi.advanceTimersByTime(399)
+    expect(messages.filter(m => m.type === 'presence')).toHaveLength(0)
+    vi.advanceTimersByTime(1)
+    expect(messages.filter(m => m.type === 'presence')).toEqual([
+      { type: 'presence', people: [{ id: 'agent:presence', name: 'Scout', color: '#0f0', kind: 'agent' }] },
+    ])
+    c.setAgent({ id: 'agent:presence', cursor: { x: 50, y: 60 } })
+    vi.advanceTimersByTime(500)
+    expect(messages.filter(m => m.type === 'presence')).toHaveLength(1)
+    c.setAgent({ id: 'agent:presence', remove: true })
+    vi.advanceTimersByTime(400)
+    expect(messages.filter(m => m.type === 'presence')).toHaveLength(2)
+    expect(messages.filter(m => m.type === 'presence').at(-1)).toEqual({ type: 'presence', people: [] })
+  })
+
   it('sets and removes agents from the host', () => {
     init()
     c.setAgent({ id: 'a1', name: 'Helper', color: '#00f', cursor: { x: 5, y: 6 }, status: 'thinking' })

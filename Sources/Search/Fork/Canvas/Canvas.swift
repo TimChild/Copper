@@ -127,6 +127,21 @@ final class Canvases: ObservableObject {
         let role: String
     }
 
+    /// A person currently visible in the canvas room. The page sends this
+    /// debounced, rather than making SwiftUI inspect Yjs awareness itself.
+    struct PresencePerson: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let color: String
+        let kind: String
+    }
+
+    struct CloudPerson: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let email: String
+    }
+
     /// This Mac's stand-in for an account: how a signed-out user appears on
     /// their own canvases (and to the agents drawing beside them).
     struct Persona: Codable, Equatable {
@@ -145,6 +160,10 @@ final class Canvases: ObservableObject {
 
     @Published private(set) var all: [Entry] = []
     @Published private(set) var invites: [Invite] = []
+    /// Invites newly observed by refresh, consumed by the in-app banner.
+    @Published var newInvite: Invite?
+    /// Presence reported by each open canvas page, keyed by canvas id.
+    @Published private(set) var presence: [String: [PresencePerson]] = [:]
     /// A cloud round trip is in flight.
     @Published private(set) var busy = false
     /// The last cloud failure, in one line, until the next success.
@@ -360,6 +379,7 @@ final class Canvases: ObservableObject {
         } else {
             invites = []
         }
+        if Cloud.shared.isSignedIn { CanvasJoinFlow.resumePending() }
         CanvasHost.cloudChanged()
     }
 
@@ -395,7 +415,12 @@ final class Canvases: ObservableObject {
             adopt(remote: Canvases.rows(data), account: account)
             let (pending, _) = try await Cloud.shared.request("GET", "/v1/invites")
             guard Canvases.account == account else { again = true; return }
-            invites = Canvases.rows(pending).compactMap(Canvases.invite)
+            let incoming = Canvases.rows(pending).compactMap(Canvases.invite)
+            let known = Set(invites.map(\.id))
+            invites = incoming
+            if let fresh = incoming.first(where: { !known.contains($0.id) }) {
+                newInvite = fresh
+            }
             problem = nil
             refreshed = Date()
             CanvasHost.cloudChanged()
@@ -444,6 +469,7 @@ final class Canvases: ObservableObject {
         all.removeAll { $0.isShared && $0.account == account && !seen.contains($0.id) }
         save()
         renamed.forEach(CanvasHost.renamed)
+        for id in seen { CanvasHost.shareChanged(id) }
         // Removed, revoked or deleted by someone else: its open tabs close.
         gone.forEach { CanvasHost.removed($0.id) }
     }
@@ -540,7 +566,40 @@ final class Canvases: ObservableObject {
         guard cloudReady else { throw Canvases.offline }
         _ = try await Cloud.shared.request("POST", "/v1/invites/\(invite.id)/\(accept ? "accept" : "decline")")
         invites.removeAll { $0.id == invite.id }
+        if newInvite?.id == invite.id { newInvite = nil }
         await refresh()
+    }
+
+    /// Called by CanvasHost when the page reports the people in its room.
+    func setPresence(_ people: [PresencePerson], for id: String) {
+        presence[id] = people
+        objectWillChange.send()
+    }
+
+    func clearPresence(for id: String) {
+        presence[id] = nil
+        objectWillChange.send()
+    }
+
+    /// Upsert one row returned by the canvas-link join endpoint. The response
+    /// deliberately has the same shape as a /v1/canvases list item.
+    @discardableResult
+    func upsert(remote row: [String: Any], account: String) -> Entry? {
+        guard let id = Canvases.string(row["id"]) ?? Canvases.string(row["canvas_id"]) else { return nil }
+        let now = Date()
+        let name = Canvases.string(row["name"]) ?? "Untitled canvas"
+        let role = Canvases.string(row["role"]) ?? "editor"
+        let owner = Canvases.person(row["owner"])
+        let members = (row["member_count"] as? NSNumber)?.intValue
+        let index = all.firstIndex { $0.id == id }
+        let value = Entry(id: id, name: name, kind: .shared, remoteId: id,
+                          createdAt: index.map { all[$0].createdAt } ?? now,
+                          updatedAt: Canvases.date(row["updated_at"]) ?? now,
+                          role: role, owner: owner, members: members, account: account)
+        if let index { all[index] = value } else { all.append(value) }
+        save()
+        CanvasHost.shareChanged(id)
+        return value
     }
 
     // MARK: reading the server's answers

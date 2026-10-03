@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { Awareness } from 'y-protocols/awareness'
 import type * as Y from 'yjs'
-import { liveAgents, readAgents } from './agents'
+import { AGENT_TTL_MS, liveAgents, readAgents } from './agents'
 import type { LaserTrails, LaserWire } from './laser'
 import { readHumanPresence } from './presence'
 import type { CanvasAgent } from './types'
@@ -78,9 +78,6 @@ export function usePeers(awareness: Awareness): PeerView[] {
   return peers
 }
 
-/** How often presence is re-checked for expiry when the doc is quiet. */
-const EXPIRY_TICK_MS = 10_000
-
 /** External store over the `agents` map, for useSyncExternalStore. */
 class AgentsStore {
   private snapshot: CanvasAgent[]
@@ -88,10 +85,10 @@ class AgentsStore {
   private readonly map: Y.Map<unknown>
   constructor(map: Y.Map<unknown>) {
     this.map = map
-    this.snapshot = readAgents(map)
+    this.snapshot = liveAgents(readAgents(map), Date.now())
   }
   private onChange = () => {
-    this.snapshot = readAgents(this.map)
+    this.snapshot = liveAgents(readAgents(this.map), Date.now())
     for (const fn of this.listeners) fn()
   }
   subscribe = (fn: () => void) => {
@@ -110,10 +107,13 @@ export function useLiveAgents(map: Y.Map<unknown>): CanvasAgent[] {
   const all = useSyncExternalStore(store.subscribe, store.get)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), EXPIRY_TICK_MS)
-    return () => clearInterval(timer)
-  }, [])
-  // A fresh write is always live: its updatedAt is ahead of the (stale) clock.
+    const time = Date.now()
+    const expires = all.map(a => a.updatedAt + AGENT_TTL_MS).filter(at => at >= time)
+    if (!expires.length) return
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(1, Math.min(...expires) - time + 1))
+    return () => clearTimeout(timer)
+  }, [all, now])
+  // No polling on an idle board; wake only when the next visible lease expires.
   return useMemo(() => liveAgents(all, now), [all, now])
 }
 

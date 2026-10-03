@@ -391,8 +391,10 @@ macOS full name, a stable colour). `docId` is the server's canvas id when there 
 All in `CanvasTools.swift`, dispatched from `Tools.call`, so all three surfaces get the same
 behaviour; every call shows in the Driver pane and every write is attributed (`by`) to the caller:
 the MCP client's name (`Claude Code`, `phi`, `copper CLI`…), **Copper agent** for ⌘E, or `as`.
-The agent's presence (`setAgent`, status `writing` → `idle`, cursor on the last shape it touched)
-shows on the board.
+The agent's presence (`setAgent`, cursor on the last shape it touched) is a two-second lease:
+each operation renews it, then the cursor fades and its face leaves the collaborator list.
+Closing the page or disconnecting releases that page's agent leases; stale leases from a lost
+peer are hidden on expiry too. Human collaborators and the shapes' author attribution stay.
 
 | tool | arguments | answer |
 |---|---|---|

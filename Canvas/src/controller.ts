@@ -9,7 +9,7 @@ import { WebsocketProvider } from 'y-websocket'
 import { BridgeSocket } from './bridge-socket'
 import { fromBase64, toBase64 } from './canvas/base64'
 import { CanvasStore, HOST, IMPORT, INIT, PRESENCE, bareId, newId } from './canvas/doc'
-import { writeAgent, isStatus, type AgentPatch } from './canvas/agents'
+import { AGENT_TTL_MS, writeAgent, readAgents, isStatus, type AgentPatch } from './canvas/agents'
 import { colorFor } from './canvas/colors'
 import { visibleWorld, type Box, type Point, type View } from './canvas/geometry'
 import { pictureForImport } from './canvas/images'
@@ -68,8 +68,8 @@ export interface ImportResult {
 /** Meta key listing the fingerprints of legacy documents already imported. */
 export const IMPORTED_KEY = 'importedLegacy'
 
-/** How long an agent shows "writing" after its last op. */
-export const WRITING_MS = 1500
+/** Presence is an operation lease, not a permanent collaborator. */
+export const WRITING_MS = AGENT_TTL_MS
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
@@ -126,8 +126,46 @@ export class Session {
   status: SyncStatus
   private onUpdate: (update: Uint8Array, origin: unknown) => void
   private readonly presenceReporter: ReturnType<typeof createPresenceReporter>
+  private expiryTimer: ReturnType<typeof setTimeout> | undefined
+  private ownedAgents = new Map<string, unknown>()
   private readonly reportPresence = () => {
     this.presenceReporter.update(hostPresence(readPresence(this.awareness, this.store.agents)))
+    clearTimeout(this.expiryTimer)
+    const now = Date.now()
+    const expires = readAgents(this.store.agents).map(a => a.updatedAt + AGENT_TTL_MS).filter(at => at >= now)
+    if (expires.length) this.expiryTimer = setTimeout(this.expireAgents, Math.max(1, Math.min(...expires) - now + 1))
+  }
+
+  /** Delete only our own unchanged leases; another client may share the agent's id. */
+  private expireAgents = () => {
+    const now = Date.now()
+    this.doc.transact(() => {
+      for (const [id, value] of this.ownedAgents) {
+        if (this.store.agents.get(id) !== value) { this.ownedAgents.delete(id); continue }
+        const at = (value as { updatedAt: number }).updatedAt
+        if (now - at >= AGENT_TTL_MS) {
+          this.store.agents.delete(id)
+          this.ownedAgents.delete(id)
+        }
+      }
+    }, PRESENCE)
+    this.reportPresence()
+  }
+
+  writeAgent(id: string, patch: AgentPatch) {
+    this.doc.transact(() => {
+      const value = writeAgent(this.store.agents, id, patch)
+      this.ownedAgents.set(id, value)
+    }, PRESENCE)
+  }
+
+  clearAgents() {
+    this.doc.transact(() => {
+      for (const [id, value] of this.ownedAgents) {
+        if (this.store.agents.get(id) === value) this.store.agents.delete(id)
+      }
+    }, PRESENCE)
+    this.ownedAgents.clear()
   }
 
   constructor(cfg: InitConfig, onStatus: () => void) {
@@ -175,6 +213,7 @@ export class Session {
       this.provider = provider
       provider.on('status', ({ status }: { status: string }) => {
         this.status = status === 'connected' ? (provider.synced ? 'online' : 'connecting') : status === 'connecting' ? 'connecting' : 'offline'
+        if (status === 'disconnected') this.clearAgents()
         onStatus()
       })
       provider.on('sync', (synced: boolean) => {
@@ -198,6 +237,8 @@ export class Session {
   }
 
   destroy() {
+    this.clearAgents()
+    clearTimeout(this.expiryTimer)
     this.presenceReporter.dispose()
     this.awareness.off('change', this.reportPresence)
     this.store.agents.unobserveDeep(this.reportPresence)
@@ -236,7 +277,6 @@ export class Controller {
   viewInfo: ViewInfo = { view: { x: 640, y: 400, z: 1 }, width: 1280, height: 800 }
   board: BoardHandle | null = null
   private pendingZoom: string[] | null = null
-  private agentTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private version = 0
   /** What the host last said about the board's connection; outlives `init`. */
   private hostStatus: HostStatus | null = null
@@ -262,8 +302,6 @@ export class Controller {
 
   init(raw: unknown): { ok: true; docId: string } {
     const cfg = parseInit(raw)
-    for (const t of this.agentTimers.values()) clearTimeout(t)
-    this.agentTimers.clear()
     this.session?.destroy()
     this.selection = []
     this.lastPostedSelection = '[]'
@@ -418,34 +456,18 @@ export class Controller {
     if (v.cursor === null) patch.cursor = null
     else if (isObject(v.cursor)) patch.cursor = v.cursor as unknown as Point
     if (isStatus(v.status)) patch.status = v.status
-    s.doc.transact(() => writeAgent(s.store.agents, id, patch), PRESENCE)
+    s.writeAgent(id, patch)
   }
 
   private agentWrote(actor: { id: string; name: string; color?: string }, at: Point | null) {
     const s = this.session
     if (!s) return
-    s.doc.transact(
-      () =>
-        writeAgent(s.store.agents, actor.id, {
-          name: actor.name,
-          color: actor.color || colorFor(actor.id),
-          status: 'writing',
-          ...(at ? { cursor: at } : {}),
-        }),
-      PRESENCE
-    )
-    clearTimeout(this.agentTimers.get(actor.id))
-    const session = s
-    this.agentTimers.set(
-      actor.id,
-      setTimeout(() => {
-        this.agentTimers.delete(actor.id)
-        if (this.session !== session) return
-        const current = session.store.agents.get(actor.id) as { status?: string } | undefined
-        if (current?.status !== 'writing') return
-        session.doc.transact(() => writeAgent(session.store.agents, actor.id, { status: 'idle' }), PRESENCE)
-      }, WRITING_MS)
-    )
+    s.writeAgent(actor.id, {
+      name: actor.name,
+      color: actor.color || colorFor(actor.id),
+      status: 'writing',
+      ...(at ? { cursor: at } : {}),
+    })
   }
 
   // ---- ops ---------------------------------------------------------------------

@@ -90,13 +90,13 @@ describe('Controller', () => {
     expect(copy.getMap('shapes').has('x')).toBe(true)
   })
 
-  it('marks an agent writing, then idle', () => {
+  it('marks an agent writing, then removes its presence', () => {
     vi.useFakeTimers()
     init()
     c.apply({ ops: [{ op: 'add', shape: { type: 'sticky', x: 0, y: 0 } }], as: { id: 'agent:s', name: 'Scout', color: '#0f0' } })
     expect(c.session!.store.agents.get('agent:s')).toMatchObject({ name: 'Scout', color: '#0f0', status: 'writing', cursor: { x: 100, y: 100 } })
     vi.advanceTimersByTime(WRITING_MS + 10)
-    expect(c.session!.store.agents.get('agent:s')).toMatchObject({ status: 'idle', cursor: { x: 100, y: 100 } })
+    expect(c.session!.store.agents.has('agent:s')).toBe(false)
   })
 
   it('shows ops without `as` as a generic agent', () => {

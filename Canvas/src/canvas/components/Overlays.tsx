@@ -7,7 +7,7 @@
 import { memo, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { Sparkles } from 'lucide-react'
 import type { ArrowPath } from '../arrows'
-import { isBusy } from '../agents'
+import { AGENT_TTL_MS, isBusy } from '../agents'
 import { SIDES, sidePoint, type Box, type Point, type Segment, type Side } from '../geometry'
 import { CORNER_HANDLES, EDGE_HANDLES, HANDLE_CURSOR, type Handle } from '../resize'
 import type { CanvasAgent } from '../types'
@@ -323,6 +323,7 @@ export const AgentCursors = memo(function AgentCursors({ agents, zoom }: { agent
             className="pointer-events-none absolute left-0 top-0 origin-top-left transition-transform duration-500 ease-out"
             style={{ transform: `translate(${agent.cursor.x}px, ${agent.cursor.y}px) scale(${1 / zoom})` }}
           >
+            <div key={agent.updatedAt} className="agent-lease" style={{ animationDuration: `${AGENT_TTL_MS}ms` }}>
             <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
               <path
                 d="M1.5 1.5 L14.5 6.4 L8 8 L6.4 14.5 z"
@@ -347,6 +348,7 @@ export const AgentCursors = memo(function AgentCursors({ agents, zoom }: { agent
               {agent.status !== 'idle' && <span className="font-normal text-ink-3">{STATUS_LABEL[agent.status]}</span>}
               <AgentDot agent={agent} />
             </span>
+            </div>
           </div>
         ) : null
       )}

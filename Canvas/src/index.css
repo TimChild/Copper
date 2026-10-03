@@ -283,3 +283,13 @@ input {
     transition-delay: 0s !important;
   }
 }
+
+/* Fade the last 200 ms of a lease; each new operation restarts it. */
+@keyframes agent-lease {
+  0%, 90% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.agent-lease { animation: agent-lease 2s linear both; }
+@media (prefers-reduced-motion: reduce) {
+  .agent-lease { animation: none; }
+}

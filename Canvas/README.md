@@ -248,7 +248,11 @@ One Y.Doc per canvas (see `src/canvas/types.ts`):
   label?}`; `image {src, naturalW, naturalH}`; `link {url, title, favicon?}`. Titles, labels and
   urls are plain strings.
 - `agents: Y.Map<agentId, {name, color, cursor:{x,y}|null, status:'idle'|'thinking'|'writing',
-  updatedAt}>` — whole values; entries older than 2 minutes are hidden, never deleted.
+  updatedAt}>` — whole values. Each entry is a two-second lease: every op renews it, the cursor fades
+  over its last 200 ms, and the page that wrote it deletes it when it runs out (only if nobody has
+  written the entry since), on `pagehide`, on `destroy` and when the sync socket drops; readers
+  hide any entry older than two seconds too, so a peer that vanished leaves no ghost
+  (`src/canvas/agents.ts`, `Session` in `src/controller.ts`).
 - `meta: Y.Map` — `name`, `createdBy` (written once by the page that made the canvas).
 - Awareness (human cursors): `{user:{id,name,color}, name, color, cursor:{x,y}|null, selection:[ids],
   laser: LaserWire|null}`. `laser` is the stroke someone is drawing with the laser pointer (**K**):

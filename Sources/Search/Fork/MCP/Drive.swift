@@ -279,6 +279,10 @@ final class Drive: ObservableObject {
         switch run.driver {
         case .jev:
             stopRequested = true
+            // A run with no loop behind it to hear the request — a seeded
+            // card, a session already torn down — ends here, or it would
+            // sit "running" with a Stop that does nothing.
+            if Tools.Ultrafast.sessions[run.tabID]?.finished ?? true { finish(.stopped, note: "Stopped by you") }
         case .agent, .bot, .pane:
             refuse(run.who.key)
             refusingUntil = Date().addingTimeInterval(Drive.refusal)

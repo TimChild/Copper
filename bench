@@ -154,6 +154,13 @@
                                        the sidebar's Saved and Today blocks: counts per space,
                                        move a tab across the seam, run the archive sweep now
                                        (with HOURS, against that age instead of the setting)
+    ./bench flight [trails on|off | tide 6h|12h|24h|never]
+                                       Labs flights (Settings › Labs): list them, or flip one in this world
+    ./bench trails [open URL [FROM]|type ID WORDS|backdate N HOURS|glance N|off|toggle N|
+                    rename N TEXT|close N|ask N|canvas N|move ID N|new|file|menu]
+                                       the Trails flight: each trail with its pages and depth; FROM opens
+                                       a page as ⌘-click would from that tab; backdate lets Tide be seen
+                                       without waiting; glance holds a Glance open for `window PATH`
     ./bench flow sources               browsers Flow can see
     ./bench flow scan --source Chrome  cheap counts (no keychain prompt)
     ./bench flow root --source Chrome --path /tmp/copy
@@ -342,7 +349,7 @@ def main(argv):
         request["op"] = args[0] if args else "status"
         if request["op"] == "picture" and len(args) > 1: args[1] = os.path.abspath(args[1])
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows"):
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows", "flight", "trails"):
         request["op"] = args[0] if args else ("status" if verb in ("updates", "bw", "drive") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "history":
@@ -564,6 +571,19 @@ def main(argv):
             print(f"{'●' if s['current'] else ' '} {s['name']:22} {s['saved']:4} saved  {s['today']:4} today")
         for t in answer.get("today", []):
             print(f"    {t['id']}  {t['seen']}h  {t['title'] or '—'}")
+    elif verb == "trails" and "trails" in answer:
+        for k in ("error", "opened", "draft", "sending"):
+            if k in answer: print(f"{k}: {answer[k]}")
+        print(f"tide: {answer.get('tide')}  glancing: {answer.get('glancing')}")
+        for t in answer["trails"]:
+            mark = "●" if t["live"] else " "
+            fold = "" if len(t["pages"]) == 1 else ("▾ " if t["open"] else "▸ ")
+            q = "🔍 " if t["searched"] else ""
+            print(f"{mark} {t['index']:2} {fold}{q}{t['title']}  [{t['place']}, {t['hours']}h, {len(t['pages'])} page(s)]  {t['id']}")
+            if len(t["pages"]) > 1:
+                for p in t["pages"]:
+                    z = " z" if p.get("asleep") else ""
+                    print(f"        {'  ' * p['depth']}└ {p['id']}  {p['title'] or '—'}{z}")
     elif verb == "tabs" and request.get("op"):
         if "cleared" in answer:
             print(f"cleared {answer['cleared']} tab(s)")

@@ -1093,6 +1093,8 @@ struct ForkCommands: Commands {
         // The Groups menu lives in GroupsUI.swift; it rides here because
         // App.swift's .commands builder is at its cap of ten.
         GroupCommands(browser: browser)
+        // Close Trail (⌘⇧W) and Ask About This Trail, while the flight is on.
+        TrailsCommands(browser: browser)
     }
 }
 

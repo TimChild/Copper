@@ -72,7 +72,10 @@ struct DriveCard: View {
     /// The steps shown folded: the newest few. The rest is one click away.
     private static let folded = 4
 
-    private var live: Bool { drive.live && drive.run?.id == run.id }
+    private var live: Bool {
+        run.status == .running && (drive.run?.id == run.id ? drive.live : drive.hands[run.who.key]?.busy == true)
+    }
+    private var busy: Bool { live && (drive.run?.id == run.id ? drive.busy : drive.hands[run.who.key]?.busy == true) }
     private var open: Bool { agent.expanded.contains(run.id) }
 
     var body: some View {
@@ -134,7 +137,9 @@ struct DriveCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             DriveClock(run: run, live: live).fixedSize()
             if live {
-                Button { drive.stop() } label: {
+                Button {
+                    if drive.run?.id == run.id { drive.stop() } else { drive.stop(run.who.key) }
+                } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "stop.fill").font(.system(size: 7.5))
                         Text("Stop").font(.system(size: 11, weight: .medium))
@@ -166,7 +171,7 @@ struct DriveCard: View {
     private var steps: some View {
         if open {
             // The foot already says it is thinking, with its dot.
-            DriveTimeline(run: run, live: live, busy: drive.busy && live, thinking: false)
+            DriveTimeline(run: run, live: live, busy: busy, thinking: false)
                 .padding(.top, 2)
         } else {
             let shown = run.cycles.suffix(DriveCard.folded)
@@ -199,7 +204,7 @@ struct DriveCard: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(run.failed ? Color.red.opacity(0.8) : Palette.muted)
             }
-            Text(run.statusLine(busy: drive.busy && live))
+            Text(run.statusLine(busy: busy))
                 .font(.system(size: 11)).foregroundStyle(run.failed ? Color.red.opacity(0.85) : Palette.muted)
                 .lineLimit(2).truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)

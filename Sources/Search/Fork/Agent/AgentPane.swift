@@ -42,6 +42,7 @@ struct AgentPane: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(Palette.hairline).frame(height: 1)
+            liveStatus
             if agent.items.isEmpty && !agent.busy {
                 empty
             } else {
@@ -103,6 +104,35 @@ struct AgentPane: View {
         .padding(.leading, 16)
         .padding(.trailing, 8)
         .frame(height: 42)
+    }
+
+    /// Live hands remain visible even while the reader is above the latest card.
+    @ViewBuilder
+    private var liveStatus: some View {
+        let hands = drive.hands.values.filter { $0.active() }.sorted { $0.last > $1.last }
+        if !hands.isEmpty || agent.busy {
+            HStack(spacing: 7) {
+                PulseDot(colour: DriveStyle.accent)
+                Button { agent.reveal() } label: {
+                    Text(hands.isEmpty ? "Copper is working" : hands.map { $0.who.agent }.joined(separator: " · "))
+                        .font(.system(size: 11, weight: .medium)).lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 4)
+                Menu {
+                    if agent.busy { Button("Stop Copper") { agent.stop() } }
+                    ForEach(hands.filter { drive.canStop($0) }, id: \.who.key) { hand in
+                        Button("Stop \(hand.who.agent)") { drive.stop(hand.who.key) }
+                    }
+                } label: {
+                    Label("Stop", systemImage: "stop.fill").font(.system(size: 10))
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+            }
+            .foregroundStyle(Palette.ink)
+            .padding(.horizontal, 16).frame(height: 30)
+            .background(Palette.wash)
+        }
     }
 
     /// The model, as a pill: which tier, and the menu to change it.
@@ -201,16 +231,26 @@ struct AgentPane: View {
             case .assistant where item.aside:
                 fold(item)
             case .assistant:
+                current = nil
                 out.append(.answer(item))
             case .note:
+                current = nil
                 out.append(.note(item))
             case .drive:
+                // Tools arriving after this card belong below it, not folded
+                // back into the activity that preceded the outside driver.
+                current = nil
                 out.append(.drive(item))
             }
         }
         // Only the newest question can still be running.
         if busy {
-            if let at = current, at > lastUser, case .activity(var group) = out[at] {
+            // An outside card ends folding, not an in-flight local tool.
+            let running = out.indices.reversed().first { index in
+                guard index > lastUser, case .activity(let group) = out[index] else { return false }
+                return group.items.contains(where: \.running)
+            } ?? current
+            if let at = running, at > lastUser, case .activity(var group) = out[at] {
                 group.running = true
                 out[at] = .activity(group)
             } else {

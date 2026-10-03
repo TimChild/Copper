@@ -173,7 +173,7 @@ final class Drive: ObservableObject {
     func begin(driver: Driver, goal: String = "", tab: Tab?, who: Who? = nil) {
         graceTimer?.invalidate(); graceTimer = nil
         let who = who ?? .plain(driver)
-        if let old = run, old.who.key != who.key { rest(old.who.key) }
+        if live { finish(.ended, note: "Another driver took over") }
         run = Run(id: UUID(), driver: driver, who: who, goal: goal, tabID: tab?.id ?? UUID(), started: Date(), ended: nil,
                   status: .running, note: "", cycles: [], url: tab?.address?.absoluteString ?? "", title: tab?.title ?? "",
                   thought: nil, thoughtAt: nil)
@@ -353,12 +353,20 @@ final class Drive: ObservableObject {
     func began(call tool: String, args: [String: Any], by driver: Driver, who: Who? = nil, tab: Tab?) -> Ticket? {
         if tool == "jev_run" || tool == "jev_step" { return nil }
         let who = who ?? .plain(driver)
-        // Every call is a touch on its tab, whoever's story the pane is telling.
-        // A call beside a live Jev run gets no ticket, so it never rests:
-        // it is a touch, not a hold.
         let beside = live && run?.driver == .jev
-        touch(who, driver: driver, tab: tab?.id, doing: Drive.words(for: tool, args).0, busy: !beside)
-        if beside { return nil }
+        touch(who, driver: driver, tab: tab?.id, doing: Drive.words(for: tool, args).0, busy: true)
+        if beside {
+            // Keep the call in the same transcript, without replacing the
+            // Jev session whose phase callbacks still own `run`.
+            let now = Date()
+            let (title, detail) = Drive.words(for: tool, args)
+            let phase = Phase(id: UUID(), kind: .act, title: title, detail: detail, started: now)
+            let side = Run(id: UUID(), driver: driver, who: who, goal: "", tabID: tab?.id ?? UUID(), started: now,
+                           status: .running, note: "", cycles: [Cycle(id: UUID(), number: 1, started: now, phases: [phase])],
+                           url: tab?.address?.absoluteString ?? "", title: tab?.title ?? "", thought: args["reason"] as? String)
+            Agent.shared.record(side)
+            return Ticket(run: side.id, who: who.key, phase: phase.id, url: side.url, title: side.title, tool: tool, args: args)
+        }
         if !live || run?.who.key != who.key || run?.status != .running {
             if let run, run.who.key == who.key, run.status == .ended,
                let ended = run.ended, Date().timeIntervalSince(ended) < Drive.revival {
@@ -390,8 +398,12 @@ final class Drive: ObservableObject {
     /// grace clock: the run ends by itself when no call follows.
     func ended(_ ticket: Ticket, error: String?, summary: String? = nil, tab: Tab?) {
         rest(ticket.who)
-        guard let run, run.id == ticket.run else { return }
-        close(phase: ticket.phase)
+        guard var target = Agent.shared.run(ticket.run),
+              let cycle = target.cycles.firstIndex(where: { $0.phases.contains(where: { $0.id == ticket.phase }) }) else { return }
+        let now = Date()
+        for p in target.cycles[cycle].phases.indices where target.cycles[cycle].phases[p].id == ticket.phase {
+            target.cycles[cycle].phases[p].ended = now
+        }
         let url = tab?.address?.absoluteString ?? ticket.url
         let title = tab?.title ?? ticket.title
         let moved = url != ticket.url || (title != ticket.title && !title.isEmpty)
@@ -404,9 +416,22 @@ final class Drive: ObservableObject {
             o.result = summary
             o.pageChanged = nil
         }
-        outcome(o)
-        page(url: url, title: title)
-        busy = false
+        target.cycles[cycle].outcome = o
+        target.cycles[cycle].ended = now
+        target.url = url
+        target.title = title
+        if run?.id != target.id {
+            if target.status != .stopped {
+                target.status = error == nil ? .done : .error
+                target.ended = now
+                target.note = error ?? ""
+            }
+            Agent.shared.record(target)
+            return
+        }
+        run = target
+        busy = target.cycles.contains { $0.ended == nil }
+        guard !busy else { return }
         graceTimer?.invalidate()
         graceTimer = Timer.scheduledTimer(withTimeInterval: Drive.grace, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.lapse() }

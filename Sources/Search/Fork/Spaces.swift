@@ -1066,8 +1066,8 @@ struct ForkCommands: Commands {
             // Jev's timeline had no way back once closed; and with two or
             // three panes open there was no one move that put them all away.
             // The timeline is the agent pane's driver cards now: this opens
-            // the pane at the newest one, or closes it.
-            Button("Driver Timeline") { agent.open ? (agent.open = false) : agent.reveal() }
+            // the pane at the newest one, even when the pane is already open.
+            Button("Driver Timeline") { agent.reveal() }
                 .keyboardShortcut("j", modifiers: [.command, .option])
             // Never disabled: a menu item's enabled state is decided when the
             // menu is built, and ⌘⌥E pressed with two panes open did nothing

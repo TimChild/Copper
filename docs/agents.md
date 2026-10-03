@@ -331,3 +331,15 @@ helper: snapshot, refs, setters), `Input.swift` (NSEvent synthesis),
 `Bridge.swift` (`--mcp-stdio`), `Link.swift` + `LinkWire.swift` (the agent
 link and its wire). Hooks: `Browser.init` starts it,
 `SearchApp.init` runs the bridge. See `PATCHES.md` › `mcp-hooks`.
+
+### Concurrent drivers
+
+The agent pane's live strip keeps active callers and per-caller Stop controls visible while
+you read older messages. Driver Timeline (⌥⌘J) always reveals the newest activity in this same
+pane; it does not toggle a second pane. Outside calls made while Jev is running get their own
+cards without replacing Jev's live run, and late results still update an archived caller's card.
+Activity folding stops at an intervening driver card or answer so later tools stay chronological.
+
+In an isolated probe, `./bench --world NAME agent regression` checks transcript ordering,
+concurrent and late completions, Stop preservation, and cancellation of a discarded tab's wake.
+It uses synthetic drivers; it does not call a model or external MCP server.

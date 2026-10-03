@@ -177,11 +177,13 @@ final class TrailThumbs: ObservableObject {
 /// is on: off, the menu has nothing more in it than before.
 struct TrailsCommands: Commands {
     @ObservedObject var browser: Browser
-    @ObservedObject var flights = Flights.shared
+    /// Handed down by `ForkCommands`, which is what SwiftUI re-reads when
+    /// the flight flips.
+    let on: Bool
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
-            if flights.trails {
+            if on {
                 Divider()
                 Button("Close Trail") { Trails.shared.closeCurrent(in: browser) }
                     .keyboardShortcut("w", modifiers: [.command, .shift])

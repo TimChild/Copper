@@ -157,7 +157,7 @@
     ./bench flight [trails on|off | tide 6h|12h|24h|never]
                                        Labs flights (Settings › Labs): list them, or flip one in this world
     ./bench trails [open URL [FROM]|type ID WORDS|backdate N HOURS|glance N|off|toggle N|
-                    rename N TEXT|close N|ask N|canvas N|move ID N|new|file|menu]
+                    rename N TEXT|close N|ask N|canvas N|move ID N|new|file|menu|press]
                                        the Trails flight: each trail with its pages and depth; FROM opens
                                        a page as ⌘-click would from that tab; backdate lets Tide be seen
                                        without waiting; glance holds a Glance open for `window PATH`

@@ -15,9 +15,37 @@ extension Trails {
     /// move ID N|new`, `trails file` (trails.json as written), `trails menu`
     /// (what ⌘⇧W is bound to). N is a trail's place in the list.
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
+        let op = (request["op"] as? String ?? "list").lowercased()
+        // Read-only, and answered with the flight off too: what the menu bar
+        // holds, to see that off adds nothing to it.
+        if op == "menu" { return Trails.menu() }
+        // ⌘⇧W as a keyboard makes it — "W", shift held — straight to the
+        // menu bar, which is where AppKit matches a shortcut.
+        if op == "press" {
+            let key = (request["arg"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "W"
+            guard let window = Windows.window(of: browser),
+                  let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift],
+                                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                               context: nil, characters: key, charactersIgnoringModifiers: key,
+                                               isARepeat: false, keyCode: key.lowercased() == "d" ? 2 : 13) else { return ["error": "no window"] }
+            let before = browser.tabs.count
+            var took = NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false
+            var via = "key"
+            var items: [String] = []
+            for top in NSApp.mainMenu?.items ?? [] {
+                guard let menu = top.submenu else { continue }
+                for (index, item) in menu.items.enumerated() where item.keyEquivalent.lowercased() == key.lowercased()
+                    && item.keyEquivalentModifierMask == [.command, .shift] {
+                    items.append("\(top.title) › \(item.title) [\(item.keyEquivalent)] ⌘⇧ enabled=\(item.isEnabled)")
+                    // A window that isn't key (headless) gets no shortcut
+                    // matching from AppKit: the item the shortcut is on, run.
+                    if !took, item.isEnabled { menu.performActionForItem(at: index); took = true; via = "item" }
+                }
+            }
+            return ["handled": took, "via": via, "closed": before - browser.tabs.count, "items": items]
+        }
         guard Flights.trails else { return ["error": "the Trails flight is off — `flight trails on`", "flights": ["trails": false]] }
         attach(browser)
-        let op = (request["op"] as? String ?? "list").lowercased()
         let words = (request["arg"] as? String ?? "").split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         let column = self.column(browser.tabs.filter(Trails.member), in: browser)
         let all = column.fresh + column.earlier.flatMap(\.plans)
@@ -93,19 +121,6 @@ extension Trails {
             guard let data = try? Data(contentsOf: Store.file("trails.json")),
                   let json = try? JSONSerialization.jsonObject(with: data) else { return ["file": NSNull()] }
             return ["file": json]
-        case "menu":
-            var bound: [String] = []
-            func walk(_ menu: NSMenu, _ path: String) {
-                for item in menu.items {
-                    if item.keyEquivalent.lowercased() == "w", item.keyEquivalentModifierMask.contains(.command) {
-                        let shift = item.keyEquivalentModifierMask.contains(.shift) || item.keyEquivalent == "W"
-                        bound.append("\(path) › \(item.title)  ⌘\(shift ? "⇧" : "")W\(item.isEnabled ? "" : " (disabled)")")
-                    }
-                    if let sub = item.submenu { walk(sub, path.isEmpty ? item.title : "\(path) › \(item.title)") }
-                }
-            }
-            if let main = NSApp.mainMenu { walk(main, "") }
-            return ["w": bound]
         default:
             return ["error": "unknown trails op \(op)"]
         }
@@ -114,6 +129,26 @@ extension Trails {
         note["tide"] = Flights.shared.tide.rawValue
         note["glancing"] = glancing.map { id in (after.fresh + after.earlier.flatMap(\.plans)).firstIndex { $0.id == id } ?? -1 } ?? NSNull()
         return note
+    }
+
+    /// Every ⌘W binding in the menu bar, and the View menu as it stands.
+    private static func menu() -> [String: Any] {
+        var bound: [String] = []
+        func walk(_ menu: NSMenu, _ path: String) {
+            // As it would be drawn: SwiftUI fills a menu in when it opens.
+            menu.delegate?.menuNeedsUpdate?(menu)
+            menu.update()
+            for item in menu.items {
+                if item.keyEquivalent.lowercased() == "w", item.keyEquivalentModifierMask.contains(.command) {
+                    let shift = item.keyEquivalentModifierMask.contains(.shift) || item.keyEquivalent == "W"
+                    bound.append("\(path) › \(item.title)  ⌘\(shift ? "⇧" : "")W\(item.isEnabled ? "" : " (disabled)")")
+                }
+                if let sub = item.submenu { walk(sub, path.isEmpty ? item.title : "\(path) › \(item.title)") }
+            }
+        }
+        if let main = NSApp.mainMenu { walk(main, "") }
+        let view = NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu?.items.map { $0.isSeparatorItem ? "—" : $0.title } ?? []
+        return ["w": bound, "view": view]
     }
 
     private func describe(_ column: Column, in browser: Browser) -> [[String: Any]] {

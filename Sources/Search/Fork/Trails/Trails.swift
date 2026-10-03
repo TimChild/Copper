@@ -102,7 +102,7 @@ final class Trails: ObservableObject {
     private var addresses: [Tab.ID: AnyCancellable] = [:]
     private var timer: Timer?
     private var terminating: NSObjectProtocol?
-    private var settling = false
+    private var settling: Set<ObjectIdentifier> = []
     private var writing = false
     /// Yesterday's trails, read and waiting for the restored rows to bind to.
     private var unbound: Disk?
@@ -245,24 +245,29 @@ final class Trails: ObservableObject {
             watch(tab)
             if !tab.title.isEmpty { labels[tab.id] = tab.label }
         }
-        if tabs.contains(where: { Trails.member($0) && nodes[$0.id] == nil }) { settleSoon(browser) }
-        prune(keeping: tabs, in: browser)
-        dirty()
+        // `$tabs` speaks before the row (and the space's) has changed: what
+        // has gone and what is new are read a moment later, once both have.
+        settleSoon(browser)
     }
 
+    /// Once per window per turn of the run loop, however many times its
+    /// rows change in it.
     private func settleSoon(_ browser: Browser) {
-        guard !settling else { return }
-        settling = true
+        let key = ObjectIdentifier(browser)
+        guard settling.insert(key).inserted else { return }
         DispatchQueue.main.async { [weak self, weak browser] in
             guard let self else { return }
-            self.settling = false
+            self.settling.remove(key)
             if let browser { self.settle(browser) }
         }
     }
 
-    /// Every row without a place gets the one `node(of:)` says, for good.
+    /// Pages that have gone go to the graveyard first — so one coming back
+    /// with ⌘⇧T in the same moment finds its grave — then every row without
+    /// a place gets the one `node(of:)` says, for good.
     private func settle(_ browser: Browser) {
         guard started else { return }
+        prune(keeping: browser.tabs, in: browser)
         let now = Date()
         let rows = Dictionary(browser.tabs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // Parents before children: an opener settles first so its child
@@ -938,8 +943,9 @@ extension Trails {
 extension Trails {
     /// `decidePolicyFor`: a ⌘-click or middle-click opened `child` beside
     /// the page it was clicked in.
-    static func opened(_ child: Tab, from parent: Tab?, in browser: Browser) {
-        guard Flights.trails, let parent, parent.id != child.id else { return }
+    static func opened(_ child: Tab, from opener: @autoclosure () -> Tab?, in browser: Browser) {
+        // The opener is only looked up with the flight on.
+        guard Flights.trails, let parent = opener(), parent.id != child.id else { return }
         shared.adopt(child, parent: parent, in: browser)
     }
 

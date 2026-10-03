@@ -19,7 +19,10 @@ import AppKit
 //
 // 2. Links always landed in the first window. With a ⌘N window in front the
 //    page opened behind it. Now a link lands in the window in front — or the
-//    first one still on screen, or the first window brought back from closed.
+//    first one still on screen, one in the Dock, or the first window brought
+//    back from closed. (The first window's key observer also outlives its
+//    red button now — Fork/Windows.swift — so "in front" stays true after
+//    it is closed and brought back.)
 //
 // 3. A file opened with Copper — an .html, or the .webloc Safari writes when
 //    a link is dragged to the Desktop; the bundle has claimed both since the
@@ -77,17 +80,26 @@ enum LinkRelay {
     /// `Links.deliver`: the page goes into the window in front. `first` is
     /// the browser the link handler was handed at launch — the first window's
     /// — kept as the last resort, and shown again when its window was closed.
+    ///
+    /// "In front" is the stacking order, not who was last key: with Settings
+    /// or another panel key, the browser window just behind it is the one
+    /// you are looking at. A window in the Dock counts after any on screen.
     static func land(_ url: URL, first: Browser?) {
         let shown = Windows.all.filter { Windows.window(of: $0)?.isVisible == true }
-        let target = Windows.front.flatMap { front in shown.first { $0 === front } }
+        let stacked = NSApp.orderedWindows.lazy.filter(\.isVisible).compactMap { Windows.owner(of: $0) }.first
+        let docked = Windows.all.first { Windows.window(of: $0)?.isMiniaturized == true }
+        let target = stacked
+            ?? Windows.front.flatMap { front in shown.first { $0 === front } }
             ?? shown.first
+            ?? docked
             ?? first
             ?? Windows.main
         target.arrive(url)
         if let window = Windows.window(of: target) ?? (target.primary ? Links.window : nil) {
-            // Closed with the app still running: the link brings it back,
-            // rather than landing in a tab nobody can see. On screen already,
-            // it comes forward with the app.
+            // Closed with the app still running (or put in the Dock): the
+            // link brings it back, rather than landing in a tab nobody can
+            // see. On screen already, it comes forward with the app.
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
         } else {
             _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)

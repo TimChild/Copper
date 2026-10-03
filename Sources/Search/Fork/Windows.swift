@@ -83,8 +83,14 @@ enum Windows {
         let slot = ObjectIdentifier(window)
         let close = center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak browser] _ in
             MainActor.assumeIsolated {
-                for token in tokens.removeValue(forKey: slot) ?? [] { NotificationCenter.default.removeObserver(token) }
+                // The first window's NSWindow is the one SwiftUI brings back
+                // after its red button (a Dock click, a link), and `attach`
+                // skips a pair it already knows: let its observers go here
+                // and it would never again tell agents — or a link from
+                // another app — that it is the window in front.
                 guard let browser, let id = browser.windowID else { return }
+                for token in tokens.removeValue(forKey: slot) ?? [] { NotificationCenter.default.removeObserver(token) }
+                windows.removeAll { $0.browser === browser }
                 closed(id)
             }
         }

@@ -136,6 +136,7 @@ export function createApi(c: Controller = controller): CopperCanvasApi {
 }
 
 export function installApi(): CopperCanvasApi {
+  window.addEventListener('pagehide', () => controller.session?.clearAgents())
   const api = createApi()
   Object.defineProperty(window, 'copperCanvas', { value: api, configurable: true, writable: false, enumerable: true })
   return api

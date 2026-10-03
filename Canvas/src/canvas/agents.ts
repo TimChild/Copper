@@ -1,15 +1,15 @@
 /**
  * Agents on the board. Whoever drives an agent (the host, a tool call, a
  * collaborator's agent through the sync server) writes one entry per agent
- * into the `agents` map and moves its cursor while it works. Entries are
- * never deleted for being old: stale ones are just hidden.
+ * into the `agents` map and moves its cursor while it works. The writer
+ * removes its lease; readers also hide expired leases after a disconnect.
  */
 import * as Y from 'yjs'
 import type { Point } from './geometry'
 import { AGENT_STATUSES, type AgentPresence, type AgentStatus, type CanvasAgent } from './types'
 
 /** How long an entry counts as present after its last write. */
-export const AGENT_TTL_MS = 2 * 60 * 1000
+export const AGENT_TTL_MS = 2000
 
 const plain = (v: unknown): Record<string, unknown> | null => {
   if (v instanceof Y.Map) return v.toJSON() as Record<string, unknown>

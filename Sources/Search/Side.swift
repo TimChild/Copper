@@ -19,6 +19,7 @@ struct SideBar: View {
     @ObservedObject private var sections = Sections.shared
     @ObservedObject private var downloads = Downloads.shared
     @ObservedObject private var clearTabs = ClearTabs.shared
+    @ObservedObject private var flights = Flights.shared // Fork (trails)
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var still
@@ -313,7 +314,13 @@ struct SideBar: View {
                         }
                     }
                     newTab
-                    rows(today)
+                    // Fork (trails): with the flight on, Today is drawn as
+                    // trails (Fork/Trails/); off, exactly as before.
+                    if flights.trails {
+                        TrailsColumn(browser: browser, prefs: prefs, tint: tint, pill: pill, tabs: today.map(\.tab))
+                    } else {
+                        rows(today)
+                    }
                 }
                 .padding(.horizontal, SideBar.inset)
                 .padding(.top, 2)

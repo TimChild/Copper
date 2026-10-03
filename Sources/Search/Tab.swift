@@ -256,11 +256,24 @@ final class Tab: ObservableObject, Identifiable {
     private var memory: Any?
     /// The last picture of that page, compressed, for the moment it wakes.
     private var picture: Data?
+    /// Fork (wake-cover): the picture's size in points, and the page's own
+    /// ground colour read off the picture's edges. The picture is drawn at
+    /// its true size when the tab wakes — the stage may be another shape by
+    /// then — and whatever it does not reach wears the page's colour rather
+    /// than the window's.
+    private var pictureSize: CGSize = .zero
+    private var pictureGround: NSColor?
     /// That picture, over the stage while the page is rebuilt underneath it:
     /// coming back to a tab that slept starts from what you left, not white.
     @Published private(set) var cover: NSImage?
+    /// Fork (wake-cover): the colour behind `cover` — the page's own, or nil
+    /// for the window's ground when the picture gave nothing away.
+    private(set) var coverGround: NSColor?
 
     private var watch: [NSKeyValueObservation] = []
+    /// Delayed recovery belongs to one view and one navigation, never its successor.
+    private var recoveryGeneration = 0
+    private var attachmentWait: DispatchWorkItem?
 
     /// A tab that has never been anywhere shows the address field instead of a
     /// page. It still owns a web view — built now, warm by the time it's needed.
@@ -678,6 +691,7 @@ final class Tab: ObservableObject, Identifiable {
     }
 
     func go(to url: URL) {
+        cancelRecovery()
         if CanvasTabs.reroute(self, to: url) { return } // Fork (canvas-hooks): a board opens in its own tab, and keeps it
         // Set straight away rather than waiting for the observer: the tab has to
         // stop being blank in the same frame the field disappears, or the empty
@@ -770,15 +784,67 @@ final class Tab: ObservableObject, Identifiable {
     /// on — can still be pictured. Nil when there is nothing to draw.
     func snapshot(_ done: @escaping (Data?) -> Void) {
         guard let built else { return done(nil) }
-        built.takeSnapshot(with: nil) { image, _ in
+        // Fork (wake-cover): the size the picture is of, in points. The JPEG
+        // it becomes carries only pixels, and a Retina picture read back is
+        // twice the size it was taken at.
+        let size = built.bounds.size
+        built.takeSnapshot(with: nil) { [weak self] image, _ in
             guard let image, let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
                 return done(nil)
             }
             DispatchQueue.global(qos: .utility).async {
                 let data = Tab.jpeg(cg)
-                DispatchQueue.main.async { done(data) }
+                let ground = Tab.ground(of: cg) // Fork (wake-cover)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self?.pictureSize = size
+                        self?.pictureGround = ground
+                    }
+                    done(data)
+                }
             }
         }
+    }
+
+    /// Fork (wake-cover): the page's background, as best a picture can tell
+    /// — the colour most of its right edge and bottom edge are. The edges,
+    /// because that is where a page runs out of content and shows its ground;
+    /// the commonest colour rather than the average, because a scrollbar or a
+    /// line of text on the edge would muddy an average into a grey no page
+    /// is. Sixty-four samples, each the mean of a short run of edge pixels.
+    nonisolated private static func ground(of image: CGImage) -> NSColor? {
+        let width = image.width, height = image.height
+        guard width > 2, height > 2 else { return nil }
+        let runs = 32
+        var samples: [(r: Int, g: Int, b: Int)] = []
+        samples.reserveCapacity(runs * 2)
+        func read(_ strip: CGImage?, across: Bool) {
+            guard let strip else { return }
+            let w = across ? runs : 1, h = across ? 1 : runs
+            var pixels = [UInt8](repeating: 0, count: w * h * 4)
+            guard let context = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            context.interpolationQuality = .medium
+            context.draw(strip, in: CGRect(x: 0, y: 0, width: w, height: h))
+            for i in 0..<runs {
+                let at = i * 4
+                samples.append((Int(pixels[at]), Int(pixels[at + 1]), Int(pixels[at + 2])))
+            }
+        }
+        read(image.cropping(to: CGRect(x: width - 1, y: 0, width: 1, height: height)), across: false)
+        read(image.cropping(to: CGRect(x: 0, y: height - 1, width: width, height: 1)), across: true)
+        guard !samples.isEmpty else { return nil }
+        // Bucketed to sixteen levels a channel, the fullest bucket wins, and
+        // its members' mean is the answer.
+        var buckets: [Int: [(r: Int, g: Int, b: Int)]] = [:]
+        for s in samples { buckets[(s.r >> 4) << 8 | (s.g >> 4) << 4 | (s.b >> 4), default: []].append(s) }
+        guard let best = buckets.values.max(by: { $0.count < $1.count }) else { return nil }
+        let n = CGFloat(best.count)
+        let r = CGFloat(best.reduce(0) { $0 + $1.r }) / n / 255
+        let g = CGFloat(best.reduce(0) { $0 + $1.g }) / n / 255
+        let b = CGFloat(best.reduce(0) { $0 + $1.b }) / n / 255
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
     }
 
     nonisolated private static func jpeg(_ image: CGImage) -> Data? {
@@ -837,48 +903,58 @@ final class Tab: ObservableObject, Identifiable {
     /// take — no error, no navigation, just a view that goes on sitting on
     /// about:blank with nothing left to say so. Still there, or still
     /// answering for a process that's already gone, is asked once more.
-    private func loadAndVerify(_ url: URL, state: Any? = nil, tries: Int = 0) {
-        // Wait for the stage to take the view back before loading into it. A
-        // page loaded while its view is off any window boots as a hidden tab,
-        // and a site that holds everything until it is shown — x.com does,
-        // right down to making no request at all — can then miss being shown a
-        // moment later and sit on its placeholder for good. Coming back to a
-        // pinned tab after ⌘W is exactly that: select() asks for the view back
-        // and wakes the page in the same breath, one synchronous step ahead of
-        // SwiftUI actually putting the view on screen. Bounded at about a
-        // second, so a wake with no stage waiting for it still loads rather
-        // than hanging on one that will never come.
+    ///
+    /// The load waits for the stage to take the view back: a page loaded
+    /// while its view is off any window boots as a hidden tab, and a site
+    /// that holds everything until it is shown — x.com does — can miss being
+    /// shown a moment later and sit on its placeholder for good.
+    private func loadAndVerify(_ url: URL, state: Any? = nil) {
+        cancelRecovery()
+        let generation = recoveryGeneration
         let view = web
-        if view.window == nil, tries < 50 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
-                self?.loadAndVerify(url, state: state, tries: tries + 1)
-            }
-            return
-        }
-        // A tab that slept has its own history to go back to — the page, its
-        // back list and its scroll position, in one. Anything else starts
-        // from the address.
-        if let state {
-            view.interactionState = state
-        } else {
-            view.load(URLRequest(url: url))
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self else { return }
-            guard built?.url?.absoluteString != "about:blank" else {
-                web.load(URLRequest(url: url))
-                return
-            }
-            web.evaluateJavaScript("document.readyState") { [weak self] _, error in
-                MainActor.assumeIsolated {
-                    guard let self, let error = error as NSError? else { return }
-                    guard error.domain == WKErrorDomain,
-                          error.code == WKError.webContentProcessTerminated.rawValue
-                    else { return }
-                    self.web.load(URLRequest(url: url))
+        let load = { [weak self, weak view] in
+            guard let self, let view, self.built === view,
+                  self.recoveryGeneration == generation, self.pending == nil else { return }
+            self.attachmentWait?.cancel()
+            self.attachmentWait = nil
+            view.onStage = nil
+            if let state { view.interactionState = state } else { view.load(URLRequest(url: url)) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak view] in
+                guard let self, let view, self.built === view,
+                      self.recoveryGeneration == generation, self.address == url, self.pending == nil else { return }
+                if view.url == nil || view.url?.absoluteString == "about:blank" {
+                    view.load(URLRequest(url: url))
+                    return
+                }
+                view.evaluateJavaScript("document.readyState") { [weak self, weak view] _, error in
+                    MainActor.assumeIsolated {
+                        guard let self, let view, self.built === view,
+                              self.recoveryGeneration == generation, self.address == url,
+                              let error = error as NSError?, error.domain == WKErrorDomain,
+                              error.code == WKError.webContentProcessTerminated.rawValue else { return }
+                        view.load(URLRequest(url: url))
+                    }
                 }
             }
         }
+        // AppKit tells us when the stage attaches, instead of fifty 20 ms
+        // polls. One fallback still lets deliberately offscreen callers load.
+        if view.window != nil { load() } else {
+            view.onStage = load
+            let fallback = DispatchWorkItem(block: load)
+            attachmentWait = fallback
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: fallback)
+        }
+    }
+
+    /// Delayed recovery work (the attachment wait, the retry, the health
+    /// check) belongs to one view and one navigation; a new one, a discard or
+    /// a trip elsewhere ends it.
+    private func cancelRecovery() {
+        recoveryGeneration += 1
+        attachmentWait?.cancel()
+        attachmentWait = nil
+        built?.onStage = nil
     }
 
     /// Coming back to a tab. A page whose process was taken away out of sight
@@ -928,11 +1004,17 @@ final class Tab: ObservableObject, Identifiable {
         let state = memory
         memory = nil
         if let picture, let image = NSImage(data: picture) {
+            // Fork (wake-cover): back to the size it was taken at, so it is
+            // drawn 1:1 over the page it stands in for — not at the pixel
+            // count a Retina JPEG reads back as, twice too big.
+            if pictureSize.width > 0, pictureSize.height > 0 { image.size = pictureSize }
+            coverGround = pictureGround
             cover = image
             // Whatever happens to the page, the picture doesn't outstay it.
             uncover(after: 4)
         }
         picture = nil
+        pictureGround = nil
         loadAndVerify(url, state: state)
         return true
     }
@@ -1036,6 +1118,7 @@ final class Tab: ObservableObject, Identifiable {
     /// back-forward cache. The tab keeps its address; `web` builds again the
     /// next time anyone asks for it.
     private func discard() {
+        cancelRecovery()
         watch = []
         ears.stop()
         guard let web = built else { return }
@@ -1159,6 +1242,19 @@ final class PageView: WKWebView {
     /// so a fresh view starts unseen, over the window's own ground, and comes
     /// in once WebKit says there is something on it worth seeing.
     private(set) var unpainted = false
+    /// Fork (restore-attachment-lease): a waking tab's load, run once the
+    /// stage has put this view in a window — AppKit says so, nobody polls.
+    var onStage: (() -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        // The representable finishes sizing the view in this turn.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil else { return }
+            self.onStage?()
+        }
+    }
 
     /// WebKit says when the first frame is only through names outside the
     /// public framework, so it is asked whether it answers to them first. One

@@ -27,13 +27,19 @@ struct Page: View {
                 // The page as it was left, while it is rebuilt underneath —
                 // anchored where the page itself starts, and never in the
                 // way of a click meant for the page.
-                Image(nsImage: cover)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .clipped()
+                //
+                // Fork (wake-cover): drawn at its own size on the page's own
+                // ground, never scaled to fill. Scaled, a picture taken when
+                // the stage was wider — before the agent pane opened, before
+                // the window was narrowed — made the stage as wide as the
+                // picture, the whole window's layout slid left to centre it,
+                // and the sidebar went off the edge until the picture came
+                // down: the "fullscreen" flash on waking a slept tab. And
+                // seen the moment the tab is picked, not faded in over the
+                // window's ground — it is the page as it already was.
+                Cover(picture: cover, ground: tab.coverGround)
                     .allowsHitTesting(false)
-                    .transition(.opacity)
+                    .transition(.asymmetric(insertion: .identity, removal: .opacity))
             }
 
             if tab.floating {
@@ -68,6 +74,28 @@ struct Page: View {
         .animation(Motion.quick, value: tab.floating)
         .animation(.easeOut(duration: 0.2), value: tab.cover == nil)
         .animation(.easeOut(duration: 0.16), value: tab.pull == nil)
+    }
+}
+
+/// Fork (wake-cover): the last picture of a page, over the stage while the
+/// page is rebuilt underneath. The picture sits in the top-left corner at the
+/// size it was taken — the corner a page keeps when its window changes shape
+/// — and is cut off where the stage ends; what it does not reach is the
+/// page's own background colour, read off the picture's edges, so a stage
+/// that has grown since shows more page-coloured ground rather than a band
+/// of window. An overlay, so nothing about the picture's size reaches the
+/// layout: the stage stays exactly the stage.
+private struct Cover: View {
+    let picture: NSImage
+    let ground: NSColor?
+
+    var body: some View {
+        (ground.map { Color(nsColor: $0) } ?? Palette.ground)
+            .overlay(alignment: .topLeading) {
+                Image(nsImage: picture)
+                    .fixedSize()
+            }
+            .clipped()
     }
 }
 

@@ -62,14 +62,14 @@ final class Links: NSObject, NSApplicationDelegate {
 
     @objc private func handle(getURL event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let text = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-              let url = URL(string: text), ["http", "https", "copper"].contains(url.scheme?.lowercased() ?? "")
+              let url = URL(string: text).flatMap(LinkRelay.accept) // Fork: http(s), copper://, and a page file or .webloc (Fork/LinkRelay.swift)
         else { return }
         Links.take(url)
     }
 
     /// Files and anything else the system opens with the app.
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where ["http", "https", "copper"].contains(url.scheme?.lowercased() ?? "") {
+        for url in urls.compactMap(LinkRelay.accept) { // Fork: http(s), copper://, and a page file or .webloc (Fork/LinkRelay.swift)
             Links.take(url)
         }
     }
@@ -95,17 +95,10 @@ final class Links: NSObject, NSApplicationDelegate {
     /// it, a few frames apart, in the order they came.
     @MainActor
     static func hand(to browser: Browser) {
-        deliver = { [weak browser] url in
-            browser?.arrive(url)
-            // The window closed with the app still running: the link brings
-            // it back, rather than landing in a tab nobody can see.
-            if let window {
-                if !window.isVisible { window.makeKeyAndOrderFront(nil) }
-            } else {
-                _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
-            }
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        // Fork: into the window in front, or this one brought back from closed
+        // (Fork/LinkRelay.swift `land` — upstream's "window closed with the
+        // app still running" case lives there too).
+        deliver = { [weak browser] url in LinkRelay.land(url, first: browser) }
         flush = { [weak browser] in browser?.flushSession() }
         let early = waiting
         waiting = []
@@ -134,6 +127,7 @@ final class Links: NSObject, NSApplicationDelegate {
     }
 
     private static func take(_ url: URL) {
+        if LinkRelay.hand(url) { return } // Fork: a probe world hands a link from outside to the main Copper (Fork/LinkRelay.swift)
         if let deliver {
             deliver(url)
         } else {

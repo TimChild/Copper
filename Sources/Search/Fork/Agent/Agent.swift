@@ -196,6 +196,22 @@ final class Agent: ObservableObject {
         items.append(Item(kind: .drive, text: new.goal, title: new.driver.name, run: new.id))
     }
 
+    /// A concurrent caller has a card without taking Jev's live run away.
+    /// Completions can also update a run that another caller already archived.
+    func record(_ run: Drive.Run) {
+        if !items.contains(where: { $0.run == run.id }) { driveChanged(from: nil, to: run) }
+        kept[run.id] = run
+    }
+
+    func stopRecorded(_ key: String) {
+        for (id, var run) in kept where run.who.key == key && run.status == .running {
+            run.status = .stopped
+            run.ended = Date()
+            run.note = "Stopped by you"
+            kept[id] = run
+        }
+    }
+
     /// The run a transcript item shows, live or as it was left.
     func run(_ id: UUID?) -> Drive.Run? {
         guard let id else { return nil }
@@ -801,6 +817,7 @@ final class Agent: ObservableObject {
         case "clear": clear()
         case "stop": stop()
         case "selftest": return ["failures": Agent.sealedSelfTest() + Claude.selfTest()]
+        case "regression": return ["failures": WaveChecks.run()]
         case "seed":
             if let error = seed(request["arg"] as? String ?? "chat", in: browser) { return ["error": error] }
         case "expand":

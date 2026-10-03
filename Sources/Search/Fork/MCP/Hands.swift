@@ -147,6 +147,7 @@ extension Drive {
             hands[key] = nil   // a bench stand-in: nothing behind it to stop
         } else if hand.driver != .jev {
             refuse(key)
+            Agent.shared.stopRecorded(key)
             hands[key] = nil
         }
     }

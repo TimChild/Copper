@@ -1049,6 +1049,7 @@ struct ForkCommands: Commands {
     @ObservedObject var spaces = Spaces.shared
     @ObservedObject var split = Split.shared
     @ObservedObject var agent = Agent.shared
+    @ObservedObject var flights = Flights.shared // Fork (trails): a nested Commands' own observer isn't heard
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
@@ -1066,8 +1067,8 @@ struct ForkCommands: Commands {
             // Jev's timeline had no way back once closed; and with two or
             // three panes open there was no one move that put them all away.
             // The timeline is the agent pane's driver cards now: this opens
-            // the pane at the newest one, or closes it.
-            Button("Driver Timeline") { agent.open ? (agent.open = false) : agent.reveal() }
+            // the pane at the newest one, even when the pane is already open.
+            Button("Driver Timeline") { agent.reveal() }
                 .keyboardShortcut("j", modifiers: [.command, .option])
             // Never disabled: a menu item's enabled state is decided when the
             // menu is built, and ⌘⌥E pressed with two panes open did nothing
@@ -1093,6 +1094,8 @@ struct ForkCommands: Commands {
         // The Groups menu lives in GroupsUI.swift; it rides here because
         // App.swift's .commands builder is at its cap of ten.
         GroupCommands(browser: browser)
+        // Close Trail (⌘⇧W) and Ask About This Trail, while the flight is on.
+        TrailsCommands(browser: browser, on: flights.trails)
     }
 }
 

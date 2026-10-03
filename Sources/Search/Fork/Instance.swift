@@ -121,7 +121,7 @@ enum Instance {
     /// or without an explicit environment), so a launch from here would
     /// otherwise carry this probe's SEARCH_PROBE — reopening the probe's own
     /// world — and whatever the agent that started the probe had in its shell.
-    private static func launch(_ target: Target) {
+    static func launch(_ target: Target) {
         let inherited = ProcessInfo.processInfo.environment
         var environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
         for key in ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG"] {
@@ -157,7 +157,7 @@ enum Instance {
 
     // MARK: - the main world, and the test seam
 
-    private struct Target {
+    struct Target {
         let name: String
         let folder: URL
         /// nil for the real main world: only the minimal environment `launch` builds.
@@ -175,7 +175,7 @@ enum Instance {
     /// `COPPER_MAIN_WORLD_PORT=<mcp port>`) treats the world `Copper (<name>)`
     /// as main and launches it from its own bundle, headless, hidden and
     /// without activating anything.
-    private static var mainWorld: Target? {
+    static var mainWorld: Target? {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let environment = ProcessInfo.processInfo.environment
         let seam = (environment["COPPER_MAIN_WORLD"] ?? "").lowercased()
@@ -185,7 +185,12 @@ enum Instance {
             return Target(name: "main", folder: support.appendingPathComponent(Fork.name, isDirectory: true),
                           environment: nil, bundle: installedBundle)
         }
-        var launch = ["SEARCH_PROBE": seam, "SEARCH_HEADLESS": "1", "SEARCH_HEADLESS_WINDOW": "hidden"]
+        // The seam's world is told it is the main one (COPPER_MAIN_WORLD
+        // naming itself): launched with a clean environment it would
+        // otherwise take the installed Copper for main and hand a reopen — or
+        // a link (Fork/LinkRelay.swift) — on to the browser the test exists
+        // to stay away from.
+        var launch = ["SEARCH_PROBE": seam, "SEARCH_HEADLESS": "1", "SEARCH_HEADLESS_WINDOW": "hidden", "COPPER_MAIN_WORLD": seam]
         if let port = environment["COPPER_MAIN_WORLD_PORT"], UInt16(port) != nil { launch["SEARCH_MCP_PORT"] = port }
         return Target(name: seam, folder: support.appendingPathComponent("\(Fork.name) (\(seam))", isDirectory: true),
                       environment: launch, bundle: Bundle.main.bundleURL)
@@ -204,7 +209,7 @@ enum Instance {
 
     /// Another running instance of this bundle that is a main-world Copper
     /// (no SEARCH_PROBE in its environment, not a build-folder run).
-    private static func unlockedMainInstance() -> pid_t? {
+    static func unlockedMainInstance() -> pid_t? {
         let me = getpid()
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? Fork.bundle)
         where app.processIdentifier != me && app.executableURL?.path.contains("/.build/") != true {

@@ -196,6 +196,17 @@ launchd recipe above) handles a reopen as before. One process per world is enfor
 lock (`instance.lock`), so neither a reopen nor an update relaunch can start a second one.
 Details: docs/updates.md.
 
+Links from other apps get the same treatment. LaunchServices resolves the default browser to a
+bundle id and sends the `GetURL` event to one process of that bundle — with a headless probe
+alive, often the probe, which used to open the page in a world nobody could see while Copper came
+forward with nothing new in it. A probe now hands the address to the main world's process by pid
+(an Apple Event aimed at that one process, so LaunchServices gets no second say), launching the
+main world first when nothing holds its lock and sending once it does. A headless Copper that *is*
+the main world opens the link itself. `Fork/LinkRelay.swift`; every hand-off is a line in
+`update.log`. The test seam (`COPPER_MAIN_WORLD=<name>`) makes a probe treat the world
+`Copper (<name>)` as main — launched headless and hidden, and told it is main itself, so a chain
+of test worlds never reaches the installed Copper.
+
 ## Probing it without touching a real profile
 
 ```sh

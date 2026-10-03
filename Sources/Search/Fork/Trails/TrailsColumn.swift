@@ -26,8 +26,11 @@ import UniformTypeIdentifiers
 extension Trails {
     /// How far each level of lineage steps in: one mark's width, as folders.
     static let step: CGFloat = 16
-    /// Reflow: short, settled, no bounce.
-    static let motion = Animation.spring(duration: 0.24, bounce: 0)
+    /// Reflow: short, settled, no bounce — and none at all under Reduce
+    /// Motion, where rows simply appear where they belong.
+    static var motion: Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .spring(duration: 0.24, bounce: 0)
+    }
     /// A page being dragged between trails.
     static let dragType = UTType(exportedAs: "com.collinrijock.copper.trail-page", conformingTo: .data)
 
@@ -75,7 +78,6 @@ struct TrailsColumn: View {
 
     @ObservedObject private var trails = Trails.shared
     @ObservedObject private var flights = Flights.shared
-    @Environment(\.accessibilityReduceMotion) private var still
     /// A page from the column is being dragged over it: the well for a new
     /// trail opens at the end of the fresh ones.
     @State private var carrying = false
@@ -108,14 +110,14 @@ struct TrailsColumn: View {
         }
         // A drop anywhere in the trails that isn't on a trail: a trail of its own.
         .onDrop(of: [Trails.dragType], isTargeted: Binding(get: { carrying }, set: { on in
-            withAnimation(still ? nil : Trails.motion) { carrying = on }
+            withAnimation(Trails.motion) { carrying = on }
         })) { providers in
             Trails.dropped(providers, in: browser) { tab in
-                withAnimation(still ? nil : Trails.motion) { trails.reroot(tab, in: browser, keepTitle: true) }
+                withAnimation(Trails.motion) { trails.reroot(tab, in: browser, keepTitle: true) }
             }
         }
-        .animation(still ? nil : Trails.motion, value: column.fresh.map(\.id))
-        .animation(still ? nil : Trails.motion, value: column.earlier.flatMap(\.plans).map(\.id))
+        .animation(Trails.motion, value: column.fresh.map(\.id))
+        .animation(Trails.motion, value: column.earlier.flatMap(\.plans).map(\.id))
         .onAppear { trails.attach(browser) }
     }
 }
@@ -274,11 +276,13 @@ private struct TrailHead: View {
     let pill: Namespace.ID
 
     @ObservedObject private var trails = Trails.shared
-    @Environment(\.accessibilityReduceMotion) private var still
     @State private var hovering = false
     @State private var overChevron = false
     @State private var target = false
     @State private var draft = ""
+    /// When a click last opened or shut the trail, so a double-click can
+    /// take its first click back.
+    @State private var folded: Date?
     @FocusState private var typing: Bool
 
     private var renaming: Bool { trails.renaming == plan.id }
@@ -376,15 +380,22 @@ private struct TrailHead: View {
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture {
             guard !renaming else { return }
-            // The second click of a double-click names the trail; the first
-            // has already gone where a click goes.
+            // The second click of a double-click names the trail. The first
+            // has already done what a click does: a fold it made is undone,
+            // a jump to the trail stands — you rename the trail you are on.
             if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+                if let folded, Date().timeIntervalSince(folded) < NSEvent.doubleClickInterval + 0.1 {
+                    withAnimation(Trails.motion) { trails.toggle(plan) }
+                }
+                folded = nil
                 trails.renaming = plan.id
                 return
             }
             if plan.live {
-                withAnimation(still ? nil : Trails.motion) { trails.toggle(plan) }
+                folded = Date()
+                withAnimation(Trails.motion) { trails.toggle(plan) }
             } else {
+                folded = nil
                 browser.select(plan.recent)
             }
         }
@@ -401,14 +412,14 @@ private struct TrailHead: View {
         .contextMenu { TrailMenu(browser: browser, plan: plan, open: open) }
         .onDrop(of: [Trails.dragType], isTargeted: $target) { providers in
             Trails.dropped(providers, in: browser) { tab in
-                withAnimation(still ? nil : Trails.motion) { trails.move(tab, to: plan.id, in: browser) }
+                withAnimation(Trails.motion) { trails.move(tab, to: plan.id, in: browser) }
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Trail \(plan.title), \(plan.pages.count) pages")
         .accessibilityHint(open ? "Shows its pages below" : "Goes to the page you used last")
         .animation(Motion.quick, value: hovering)
-        .animation(still ? nil : Trails.motion, value: open)
+        .animation(Trails.motion, value: open)
         .transition(.opacity)
     }
 
@@ -429,7 +440,7 @@ private struct TrailHead: View {
         .frame(width: 16, height: 16)
         .contentShape(Rectangle().inset(by: -7))
         .onHover { overChevron = $0 }
-        .onTapGesture { withAnimation(still ? nil : Trails.motion) { trails.toggle(plan) } }
+        .onTapGesture { withAnimation(Trails.motion) { trails.toggle(plan) } }
         .help(open ? "Fold this trail" : "Open this trail here")
     }
 

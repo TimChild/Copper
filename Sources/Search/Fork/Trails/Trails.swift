@@ -47,6 +47,9 @@ final class Trails: ObservableObject {
         /// The founder has left its results page: the query is the trail's
         /// for good, and later searches in that tab don't rename it.
         var settled = false
+        /// What it was called when its first page closed, so a trail coming
+        /// back with ⌘⇧T keeps its name until that page is back too.
+        var caption: String?
         var created: Date
         var used: Date
         var rank: Date
@@ -78,9 +81,21 @@ final class Trails: ObservableObject {
         let trail: UUID
         let meta: Meta?
         let parentURL: String?
+        let founder: Bool
+        let opened: Date
         let at: Date
     }
     private var graveyard: [Grave] = []
+    /// Addresses Reopen Closed Tab has just taken out of a window's list:
+    /// only a page arriving at one of these goes back to its old trail — the
+    /// same address typed or opened afresh starts a trail of its own.
+    private var expected: [(url: String, at: Date)] = []
+    /// Pages back from the graveyard whose parent isn't back yet: the
+    /// address they hang from, so they move under it when it returns.
+    private var orphans: [Tab.ID: String] = [:]
+    /// Each page's title the last time the rows changed — the name a trail
+    /// keeps when its first page closes.
+    private var labels: [Tab.ID: String] = [:]
 
     private var started = false
     private var watching: [ObjectIdentifier: [AnyCancellable]] = [:]
@@ -160,6 +175,20 @@ final class Trails: ObservableObject {
             guard let self, let browser else { return }
             self.activated(id, from: browser.activeID, in: browser)
         }.store(in: &bag)
+        // A ghost taken out of the list (and none put in) is a page being
+        // reopened. Thirteen before is the list trimming itself to twelve.
+        var ghosts = browser.ghosts
+        browser.$ghosts.sink { [weak self] now in
+            let before = ghosts
+            ghosts = now
+            guard let self, before.count <= 12 else { return }
+            let ids = Set(now.map(\.id))
+            let old = Set(before.map(\.id))
+            guard !now.contains(where: { !old.contains($0.id) }) else { return }
+            let at = Date()
+            for ghost in before where !ids.contains(ghost.id) { self.expected.append((ghost.url.absoluteString, at)) }
+            self.expected.removeAll { at.timeIntervalSince($0.at) > 15 }
+        }.store(in: &bag)
         watching[key] = bag
     }
 
@@ -186,7 +215,7 @@ final class Trails: ObservableObject {
             let parent = grave.parentURL.flatMap { url in
                 nodes.first { $0.value.trail == grave.trail && lastURL[$0.key]?.absoluteString == url && rows[$0.key] != nil }?.key
             }
-            return Node(trail: grave.trail, parent: parent, opened: now, used: now)
+            return Node(trail: grave.trail, parent: parent, opened: grave.opened, used: now)
         }
         let seen = Sections.shared.knows(tab) ? Sections.shared.lastSeen(tab) : now
         return Node(trail: tab.id, parent: nil, opened: seen, used: seen)
@@ -214,6 +243,7 @@ final class Trails: ObservableObject {
         for tab in tabs where Trails.member(tab) {
             gone[tab.id] = nil
             watch(tab)
+            if !tab.title.isEmpty { labels[tab.id] = tab.label }
         }
         if tabs.contains(where: { Trails.member($0) && nodes[$0.id] == nil }) { settleSoon(browser) }
         prune(keeping: tabs, in: browser)
@@ -260,13 +290,7 @@ final class Trails: ObservableObject {
         nodes[tab.id] = node
         if let url = tab.pending ?? tab.address { lastURL[tab.id] = url }
         if let index = graveIndex(for: tab, trail: node.trail) {
-            let grave = graveyard.remove(at: index)
-            if metas[node.trail] == nil, var meta = grave.meta {
-                meta.founder = nil
-                meta.used = now
-                meta.rank = now
-                metas[node.trail] = meta
-            }
+            revive(tab, from: graveyard.remove(at: index), now: now)
         }
         if metas[node.trail] == nil {
             var meta = Meta(founder: tab.id, created: node.opened, used: node.used, rank: node.opened)
@@ -353,31 +377,58 @@ final class Trails: ObservableObject {
         graveyard.remove(at: index)
         let now = Date()
         let old = nodes[tab.id]?.trail
-        let parent = grave.parentURL.flatMap { url in
-            nodes.first { $0.key != tab.id && $0.value.trail == grave.trail && lastURL[$0.key]?.absoluteString == url && gone[$0.key] == nil }?.key
-        }
-        nodes[tab.id] = Node(trail: grave.trail, parent: parent, opened: now, used: now)
-        if metas[grave.trail] == nil, var meta = grave.meta {
-            meta.founder = nil
-            meta.used = now
-            meta.rank = now
-            metas[grave.trail] = meta
-        }
+        nodes[tab.id] = Node(trail: grave.trail, parent: nil, opened: grave.opened, used: now)
         if let old, old != grave.trail { metas[old] = nil }
+        revive(tab, from: grave, now: now)
         dirty()
+    }
+
+    /// A page back from the graveyard, on its trail again: in its old place
+    /// in the order, under its parent if that is back (or as soon as it is),
+    /// over the pages that hang from it, and — if it began the trail — its
+    /// founder again. A trail that had gone entirely comes back to the top.
+    private func revive(_ tab: Tab, from grave: Grave, now: Date) {
+        guard var node = nodes[tab.id] else { return }
+        let url = (tab.pending ?? tab.address)?.absoluteString ?? grave.url
+        if let used = expected.firstIndex(where: { $0.url == url || $0.url == grave.url }) { expected.remove(at: used) }
+        node.opened = grave.opened
+        if node.parent == nil, let want = grave.parentURL {
+            if let parent = nodes.first(where: { $0.key != tab.id && $0.value.trail == grave.trail && gone[$0.key] == nil
+                && lastURL[$0.key]?.absoluteString == want })?.key {
+                node.parent = parent
+            } else {
+                orphans[tab.id] = want
+            }
+        }
+        nodes[tab.id] = node
+        for (id, want) in orphans where want == url && id != tab.id && nodes[id]?.trail == grave.trail {
+            nodes[id]?.parent = tab.id
+            orphans[id] = nil
+        }
+        let held = nodes.contains { $0.key != tab.id && $0.value.trail == grave.trail && gone[$0.key] == nil }
+        var meta = metas[grave.trail] ?? grave.meta ?? Meta(created: grave.opened, used: now, rank: now)
+        if !held { meta.rank = now }
+        meta.used = now
+        if grave.founder { meta.founder = tab.id }
+        metas[grave.trail] = meta
     }
 
     // MARK: - the graveyard
 
     private func grave(for tab: Tab) -> Grave? {
-        guard let url = (tab.pending ?? tab.address)?.absoluteString else { return nil }
+        guard let url = (tab.pending ?? tab.address)?.absoluteString, expecting(url) else { return nil }
         let fresh = Date().addingTimeInterval(-3600)
         return graveyard.last { $0.url == url && $0.at > fresh }
     }
 
     private func graveIndex(for tab: Tab, trail: UUID) -> Int? {
-        guard let url = (tab.pending ?? tab.address)?.absoluteString else { return nil }
+        guard let url = (tab.pending ?? tab.address)?.absoluteString, expecting(url) else { return nil }
         return graveyard.lastIndex { $0.url == url && $0.trail == trail }
+    }
+
+    private func expecting(_ url: String) -> Bool {
+        let now = Date()
+        return expected.contains { $0.url == url && now.timeIntervalSince($0.at) < 15 }
     }
 
     /// Pages whose tab has gone from every window and every space: kept for
@@ -395,9 +446,13 @@ final class Trails: ObservableObject {
         for (id, node) in nodes where !alive.contains(id) && gone[id] == nil {
             gone[id] = now
             addresses[id] = nil
+            orphans[id] = nil
+            let founder = metas[node.trail]?.founder == id
+            if founder, metas[node.trail]?.caption == nil { metas[node.trail]?.caption = labels[id] }
             if let url = lastURL[id], url.scheme?.hasPrefix("http") == true {
                 graveyard.append(Grave(url: url.absoluteString, trail: node.trail, meta: metas[node.trail],
-                                       parentURL: node.parent.flatMap { lastURL[$0]?.absoluteString }, at: now))
+                                       parentURL: node.parent.flatMap { lastURL[$0]?.absoluteString },
+                                       founder: founder, opened: node.opened, at: now))
             }
         }
         if graveyard.count > 60 { graveyard.removeFirst(graveyard.count - 60) }
@@ -409,6 +464,7 @@ final class Trails: ObservableObject {
             gone[id] = nil
             nodes[id] = nil
             lastURL[id] = nil
+            labels[id] = nil
         }
         graveyard.removeAll { now.timeIntervalSince($0.at) > 3600 }
         let held = Set(nodes.values.map(\.trail))
@@ -538,6 +594,11 @@ final class Trails: ObservableObject {
         dirty()
     }
 
+    /// The name a trail keeps while its pages wait in Reopen Closed Tab.
+    func caption(_ trail: UUID, _ text: String) {
+        metas[trail]?.caption = text
+    }
+
     func rename(_ trail: UUID, to text: String) {
         guard var meta = metas[trail] else { return }
         let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -599,6 +660,7 @@ final class Trails: ObservableObject {
             var title: String?
             var query: String?
             var settled: Bool?
+            var caption: String?
             var created: Double
             var used: Double
             var rank: Double
@@ -670,7 +732,7 @@ final class Trails: ObservableObject {
         let held = Set(found.map(\.1.trail))
         for trail in disk.trails where held.contains(trail.id) && metas[trail.id] == nil {
             metas[trail.id] = Meta(founder: trail.founder.flatMap { map[$0] }, title: trail.title, query: trail.query,
-                                   settled: trail.settled ?? false, created: Date(timeIntervalSince1970: trail.created),
+                                   settled: trail.settled ?? false, caption: trail.caption, created: Date(timeIntervalSince1970: trail.created),
                                    used: Date(timeIntervalSince1970: trail.used), rank: Date(timeIntervalSince1970: trail.rank))
         }
         // A page whose trail record didn't survive gets a plain one.
@@ -704,7 +766,7 @@ final class Trails: ObservableObject {
         let held = Set(pages.map(\.trail))
         let trails = metas.filter { held.contains($0.key) }.map { id, meta in
             Disk.Trail(id: id, founder: meta.founder?.uuidString, title: meta.title, query: meta.query,
-                       settled: meta.settled ? true : nil, created: meta.created.timeIntervalSince1970,
+                       settled: meta.settled ? true : nil, caption: meta.caption, created: meta.created.timeIntervalSince1970,
                        used: (inUse.contains(id) ? now : meta.used).timeIntervalSince1970,
                        rank: meta.rank.timeIntervalSince1970)
         }
@@ -756,7 +818,7 @@ extension Trails {
     struct Plan: Identifiable {
         let id: UUID
         let title: String
-        /// The title is the search the trail began with.
+        /// It began with a search: it wears the glass, not the path.
         let searched: Bool
         let pages: [Page]
         let used: Date
@@ -861,11 +923,11 @@ extension Trails {
             query = Trails.query(in: url)
         }
         let named = meta?.title
-        let title = named ?? query ?? (founder ?? pages.first?.tab)?.label ?? "Trail"
+        let title = named ?? query ?? founder?.label ?? meta?.caption ?? pages.first?.tab.label ?? "Trail"
         let used = max(meta?.used ?? .distantPast, members.map(\.node.used).max() ?? now)
         let rank = meta?.rank ?? (members.map(\.node.opened).min() ?? now)
         let recent = members.max { a, b in a.node.used == b.node.used ? a.index > b.index : a.node.used < b.node.used }?.tab ?? members[0].tab
-        return Plan(id: id, title: title, searched: named == nil && query != nil, pages: pages, used: used, rank: rank,
+        return Plan(id: id, title: title, searched: query != nil, pages: pages, used: used, rank: rank,
                     live: members.contains { $0.tab.id == browser.activeID },
                     busy: members.contains { staged.contains($0.tab.id) }, recent: recent)
     }

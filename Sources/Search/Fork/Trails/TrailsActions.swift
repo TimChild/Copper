@@ -16,9 +16,21 @@ extension Trails {
         let pages = plan.pages.map(\.tab).filter { tab in browser.tabs.contains { $0.id == tab.id } }
         guard !pages.isEmpty else { return }
         let front = pages.filter { $0.id == browser.activeID }
+        // Its name stays with it in the graveyard, for ⌘⇧T.
+        caption(plan.id, plan.title)
+        // Closing the trail you are on lands on the next one down the
+        // column (or the one above, closing the last), not on whichever row
+        // happened to sit beside its last page.
+        if !front.isEmpty {
+            let fresh = column(browser.tabs.filter(Trails.member), in: browser).fresh
+            if let here = fresh.firstIndex(where: { $0.id == plan.id }) {
+                let next = fresh.indices.contains(here + 1) ? fresh[here + 1] : (here > 0 ? fresh[here - 1] : nil)
+                if let next { browser.select(next.recent) }
+            }
+        }
         withAnimation(Motion.settle) {
             for tab in pages where tab.id != browser.activeID { browser.close(tab) }
-            for tab in front { browser.close(tab) }
+            for tab in front where browser.tabs.contains(where: { $0.id == tab.id }) { browser.close(tab) }
         }
         glancing = nil
         let title = plan.single ? (pages.first?.label ?? "Trail") : plan.title
@@ -75,7 +87,7 @@ extension Trails {
                 let deepest = pages.map(\.page.depth).max() ?? 0
                 var ops: [[String: Any]] = [[
                     "op": "add",
-                    "shape": ["type": "frame", "id": "trail-\(stamp)", "title": "Trail · \(title)",
+                    "shape": ["type": "frame", "id": "trail-\(stamp)", "title": title,
                               "x": left, "y": top,
                               "w": pad * 2 + Double(deepest) * stepX + cardW,
                               "h": pad * 2 + 18 + Double(pages.count - 1) * stepY + cardH],

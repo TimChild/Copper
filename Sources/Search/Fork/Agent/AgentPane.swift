@@ -52,6 +52,7 @@ struct AgentPane: View {
         }
         .frame(width: width)
         .background(Palette.ground)
+        .animation(Motion.quick, value: drive.live)
         .overlay(alignment: .leading) { grip }
         .onAppear { focused = true }
         .onChange(of: agent.focusTick) { _, _ in focused = true }
@@ -106,32 +107,27 @@ struct AgentPane: View {
         .frame(height: 42)
     }
 
-    /// Live hands remain visible even while the reader is above the latest card.
+    /// Someone other than the pane's own agent at the wheel, said under the
+    /// header for as long as it lasts, wherever the conversation is scrolled:
+    /// the live run first, then any caller working beside it (an MCP call
+    /// alongside a Jev run), each with its own Stop. The pane's own agent has
+    /// the composer's Stop and its shimmering row; a band would say it twice.
     @ViewBuilder
     private var liveStatus: some View {
-        let hands = drive.hands.values.filter { $0.active() }.sorted { $0.last > $1.last }
-        if !hands.isEmpty || agent.busy {
-            HStack(spacing: 7) {
-                PulseDot(colour: DriveStyle.accent)
-                Button { agent.reveal() } label: {
-                    Text(hands.isEmpty ? "Copper is working" : hands.map { $0.who.agent }.joined(separator: " · "))
-                        .font(.system(size: 11, weight: .medium)).lineLimit(1)
-                }
-                .buttonStyle(.plain)
-                Spacer(minLength: 4)
-                Menu {
-                    if agent.busy { Button("Stop Copper") { agent.stop() } }
-                    ForEach(hands.filter { drive.canStop($0) }, id: \.who.key) { hand in
-                        Button("Stop \(hand.who.agent)") { drive.stop(hand.who.key) }
-                    }
-                } label: {
-                    Label("Stop", systemImage: "stop.fill").font(.system(size: 10))
-                }
-                .menuStyle(.borderlessButton).fixedSize()
+        let run = drive.live ? drive.run.flatMap { $0.driver == .pane ? nil : $0 } : nil
+        let now = Date()
+        let beside = drive.hands.values
+            .filter { hand in
+                hand.driver != .pane && hand.who.key != run?.who.key
+                    && (hand.busy || (hand.until.map { $0 > now } ?? false))
             }
-            .foregroundStyle(Palette.ink)
-            .padding(.horizontal, 16).frame(height: 30)
-            .background(Palette.wash)
+            .sorted { $0.since < $1.since }
+        if run != nil || !beside.isEmpty {
+            VStack(spacing: 0) {
+                if let run { DriveLiveStrip(run: run) }
+                ForEach(beside) { DriveHandStrip(hand: $0) }
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 

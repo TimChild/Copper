@@ -258,6 +258,128 @@ struct PulseDot: View {
     }
 }
 
+/// The band under the agent pane's header while a run that is not the
+/// pane's own is live: whose, what it is at, for how long, and Stop — in the
+/// driver's colour, always in view however far the conversation has scrolled
+/// past the run's card. A click goes to the card.
+struct DriveLiveStrip: View {
+    let run: Drive.Run
+    @ObservedObject private var drive = Drive.shared
+    @State private var over = false
+
+    var body: some View {
+        let swatch = Drive.colour(for: run.who)
+        HStack(spacing: 8) {
+            Button { Agent.shared.reveal() } label: {
+                HStack(spacing: 8) {
+                    PulseDot(colour: swatch.fill, size: 7)
+                    Text(line)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    DriveClock(run: run, live: true).fixedSize()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Show the run")
+            DriveStopPill(help: run.driver == .jev ? "Stop the run" : "Take the browser back — its next calls are refused") {
+                drive.stop()
+            }
+        }
+        .modifier(DriveBand(swatch: swatch, over: over))
+        .onHover { over = $0 }
+    }
+
+    /// "phi is driving · 4 calls · Read 45 shapes", "Jev is driving · 3 actions · Clicking Search".
+    /// The count before the words, which can run long and are cut first.
+    private var line: String {
+        let acted = run.cycles.filter { $0.outcome != nil }.count
+        let word = run.driver == .jev ? "action" : "call"
+        var bits = ["\(run.who.agent) is driving", "\(acted) \(word)\(acted == 1 ? "" : "s")"]
+        if let doing = run.cycles.last, doing.ended == nil, let phase = doing.phases.last {
+            bits.append(phase.title)
+        } else if let thought = run.thought, !thought.isEmpty {
+            bits.append(thought)
+        }
+        return bits.joined(separator: " · ")
+    }
+}
+
+/// A caller working beside the live run (an MCP call while Jev drives): one
+/// slimmer line with its own Stop, under the run's band.
+struct DriveHandStrip: View {
+    let hand: Drive.Hand
+    @ObservedObject private var drive = Drive.shared
+    @State private var over = false
+
+    var body: some View {
+        let swatch = Drive.colour(for: hand.who)
+        HStack(spacing: 8) {
+            Button { Agent.shared.reveal() } label: {
+                HStack(spacing: 8) {
+                    PulseDot(colour: swatch.fill, size: 7)
+                    Text(hand.doing.isEmpty ? "\(hand.who.agent) is working" : "\(hand.who.agent) · \(hand.doing)")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Show its card")
+            if drive.canStop(hand) {
+                DriveStopPill(help: "Take the browser back from \(hand.who.agent) — its next calls are refused") {
+                    drive.stop(hand.who.key)
+                }
+            }
+        }
+        .modifier(DriveBand(swatch: swatch, over: over))
+        .onHover { over = $0 }
+    }
+}
+
+/// The small capsule Stop the live bands share.
+private struct DriveStopPill: View {
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "stop.fill").font(.system(size: 7))
+                Text("Stop").font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(Palette.ink)
+            .padding(.horizontal, 8).frame(height: 20)
+            .background(Palette.ground, in: Capsule())
+            .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+            .contentShape(Capsule())
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+/// A live band's ground: a wash of the driver's colour, a hairline under it.
+private struct DriveBand: ViewModifier {
+    let swatch: Drive.Swatch
+    let over: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.leading, 16)
+            .padding(.trailing, 8)
+            .frame(height: 30)
+            .background(swatch.fill.opacity(over ? 0.16 : 0.10))
+            .overlay(alignment: .bottom) { Rectangle().fill(Palette.hairline).frame(height: 1) }
+            .animation(Motion.quick, value: over)
+    }
+}
+
 /// One cycle, folded to a line: what was done, to what, how it went.
 struct DriveStep: View {
     let cycle: Drive.Cycle

@@ -334,8 +334,12 @@ link and its wire). Hooks: `Browser.init` starts it,
 
 ### Concurrent drivers
 
-The agent pane's live strip keeps active callers and per-caller Stop controls visible while
-you read older messages. Driver Timeline (⌥⌘J) always reveals the newest activity in this same
+While anyone other than the pane's own agent has the browser, a band under the pane's
+header says so in that driver's colour — "Jev is driving · 3 actions · Clicking Search",
+a clock and Stop — and any caller working beside it (an MCP call during a Jev run) gets a
+slimmer band of its own with its own Stop. The bands stay put however far you scroll back
+through older messages; a click scrolls to the run's card. The pane's own agent has none:
+its Stop is the composer's. Driver Timeline (⌥⌘J) always reveals the newest activity in this same
 pane; it does not toggle a second pane. Outside calls made while Jev is running get their own
 cards without replacing Jev's live run, and late results still update an archived caller's card.
 Activity folding stops at an intervening driver card or answer so later tools stay chronological.

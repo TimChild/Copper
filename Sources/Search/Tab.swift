@@ -256,9 +256,19 @@ final class Tab: ObservableObject, Identifiable {
     private var memory: Any?
     /// The last picture of that page, compressed, for the moment it wakes.
     private var picture: Data?
+    /// Fork (wake-cover): the picture's size in points, and the page's own
+    /// ground colour read off the picture's edges. The picture is drawn at
+    /// its true size when the tab wakes — the stage may be another shape by
+    /// then — and whatever it does not reach wears the page's colour rather
+    /// than the window's.
+    private var pictureSize: CGSize = .zero
+    private var pictureGround: NSColor?
     /// That picture, over the stage while the page is rebuilt underneath it:
     /// coming back to a tab that slept starts from what you left, not white.
     @Published private(set) var cover: NSImage?
+    /// Fork (wake-cover): the colour behind `cover` — the page's own, or nil
+    /// for the window's ground when the picture gave nothing away.
+    private(set) var coverGround: NSColor?
 
     private var watch: [NSKeyValueObservation] = []
 
@@ -770,15 +780,67 @@ final class Tab: ObservableObject, Identifiable {
     /// on — can still be pictured. Nil when there is nothing to draw.
     func snapshot(_ done: @escaping (Data?) -> Void) {
         guard let built else { return done(nil) }
-        built.takeSnapshot(with: nil) { image, _ in
+        // Fork (wake-cover): the size the picture is of, in points. The JPEG
+        // it becomes carries only pixels, and a Retina picture read back is
+        // twice the size it was taken at.
+        let size = built.bounds.size
+        built.takeSnapshot(with: nil) { [weak self] image, _ in
             guard let image, let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
                 return done(nil)
             }
             DispatchQueue.global(qos: .utility).async {
                 let data = Tab.jpeg(cg)
-                DispatchQueue.main.async { done(data) }
+                let ground = Tab.ground(of: cg) // Fork (wake-cover)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self?.pictureSize = size
+                        self?.pictureGround = ground
+                    }
+                    done(data)
+                }
             }
         }
+    }
+
+    /// Fork (wake-cover): the page's background, as best a picture can tell
+    /// — the colour most of its right edge and bottom edge are. The edges,
+    /// because that is where a page runs out of content and shows its ground;
+    /// the commonest colour rather than the average, because a scrollbar or a
+    /// line of text on the edge would muddy an average into a grey no page
+    /// is. Sixty-four samples, each the mean of a short run of edge pixels.
+    nonisolated private static func ground(of image: CGImage) -> NSColor? {
+        let width = image.width, height = image.height
+        guard width > 2, height > 2 else { return nil }
+        let runs = 32
+        var samples: [(r: Int, g: Int, b: Int)] = []
+        samples.reserveCapacity(runs * 2)
+        func read(_ strip: CGImage?, across: Bool) {
+            guard let strip else { return }
+            let w = across ? runs : 1, h = across ? 1 : runs
+            var pixels = [UInt8](repeating: 0, count: w * h * 4)
+            guard let context = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            context.interpolationQuality = .medium
+            context.draw(strip, in: CGRect(x: 0, y: 0, width: w, height: h))
+            for i in 0..<runs {
+                let at = i * 4
+                samples.append((Int(pixels[at]), Int(pixels[at + 1]), Int(pixels[at + 2])))
+            }
+        }
+        read(image.cropping(to: CGRect(x: width - 1, y: 0, width: 1, height: height)), across: false)
+        read(image.cropping(to: CGRect(x: 0, y: height - 1, width: width, height: 1)), across: true)
+        guard !samples.isEmpty else { return nil }
+        // Bucketed to sixteen levels a channel, the fullest bucket wins, and
+        // its members' mean is the answer.
+        var buckets: [Int: [(r: Int, g: Int, b: Int)]] = [:]
+        for s in samples { buckets[(s.r >> 4) << 8 | (s.g >> 4) << 4 | (s.b >> 4), default: []].append(s) }
+        guard let best = buckets.values.max(by: { $0.count < $1.count }) else { return nil }
+        let n = CGFloat(best.count)
+        let r = CGFloat(best.reduce(0) { $0 + $1.r }) / n / 255
+        let g = CGFloat(best.reduce(0) { $0 + $1.g }) / n / 255
+        let b = CGFloat(best.reduce(0) { $0 + $1.b }) / n / 255
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
     }
 
     nonisolated private static func jpeg(_ image: CGImage) -> Data? {
@@ -928,11 +990,17 @@ final class Tab: ObservableObject, Identifiable {
         let state = memory
         memory = nil
         if let picture, let image = NSImage(data: picture) {
+            // Fork (wake-cover): back to the size it was taken at, so it is
+            // drawn 1:1 over the page it stands in for — not at the pixel
+            // count a Retina JPEG reads back as, twice too big.
+            if pictureSize.width > 0, pictureSize.height > 0 { image.size = pictureSize }
+            coverGround = pictureGround
             cover = image
             // Whatever happens to the page, the picture doesn't outstay it.
             uncover(after: 4)
         }
         picture = nil
+        pictureGround = nil
         loadAndVerify(url, state: state)
         return true
     }

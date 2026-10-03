@@ -2410,9 +2410,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // Whatever you last set this site to, before it draws a single frame
         // at the wrong size.
         tab.applyRememberedZoom()
-        // A tab waking from sleep: the new document is in, and a moment
-        // after it is on screen the picture of the old one can go.
-        tab.uncover(after: 0.45)
+        // A tab waking from sleep: the new document is in, and once it has
+        // drawn (`renderingProgressDidChange`, below) the picture of the old
+        // one goes. This is the fallback for a view that never says so —
+        // long enough that a page which does say so is never undercut, and a
+        // flash of unpainted ground never stands in for a page still coming.
+        // (Fork: wake-cover — was 0.45 s, ahead of many a first paint.)
+        tab.uncover(after: 1.2)
     }
 
     /// The page has drawn something: a view kept out of sight until now, so
@@ -2422,6 +2426,10 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, renderingProgressDidChange events: UInt) {
         guard events & PageView.firstFrame != 0 else { return }
         (webView as? PageView)?.showFirstFrame()
+        // Fork (wake-cover): the page is painted, so the picture of its old
+        // self can go — the moment Safari takes its own down. A beat after
+        // the view's own fade-in, so the two never cross over the ground.
+        tab(for: webView)?.uncover(after: 0.15)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

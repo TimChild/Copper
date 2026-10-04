@@ -54,8 +54,14 @@ enum FlowCookies {
             }
         }
 
+        // Every profile goes into one jar, so the same cookie can turn up
+        // once per profile. WebKit keeps whichever is set last; keep only the
+        // most recently used copy, or a stale profile's `logged_in=no` signs
+        // you out of a site the newer profile was signed in to.
+        var seen = Set<String>()
         return found
             .sorted { $0.lastAccess > $1.lastAccess }
+            .filter { seen.insert("\($0.cookie.domain.lowercased())\t\($0.cookie.name)\t\($0.cookie.path)").inserted }
             .prefix(limit)
             .map(\.cookie)
     }

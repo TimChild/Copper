@@ -167,6 +167,10 @@ the new Mac paste that code into Settings › Cloud and press **Pair this
 Mac** — it links and signs in in one step. A pairing code works once, for ten
 minutes.
 
+Pair rather than reusing your link code: a personal access key is often good
+for one sign-in only (the admin's *Max uses*), so the same link code on a
+second Mac may be refused.
+
 ## 4. The agent and Jev
 
 ### The agent pane

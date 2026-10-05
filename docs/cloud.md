@@ -215,6 +215,12 @@ another account starts it over.
   expiry are). On the receiving Mac the code is sent once, over the pinned
   connection, and forgotten.
 
+**Model keys.** A cloud may also hand every signed-in Copper the Jev and
+gateway keys (`GET /v1/intelligence`); they are kept in
+`cloud-intelligence.json` (0600), never in `intelligence.json`, never shown
+unmasked, never in any status, and deleted on sign-out or disconnect. A key
+typed on the Mac always wins. See [intelligence.md](intelligence.md#keys-from-copper-cloud).
+
 `cloud.json` holds: the device id (minted once per data folder, so each probe
 world is its own device) and name, the link (address, key, fingerprint), the
 account (user id, email, name, device id), the token, and the sync switches

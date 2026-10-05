@@ -149,6 +149,7 @@ struct AgentPane: View {
             }
             Divider()
             Text(brain.accessLine)
+            Text(modelLine)
             Button("Model access…") { browser.openSettings(.intelligence) }
             if !servers.all.isEmpty {
                 Divider()
@@ -176,7 +177,14 @@ struct AgentPane: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Model — \(brain.accessLine)")
+        .help("Model — \(modelLine) · \(brain.accessLine)")
+    }
+
+    /// The name sent for the tier, and the model the last answer said it was.
+    private var modelLine: String {
+        var line = "\(brain.tier.title) → \(brain.modelName)"
+        if let answered = brain.answeredModel, answered != brain.modelName { line += " · answered by \(answered)" }
+        return line
     }
 
     // MARK: - the conversation

@@ -307,7 +307,8 @@ session*, or `copper session restore` (add `--quit` if Copper is running).
 Everything is in `~/Library/Application Support/Copper/`: `session.json`
 (tabs and spaces), history and bookmarks, `cloud.json` (the cloud link and
 session token, mode 0600), `intelligence.json` and `claude.json` (model keys
-and the Claude sign-in, 0600), `agent.json` (the agent token, 0600) and
+and the Claude sign-in, 0600), `cloud-intelligence.json` (keys your Copper
+Cloud provides, 0600, gone when you sign out of the cloud), `agent.json` (the agent token, 0600) and
 `mcp.json`. Passwords are in the macOS keychain (or Bitwarden). Site cookies
 are in WebKit's store for the app. Copper sends no telemetry.
 

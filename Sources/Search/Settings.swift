@@ -74,6 +74,7 @@ struct SettingsPanel: View {
         .onAppear {
             page = browser.settingsPage
             Task { await Bitwarden.shared.refreshStatus() }
+            CloudIntelligence.shared.settingsOpened() // Fork (cloud-intelligence)
         }
         .onChange(of: page) { _, page in
             Store.settings.set(page.rawValue, forKey: "settings.page")

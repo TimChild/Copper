@@ -98,15 +98,106 @@ final class Intelligence: ObservableObject {
             if let saved = try c.decodeIfPresent([String: String].self, forKey: .routerModels) {
                 decodedRouter.merge(saved) { _, value in value }
             } else if !hadRouterModels,
-                      ![Tier.haiku.rawValue, Tier.sonnet.rawValue, Tier.opus.rawValue].contains(routerModel) {
+                      Intelligence.family(of: routerModel) == nil {
                 decodedRouter[Tier.sonnet.rawValue] = routerModel
             }
             routerModels = decodedRouter
             textModel = try c.decodeIfPresent(String.self, forKey: .textModel) ?? fresh.textModel
+            migrateModelNames()
+        }
+
+        /// Pinned and prefixed names for a tier go back to what tracks the
+        /// newest model: on the gateway the bare float (`opus`, never
+        /// `exowatt/opus`, `opus-5` or `claude-opus-5`), on the Claude-account
+        /// lane Copper's own current id for that tier (Anthropic has no
+        /// float). A name that is not a Claude tier — a gateway's own
+        /// `gpt-…`, `luna` — is the user's choice and is left alone, but for
+        /// the `exowatt/` prefix phi shows and the gateway does not know.
+        mutating func migrateModelNames() {
+            for (tier, name) in routerModels { routerModels[tier] = Intelligence.gatewayName(name) }
+            for (tier, name) in claudeModels { claudeModels[tier] = Intelligence.claudeName(name, tier: Tier(rawValue: tier)) }
+            routerModel = Intelligence.gatewayName(routerModel)
+            let text = textModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                // A tier word resolves on whichever lane is chosen.
+                textModel = Intelligence.family(of: text)?.rawValue ?? Intelligence.unprefixed(text)
+            }
         }
     }
 
+    // MARK: - model names
+
+    /// The tier a Claude model name belongs to, however it is spelled:
+    /// `opus`, `opus-5`, `exowatt/opus-5`, `claude-opus-5-5`,
+    /// `claude-sonnet-4-5-20250929`, `claude-3-5-haiku-latest`,
+    /// `anthropic/claude-opus-5`. Nil for anything else — including a
+    /// variant that is a different offering, such as `sonnet-1m`.
+    nonisolated static func family(of raw: String) -> Tier? {
+        var name = unprefixed(raw).lowercased()
+        if name.hasPrefix("anthropic/") { name.removeFirst("anthropic/".count) }
+        let pattern = #"^(?:claude-)?(?:\d+(?:[.-]\d+)*-)?(haiku|sonnet|opus)(?:-\d+(?:[.-]\d+)*)?(?:-latest)?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+              let range = Range(match.range(at: 1), in: name) else { return nil }
+        return Tier(rawValue: String(name[range]))
+    }
+
+    /// Without phi's `exowatt/` provider prefix: the gateway's own names have none.
+    nonisolated static func unprefixed(_ raw: String) -> String {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.lowercased().hasPrefix("exowatt/") ? String(name.dropFirst("exowatt/".count)) : name
+    }
+
+    /// What the gateway is sent for a name: a Claude tier in any spelling
+    /// becomes its float (`opus`), so it follows the gateway to the newest
+    /// model; anything else goes as typed, without an `exowatt/` prefix.
+    nonisolated static func gatewayName(_ raw: String) -> String {
+        if let tier = family(of: raw) { return tier.rawValue }
+        return unprefixed(raw)
+    }
+
+    /// What the Claude-account lane is sent: a Claude tier in any spelling
+    /// becomes Copper's current id for it; anything else as typed.
+    nonisolated static func claudeName(_ raw: String, tier: Tier?) -> String {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let family = family(of: name) ?? (name.isEmpty ? tier : nil),
+           let current = Keys.defaultClaudeModels[family.rawValue] {
+            return current
+        }
+        return unprefixed(name)
+    }
+
+    /// What is set on this Mac — intelligence.json. Settings edits this.
     @Published var keys: Keys { didSet { if keys != oldValue, !loading { save() } } }
+
+    /// What the linked Copper Cloud provides (`GET /v1/intelligence`,
+    /// Fork/Cloud/CloudIntelligence.swift). Never written into
+    /// intelligence.json: it lives in memory and cloud-intelligence.json.
+    @Published private(set) var cloud: CloudProvided?
+
+    /// The model the last answer said it came from, beside what was sent.
+    @Published private(set) var reported: (sent: String, answered: String)?
+
+    func adoptCloud(_ provided: CloudProvided?) {
+        if cloud != provided { cloud = provided }
+    }
+
+    func noteAnswer(sent: String, answered: String?) {
+        guard let answered, !answered.isEmpty else { return }
+        if reported?.sent != sent || reported?.answered != answered { reported = (sent, answered) }
+    }
+
+    /// The model the last answer for the current choice reported, if any.
+    var answeredModel: String? {
+        guard let reported, reported.sent == modelName else { return nil }
+        return reported.answered
+    }
+
+    /// What every caller uses: this Mac's keys, with Copper Cloud's filling
+    /// the gaps (Intelligence.merge). Never saved.
+    var effective: Keys { Intelligence.merge(local: keys, cloud: cloud).keys }
+    /// Where each key and address comes from: local, cloud, or none/default.
+    var sources: [String: String] { Intelligence.merge(local: keys, cloud: cloud).sources }
 
     /// True while `reload()` assigns what it read: that is the file, and
     /// writing it straight back would only race whoever just wrote it.
@@ -118,12 +209,15 @@ final class Intelligence: ObservableObject {
     var tier: Tier { keys.tier }
 
     /// what Jev mode types with: the text model when one is named, else the chosen model.
-    var textModelName: String { keys.textModel.trimmingCharacters(in: .whitespaces).isEmpty ? model() : keys.textModel }
+    var textModelName: String { keys.textModel.trimmingCharacters(in: .whitespaces).isEmpty ? model() : model(keys.textModel) }
 
-    /// Whether Jev can be asked at all.
-    var jevReady: Bool { !keys.jevKey.trimmingCharacters(in: .whitespaces).isEmpty }
-    /// Whether the router can be asked at all.
-    var routerReady: Bool { !keys.routerKey.trimmingCharacters(in: .whitespaces).isEmpty && URL(string: keys.routerURL) != nil }
+    /// Whether Jev can be asked at all — with this Mac's key or the cloud's.
+    var jevReady: Bool { !effective.jevKey.trimmingCharacters(in: .whitespaces).isEmpty }
+    /// Whether the router can be asked at all — with this Mac's key or the cloud's.
+    var routerReady: Bool {
+        let keys = effective
+        return !keys.routerKey.trimmingCharacters(in: .whitespaces).isEmpty && URL(string: keys.routerURL) != nil
+    }
     /// Whether the active model lane can be asked at all.
     var claudeReady: Bool { ClaudeAccount.shared.signedIn }
     var modelReady: Bool { lane == .key ? routerReady : claudeReady }
@@ -134,18 +228,26 @@ final class Intelligence: ObservableObject {
         let raw = named ?? ""
         let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !candidate.isEmpty {
-            if let namedTier = Tier(rawValue: candidate.lowercased()) {
+            // Any spelling of a tier is that tier: the gateway gets the
+            // float, the Claude lane Copper's current id.
+            if let namedTier = Intelligence.family(of: candidate) {
                 return model(for: namedTier)
             }
-            return raw
+            return lane == .key ? Intelligence.unprefixed(candidate) : candidate
         }
         return model(for: tier ?? self.tier)
     }
 
-    private func model(for tier: Tier) -> String {
-        let map = lane == .claude ? keys.claudeModels : keys.routerModels
-        let defaults = lane == .claude ? Keys.defaultClaudeModels : Keys.defaultRouterModels
-        return map[tier.rawValue] ?? defaults[tier.rawValue] ?? tier.rawValue
+    private func model(for tier: Tier) -> String { Intelligence.name(for: tier, lane: lane, keys: keys) }
+
+    /// The name a tier is sent as on a lane: the gateway's float (or the
+    /// custom name set for it), or the Claude lane's current id.
+    nonisolated static func name(for tier: Tier, lane: Lane, keys: Keys) -> String {
+        if lane == .claude {
+            return claudeName(keys.claudeModels[tier.rawValue] ?? "", tier: tier)
+        }
+        let named = (keys.routerModels[tier.rawValue] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return named.isEmpty ? tier.rawValue : gatewayName(named)
     }
 
     var modelName: String { model() }
@@ -155,7 +257,9 @@ final class Intelligence: ObservableObject {
         guard modelReady else { return "Not set up" }
         switch lane {
         case .key:
-            let host = URL(string: keys.routerURL)?.host ?? keys.routerURL
+            let effective = self.effective
+            let host = URL(string: effective.routerURL)?.host ?? effective.routerURL
+            if sources["routerKey"] == "cloud" { return "Copper Cloud · \(host)" }
             return "API key · \(host)"
         case .claude:
             return "Claude account · \(ClaudeAccount.shared.email)"
@@ -209,11 +313,117 @@ final class Intelligence: ObservableObject {
 
     /// readiness and the non-secret settings. Never a key.
     var status: [String: Any] {
-        ["jevReady": jevReady, "routerReady": routerReady, "routerURL": keys.routerURL,
-         "routerModel": keys.routerModel, "jevModel": keys.jevModel,
+        let effective = self.effective
+        var out: [String: Any] = ["jevReady": jevReady, "routerReady": routerReady, "routerURL": effective.routerURL,
+         "routerModel": keys.routerModel, "jevModel": effective.jevModel,
          "lane": lane.rawValue, "tier": tier.rawValue, "model": modelName,
          "modelReady": modelReady, "claudeReady": claudeReady,
-         "claudeAccount": ClaudeAccount.shared.email]
+         "claudeAccount": ClaudeAccount.shared.email,
+         "sources": sources]
+        if let answered = answeredModel { out["answeredBy"] = answered }
+        if let cloud {
+            var line: [String: Any] = ["host": cloud.host ?? "", "provides": cloud.provides]
+            if let updated = cloud.updatedAt { line["updatedAt"] = updated }
+            if let fetched = cloud.fetchedAt { line["fetchedAt"] = ISO8601DateFormatter().string(from: fetched) }
+            out["cloud"] = line
+        }
+        return out
+    }
+
+    /// Settings' words for a key Copper Cloud supplies; nil when this
+    /// Mac's own key (or no key) is in use.
+    func cloudLine(_ field: String, _ key: String?) -> String? {
+        guard sources[field] == "cloud" else { return nil }
+        return "Provided by Copper Cloud (\(cloud?.host ?? "your cloud"))"
+    }
+
+    /// The key field's placeholder while the cloud's key is in use: the
+    /// key masked (`sk-…1a2b`), and that typing one overrides it.
+    func cloudPlaceholder(_ field: String, _ key: String?, otherwise: String) -> String {
+        guard sources[field] == "cloud" else { return otherwise }
+        return "\(CloudProvided.masked(key)) · type to override"
+    }
+
+    /// One line per key and address: where it comes from, never its value.
+    var sourcesLine: String {
+        let s = sources
+        let order = ["jevKey", "jevEndpoint", "jevModel", "routerKey", "routerURL"]
+        return order.map { "\($0) \(s[$0] ?? "none")" }.joined(separator: " · ")
+    }
+
+    // MARK: - this Mac's keys over the cloud's
+
+    /// This Mac's keys with Copper Cloud's filling the gaps, and where each
+    /// came from. Per field:
+    ///   - `jevKey`, `routerKey`: a non-empty local key wins, else the cloud's.
+    ///   - `jevModel`: a local name other than the default wins, else the
+    ///     cloud's, else the default.
+    ///   - `jevEndpoint`, `routerURL`: a local address other than the default
+    ///     wins; the cloud's is used only alongside the cloud's key, so a key
+    ///     typed on this Mac is never sent to an address it wasn't set for.
+    /// Sources are `local`, `cloud`, `none` (no key) or `default`.
+    nonisolated static func merge(local: Keys, cloud: CloudProvided?) -> (keys: Keys, sources: [String: String]) {
+        let fresh = Keys()
+        var out = local
+        var sources: [String: String] = [:]
+        func trimmed(_ s: String?) -> String { (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+        func custom(_ value: String, _ standard: String) -> Bool {
+            let v = trimmed(value)
+            return !v.isEmpty && v.trimmingCharacters(in: CharacterSet(charactersIn: "/")) != standard.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        func web(_ s: String?) -> String? {
+            let v = trimmed(s)
+            guard let url = URL(string: v), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return nil }
+            return v
+        }
+
+        // Jev
+        if !trimmed(local.jevKey).isEmpty {
+            sources["jevKey"] = "local"
+        } else if !trimmed(cloud?.jev?.key).isEmpty {
+            out.jevKey = trimmed(cloud?.jev?.key)
+            sources["jevKey"] = "cloud"
+        } else {
+            sources["jevKey"] = "none"
+        }
+        if custom(local.jevEndpoint, fresh.jevEndpoint) {
+            sources["jevEndpoint"] = "local"
+        } else if sources["jevKey"] == "cloud", let endpoint = web(cloud?.jev?.endpoint) {
+            out.jevEndpoint = endpoint
+            sources["jevEndpoint"] = "cloud"
+        } else {
+            out.jevEndpoint = fresh.jevEndpoint
+            sources["jevEndpoint"] = "default"
+        }
+        if custom(local.jevModel, fresh.jevModel) {
+            sources["jevModel"] = "local"
+        } else if !trimmed(cloud?.jev?.model).isEmpty {
+            out.jevModel = trimmed(cloud?.jev?.model)
+            sources["jevModel"] = "cloud"
+        } else {
+            out.jevModel = fresh.jevModel
+            sources["jevModel"] = "default"
+        }
+
+        // the router
+        if !trimmed(local.routerKey).isEmpty {
+            sources["routerKey"] = "local"
+        } else if !trimmed(cloud?.router?.key).isEmpty {
+            out.routerKey = trimmed(cloud?.router?.key)
+            sources["routerKey"] = "cloud"
+        } else {
+            sources["routerKey"] = "none"
+        }
+        if custom(local.routerURL, fresh.routerURL) {
+            sources["routerURL"] = "local"
+        } else if sources["routerKey"] == "cloud", let url = web(cloud?.router?.url) {
+            out.routerURL = url
+            sources["routerURL"] = "cloud"
+        } else {
+            out.routerURL = fresh.routerURL
+            sources["routerURL"] = "default"
+        }
+        return (out, sources)
     }
 
     /// The loopback server's `copper/intelligence` method (`copper
@@ -228,6 +438,18 @@ final class Intelligence: ObservableObject {
         case "reload":
             var out = status
             out["reloaded"] = reload()
+            return out
+        case "sources":
+            var out: [String: Any] = sources
+            out["line"] = sourcesLine
+            if let cloud { out["cloudHost"] = cloud.host ?? "" }
+            out["cloudFetch"] = CloudIntelligence.shared.lastOutcome
+            return out
+        case "refresh":
+            CloudIntelligence.shared.refresh(force: true)
+            var out: [String: Any] = sources
+            out["line"] = sourcesLine
+            out["refreshing"] = true
             return out
         case "set":
             var next = keys
@@ -268,16 +490,16 @@ final class Intelligence: ObservableObject {
             take("routerURL") { next.routerURL = $0 }
             take("textModel") { next.textModel = $0 }
             take("routerModel") {
-                next.routerModel = $0
-                next.routerModels[next.tier.rawValue] = $0
+                next.routerModel = Intelligence.gatewayName($0)
+                next.routerModels[next.tier.rawValue] = Intelligence.gatewayName($0)
             }
             let modelFields: [(String, Tier)] = [("haikuModel", .haiku), ("sonnetModel", .sonnet), ("opusModel", .opus)]
             for (name, modelTier) in modelFields {
                 take(name) { value in
                     if next.lane == .claude {
-                        next.claudeModels[modelTier.rawValue] = value
+                        next.claudeModels[modelTier.rawValue] = Intelligence.claudeName(value, tier: modelTier)
                     } else {
-                        next.routerModels[modelTier.rawValue] = value
+                        next.routerModels[modelTier.rawValue] = Intelligence.gatewayName(value)
                     }
                 }
             }
@@ -290,7 +512,7 @@ final class Intelligence: ObservableObject {
             out["applied"] = applied
             return out
         case let op:
-            return ["error": "unknown intelligence op \(op) (status, set, reload)"]
+            return ["error": "unknown intelligence op \(op) (status, sources, refresh, set, reload)"]
         }
     }
 
@@ -407,12 +629,16 @@ enum Router {
         if keys.lane == .claude {
             let token = try await ClaudeAccount.shared.token()
             let model = await MainActor.run { Intelligence.shared.model(override) }
+            let reply: Reply
             do {
-                return try await Claude.ask(token: token, model: model, system: system, user: user, timeout: timeout, maxTokens: maxTokens)
+                reply = try await Claude.ask(token: token, model: model, system: system, user: user, timeout: timeout, maxTokens: maxTokens)
             } catch let failure as Claude.Failure where failure.status == 401 {
                 let refreshed = try await ClaudeAccount.shared.refreshNow()
-                return try await Claude.ask(token: refreshed, model: model, system: system, user: user, timeout: timeout, maxTokens: maxTokens)
+                reply = try await Claude.ask(token: refreshed, model: model, system: system, user: user, timeout: timeout, maxTokens: maxTokens)
             }
+            let answered = reply.model
+            await MainActor.run { Intelligence.shared.noteAnswer(sent: model, answered: answered) }
+            return reply
         }
 
         guard !keys.routerKey.isEmpty else { throw Failure(detail: "No router key — Settings › Intelligence") }
@@ -424,15 +650,10 @@ enum Router {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
         let chosen = await MainActor.run { Intelligence.shared.model(override) }
-        let body: [String: Any] = [
-            "model": chosen,
-            "temperature": 0,
-            "max_tokens": maxTokens,
-            "messages": [
-                ["role": "system", "content": system],
-                ["role": "user", "content": user],
-            ],
-        ]
+        let body = Router.body(model: chosen, maxTokens: maxTokens, messages: [
+            ["role": "system", "content": system],
+            ["role": "user", "content": user],
+        ])
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let started = Date()
@@ -454,7 +675,21 @@ enum Router {
             text = parts.compactMap { $0["text"] as? String }.joined()
         }
         let model = (payload["model"] as? String) ?? chosen
+        let answered = payload["model"] as? String
+        await MainActor.run { Intelligence.shared.noteAnswer(sent: chosen, answered: answered) }
         return Reply(json: Router.json(in: text), text: text, latencyMs: latency, model: model)
+    }
+
+    /// One chat-completions body. No `temperature`, no thinking switch and
+    /// no forced tool: the newest models (Opus 5.5) refuse a sampling knob,
+    /// and `auto` is the one tool_choice every model behind a gateway takes.
+    static func body(model: String, maxTokens: Int, messages: [[String: Any]], tools: [[String: Any]] = []) -> [String: Any] {
+        var body: [String: Any] = ["model": model, "max_tokens": maxTokens, "messages": messages]
+        if !tools.isEmpty {
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        }
+        return body
     }
 
     /// The first JSON object in a reply, fences and chatter around it ignored.
@@ -466,5 +701,121 @@ enum Router {
             return object
         }
         return [:]
+    }
+}
+
+// MARK: - self test (`./bench --world W ai selftest`, also in `agent selftest`)
+
+extension Intelligence {
+    /// The model-name migration, the local-over-cloud merge, the cloud
+    /// answer's decoder and the request shapes. Pure: no file, no network.
+    static func selfTest() -> [String] {
+        var failures: [String] = []
+        func check(_ ok: Bool, _ name: String) { if !ok { failures.append("intelligence: \(name)") } }
+
+        // Every spelling of a tier is that tier; anything else is not.
+        let tiers: [(String, Tier?)] = [
+            ("opus", .opus), ("OPUS", .opus), ("opus-5", .opus), ("opus-5.5", .opus), ("exowatt/opus", .opus),
+            ("exowatt/opus-5", .opus), ("claude-opus-5", .opus), ("claude-opus-5-5", .opus),
+            ("anthropic/claude-opus-5", .opus), ("claude-opus-latest", .opus),
+            ("sonnet", .sonnet), ("exowatt/sonnet", .sonnet), ("claude-sonnet-5", .sonnet),
+            ("claude-sonnet-4-5-20250929", .sonnet), ("claude-3-5-sonnet-20241022", .sonnet),
+            ("haiku", .haiku), ("claude-haiku-4-5", .haiku), ("claude-3-5-haiku-latest", .haiku),
+            ("gpt-4o-mini", nil), ("luna", nil), ("exowatt/luna", nil), ("sonnet-1m", nil),
+            ("opus-fast", nil), ("my-opus-proxy", nil), ("", nil),
+        ]
+        for (name, want) in tiers { check(family(of: name) == want, "family(\(name))") }
+        check(gatewayName("exowatt/opus-5") == "opus", "gateway exowatt/opus-5 → opus")
+        check(gatewayName("claude-opus-5-5") == "opus", "gateway claude-opus-5-5 → opus")
+        check(gatewayName("exowatt/luna") == "luna", "gateway strips exowatt/ off a custom name")
+        check(gatewayName("gpt-4o-mini") == "gpt-4o-mini", "gateway leaves a custom name")
+        check(claudeName("claude-opus-5", tier: .opus) == "claude-opus-5-5", "claude lane: opus-5 → current")
+        check(claudeName("exowatt/opus", tier: .opus) == "claude-opus-5-5", "claude lane: exowatt/opus → current")
+        check(claudeName("", tier: .haiku) == "claude-haiku-4-5", "claude lane: empty → current")
+
+        // intelligence.json written by older builds decodes to the floats.
+        func decode(_ json: String) -> Keys? { try? JSONDecoder().decode(Keys.self, from: Data(json.utf8)) }
+        if let k = decode(#"{"routerKey":"sk-x","routerModel":"exowatt/sonnet","routerModels":{"opus":"exowatt/opus-5","sonnet":"claude-sonnet-5","haiku":"gpt-4o-mini"},"claudeModels":{"opus":"claude-opus-5","sonnet":"claude-sonnet-5"},"textModel":"exowatt/haiku-4-5","tier":"opus"}"#) {
+            check(k.routerModels["opus"] == "opus", "migrate routerModels.opus")
+            check(k.routerModels["sonnet"] == "sonnet", "migrate routerModels.sonnet")
+            check(k.routerModels["haiku"] == "gpt-4o-mini", "keep a custom routerModels name")
+            check(k.routerModel == "sonnet", "migrate routerModel")
+            check(k.claudeModels["opus"] == "claude-opus-5-5", "migrate claudeModels.opus")
+            check(k.claudeModels["haiku"] == "claude-haiku-4-5", "claudeModels default filled")
+            check(k.textModel == "haiku", "migrate textModel to its tier")
+            check(k.routerKey == "sk-x" && k.tier == .opus, "keys and tier kept")
+            check(name(for: .opus, lane: .key, keys: k) == "opus", "gateway sends opus")
+            check(name(for: .opus, lane: .claude, keys: k) == "claude-opus-5-5", "claude lane sends current opus")
+            check(name(for: .haiku, lane: .key, keys: k) == "gpt-4o-mini", "gateway sends the custom haiku")
+            if let again = try? JSONDecoder().decode(Keys.self, from: JSONEncoder().encode(k)) {
+                check(again == k, "round trip is stable")
+            } else { check(false, "round trip decodes") }
+        } else { check(false, "decode a migrated file") }
+        if let legacy = decode(#"{"routerModel":"exowatt/opus-5"}"#) {
+            check(legacy.routerModel == "opus" && legacy.routerModels["sonnet"] == "sonnet", "legacy pinned routerModel not copied into sonnet")
+        } else { check(false, "decode legacy pinned") }
+        if let legacy = decode(#"{"routerModel":"gpt-4o"}"#) {
+            check(legacy.routerModels["sonnet"] == "gpt-4o", "legacy custom routerModel still lands in sonnet")
+        } else { check(false, "decode legacy custom") }
+        if let empty = decode("{}") {
+            check(empty == Keys(), "an empty file is the defaults")
+            check(name(for: .sonnet, lane: .key, keys: empty) == "sonnet", "default gateway sonnet is the float")
+        } else { check(false, "decode empty") }
+
+        // Cloud answer: lenient, nulls and wrong types are \"not provided\".
+        let full = CloudProvided.parse(Data(#"{"jev":{"key":"ts-cloud-1234567","endpoint":"https://api.typesafe.ai/v1/systemone","model":"jev-latest"},"router":{"key":"sk-cloud-1234567","url":"https://llm.dev.exowatt.com"},"updated_at":"2026-10-03T12:00:00Z"}"#.utf8))
+        check(full?.jev?.key == "ts-cloud-1234567" && full?.router?.url == "https://llm.dev.exowatt.com" && full?.updatedAt == "2026-10-03T12:00:00Z", "parse a full answer")
+        check(full?.provides == ["jev", "router"], "provides both")
+        let nulls = CloudProvided.parse(Data(#"{"jev":null,"router":{"key":null,"url":"https://gw.example"},"updated_at":null}"#.utf8))
+        check(nulls != nil && nulls?.jev == nil && nulls?.router?.key == nil && nulls?.router?.url == "https://gw.example" && nulls?.provides == [], "parse nulls")
+        let odd = CloudProvided.parse(Data(#"{"jev":{"key":5,"model":["x"]},"router":"nope","extra":1}"#.utf8))
+        check(odd != nil && odd!.isEmpty, "wrong types are not provided")
+        check(CloudProvided.parse(Data("{}".utf8))?.isEmpty == true, "an empty object provides nothing")
+        check(CloudProvided.parse(Data("[]".utf8)) == nil && CloudProvided.parse(Data("<html>".utf8)) == nil, "not an object is nil")
+        check(CloudProvided.masked("sk-abcdefghijkl") == "sk-…ijkl" && !CloudProvided.masked("sk-abcdefghijkl").contains("abcdefgh"), "masked")
+
+        // This Mac over the cloud, field by field.
+        let cloud = CloudProvided(jev: .init(key: "ts-cloud", endpoint: "https://jev.cloud.example/v1", model: "jev-cloud"),
+                                  router: .init(key: "sk-cloud", url: "https://gw.cloud.example"), host: "cloud.example")
+        var local = Keys()
+        var m = merge(local: local, cloud: cloud)
+        check(m.keys.jevKey == "ts-cloud" && m.keys.routerKey == "sk-cloud", "empty local takes the cloud's keys")
+        check(m.keys.jevEndpoint == "https://jev.cloud.example/v1" && m.keys.routerURL == "https://gw.cloud.example", "the cloud's addresses follow its keys")
+        check(m.keys.jevModel == "jev-cloud", "the cloud's jev model over the default")
+        check(m.sources == ["jevKey": "cloud", "jevEndpoint": "cloud", "jevModel": "cloud", "routerKey": "cloud", "routerURL": "cloud"], "all cloud sources")
+        local.jevKey = "ts-mine"
+        local.routerKey = "  sk-mine "
+        m = merge(local: local, cloud: cloud)
+        check(m.keys.jevKey == "ts-mine" && m.keys.routerKey == "  sk-mine ", "local keys win")
+        check(m.keys.routerURL == Keys().routerURL && m.sources["routerURL"] == "default", "a local key is never sent to the cloud's address")
+        check(m.keys.jevEndpoint == Keys().jevEndpoint && m.sources["jevEndpoint"] == "default", "a local jev key keeps the default endpoint")
+        check(m.keys.jevModel == "jev-cloud" && m.sources["jevModel"] == "cloud", "jev model: default local yields to the cloud")
+        local = Keys()
+        local.routerKey = "   "
+        local.routerURL = "https://my.gateway.example/"
+        local.jevModel = "jev-mine"
+        m = merge(local: local, cloud: cloud)
+        check(m.keys.routerKey == "sk-cloud" && m.sources["routerKey"] == "cloud", "a blank local key is no key")
+        check(m.keys.routerURL == "https://my.gateway.example/" && m.sources["routerURL"] == "local", "a custom local address wins")
+        check(m.keys.jevModel == "jev-mine" && m.sources["jevModel"] == "local", "a custom local jev model wins")
+        local = Keys()
+        local.routerURL = "https://llm.dev.exowatt.com/"
+        m = merge(local: local, cloud: cloud)
+        check(m.sources["routerURL"] == "cloud", "the default address with a slash is still the default")
+        m = merge(local: Keys(), cloud: nil)
+        check(m.keys == Keys() && m.sources["jevKey"] == "none" && m.sources["routerKey"] == "none" && m.sources["routerURL"] == "default", "no cloud, no keys")
+        let bad = CloudProvided(router: .init(key: "sk-cloud", url: "ftp://nope"))
+        m = merge(local: Keys(), cloud: bad)
+        check(m.keys.routerKey == "sk-cloud" && m.keys.routerURL == Keys().routerURL && m.sources["routerURL"] == "default", "a bad cloud address is ignored")
+        check(merge(local: Keys(), cloud: cloud).keys.lane == .key, "lane and tier stay this Mac's")
+
+        // What goes on the wire works on Opus 5.5.
+        let tool: [[String: Any]] = [["type": "function", "function": ["name": "x"]]]
+        let chat = Router.body(model: "opus", maxTokens: 100, messages: [["role": "user", "content": "hi"]], tools: tool)
+        check(chat["temperature"] == nil && chat["thinking"] == nil && chat["tool_choice"] as? String == "auto" && chat["model"] as? String == "opus", "gateway body")
+        check(Router.body(model: "opus", maxTokens: 1, messages: [])["tool_choice"] == nil, "no tools, no tool_choice")
+        let messages = Claude.body(model: "claude-opus-5-5", system: [], messages: [], tools: [["name": "x"]], maxTokens: 10)
+        check(messages["temperature"] == nil && messages["thinking"] == nil && (messages["tool_choice"] as? [String: String]) == ["type": "auto"], "claude body")
+        return failures
     }
 }

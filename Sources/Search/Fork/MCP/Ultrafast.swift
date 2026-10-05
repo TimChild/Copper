@@ -790,7 +790,7 @@ enum Ultrafast {
         func tick() async throws -> Step? {
             guard !finished else { return nil }
             if stopped() { return nil }
-            let keys = Intelligence.shared.keys
+            let keys = Intelligence.shared.effective
             guard Intelligence.shared.jevReady else { throw Failure(text: "No Jev key — Settings › Agents › Jev mode (or Settings › Intelligence)") }
             // Awake, and painting backstage if nobody is looking at it — the
             // user may have chosen it, or left it, since the last tick.
@@ -1030,7 +1030,7 @@ enum Ultrafast {
         case "jev_extract":
             guard let instruction = (args["instruction"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !instruction.isEmpty else { throw Failure(text: "instruction required") }
             let tab = try Tools.current(browser)
-            let keys = Intelligence.shared.keys
+            let keys = Intelligence.shared.effective
             guard Intelligence.shared.modelReady else { throw Failure(text: "jev_extract needs a model (Settings › Intelligence › Model access) to read for you") }
             let obs = try await observe(tab)
             var text = obs.text

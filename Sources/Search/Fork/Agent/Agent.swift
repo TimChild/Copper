@@ -261,7 +261,8 @@ final class Agent: ObservableObject {
         // Stopped or cleared since this started: hands off the transcript.
         func live() -> Bool { ticket == generation && !Task.isCancelled }
         messages = Agent.sealed(messages)
-        let keys = Intelligence.shared.keys
+        // This Mac's keys over Copper Cloud's; never written back.
+        let keys = Intelligence.shared.effective
         var user: [String: Any] = ["role": "user"]
         if config.pageContext, let tab = browser.active, !tab.isBlank {
             var context = "Current page: \(tab.address?.absoluteString ?? "about:blank")\nTitle: \(tab.title)"
@@ -317,6 +318,7 @@ final class Agent: ObservableObject {
                 return
             }
             guard live() else { return }
+            Intelligence.shared.noteAnswer(sent: modelName, answered: reply["_model"] as? String)
             let cut = Agent.cutOff(reply)
             var assistant: [String: Any] = ["role": "assistant"]
             let content = Agent.text(of: reply["content"])
@@ -530,16 +532,10 @@ final class Agent: ObservableObject {
         request.setValue("Bearer \(keys.routerKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
-        var body: [String: Any] = [
-            "model": model,
-            "temperature": 0,
-            "max_tokens": limit,
-            "messages": [["role": "system", "content": system]] + messages,
-        ]
-        if !tools.isEmpty {
-            body["tools"] = tools
-            body["tool_choice"] = "auto"
-        }
+        // No temperature and no forced tool (Router.body): Opus 5.5 refuses
+        // a sampling knob, and `auto` is the only tool_choice every model takes.
+        let body = Router.body(model: model, maxTokens: limit,
+                               messages: [["role": "system", "content": system]] + messages, tools: tools)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw Servers.Failure(text: "no HTTP response") }
@@ -558,6 +554,7 @@ final class Agent: ObservableObject {
         else { throw Servers.Failure(text: "router answered with no choices") }
         // "length" is the reply cut off at max_tokens — see cutOff.
         if let finish = choices.first?["finish_reason"] as? String { message["_stop"] = finish }
+        if let answered = payload["model"] as? String { message["_model"] = answered }
         return message
     }
 
@@ -816,7 +813,7 @@ final class Agent: ObservableObject {
         case "close": open = false
         case "clear": clear()
         case "stop": stop()
-        case "selftest": return ["failures": Agent.sealedSelfTest() + Claude.selfTest()]
+        case "selftest": return ["failures": Agent.sealedSelfTest() + Claude.selfTest() + Intelligence.selfTest()]
         case "regression": return ["failures": WaveChecks.run()]
         case "seed":
             if let error = seed(request["arg"] as? String ?? "chat", in: browser) { return ["error": error] }

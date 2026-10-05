@@ -33,16 +33,7 @@ enum Claude {
         if !system.isEmpty {
             systemBlocks.append(["type": "text", "text": system])
         }
-        var body: [String: Any] = [
-            "model": model,
-            "max_tokens": maxTokens,
-            "system": systemBlocks,
-            "messages": messages,
-        ]
-        if !tools.isEmpty {
-            body["tools"] = tools
-            body["tool_choice"] = ["type": "auto"]
-        }
+        let body = Claude.body(model: model, system: systemBlocks, messages: messages, tools: tools, maxTokens: maxTokens)
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         } catch {
@@ -66,6 +57,24 @@ enum Claude {
             throw Failure(status: http.statusCode, text: "Claude \(http.statusCode): \(String(decoding: data.prefix(300), as: UTF8.self))")
         }
         return payload
+    }
+
+    /// A Messages body. No `temperature`, no `thinking` block (disabled or
+    /// budgeted) and no forced tool: Opus 5.5 refuses all three, and auto
+    /// is what every Claude model takes.
+    static func body(model: String, system: [[String: Any]], messages: [[String: Any]],
+                     tools: [[String: Any]], maxTokens: Int) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "system": system,
+            "messages": messages,
+        ]
+        if !tools.isEmpty {
+            body["tools"] = tools
+            body["tool_choice"] = ["type": "auto"]
+        }
+        return body
     }
 
     static func ask(token: String, model: String, system: String, user: String,
@@ -192,6 +201,7 @@ enum Claude {
         // "max_tokens" means it was cut off, possibly in the middle of a
         // tool call whose input is then incomplete (Agent.cutOff).
         if let stop = payload["stop_reason"] as? String { message["_stop"] = stop }
+        if let answered = payload["model"] as? String { message["_model"] = answered }
         return message
     }
 

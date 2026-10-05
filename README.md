@@ -6,6 +6,8 @@ A small, fast, quiet web browser for the Mac, by Collin and Felipe. Built on Sea
 
 **[Download for macOS →](https://github.com/copper-browser/Copper/releases/latest/download/copper-macos-arm64.zip)** · `brew install --cask copper-browser/copper/copper` · macOS 14 or later · Apple Silicon · free
 
+New to Copper? **[Getting started](docs/onboarding.md)** — install, move in from Arc or Chrome, link a Copper Cloud, use the agent.
+
 ---
 
 ## What it is

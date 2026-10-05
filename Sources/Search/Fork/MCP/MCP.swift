@@ -488,23 +488,30 @@ final class MCP: ObservableObject {
             let arguments = params["arguments"] as? [String: Any] ?? [:]
             calls += 1
             lastTool = name
-            switch announce {
-            case .agent: if config.announces { browser.announce("Agent · \(name)") }
-            case .prefix(let who): browser.announce("\(who) · \(name)")
-            case .quiet: break
-            }
-            // The user pressed Stop on this driver: the call is refused with
-            // words the agent can act on, and nothing touches the page.
             // Which session this is, from what it says about itself (Hands.swift).
             let saidNow = MCP.said(params, context)
             let known = context.session.flatMap { said[$0] } ?? Drive.Who.Said()
             let caller = given ?? Drive.Who.from(saidNow.over(known), mcpSession: context.session, fallbackName: clientName)
             let who = driver ?? .agent(caller.agent)
+            // The tab the call will land on: its own, the caller's, or the
+            // one on screen (AgentTabs). Work in a tab you are not looking at
+            // is not announced over the one you are.
+            let landing = AgentTabs.peek(arguments, in: browser, caller: caller.key)
+            let behind = AgentTabs.opensBehind(name, arguments)
+            if AgentTabs.onScreen(landing), !behind {
+                switch announce {
+                case .agent: if config.announces { browser.announce("Agent · \(name)") }
+                case .prefix(let who): browser.announce("\(who) · \(name)")
+                case .quiet: break
+                }
+            }
+            // The user pressed Stop on this driver: the call is refused with
+            // words the agent can act on, and nothing touches the page.
             if let refusal = Drive.shared.refusal(for: caller.key) {
                 Drive.shared.refused(call: name, args: arguments, by: who, who: caller)
                 return reply(["content": [["type": "text", "text": refusal]], "isError": true])
             }
-            let ticket = Drive.shared.began(call: name, args: arguments, by: who, who: caller, tab: browser.active)
+            let ticket = AgentTabs.$behind.withValue(behind) { Drive.shared.began(call: name, args: arguments, by: who, who: caller, tab: landing) }
             // A tool may leave a one-line summary (jev_run / jev_step do:
             // "done · 7 actions · 12.3 s · example.com"); it rides as
             // `_meta.summary`, which the app's gateway copies into its audit.
@@ -520,11 +527,11 @@ final class MCP: ObservableObject {
                         try await Tools.call(name, arguments, in: browser)
                     }
                 }
-                if let ticket { Drive.shared.ended(ticket, error: nil, summary: summary.line, tab: browser.active) }
+                if let ticket { Drive.shared.ended(ticket, error: nil, summary: summary.line, tab: AgentTabs.peek(arguments, in: browser, caller: caller.key)) }
                 return reply(result(content.map(\.json), isError: false))
             } catch {
                 let text = (error as? Tools.Failure)?.text ?? error.localizedDescription
-                if let ticket { Drive.shared.ended(ticket, error: text, tab: browser.active) }
+                if let ticket { Drive.shared.ended(ticket, error: text, tab: AgentTabs.peek(arguments, in: browser, caller: caller.key)) }
                 return reply(result([["type": "text", "text": text]], isError: true))
             }
         case "resources/list":

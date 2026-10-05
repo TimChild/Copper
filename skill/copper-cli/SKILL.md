@@ -11,12 +11,14 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 
 | Command | Use |
 |---|---|
-| `copper tabs` | List tabs. |
+| `copper tabs` | List tabs with ids; *yours* marks where your calls land, *on screen* what the user sees. |
 | `copper signin [--account USER] [--otp] [--no-submit] [--json]` | Fill a shared saved account on the current tab (submits by default). |
 | `copper autofill card|identity|field [--name NAME] [--submit]` | Fill a shared Bitwarden card, identity, or custom field; vault values are never returned. |
 | `copper health` | Check connectivity and Jev mode. |
-| `copper open URL` / `copper go URL` | Open a tab / navigate the current tab. |
-| `copper run "GOAL" [--url URL] [--new-tab]` | Let Jev complete a multi-step goal. |
+| `copper open URL [--focus]` / `copper go URL` | Open a background tab of your own (the user's tab stays put) / navigate your tab. |
+| `copper use [ID]` / `copper show [ID]` | Make a tab yours without touching the user's view / and switch their window to it. |
+| `copper --tab ID COMMAND` | Run one command in another tab. |
+| `copper run "GOAL" [--url URL] [--new-tab [--focus]]` | Let Jev complete a multi-step goal. |
 | `copper observe [-n N]` | Fast indexed read of the visible page. |
 | `copper extract "INSTRUCTION" [--full]` | Return a structured page read. |
 | `copper snapshot` / `copper text` / `copper find TEXT` | Read the page. |
@@ -40,6 +42,16 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper bitwarden lock` / `logout` / `sync` | Drop the session / sign out and wipe the CLI state / pull the vault now. |
 | `copper bitwarden policy [--share folder\|all] [--stay-unlocked on\|off]` | What agents may use (the `Agents` folder, or everything) and whether the session survives a restart. |
 | `copper --launch …` | Explicitly opt into launching Copper when it is down (also `COPPER_LAUNCH=1`). |
+
+## Your own tab
+
+Work the user need not watch goes in a tab of your own: `copper open URL` or
+`copper run "GOAL" --url URL --new-tab` opens it in the background without
+switching the user's tab, and every later command from your thread (`observe`,
+`shot`, `click`, `run`…) lands there while the user keeps working. The page
+still paints, so screenshots and real clicks work. Only `--focus` / `copper
+show` puts it in front of the user — do that when they asked to see it.
+Without a tab of your own, commands work on the tab the user is looking at.
 
 Examples:
 

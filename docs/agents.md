@@ -56,10 +56,24 @@ goes stale at once, on purpose.
 Playwright MCP's names and argument shapes. `ref`s come from
 `browser_snapshot` and are remembered on the element until the page changes.
 
+**Which tab.** Every page tool (and the four `jev_*` tools) works on the
+caller's own tab — the one it opened with `browser_tabs new` / `jev_run
+newTab`, or chose with `browser_tabs select` — else the tab on the user's
+screen. Any call can name another with `tab` (an id from `browser_tabs list`,
+or an index). The caller is the agent session (`Drive.Who`, Hands.swift), so
+two threads keep two tabs. A caller's tab is worked on where it is: off
+screen, its web view hangs in a borderless window outside every display
+(`Fork/MCP/Backstage.swift`) that WebKit counts as visible and focused, so
+pages paint, rAF runs, screenshots are real and clicks go in as trusted
+events, without the user's window, keyboard or app focus moving. Choosing the
+tab shows it the ordinary way; five minutes after the agent's last call it is
+an ordinary background tab again (and may sleep). Calls never bring a window
+forward; the pane opens itself only for work on the page on screen.
+
 | tool | does |
 |---|---|
-| `browser_tabs` | `list` / `new {url}` / `close {index}` / `select {index}` — the real row, groups and pins shown |
-| `browser_navigate`, `browser_navigate_back`, `browser_navigate_forward` | the current tab; waits for the load to settle |
+| `browser_tabs` | `list` / `new {url}` / `close {index\|tab}` / `select {index\|tab}` (+ `focus`) — the real row, groups and pins shown, each tab with its id; `new` opens a background tab of the caller's own and `select` makes one the caller's, neither switching the user's tab unless `focus: true` |
+| `browser_navigate`, `browser_navigate_back`, `browser_navigate_forward` | your tab; waits for the load to settle |
 | `browser_snapshot` | accessibility tree with `[ref=e12]` on interactive nodes; `interactive: true` for a smaller one, `selector` for a subtree |
 | `browser_click` | `ref` or `selector`; `doubleClick`, `button`, `modifiers` — a real `NSEvent` at the element's centre |
 | `browser_type` | `text`, `submit`, `slowly` (real key events) — sets the value through the native setter so React/Vue notice |
@@ -149,7 +163,7 @@ first:
 
 | tool | does |
 |---|---|
-| `jev_run` | `goal` (+ `url`, `newTab`, `maxSteps`, `elements`) — runs [browser-use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in the current tab until DONE, BLOCKED or the budget (60 actions, 120 decisions, 3 minutes); answers with the trace, the page, and the indexed element table |
+| `jev_run` | `goal` (+ `url`, `newTab`, `focus`, `tab`, `maxSteps`, `elements`) — runs [browser-use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in your tab (`newTab`: a new background one) until DONE, BLOCKED or the budget (60 actions, 120 decisions, 3 minutes); answers with the trace, the page, and the indexed element table |
 | `jev_step` | one decision and its action; same `goal` continues the session |
 | `jev_observe` | what Jev sees: `[3] combobox  Where to? · London` for every visible control, plus the visible text |
 | `jev_extract` | `instruction` (+ `schema`, `full`) — one JSON object drawn from the page by the text model: values, not a tree |

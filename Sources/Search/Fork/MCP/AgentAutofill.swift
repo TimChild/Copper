@@ -9,7 +9,8 @@ enum AgentAutofill {
 
     @MainActor
     static func run(_ args: [String: Any], in browser: Browser, source: Source) async throws -> [String: Any] {
-        guard let tab = browser.active else { throw Failure(message: "no active tab") }
+        guard let tab = AgentTabs.target(in: browser) else { throw Failure(message: "no active tab") }
+        AgentTabs.prepare(tab)
         guard !tab.shy else { throw Failure(message: "autofill is unavailable in private tabs") }
         guard let address = tab.address, let rawHost = address.host(), !rawHost.isEmpty else {
             throw Failure(message: "current tab has no host")

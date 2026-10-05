@@ -49,6 +49,16 @@ enum CLI {
         let dryRun = args.contains("--dry-run")
         let launchRequested = args.contains("--launch") || ProcessInfo.processInfo.environment["COPPER_LAUNCH"] == "1"
         args.removeAll { $0 == "--json" || $0 == "--dry-run" || $0 == "--launch" }
+        // `--tab ID`, anywhere: this one call works in that tab.
+        var tabRef: String?
+        if let at = args.firstIndex(of: "--tab") {
+            guard at + 1 < args.count, !args[at + 1].isEmpty else {
+                error("--tab needs a tab id (from copper tabs) or index")
+                return 2
+            }
+            tabRef = args[at + 1]
+            args.removeSubrange(at...(at + 1))
+        }
 
         guard let command = args.first else {
             print(usage)
@@ -77,7 +87,14 @@ enum CLI {
             return runBitwarden(Array(args.dropFirst()), dryRun: dryRun, launchRequested: launchRequested)
         }
 
-        guard let spec = makeRequest(command, Array(args.dropFirst())) else { return 2 }
+        guard var spec = makeRequest(command, Array(args.dropFirst())) else { return 2 }
+        if let tabRef, var request = spec.request, var params = request["params"] as? [String: Any],
+           var arguments = params["arguments"] as? [String: Any], arguments["tab"] == nil {
+            arguments["tab"] = tabRef
+            params["arguments"] = arguments
+            request["params"] = params
+            spec.request = request
+        }
         if dryRun {
             return dryRunDecision(spec, launchRequested: launchRequested)
         }
@@ -127,8 +144,17 @@ enum CLI {
             guard args.isEmpty else { return bad("tabs takes no arguments") }
             return call("browser_tabs", ["action": "list"])
         case "open":
+            let focus = args.contains("--focus")
+            args.removeAll { $0 == "--focus" }
             guard args.count == 1, let url = args.first else { return bad("open needs URL") }
-            return call("browser_tabs", ["action": "new", "url": url])
+            return call("browser_tabs", ["action": "new", "url": url, "focus": focus])
+        case "use", "show":
+            // use: make a tab yours without touching the user's view; show:
+            // the same, and switch the user's window to it.
+            guard args.count <= 1 else { return bad("\(command) takes one tab id or index") }
+            var arguments: [String: Any] = ["action": "select", "focus": command == "show"]
+            if let ref = args.first { arguments["tab"] = ref }
+            return call("browser_tabs", arguments)
         case "go":
             guard args.count == 1, let url = args.first else { return bad("go needs URL") }
             return call("browser_navigate", ["url": url])
@@ -188,6 +214,7 @@ enum CLI {
                     guard let value = next(&args, &i), !value.isEmpty else { return bad("run --url needs URL") }
                     arguments["url"] = value
                 case "--new-tab": arguments["newTab"] = true
+                case "--focus": arguments["focus"] = true
                 case "--max":
                     guard let value = next(&args, &i), let number = Int(value), number >= 0 else { return bad("run --max needs a non-negative number") }
                     arguments["maxSteps"] = number
@@ -1235,17 +1262,20 @@ enum CLI {
     }
 
     private static let usage = """
-    Usage: copper [--json] [--launch] <command> [arguments]
+    Usage: copper [--json] [--launch] [--tab ID] <command> [arguments]
 
-      tabs                                      list open tabs
-      open URL                                  open URL in a new tab
-      go URL                                    navigate the current tab
+      tabs                                      list open tabs, with ids; "yours" is where your calls land
+      open URL [--focus]                        open URL in a background tab of your own; the user's
+                                                tab stays put (--focus shows it to them)
+      use [ID]                                  make a tab yours, in the background (no ID: the user's)
+      show [ID]                                 make a tab yours and switch the user's window to it
+      go URL                                    navigate your tab
       signin [--account USER] [--otp] [--no-submit]
                                                 fill a shared saved account on the current tab
       autofill card|identity|field [--name NAME] [--submit]
                                                 fill a shared Bitwarden card, identity, or field
       observe [--no-text] [-n N]                fast Jev observation
-      run "GOAL…" [--url URL] [--new-tab] [--max N] [--no-elements]
+      run "GOAL…" [--url URL] [--new-tab [--focus]] [--max N] [--no-elements]
       step "GOAL…"                              supervise one Jev decision
       extract "INSTRUCTION…" [--full] [--schema JSON]
       snapshot [--interactive] [-n N] [--selector CSS]
@@ -1273,6 +1303,11 @@ enum CLI {
                                                 (copper bitwarden --help)
       call TOOL [JSON-ARGS]                     call any MCP tool
       help                                      show this help
+
+    Every page command works on your tab: the one you opened or chose with use,
+    else the tab the user is looking at. A background tab still paints, takes
+    screenshots and real clicks, and is never brought in front of the user.
+    --tab ID works in another tab for one call.
 
     Use --json for the raw JSON-RPC result. Pass --launch (or COPPER_LAUNCH=1)
     to opt into starting Copper when it is down. (Hidden: --dry-run prints the decision.)

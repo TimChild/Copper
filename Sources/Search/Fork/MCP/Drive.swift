@@ -179,7 +179,10 @@ final class Drive: ObservableObject {
                   thought: nil, thoughtAt: nil)
         stopRequested = false
         live = true
-        paneOpen = true
+        // The pane comes up for work on the page you are looking at. Work in
+        // a background tab stays out of your way: its row wears the agent's
+        // badge, and the pane is there if you open it.
+        if AgentTabs.onScreen(tab), !AgentTabs.behind { paneOpen = true }
         touch(who, driver: driver, tab: tab?.id, doing: goal.isEmpty ? nil : goal, busy: driver == .jev)
     }
 
@@ -379,7 +382,7 @@ final class Drive: ObservableObject {
                 self.run?.ended = nil
                 self.run?.note = ""
                 live = true
-                paneOpen = true
+                if AgentTabs.onScreen(tab), !AgentTabs.behind { paneOpen = true }
             } else {
                 begin(driver: driver, tab: tab, who: who)
             }

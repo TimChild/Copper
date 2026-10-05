@@ -661,13 +661,13 @@ enum Ultrafast {
         let kind = action["kind"] as? String ?? ""
         if kind == "SIGN_IN" {
             guard await fresh(web, obs) else { throw Stale(text: "Page changed since this decision. Observe again.") }
-            _ = try await SignIn.run([:], in: browser, source: .jev)
+            _ = try await AgentTabs.$pinned.withValue(tab.id) { try await SignIn.run([:], in: browser, source: .jev) }
             return
         }
         if kind == "AUTOFILL_CARD" || kind == "AUTOFILL_IDENTITY" {
             guard await fresh(web, obs) else { throw Stale(text: "Page changed since this decision. Observe again.") }
             let fillKind = kind == "AUTOFILL_CARD" ? "card" : "identity"
-            _ = try await AgentAutofill.run(["kind": fillKind, "first": true], in: browser, source: .jev)
+            _ = try await AgentTabs.$pinned.withValue(tab.id) { try await AgentAutofill.run(["kind": fillKind, "first": true], in: browser, source: .jev) }
             return
         }
         let node = (action["node"] as? NSNumber)?.intValue
@@ -792,7 +792,9 @@ enum Ultrafast {
             if stopped() { return nil }
             let keys = Intelligence.shared.keys
             guard Intelligence.shared.jevReady else { throw Failure(text: "No Jev key — Settings › Agents › Jev mode (or Settings › Intelligence)") }
-            if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
+            // Awake, and painting backstage if nobody is looking at it — the
+            // user may have chosen it, or left it, since the last tick.
+            AgentTabs.prepare(tab)
             let web = tab.web
             let trace = Drive.shared
             trace.cycle()
@@ -961,20 +963,23 @@ enum Ultrafast {
         return [
             [
                 "name": "jev_run",
-                "description": "FAST PATH. Give one plain-English goal and Copper drives the current tab itself with browser-use's jev-ultrafast loop: TypeSafe Jev picks an operation and an indexed element each cycle (~200 ms), a small LLM writes any text, until DONE or BLOCKED. Seconds instead of a snapshot/click round-trip per step. Returns the trace, the page, and the indexed element table. Verify DONE yourself.",
+                "description": "FAST PATH. Give one plain-English goal and Copper drives the tab itself — yours if you opened or selected one, else the user's current tab —  with browser-use's jev-ultrafast loop: TypeSafe Jev picks an operation and an indexed element each cycle (~200 ms), a small LLM writes any text, until DONE or BLOCKED. Seconds instead of a snapshot/click round-trip per step. Returns the trace, the page, and the indexed element table. Verify DONE yourself.",
                 "inputSchema": ["type": "object", "properties": [
                     "goal": string("Everything the run must achieve, with concrete values: places, dates, names, filters, and when to stop (\"stop when results are visible\")."),
-                    "url": string("Open this address first (in the current tab, or a new one when newTab is true)"),
-                    "newTab": bool("Open url in a new tab instead of the current one"),
+                    "url": string("Open this address first (in your tab, or a new one when newTab is true)"),
+                    "newTab": bool("Open url in a new tab of your own, in the background — the user's tab does not change, and your later calls land on it"),
+                    "focus": bool("With newTab: also show the new tab to the user. Default false"),
+                    "tab": string("Tab id (or index) from browser_tabs list, to run in that tab"),
                     "maxSteps": number("Cap on actions; default \(maxSteps)"),
                     "elements": bool("Append the indexed element table of the final page; default true"),
                 ], "required": ["goal"]] as [String: Any],
             ],
             [
                 "name": "jev_step",
-                "description": "One jev-ultrafast decision and action on the current tab, for supervising a run a step at a time. The first call with a goal starts a session; later calls with the same goal continue it. Returns what Jev chose, what happened, and the fresh element table.",
+                "description": "One jev-ultrafast decision and action on your tab (else the user's current tab), for supervising a run a step at a time. The first call with a goal starts a session; later calls with the same goal continue it. Returns what Jev chose, what happened, and the fresh element table.",
                 "inputSchema": ["type": "object", "properties": [
                     "goal": string("The goal; same text as before to continue the session"),
+                    "tab": string("Tab id (or index) from browser_tabs list"),
                 ], "required": ["goal"]] as [String: Any],
             ],
             [
@@ -984,6 +989,7 @@ enum Ultrafast {
                     "instruction": string("What to pull out, e.g. \"the flight options with airline, departure time, duration and price\""),
                     "schema": ["type": "object", "description": "JSON schema (or an example object) the answer must match"] as [String: Any],
                     "full": bool("Read the whole page's text, not just what is on screen; default false"),
+                    "tab": string("Tab id (or index) from browser_tabs list"),
                 ], "required": ["instruction"]] as [String: Any],
             ],
             [
@@ -992,6 +998,7 @@ enum Ultrafast {
                 "inputSchema": ["type": "object", "properties": [
                     "text": bool("Include the page's visible text; default true"),
                     "limit": number("Cap on elements listed; default 80"),
+                    "tab": string("Tab id (or index) from browser_tabs list"),
                 ]] as [String: Any],
             ],
         ]
@@ -1013,8 +1020,7 @@ enum Ultrafast {
         guard Intelligence.shared.jevReady else { throw Failure(text: "No Jev (TypeSafe) key — Settings › Agents › Jev mode, paste the ts-… key") }
         switch name {
         case "jev_observe":
-            guard let tab = browser.active else { throw Failure(text: "no active tab") }
-            if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
+            let tab = try Tools.current(browser)
             let obs = try await observe(tab)
             let limit = (args["limit"] as? NSNumber)?.intValue ?? 80
             let available = await availability(tab)
@@ -1023,8 +1029,7 @@ enum Ultrafast {
             return [.text(out)]
         case "jev_extract":
             guard let instruction = (args["instruction"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !instruction.isEmpty else { throw Failure(text: "instruction required") }
-            guard let tab = browser.active else { throw Failure(text: "no active tab") }
-            if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
+            let tab = try Tools.current(browser)
             let keys = Intelligence.shared.keys
             guard Intelligence.shared.modelReady else { throw Failure(text: "jev_extract needs a model (Settings › Intelligence › Model access) to read for you") }
             let obs = try await observe(tab)
@@ -1047,7 +1052,7 @@ enum Ultrafast {
             return [.text(String(decoding: out, as: UTF8.self))]
         case "jev_step":
             guard let goal = (args["goal"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty else { throw Failure(text: "goal required") }
-            guard let tab = browser.active else { throw Failure(text: "no active tab") }
+            let tab = try Tools.current(browser)
             let session: Session
             if let have = sessions[tab.id], have.goal == goal, !have.finished { session = have }
             else {
@@ -1082,11 +1087,14 @@ enum Ultrafast {
             var tab: Tab
             if let raw = args["url"] as? String, let url = Address.url(from: raw) {
                 if (args["newTab"] as? Bool) ?? false {
-                    tab = browser.open(url, foreground: true)
+                    // A tab of the caller's own, behind the user's: the run
+                    // and every call after it work there.
+                    let pane = AgentTabs.callerKey == "pane"
+                    tab = browser.open(url, foreground: pane || ((args["focus"] as? Bool) ?? false))
+                    AgentTabs.bind(tab)
+                    AgentTabs.prepare(tab)
                 } else {
-                    guard let current = browser.active else { throw Failure(text: "no active tab") }
-                    tab = current
-                    if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
+                    tab = try Tools.current(browser)
                     tab.go(to: url)
                 }
                 // The pane and the pill come up with the page, not after it:
@@ -1107,9 +1115,7 @@ enum Ultrafast {
                 }
                 Drive.shared.close(phase: opening)
             } else {
-                guard let current = browser.active else { throw Failure(text: "no active tab") }
-                tab = current
-                if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
+                tab = try Tools.current(browser)
                 Drive.shared.begin(goal: goal, tab: tab)
             }
             // begin() happened above, on whichever road got here.

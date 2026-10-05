@@ -12,6 +12,11 @@ import WebKit
 // knows one. Clicks and keys go in as real events at the window (Input.swift)
 // so pages see trusted input; when a tab has no window to receive them, the
 // DOM gets an event of the same shape instead.
+//
+// Which tab: the one the call names (`tab`), else the agent's own (the one
+// it opened or selected), else the one on the user's screen. A tab of the
+// agent's own is worked on where it is — in the background, never brought in
+// front of the user (Backstage.swift).
 
 enum Tools {
     struct Failure: Error {
@@ -46,14 +51,17 @@ enum Tools {
         }
     }
 
+    /// What every tool tells the agent about its own tab.
+    static let tabNote = "Work that the user need not watch goes in a tab of your own: browser_tabs new (or jev_run with newTab) opens one in the background without switching the user's tab, and every later call of yours lands there — snapshots, screenshots, clicks and typing all work while the user looks at something else. browser_tabs select binds you to another tab the same way; pass focus: true only when the user should see it."
+
     /// What every tool tells the agent about `reason`: the user is watching.
     static let reasonNote = "The user watches every call in a pane beside the page: pass `reason` (one short sentence: what you are doing and why) on each call, and `element` for anything you click or type into. If a call answers \"Stopped by the user\", stop and say so — do not retry."
 
     static func instructions(jev: Bool) -> String {
         guard jev else {
-            return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. First action: call browser_snapshot with interactive: true on the current tab, then act with its refs. Call browser_tabs only when another tab is named. Take a screenshot when layout matters. Nothing is sandboxed — act as the user would. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(reasonNote) \(CanvasTools.instructions)"
+            return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. First action: call browser_snapshot with interactive: true on the current tab, then act with its refs. Call browser_tabs only when another tab is named. Take a screenshot when layout matters. Nothing is sandboxed — act as the user would. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(tabNote) \(reasonNote) \(CanvasTools.instructions)"
         }
-        return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. ANY task: the FIRST call is jev_run with the whole goal, every concrete place/date/name/filter and stop condition; no browser_tabs or snapshot first. Add url only for a named page that is not current. jev_observe = fast indexed read; jev_extract = JSON values; jev_step = one decision. BLOCKED → browser_snapshot/click/type for that part, then jev_run again. DONE is Jev's claim — verify with jev_observe/jev_extract. Screenshot when layout matters; nothing is sandboxed — act as the user. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(reasonNote) \(CanvasTools.instructions)"
+        return "Copper is the user's own browser, signed in as them; the current tab is the one they are looking at — work there unless the task names another tab. ANY task: the FIRST call is jev_run with the whole goal, every concrete place/date/name/filter and stop condition; no browser_tabs or snapshot first. Add url only for a named page that is not current. jev_observe = fast indexed read; jev_extract = JSON values; jev_step = one decision. BLOCKED → browser_snapshot/click/type for that part, then jev_run again. DONE is Jev's claim — verify with jev_observe/jev_extract. Screenshot when layout matters; nothing is sandboxed — act as the user. For sign-in forms call browser_sign_in first; it fills a saved account in-process and never returns the password. For checkout, address, or sign-up forms call browser_autofill (kind card|identity) — it fills from the vault and never returns the values. \(tabNote) \(reasonNote) \(CanvasTools.instructions)"
     }
 
     // MARK: - the catalogue
@@ -65,9 +73,17 @@ enum Tools {
         "description": "One short sentence on what you are doing and why — shown to the user watching the browser",
     ]
 
+    /// Every page tool takes `tab`, for a call on a tab other than the
+    /// caller's own.
+    static let tabProperty: [String: Any] = [
+        "type": "string",
+        "description": "Tab id (or index) from browser_tabs list; omit for your own tab — the one you opened or selected — or else the user's current tab",
+    ]
+
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any] = [:], required: [String] = []) -> [String: Any] {
         var all = properties
         if all["reason"] == nil { all["reason"] = reasonProperty }
+        if all["tab"] == nil, !["browser_tabs", "browser_resize"].contains(name) { all["tab"] = tabProperty }
         return [
             "name": name,
             "description": description,
@@ -96,10 +112,12 @@ enum Tools {
 
     static var playwright: [[String: Any]] {
         [
-            tool("browser_tabs", "List, create, close, or select a browser tab", [
+            tool("browser_tabs", "List, create, close, or select a browser tab. new opens a tab of your own in the background — the user's tab does not change — and your later calls land on it; select makes another tab yours the same way. Neither brings the tab in front of the user unless focus is true.", [
                 "action": string("Operation to perform", ["enum": ["list", "new", "close", "select"]]),
-                "index": number("Tab index (from list) for close/select; omit to act on the current tab"),
+                "index": number("Tab index (from list) for close/select; omit to act on your tab"),
+                "tab": string("Tab id (from list) for close/select, instead of index"),
                 "url": string("Address to open, for new"),
+                "focus": bool("Also show the tab to the user (switch their window to it). Default false — leave the user where they are"),
             ], required: ["action"]),
             tool("browser_sign_in", "Sign in on the current tab with a saved account the user has shared with agents. Fills (and by default submits) the password in-process; you never receive the secret. what=otp fills the account's one-time code.", [
                 "account": string("Username to use when several are saved"),
@@ -171,7 +189,7 @@ enum Tools {
             tool("browser_console_messages", "Console messages captured on the current page since it loaded"),
             tool("browser_find", "Find on the page: the refs of elements whose text matches", ["text": string("Text to look for")], required: ["text"]),
             tool("browser_resize", "Resize the browser window", ["width": number("Width"), "height": number("Height")], required: ["width", "height"]),
-            tool("browser_close", "Close the current tab"),
+            tool("browser_close", "Close your tab (the one your calls land on)"),
             tool("browser_groups", "Copper's tab groups: list them, or move the current tab into one", [
                 "action": string("list, assign, remove", ["enum": ["list", "assign", "remove"]]),
                 "group": string("Group name for assign (created if new)"),
@@ -183,11 +201,24 @@ enum Tools {
 
     @MainActor
     static func call(_ name: String, _ args: [String: Any], in browser: Browser) async throws -> [Content] {
+        // browser_tabs reads `tab` as the tab to close or select, not to work in.
+        guard name != "browser_tabs", let named = try AgentTabs.resolve(args["tab"], in: browser) else {
+            return try await dispatch(name, args, in: browser)
+        }
+        return try await AgentTabs.$pinned.withValue(named.id) { try await dispatch(name, args, in: browser) }
+    }
+
+    @MainActor
+    private static func dispatch(_ name: String, _ args: [String: Any], in browser: Browser) async throws -> [Content] {
+        if !["browser_tabs", "browser_close", "browser_resize", "browser_groups"].contains(name), !CanvasTools.names.contains(name),
+           !(name == "jev_run" && (args["newTab"] as? Bool) == true) {
+            await AgentTabs.ready(in: browser)
+        }
         switch name {
         case "browser_tabs": return try await tabs(args, in: browser)
         case "browser_close":
             let tab = try current(browser)
-            browser.close(tab)
+            close(tab)
             return [.text("Closed. \(tabList(browser))")]
         case "browser_resize":
             guard let w = args["width"] as? NSNumber, let h = args["height"] as? NSNumber else { throw Failure(text: "width and height") }
@@ -202,9 +233,9 @@ enum Tools {
         default: break
         }
 
+        // A sleeping tab comes back for the agent the way it does for a
+        // click; one off screen is hung backstage so it paints (current).
         let tab = try current(browser)
-        // A sleeping tab comes back for the agent the way it does for a click.
-        if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
         let web = tab.web
 
         switch name {
@@ -405,22 +436,40 @@ enum Tools {
 
     // MARK: - tabs
 
+    /// The tab this call works on (AgentTabs.target), made ready: awake,
+    /// and painting backstage when nobody is looking at it.
     @MainActor
     static func current(_ browser: Browser) throws -> Tab {
-        guard let tab = browser.active else { throw Failure(text: "no active tab") }
+        guard let tab = AgentTabs.target(in: browser) else { throw Failure(text: "no active tab") }
+        AgentTabs.prepare(tab)
         return tab
+    }
+
+    /// Close a tab wherever it is, and let go of it.
+    @MainActor
+    static func close(_ tab: Tab) {
+        Backstage.shared.release(tab.id)
+        AgentTabs.owner(of: tab).close(tab)
     }
 
     @MainActor
     static func tabList(_ browser: Browser) -> String {
         var lines: [String] = []
-        for (i, tab) in browser.tabs.enumerated() {
-            let marker = tab.id == browser.activeID ? "(current) " : ""
+        let mine = AgentTabs.target(in: browser)?.id
+        var listed = browser.tabs
+        // Your tab is listed even when it is in another window or space.
+        if let own = AgentTabs.own(), !listed.contains(where: { $0.id == own.id }) { listed.append(own) }
+        for (i, tab) in listed.enumerated() {
+            var marks: [String] = []
+            if AgentTabs.onScreen(tab) { marks.append("on screen") }
+            if tab.id == mine { marks.append("yours") }
+            let marker = marks.isEmpty ? "" : "(\(marks.joined(separator: ", "))) "
+            let index = browser.tabs.contains { $0.id == tab.id } ? "\(i)" : "-"
             let group = Groups.shared.group(of: tab).map { " [\($0.name)]" } ?? ""
             let pin = tab.pin != nil ? " (pinned)" : ""
             // Only a tab that is actually burning gets a figure; the rest stay quiet.
             let heat = Heat.shared.reading(for: tab).flatMap { $0.sustained >= 10 ? " {cpu \(Int($0.sustained))%}" : nil } ?? ""
-            lines.append("- \(i): \(marker)[\(tab.title)] (\(tab.address?.absoluteString ?? "about:blank"))\(pin)\(group)\(heat)")
+            lines.append("- \(index): \(marker)[\(tab.title)] (\(tab.address?.absoluteString ?? "about:blank")) {tab \(AgentTabs.short(tab))}\(pin)\(group)\(heat)")
         }
         let gpu = Heat.shared.gpu.flatMap { $0 >= 10 ? "\nGPU process (shared by all tabs): \(Int($0))% of a core" : nil } ?? ""
         return "### Open tabs\n" + lines.joined(separator: "\n") + gpu
@@ -429,34 +478,42 @@ enum Tools {
     @MainActor
     private static func tabs(_ args: [String: Any], in browser: Browser) async throws -> [Content] {
         let action = (args["action"] as? String) ?? "list"
-        let index = (args["index"] as? NSNumber)?.intValue
-        func pick() throws -> Tab {
-            if let index {
-                guard browser.tabs.indices.contains(index) else { throw Failure(text: "no tab \(index) — \(tabList(browser))") }
-                return browser.tabs[index]
-            }
-            return try current(browser)
+        let index = args["index"] as? NSNumber
+        let focus = (args["focus"] as? Bool) ?? false
+        func pick(orScreen: Bool = false) throws -> Tab {
+            if let named = try AgentTabs.resolve(args["tab"] ?? index, in: browser) { return named }
+            // select with nothing named: the tab the user is looking at.
+            if orScreen, let active = browser.active { return active }
+            guard let tab = AgentTabs.target(in: browser) else { throw Failure(text: "no active tab") }
+            return tab
         }
+        // The pane beside the page works on what the user is looking at: a
+        // tab it opens is one the user asked to see.
+        let pane = AgentTabs.callerKey == "pane"
         switch action {
         case "list":
             return [.text(tabList(browser))]
         case "new":
-            let tab: Tab
-            if let raw = args["url"] as? String, let url = Address.url(from: raw) {
-                tab = browser.open(url, foreground: true)
-                try await settle(tab)
-            } else {
-                browser.newTab()
-                tab = try current(browser)
+            let raw = (args["url"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            guard let url = raw.map({ Address.url(from: $0) }) ?? URL(string: "about:blank") else {
+                throw Failure(text: "not an address: \(raw ?? "")")
             }
-            return [.text("Opened. \(tabList(browser))")]
+            // Behind the user's tab, not in front of it. Unless asked.
+            let tab = browser.open(url, foreground: focus || pane)
+            AgentTabs.bind(tab)
+            AgentTabs.prepare(tab)
+            if raw != nil { try await settle(tab) }
+            let note = focus || pane ? "Opened and shown to the user." : "Opened in the background — the user's tab did not change; your calls now land on it."
+            return [.text("\(note) {tab \(AgentTabs.short(tab))}\n\(pageLine(tab))\n\n\(tabList(browser))")]
         case "close":
-            browser.close(try pick())
+            close(try pick())
             return [.text("Closed. \(tabList(browser))")]
         case "select":
-            let tab = try pick()
-            browser.select(tab)
-            return [.text("Selected. \(tabList(browser))")]
+            let tab = try pick(orScreen: true)
+            AgentTabs.bind(tab)
+            if focus || pane { AgentTabs.show(tab) } else { AgentTabs.prepare(tab) }
+            let note = focus || pane ? "Selected and shown to the user." : "Selected — your calls now land on this tab; the user's view did not change."
+            return [.text("\(note) {tab \(AgentTabs.short(tab))}\n\(tabList(browser))")]
         default:
             throw Failure(text: "action must be list, new, close or select")
         }
@@ -468,11 +525,11 @@ enum Tools {
         let groups = Groups.shared
         switch action {
         case "assign":
-            guard let tab = browser.active, let name = args["group"] as? String, !name.isEmpty else { return [.text("group name required")] }
+            guard let tab = AgentTabs.target(in: browser), let name = args["group"] as? String, !name.isEmpty else { return [.text("group name required")] }
             groups.assign(tab, to: groups.create(named: name), in: browser)
             return [.text("Grouped into \(name)")]
         case "remove":
-            if let tab = browser.active { groups.remove(tab) }
+            if let tab = AgentTabs.target(in: browser) { groups.remove(tab) }
             return [.text("Removed from its group")]
         case "list":
             let lines = groups.all.map { g in "- \(g.name): " + groups.members(of: g.id, in: browser).map { "[\($0.title)]" }.joined(separator: ", ") }
@@ -509,7 +566,8 @@ enum Tools {
 
     @MainActor
     static func pageLine(_ tab: Tab) -> String {
-        "### Page\n- URL: \(tab.address?.absoluteString ?? "about:blank")\n- Title: \(tab.title)"
+        let place = AgentTabs.onScreen(tab) ? "" : " (background — not on the user's screen)"
+        return "### Page\n- URL: \(tab.address?.absoluteString ?? "about:blank")\n- Title: \(tab.title)\n- Tab: \(AgentTabs.short(tab))\(place)"
     }
 
     /// Until the page stops loading, plus a beat, or the budget is spent.

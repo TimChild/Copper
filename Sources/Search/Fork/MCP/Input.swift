@@ -18,6 +18,21 @@ enum Input {
         web.window != nil && !web.isHiddenOrHasHiddenAncestor && web.bounds.width > 0
     }
 
+    /// The web view takes first responder in its own window, and that is
+    /// all: an agent never brings a window forward, never takes key from
+    /// the window you are typing in, never activates the app. Events sent to
+    /// a view in a window that is not key still land — that is how agents
+    /// drove Copper from a terminal in front of it all along. A backstage
+    /// window (Backstage.swift) says it is key, so its page counts as focused.
+    /// Only when Copper is in front with no key window at all does the
+    /// window take key, the way a click would give it.
+    @MainActor private static func focus(_ web: WKWebView, in window: NSWindow) {
+        if !(window is Backstage.Window), NSApp.isActive, NSApp.keyWindow == nil, window.isVisible, window.canBecomeKey {
+            window.makeKey()
+        }
+        if window.firstResponder !== web { window.makeFirstResponder(web) }
+    }
+
     @MainActor private static func windowPoint(_ web: WKWebView, _ point: CGPoint) -> CGPoint {
         // Points come in with the page's origin, top-left. WKWebView is a
         // flipped view, so that is its own space too; should a build say
@@ -59,8 +74,7 @@ enum Input {
         // Focus follows the click, as it would for a person: the window
         // takes key, the web view takes first responder, and only then does
         // the page hear about the mouse.
-        if !window.isKeyWindow { window.makeKeyAndOrderFront(nil) }
-        if window.firstResponder !== web { window.makeFirstResponder(web) }
+        focus(web, in: window)
         let at = windowPoint(web, point)
         let (down, up, num): (NSEvent.EventType, NSEvent.EventType, Int) = {
             switch button {
@@ -168,8 +182,7 @@ enum Input {
     @MainActor
     private static func press(_ web: WKWebView, code: UInt16, text: String, flags: NSEvent.ModifierFlags) {
         guard let window = web.window else { return }
-        if !window.isKeyWindow { window.makeKeyAndOrderFront(nil) }
-        if window.firstResponder !== web { window.makeFirstResponder(web) }
+        focus(web, in: window)
         // Command shortcuts are the window's (⌘L, ⌘W…) before they are the
         // page's; those go through performKeyEquivalent as they would from
         // the keyboard, everything else straight to the view.

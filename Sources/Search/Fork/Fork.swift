@@ -86,12 +86,17 @@ enum Fork {
                 Intelligence.shared.keys.tier = tier
             } else if op == "mode" || op == "last" {
                 return ["error": "automatic tab grouping was removed"]
+            } else if op == "selftest" {
+                return ["failures": Intelligence.selfTest()]
+            } else if op == "sources" || op == "refresh" {
+                return Intelligence.shared.control(["op": op])
             }
-            let k = Intelligence.shared.keys
+            let k = Intelligence.shared.effective
             return ["jev": Intelligence.shared.jevReady, "router": Intelligence.shared.routerReady, "routerModel": k.routerModel,
                     "routerURL": k.routerURL, "lane": k.lane.rawValue, "tier": k.tier.rawValue,
                     "model": Intelligence.shared.modelName, "modelReady": Intelligence.shared.modelReady,
-                    "claudeReady": Intelligence.shared.claudeReady]
+                    "claudeReady": Intelligence.shared.claudeReady, "sources": Intelligence.shared.sources,
+                    "answeredBy": Intelligence.shared.answeredModel ?? ""]
         case "split":
             // `split` toggles; `split ID` opens beside the active tab; `split off` closes.
             let arg = request["arg"] as? String ?? ""

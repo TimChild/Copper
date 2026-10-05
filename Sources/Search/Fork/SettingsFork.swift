@@ -26,7 +26,7 @@ struct IntelligencePage: View {
                 Rule()
                 laneRows
                 Rule()
-                Line("Model", "\(brain.tier.title) — \(brain.tier.blurb). Also in the agent pane's header.") {
+                Line("Model", modelDetail) {
                     Segmented(options: Intelligence.Tier.allCases.map { ($0, $0.title) }, selection: $brain.keys.tier)
                 }
                 Rule()
@@ -41,12 +41,14 @@ struct IntelligencePage: View {
 
             Caption("Jev — the fast lane")
             Card {
-                Line("Jev", "TypeSafe's System One: answers a typed question — which of these, how likely — in a fifth of a second, with a confidence. The fast lane.") {
-                    KeyField(text: $brain.keys.jevKey, placeholder: "ts-…", ready: brain.jevReady)
+                Line("Jev", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? "TypeSafe's System One: answers a typed question — which of these, how likely — in a fifth of a second, with a confidence. The fast lane.") {
+                    KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"), ready: brain.jevReady)
                 }
             }
 
-            Text("Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone.")
+            Text(brain.cloud == nil
+                 ? "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone."
+                 : "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone. Keys from Copper Cloud stay in cloud-intelligence.json and go when you sign out of the cloud; a key typed here always wins.")
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -59,12 +61,14 @@ struct IntelligencePage: View {
                 accountControl
             }
         } else {
-            Line("API key", "For an OpenAI-compatible gateway — LiteLLM, or anything that speaks /v1/chat/completions") {
-                KeyField(text: $brain.keys.routerKey, placeholder: "sk-…", ready: brain.routerReady)
+            Line("API key", brain.cloudLine("routerKey", brain.cloud?.router?.key) ?? "For an OpenAI-compatible gateway — LiteLLM, or anything that speaks /v1/chat/completions") {
+                KeyField(text: $brain.keys.routerKey, placeholder: brain.cloudPlaceholder("routerKey", brain.cloud?.router?.key, otherwise: "sk-…"), ready: brain.routerReady)
             }
             Rule()
-            Line("Gateway address", "Where the gateway lives") {
-                TextField("https://…", text: $brain.keys.routerURL)
+            Line("Gateway address", brain.sources["routerURL"] == "cloud"
+                 ? "Provided by Copper Cloud (\(brain.cloud?.host ?? "your cloud"))"
+                 : "Where the gateway lives") {
+                TextField(brain.sources["routerURL"] == "cloud" ? brain.effective.routerURL : "https://…", text: routerURLBinding)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, design: .monospaced))
                     .frame(width: 220)
@@ -72,6 +76,29 @@ struct IntelligencePage: View {
                     .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
         }
+    }
+
+    /// The address field. While Copper Cloud supplies the address it reads
+    /// empty, the cloud's address as its placeholder; typing one overrides
+    /// it, and clearing it goes back to the cloud's (or the default).
+    private var routerURLBinding: Binding<String> {
+        Binding(
+            get: {
+                let local = brain.keys.routerURL
+                return brain.sources["routerURL"] == "cloud" && local.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "/")) == Intelligence.Keys().routerURL ? "" : local
+            },
+            set: { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                brain.keys.routerURL = trimmed.isEmpty && brain.sources["routerKey"] == "cloud" ? Intelligence.Keys().routerURL : value
+            }
+        )
+    }
+
+    /// The tier, the name sent for it, and the model the last answer named.
+    private var modelDetail: String {
+        let line = "\(brain.tier.title) — \(brain.tier.blurb). Sends \(brain.modelName)"
+        if let answered = brain.answeredModel, answered != brain.modelName { return line + "; answered by \(answered)." }
+        return line + ". Also in the agent pane's header."
     }
 
     private var accountDetail: String {
@@ -173,7 +200,7 @@ struct IntelligencePage: View {
     private func test() {
         testing = true
         verdict = nil
-        let keys = brain.keys
+        let keys = brain.effective
         Task { @MainActor in
             var lines: [String] = []
             if brain.jevReady {
@@ -397,8 +424,8 @@ struct AgentsPage: View {
                 }
                 if mcp.config.jev {
                     Rule()
-                    Line("Jev key", brain.jevReady ? "TypeSafe System One — the same key as Intelligence" : "Needed. A TypeSafe key (ts-…) — typesafe.ai. Shared with Settings › Intelligence.") {
-                        KeyField(text: $brain.keys.jevKey, placeholder: "ts-…", ready: brain.jevReady)
+                    Line("Jev key", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? (brain.jevReady ? "TypeSafe System One — the same key as Intelligence" : "Needed. A TypeSafe key (ts-…) — typesafe.ai. Shared with Settings › Intelligence.")) {
+                        KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"), ready: brain.jevReady)
                     }
                     Rule()
                     Line("Text model", brain.modelReady ? "Writes what gets typed and answers jev_extract. Small and fast is the point — empty means the model you picked (\(brain.modelName))." : "TYPE_TEXT and jev_extract need a model — Settings › Intelligence › Model access") {

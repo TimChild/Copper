@@ -718,7 +718,7 @@ enum CLI {
         }
         var params: [String: Any] = ["op": op]
         switch op {
-        case "status", "reload":
+        case "status", "reload", "sources", "refresh":
             guard args.isEmpty else { error("intelligence \(op) takes no arguments"); return 2 }
         case "set":
             let flags = ["--jev": "jevKey", "--router-key": "routerKey", "--router-url": "routerURL",
@@ -774,7 +774,12 @@ enum CLI {
     router (a LiteLLM gateway). Output is JSON and never contains a key.
 
       status                     {jevReady, routerReady, routerURL, routerModel, jevModel,
-                                 lane, tier, model, modelReady, claudeReady, claudeAccount} (default)
+                                 lane, tier, model, answeredBy, modelReady, claudeReady,
+                                 claudeAccount, sources, cloud} (default)
+      sources                    where each key and address comes from: local | cloud | none
+                                 (keys) or local | cloud | default (addresses, jev model);
+                                 Copper Cloud provides keys through GET /v1/intelligence
+      refresh                    ask the linked Copper Cloud for its keys again now
       set [--lane key|claude] [--model haiku|sonnet|opus]
           [--haiku-model M] [--sonnet-model M] [--opus-model M]
           [--jev KEY] [--router-key KEY] [--router-url URL] [--router-model M] [--text-model M]
@@ -1293,7 +1298,7 @@ enum CLI {
       setup [phi|claude|cli|status]             install terminal-agent setup (default: status)
       link [--app SELECTOR] [status|on|off|token|api|add|remove|grants|grant|revoke|calls]
                                                 link this browser to one or more agents apps (copper link --help)
-      intelligence [status|set|reload]          model access, keys and readiness; never prints a key
+      intelligence [status|sources|refresh|set|reload]  model access, keys, their source and readiness; never prints a key
                                                 (copper intelligence --help)
       claude [status|signin|paste -|signout|cancel]
                                                 Claude account sign-in and status; never prints a token

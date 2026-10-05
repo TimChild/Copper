@@ -269,6 +269,8 @@ final class MCP: ObservableObject {
         apply()
         // An external daemon nudges new keys in with SIGHUP.
         Intelligence.shared.watchForReload()
+        // Model keys the linked Copper Cloud provides (Fork/Cloud/CloudIntelligence.swift).
+        CloudIntelligence.shared.start()
         Headless.start(for: browser)
         // Agent links dial out once there is a window to drive.
         AgentLinks.shared.start()

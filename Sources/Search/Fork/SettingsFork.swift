@@ -19,8 +19,13 @@ struct IntelligencePage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
             SettingsSection("Model access") {
-                Line("Use", "Sign in with your Claude account (Pro, Max, Team or Enterprise), or paste a key for an OpenAI-compatible gateway such as LiteLLM.") {
-                    Segmented(options: Intelligence.Lane.allCases.map { ($0, $0.title) }, selection: $brain.keys.lane)
+                Line("Use", useDetail) {
+                    // While Copper Cloud provides the gateway key it decides
+                    // the lane; this Mac's choice is kept for after.
+                    Segmented(options: Intelligence.Lane.allCases.map { ($0, $0.title) },
+                              selection: brain.cloudLane ? .constant(brain.lane) : $brain.keys.lane)
+                        .disabled(brain.cloudLane)
+                        .opacity(brain.cloudLane ? 0.55 : 1)
                 }
                 .settingsAnchor("intelligence.lane")
                 Rule()
@@ -31,7 +36,7 @@ struct IntelligencePage: View {
                 }
                 .settingsAnchor("intelligence.tier")
                 Rule()
-                Line("Model names", brain.keys.lane == .claude ? "What Haiku, Sonnet and Opus are called at Anthropic" : "What Haiku, Sonnet and Opus are called on your gateway") {
+                Line("Model names", brain.lane == .claude ? "What Haiku, Sonnet and Opus are called at Anthropic" : "What Haiku, Sonnet and Opus are called on your gateway") {
                     modelNames
                 }
                 .settingsAnchor("intelligence.names")
@@ -44,7 +49,7 @@ struct IntelligencePage: View {
 
             SettingsSection("Jev — the fast lane", note: brain.cloud == nil
                  ? "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone."
-                 : "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone. Keys from Copper Cloud stay in cloud-intelligence.json and go when you sign out of the cloud; a key typed here always wins.") {
+                 : "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone. Keys from Copper Cloud stay in cloud-intelligence.json and go when you sign out of the cloud; its gateway key is the one used while it provides one, and a Jev key typed here wins.") {
                 Line("Jev", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? "TypeSafe's System One: answers a typed question — which of these, how likely — in a fifth of a second, with a confidence. The fast lane.") {
                     KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"), ready: brain.jevReady)
                 }
@@ -53,23 +58,36 @@ struct IntelligencePage: View {
         }
     }
 
+    private var useDetail: String {
+        guard brain.cloudLane else {
+            return "Sign in with your Claude account (Pro, Max, Team or Enterprise), or paste a key for an OpenAI-compatible gateway such as LiteLLM."
+        }
+        if brain.keys.lane == .claude || account.signedIn {
+            return "Copper Cloud provides the model key — your Claude account isn't used while you're signed in to it."
+        }
+        return "Copper Cloud provides the model key while you're signed in to Copper Cloud."
+    }
+
     @ViewBuilder
     private var laneRows: some View {
-        if brain.keys.lane == .claude {
+        if brain.lane == .claude {
             Line("Claude account", accountDetail) {
                 accountControl
             }
             .settingsAnchor("intelligence.account")
         } else {
             Line("API key", brain.cloudLine("routerKey", brain.cloud?.router?.key) ?? "For an OpenAI-compatible gateway — LiteLLM, or anything that speaks /v1/chat/completions") {
-                KeyField(text: $brain.keys.routerKey, placeholder: brain.cloudPlaceholder("routerKey", brain.cloud?.router?.key, otherwise: "sk-…"), ready: brain.routerReady)
+                KeyField(text: brain.cloudLane ? .constant("") : $brain.keys.routerKey, placeholder: brain.cloudPlaceholder("routerKey", brain.cloud?.router?.key, otherwise: "sk-…"), ready: brain.routerReady)
+                    .disabled(brain.cloudLane)
             }
             .settingsAnchor("intelligence.key")
             Rule()
             Line("Gateway address", brain.sources["routerURL"] == "cloud"
                  ? "Provided by Copper Cloud (\(brain.cloud?.host ?? "your cloud"))"
                  : "Where the gateway lives") {
-                TextField(brain.sources["routerURL"] == "cloud" ? brain.effective.routerURL : "https://…", text: routerURLBinding)
+                TextField(brain.sources["routerURL"] == "cloud" || brain.cloudLane ? brain.effective.routerURL : "https://…",
+                          text: brain.cloudLane ? .constant("") : routerURLBinding)
+                    .disabled(brain.cloudLane)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, design: .monospaced))
                     .frame(width: 220)
@@ -172,18 +190,18 @@ struct IntelligencePage: View {
     }
 
     private func defaultModel(for tier: Intelligence.Tier) -> String {
-        let defaults = brain.keys.lane == .claude ? Intelligence.Keys.defaultClaudeModels : Intelligence.Keys.defaultRouterModels
+        let defaults = brain.lane == .claude ? Intelligence.Keys.defaultClaudeModels : Intelligence.Keys.defaultRouterModels
         return defaults[tier.rawValue] ?? tier.rawValue
     }
 
     private func modelBinding(_ tier: Intelligence.Tier) -> Binding<String> {
         Binding(
             get: {
-                let map = brain.keys.lane == .claude ? brain.keys.claudeModels : brain.keys.routerModels
+                let map = brain.lane == .claude ? brain.keys.claudeModels : brain.keys.routerModels
                 return map[tier.rawValue] ?? defaultModel(for: tier)
             },
             set: { value in
-                if brain.keys.lane == .claude {
+                if brain.lane == .claude {
                     brain.keys.claudeModels[tier.rawValue] = value
                 } else {
                     brain.keys.routerModels[tier.rawValue] = value
@@ -211,7 +229,7 @@ struct IntelligencePage: View {
                     lines.append(String(format: "Jev ✓ %.0f ms", a.latencyMs))
                 } catch { lines.append("Jev ✗ \(error.localizedDescription)") }
             } else { lines.append("Jev — no key") }
-            let lane = brain.keys.lane
+            let lane = keys.lane
             let label = lane == .claude ? "Claude" : "Gateway"
             if brain.modelReady {
                 do {

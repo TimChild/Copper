@@ -5,8 +5,10 @@ import Foundation
 // pane and Jev with nothing pasted. What it answers is kept in memory
 // (`Intelligence.cloud`) and in `cloud-intelligence.json` (0600) so an
 // offline launch still has them; it is never written into
-// intelligence.json, and this Mac's own keys always win
-// (`Intelligence.merge`). Signed out or unlinked, both go.
+// intelligence.json. Its gateway key, while provided, is the one every model
+// call uses (gateway lane, its address), whatever this Mac chose; a Jev key
+// typed on this Mac wins (`Intelligence.merge`). Signed out or unlinked,
+// both go, and this Mac's own choice is back.
 //
 // Asked after a sign-in, at launch when linked and signed in, when Settings
 // opens, and every 30 minutes. A 404 (a cloud from before this route), 401

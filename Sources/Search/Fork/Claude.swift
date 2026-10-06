@@ -15,9 +15,11 @@ enum Claude {
         var errorDescription: String? { text }
     }
 
+    /// `cache` says which prompt-cache marks the body gets (PromptCache):
+    /// `.rolling` for an agent turn, `.prefix` for a one-shot ask.
     static func complete(token: String, model: String, system: String, messages: [[String: Any]],
                         tools: [[String: Any]] = [], maxTokens: Int = 8192,
-                        timeout: TimeInterval = 180) async throws -> [String: Any] {
+                        timeout: TimeInterval = 180, cache: PromptCache.Marks = .prefix) async throws -> [String: Any] {
         var request = URLRequest(url: endpoint, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
@@ -33,9 +35,9 @@ enum Claude {
         if !system.isEmpty {
             systemBlocks.append(["type": "text", "text": system])
         }
-        let body = Claude.body(model: model, system: systemBlocks, messages: messages, tools: tools, maxTokens: maxTokens)
+        let body = Claude.body(model: model, system: systemBlocks, messages: messages, tools: tools, maxTokens: maxTokens, cache: cache)
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = try PromptCache.json(body)
         } catch {
             throw Failure(status: 0, text: "Claude: \(error.localizedDescription)")
         }
@@ -61,9 +63,12 @@ enum Claude {
 
     /// A Messages body. No `temperature`, no `thinking` block (disabled or
     /// budgeted) and no forced tool: Opus 5.5 refuses all three, and auto
-    /// is what every Claude model takes.
+    /// is what every Claude model takes. Prompt-cache marks on the last
+    /// system block (never the identity block before it), the last tool and,
+    /// for `.rolling`, the last message and the previous request's last one.
     static func body(model: String, system: [[String: Any]], messages: [[String: Any]],
-                     tools: [[String: Any]], maxTokens: Int) -> [String: Any] {
+                     tools: [[String: Any]], maxTokens: Int, cache: PromptCache.Marks = .prefix) -> [String: Any] {
+        let (system, messages, tools) = PromptCache.messages(system: system, messages: messages, tools: tools, marks: cache)
         var body: [String: Any] = [
             "model": model,
             "max_tokens": maxTokens,
@@ -181,7 +186,7 @@ enum Claude {
         for block in blocks where block["type"] as? String == "tool_use" {
             let input = block["input"] as? [String: Any] ?? [:]
             let arguments: String
-            if let data = try? JSONSerialization.data(withJSONObject: input),
+            if let data = try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys]),
                let string = String(data: data, encoding: .utf8) {
                 arguments = string
             } else {
@@ -202,6 +207,7 @@ enum Claude {
         // tool call whose input is then incomplete (Agent.cutOff).
         if let stop = payload["stop_reason"] as? String { message["_stop"] = stop }
         if let answered = payload["model"] as? String { message["_model"] = answered }
+        if let usage = PromptCache.usage(messages: payload) { message["_usage"] = usage }
         return message
     }
 

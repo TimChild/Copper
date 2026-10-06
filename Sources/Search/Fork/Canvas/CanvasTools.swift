@@ -53,7 +53,7 @@ enum CanvasTools {
             tool("canvas_create", "Make a new canvas: shared on the user's cloud when signed in, on this Mac only otherwise. Returns its summary.", [
                 "name": string("The canvas's name"),
             ], required: ["name"]),
-            tool("canvas_invite", "Invite someone by email to a shared canvas (needs Copper Cloud; the Personal canvas is never shared)", [
+            tool("canvas_invite", "Invite someone by email to a shared canvas (needs Copper Cloud; the Personal canvas is never shared). Inviting someone already invited reminds them, on a cloud that can.", [
                 "id": string("Canvas id or name"), "email": string("Their email address"),
             ], required: ["id", "email"]),
             tool("canvas_share_link", "Create or reuse the invite link for a shared canvas", ["id": string("Canvas id or name")], required: ["id"]),
@@ -85,7 +85,11 @@ enum CanvasTools {
         case "canvas_list":
             let rows = Canvases.shared.visible.map { summary($0, in: browser) }
             Tools.summary?.line = "Listed \(rows.count) canvas\(rows.count == 1 ? "" : "es")"
-            return [.text(json(["canvases": rows, "cloud": cloudLine]))]
+            var out: [String: Any] = ["canvases": rows, "cloud": cloudLine]
+            // Invites waiting for the user's answer — theirs to give, in the Canvas card.
+            let waiting = Canvases.shared.invites
+            if !waiting.isEmpty { out["invitations"] = waiting.map { ["canvas": $0.canvasName, "from": $0.from] } }
+            return [.text(json(out))]
 
         case "canvas_open":
             let entry = try resolve(args, in: browser, fallbackToActive: false)
@@ -140,12 +144,13 @@ enum CanvasTools {
             guard let key = args["id"] as? String, let entry = Canvases.shared.find(key) else { throw Failure(text: "no canvas \(args["id"] as? String ?? "") — canvas_list names them") }
             guard let email = args["email"] as? String, !email.isEmpty else { throw Failure(text: "email required") }
             let address = email.trimmingCharacters(in: .whitespacesAndNewlines)
-            let made: Bool
-            do { made = try await Canvases.shared.invite(entry.id, email: address) } catch {
+            let outcome: Canvases.InviteOutcome
+            do { outcome = try await Canvases.shared.invite(entry.id, email: address) } catch {
                 throw Failure(text: Canvases.plain(error, while: .inviting(address)))
             }
-            Tools.summary?.line = "Invited \(address) to \(entry.name)"
-            return [.text(made ? "Invited \(address) to \(entry.name)" : "\(address) was already invited to \(entry.name)")]
+            let said = Canvases.inviteLine(outcome, email: address, canvas: entry.name)
+            Tools.summary?.line = outcome.nudged == true ? "Reminded \(address) about \(entry.name)" : "Invited \(address) to \(entry.name)"
+            return [.text(said)]
 
         case "canvas_share_link":
             let entry = try resolve(args, in: browser, fallbackToActive: false)
@@ -238,6 +243,19 @@ enum CanvasTools {
         return out
     }
 
+    /// An invite, for the bench.
+    @MainActor
+    static func describe(_ invite: Canvases.Invite) -> [String: Any] {
+        let stamp = ISO8601DateFormatter()
+        var out: [String: Any] = ["id": invite.id, "canvas": invite.canvasName, "canvasId": invite.canvasId,
+                                  "from": invite.from, "email": invite.email,
+                                  "nudgedAt": invite.nudgedAt.map { stamp.string(from: $0) as Any } ?? NSNull()]
+        if invite.inviteeKnown {
+            out["invitee"] = invite.invitee.map { ["id": $0.id, "name": $0.name, "email": $0.email] as Any } ?? NSNull()
+        }
+        return out
+    }
+
     @MainActor
     private static var cloudLine: String {
         if Canvases.shared.cloudReady {
@@ -291,9 +309,49 @@ enum CanvasTools {
                 case "create":
                     answer(content(try await call("canvas_create", ["name": arg], in: browser)))
                 case "invites":
+                    // The invites waiting for this account, and the pill's.
                     await Canvases.shared.refresh()
-                    answer(["invites": Canvases.shared.invites.map { ["id": $0.id, "canvas": $0.canvasName, "from": $0.from] },
+                    answer(["invites": Canvases.shared.invites.map(describe),
+                            "pill": Canvases.shared.newInvite.map(describe) ?? NSNull(),
                             "cloud": cloudLine, "problem": Canvases.shared.problem ?? ""])
+                case "pill":
+                    // `pill` what the pill at the window's foot shows; `pill dismiss` is
+                    // its × (Not now); `pill open` its Open (joins, opens the canvas).
+                    switch arg {
+                    case "dismiss": Canvases.shared.dismissNewInvite()
+                    case "open":
+                        guard let invite = Canvases.shared.newInvite else { answer(["error": "no pill"]); return }
+                        if let problem = await CanvasInvites.join(invite, in: browser).problem { answer(["error": problem]); return }
+                    default: break
+                    }
+                    answer(["pill": Canvases.shared.newInvite.map(describe) ?? NSNull(), "invites": Canvases.shared.invites.count])
+                case "pending":
+                    // `pending ID`: the invites waiting on canvas ID, as its members see them.
+                    guard let entry = Canvases.shared.find(arg) else { answer(["error": "pending ID — no canvas \(arg)"]); return }
+                    let pending = try await Canvases.shared.canvasInvites(entry.id)
+                    answer(["canvas": entry.name, "pending": pending.map(describe),
+                            "reminders": Cloud.shared.supports(.inviteReminders).map { $0 as Any } ?? NSNull()])
+                case "remind", "withdraw":
+                    // `remind ID EMAIL` (invite again: a reminder on 0.5.0),
+                    // `withdraw ID EMAIL|INVITE_ID` — what the Share sheet's Resend and × do.
+                    let words = arg.split(separator: " ").map(String.init)
+                    guard words.count >= 2, let entry = Canvases.shared.find(words.dropLast().joined(separator: " ")) else {
+                        answer(["error": "\(op) ID EMAIL"]); return
+                    }
+                    let who = words.last ?? ""
+                    if op == "remind" {
+                        let outcome = try await Canvases.shared.invite(entry.id, email: who)
+                        answer(["made": outcome.made, "nudged": outcome.nudged.map { $0 as Any } ?? NSNull(),
+                                "invite": outcome.invite.map(describe) ?? NSNull(),
+                                "said": Canvases.inviteLine(outcome, email: who, canvas: entry.name)])
+                        return
+                    }
+                    let pending = try await Canvases.shared.canvasInvites(entry.id)
+                    guard let invite = pending.first(where: { $0.id == who || $0.email.lowercased() == who.lowercased() }) else {
+                        answer(["error": "no invite for \(who) on \(entry.name)", "pending": pending.map(\.email)]); return
+                    }
+                    try await Canvases.shared.withdraw(entry.id, invite: invite)
+                    answer(["withdrawn": invite.id, "pending": (try await Canvases.shared.canvasInvites(entry.id)).map(describe)])
                 case "accept", "decline":
                     // `accept INVITE_ID|CANVAS_NAME` — what the card's buttons do.
                     await Canvases.shared.refresh()
@@ -301,8 +359,39 @@ enum CanvasTools {
                         answer(["error": "no invite \(arg)", "invites": Canvases.shared.invites.map(\.id)])
                         return
                     }
-                    try await Canvases.shared.answer(invite, accept: op == "accept")
-                    answer(content(try await call("canvas_list", [:], in: browser)))
+                    let outcome = try await Canvases.shared.answer(invite, accept: op == "accept")
+                    var out = content(try await call("canvas_list", [:], in: browser))
+                    out["answer"] = outcome.rawValue
+                    answer(out)
+                case "stale":
+                    // `stale accept|decline INVITE_ID CANVAS_ID` (test worlds): answer
+                    // an invite by id as the pill and the Invitations row would, even
+                    // one this Copper no longer lists — the stale pill a share-link
+                    // join or a withdraw left on screen. Accept goes the pill's way
+                    // (CanvasInvites.join: opens the canvas, or says it has gone).
+                    let words = arg.split(separator: " ").map(String.init)
+                    guard Store.testing, words.count == 3, ["accept", "decline"].contains(words[0]) else {
+                        answer(["error": "stale accept|decline INVITE_ID CANVAS_ID (test worlds only)"]); return
+                    }
+                    let invite = Canvases.shared.invites.first { $0.id == words[1] }
+                        ?? Canvases.Invite(id: words[1], canvasId: words[2], canvasName: "", from: "", createdAt: nil)
+                    var out: [String: Any] = [:]
+                    if words[0] == "accept" {
+                        switch await CanvasInvites.join(invite, in: browser) {
+                        case .opened: out["answer"] = "opened"
+                        case .closed: out["answer"] = "closed"
+                        case .failed(let said): out["error"] = said
+                        }
+                    } else {
+                        out["answer"] = (try await Canvases.shared.answer(invite, accept: false)).rawValue
+                    }
+                    let front = browser.tabs.first { $0.id == browser.activeID }.flatMap(CanvasTabs.showing)
+                    out["front"] = front ?? NSNull()
+                    out["said"] = browser.announcement ?? NSNull()
+                    out["member"] = Canvases.shared.entry(words[2]) != nil
+                    out["listed"] = Canvases.shared.invites.contains { $0.id == words[1] || $0.canvasId == words[2] }
+                    out["pill"] = Canvases.shared.newInvite.map(describe) ?? NSNull()
+                    answer(out)
                 case "rename", "delete", "leave", "members":
                     // `rename ID -> NAME` (or `rename ID NAME` for an id without spaces),
                     // `delete ID`, `leave ID`, `members ID` — the row's menu.
@@ -359,19 +448,28 @@ enum CanvasTools {
                         // `ui share invite [EMAIL]` (the Invite row for it, or the typed one),
                         // `ui share copy` (Copy invite link) — on the sheet `ui mode share ID` opened.
                         guard let model = ui.share else { answer(["error": "no Share sheet — ui mode share ID first"]); return }
-                        let rest = words.count > 2 ? words[2...].joined(separator: " ") : ""
+                        let instant = words.contains("--instant")
+                        let rest = words.count > 2 ? words[2...].filter { $0 != "--instant" }.joined(separator: " ") : ""
                         switch words.count > 1 ? words[1] : "state" {
                         case "type": model.query = rest
                         case "invite":
                             guard let email = rest.isEmpty ? model.emailRow : rest else { answer(["error": "nothing to invite", "state": model.describe]); return }
                             model.invite(email)
+                            // The row flips before the server answers: say so, as it was.
+                            if instant { answer(model.describe); return }
+                        case "resend", "withdraw":
+                            guard let invite = model.pending.first(where: { $0.email.lowercased() == rest.lowercased() || $0.id == rest }) else {
+                                answer(["error": "no invite waiting for \(rest)", "state": model.describe]); return
+                            }
+                            if words[1] == "resend" { model.resend(invite) } else { model.withdraw(invite) }
+                        case "reload": await model.reloadMembers()
                         case "copy": model.copyLink()
                         default: break
                         }
                         // Let the round trip (and the debounced search) land before answering.
                         if words.count > 1, words[1] != "state" {
                             try? await Task.sleep(nanoseconds: 450_000_000)
-                            for _ in 0..<20 where model.working { try? await Task.sleep(nanoseconds: 150_000_000) }
+                            for _ in 0..<20 where model.working || !model.acting.isEmpty { try? await Task.sleep(nanoseconds: 150_000_000) }
                         }
                         answer(model.describe)
                         return

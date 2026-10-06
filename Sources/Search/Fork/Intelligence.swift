@@ -193,10 +193,12 @@ final class Intelligence: ObservableObject {
         return reported.answered
     }
 
-    /// What every caller uses: this Mac's keys, with Copper Cloud's filling
-    /// the gaps (Intelligence.merge). Never saved.
+    /// What every caller uses: this Mac's keys with Copper Cloud's merged
+    /// in (Intelligence.merge) — the cloud's gateway key, address and lane
+    /// whenever it provides a gateway key. Never saved.
     var effective: Keys { Intelligence.merge(local: keys, cloud: cloud).keys }
-    /// Where each key and address comes from: local, cloud, or none/default.
+    /// Where each key and address comes from: local, cloud, or none/default;
+    /// and `lane`: cloud or local.
     var sources: [String: String] { Intelligence.merge(local: keys, cloud: cloud).sources }
 
     /// True while `reload()` assigns what it read: that is the file, and
@@ -204,8 +206,13 @@ final class Intelligence: ObservableObject {
     private var loading = false
     private var hangup: DispatchSourceSignal?
 
-    /// the lane and tier selected for every model caller.
-    var lane: Lane { keys.lane }
+    /// The lane every model caller uses: the gateway while Copper Cloud
+    /// provides its key, else the one chosen on this Mac (`keys.lane`, which
+    /// the cloud never changes — it is back in force once the cloud goes).
+    var lane: Lane { effective.lane }
+    /// `cloud` while Copper Cloud's gateway key decides the lane, else `local`.
+    var laneSource: String { sources["lane"] ?? "local" }
+    var cloudLane: Bool { laneSource == "cloud" }
     var tier: Tier { keys.tier }
 
     /// what Jev mode types with: the text model when one is named, else the chosen model.
@@ -238,7 +245,10 @@ final class Intelligence: ObservableObject {
         return model(for: tier ?? self.tier)
     }
 
-    private func model(for tier: Tier) -> String { Intelligence.name(for: tier, lane: lane, keys: keys) }
+    private func model(for tier: Tier) -> String {
+        let keys = effective
+        return Intelligence.name(for: tier, lane: keys.lane, keys: keys)
+    }
 
     /// The name a tier is sent as on a lane: the gateway's float (or the
     /// custom name set for it), or the Claude lane's current id.
@@ -316,7 +326,8 @@ final class Intelligence: ObservableObject {
         let effective = self.effective
         var out: [String: Any] = ["jevReady": jevReady, "routerReady": routerReady, "routerURL": effective.routerURL,
          "routerModel": keys.routerModel, "jevModel": effective.jevModel,
-         "lane": lane.rawValue, "tier": tier.rawValue, "model": modelName,
+         "lane": effective.lane.rawValue, "laneSource": laneSource, "localLane": keys.lane.rawValue,
+         "tier": tier.rawValue, "model": modelName,
          "modelReady": modelReady, "claudeReady": claudeReady,
          "claudeAccount": ClaudeAccount.shared.email,
          "sources": sources]
@@ -338,30 +349,44 @@ final class Intelligence: ObservableObject {
     }
 
     /// The key field's placeholder while the cloud's key is in use: the
-    /// key masked (`sk-…1a2b`), and that typing one overrides it.
+    /// key masked (`sk-…1a2b`), and — for the Jev key, which one typed here
+    /// still overrides — that typing one overrides it. The cloud's gateway
+    /// key is not overridden while it is provided.
     func cloudPlaceholder(_ field: String, _ key: String?, otherwise: String) -> String {
         guard sources[field] == "cloud" else { return otherwise }
+        if field == "routerKey" { return CloudProvided.masked(key) }
         return "\(CloudProvided.masked(key)) · type to override"
     }
 
     /// One line per key and address: where it comes from, never its value.
     var sourcesLine: String {
         let s = sources
-        let order = ["jevKey", "jevEndpoint", "jevModel", "routerKey", "routerURL"]
+        let order = ["jevKey", "jevEndpoint", "jevModel", "routerKey", "routerURL", "lane"]
         return order.map { "\($0) \(s[$0] ?? "none")" }.joined(separator: " · ")
     }
 
-    // MARK: - this Mac's keys over the cloud's
+    // MARK: - this Mac's keys and the cloud's
 
-    /// This Mac's keys with Copper Cloud's filling the gaps, and where each
-    /// came from. Per field:
-    ///   - `jevKey`, `routerKey`: a non-empty local key wins, else the cloud's.
+    /// This Mac's keys merged with Copper Cloud's, and where each came from.
+    /// While the cloud provides a gateway key, every model call goes through
+    /// the cloud's gateway — even with a Claude account signed in, even with
+    /// a gateway key typed here. Per field:
+    ///   - `routerKey`: the cloud's whenever it provides one, else a
+    ///     non-empty local key.
+    ///   - `lane`: `.key` while the cloud's gateway key is in use, else this
+    ///     Mac's choice. `local.lane` itself is never changed, so it is back
+    ///     the moment the cloud signs out or stops providing a key.
+    ///   - `routerURL`: the cloud's alongside the cloud's key; else a local
+    ///     address other than the default; else the default. A key typed on
+    ///     this Mac is never sent to an address the cloud chose.
+    ///   - `jevKey`: a non-empty local key wins, else the cloud's.
     ///   - `jevModel`: a local name other than the default wins, else the
     ///     cloud's, else the default.
-    ///   - `jevEndpoint`, `routerURL`: a local address other than the default
-    ///     wins; the cloud's is used only alongside the cloud's key, so a key
-    ///     typed on this Mac is never sent to an address it wasn't set for.
-    /// Sources are `local`, `cloud`, `none` (no key) or `default`.
+    ///   - `jevEndpoint`: a local address other than the default wins; the
+    ///     cloud's is used only alongside the cloud's Jev key.
+    /// Sources are `local`, `cloud`, `none` (no key) or `default`; `lane` is
+    /// `cloud` or `local`. The model names for each tier stay this Mac's:
+    /// `/v1/intelligence` ships none.
     nonisolated static func merge(local: Keys, cloud: CloudProvided?) -> (keys: Keys, sources: [String: String]) {
         let fresh = Keys()
         var out = local
@@ -405,20 +430,27 @@ final class Intelligence: ObservableObject {
             sources["jevModel"] = "default"
         }
 
-        // the router
-        if !trimmed(local.routerKey).isEmpty {
-            sources["routerKey"] = "local"
-        } else if !trimmed(cloud?.router?.key).isEmpty {
+        // the router: the cloud's gateway key, when it provides one, wins
+        // the key, its address and the lane.
+        if !trimmed(cloud?.router?.key).isEmpty {
             out.routerKey = trimmed(cloud?.router?.key)
             sources["routerKey"] = "cloud"
+        } else if !trimmed(local.routerKey).isEmpty {
+            sources["routerKey"] = "local"
         } else {
             sources["routerKey"] = "none"
         }
-        if custom(local.routerURL, fresh.routerURL) {
-            sources["routerURL"] = "local"
-        } else if sources["routerKey"] == "cloud", let url = web(cloud?.router?.url) {
+        if sources["routerKey"] == "cloud" {
+            out.lane = .key
+            sources["lane"] = "cloud"
+        } else {
+            sources["lane"] = "local"
+        }
+        if sources["routerKey"] == "cloud", let url = web(cloud?.router?.url) {
             out.routerURL = url
             sources["routerURL"] = "cloud"
+        } else if custom(local.routerURL, fresh.routerURL) {
+            sources["routerURL"] = "local"
         } else {
             out.routerURL = fresh.routerURL
             sources["routerURL"] = "default"
@@ -493,10 +525,13 @@ final class Intelligence: ObservableObject {
                 next.routerModel = Intelligence.gatewayName($0)
                 next.routerModels[next.tier.rawValue] = Intelligence.gatewayName($0)
             }
+            // A tier's name goes to the map of the lane in force (the
+            // gateway's while Copper Cloud provides its key).
+            let namesLane = Intelligence.merge(local: next, cloud: cloud).keys.lane
             let modelFields: [(String, Tier)] = [("haikuModel", .haiku), ("sonnetModel", .sonnet), ("opusModel", .opus)]
             for (name, modelTier) in modelFields {
                 take(name) { value in
-                    if next.lane == .claude {
+                    if namesLane == .claude {
                         next.claudeModels[modelTier.rawValue] = Intelligence.claudeName(value, tier: modelTier)
                     } else {
                         next.routerModels[modelTier.rawValue] = Intelligence.gatewayName(value)
@@ -650,14 +685,23 @@ enum Router {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
         let chosen = await MainActor.run { Intelligence.shared.model(override) }
-        let body = Router.body(model: chosen, maxTokens: maxTokens, messages: [
-            ["role": "system", "content": system],
-            ["role": "user", "content": user],
-        ])
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // The instructions are marked for the cache (PromptCache); the
+        // question is asked once, so it is not.
+        func send(_ marks: PromptCache.Marks) async throws -> (Data, URLResponse) {
+            let body = Router.body(model: chosen, maxTokens: maxTokens, messages: [
+                ["role": "system", "content": system],
+                ["role": "user", "content": user],
+            ], cache: marks)
+            var sending = request
+            sending.httpBody = try PromptCache.json(body)
+            return try await URLSession.shared.data(for: sending)
+        }
 
         let started = Date()
-        let (data, response) = try await URLSession.shared.data(for: request)
+        var (data, response) = try await send(.prefix)
+        if (response as? HTTPURLResponse)?.statusCode != 200, PromptCache.refused(data) {
+            (data, response) = try await send(.none)
+        }
         let latency = Date().timeIntervalSince(started) * 1000
         guard let http = response as? HTTPURLResponse else { throw Failure(detail: "no HTTP response") }
         guard http.statusCode == 200 else {
@@ -683,7 +727,12 @@ enum Router {
     /// One chat-completions body. No `temperature`, no thinking switch and
     /// no forced tool: the newest models (Opus 5.5) refuse a sampling knob,
     /// and `auto` is the one tool_choice every model behind a gateway takes.
-    static func body(model: String, maxTokens: Int, messages: [[String: Any]], tools: [[String: Any]] = []) -> [String: Any] {
+    /// A Claude model gets prompt-cache marks (PromptCache); write it with
+    /// `PromptCache.json` so the same history is the same bytes every turn.
+    static func body(model: String, maxTokens: Int, messages: [[String: Any]], tools: [[String: Any]] = [],
+                     cache: PromptCache.Marks = .prefix) -> [String: Any] {
+        let marks = PromptCache.gatewayCaches(model) ? cache : .none
+        let (messages, tools) = PromptCache.chat(messages: messages, tools: tools, marks: marks)
         var body: [String: Any] = ["model": model, "max_tokens": maxTokens, "messages": messages]
         if !tools.isEmpty {
             body["tools"] = tools
@@ -708,7 +757,8 @@ enum Router {
 
 extension Intelligence {
     /// The model-name migration, the local-over-cloud merge, the cloud
-    /// answer's decoder and the request shapes. Pure: no file, no network.
+    /// answer's decoder, the request shapes and their prompt-cache marks.
+    /// Pure: no file, no network.
     static func selfTest() -> [String] {
         var failures: [String] = []
         func check(_ ok: Bool, _ name: String) { if !ok { failures.append("intelligence: \(name)") } }
@@ -774,7 +824,7 @@ extension Intelligence {
         check(CloudProvided.parse(Data("[]".utf8)) == nil && CloudProvided.parse(Data("<html>".utf8)) == nil, "not an object is nil")
         check(CloudProvided.masked("sk-abcdefghijkl") == "sk-…ijkl" && !CloudProvided.masked("sk-abcdefghijkl").contains("abcdefgh"), "masked")
 
-        // This Mac over the cloud, field by field.
+        // This Mac and the cloud, field by field.
         let cloud = CloudProvided(jev: .init(key: "ts-cloud", endpoint: "https://jev.cloud.example/v1", model: "jev-cloud"),
                                   router: .init(key: "sk-cloud", url: "https://gw.cloud.example"), host: "cloud.example")
         var local = Keys()
@@ -782,32 +832,77 @@ extension Intelligence {
         check(m.keys.jevKey == "ts-cloud" && m.keys.routerKey == "sk-cloud", "empty local takes the cloud's keys")
         check(m.keys.jevEndpoint == "https://jev.cloud.example/v1" && m.keys.routerURL == "https://gw.cloud.example", "the cloud's addresses follow its keys")
         check(m.keys.jevModel == "jev-cloud", "the cloud's jev model over the default")
-        check(m.sources == ["jevKey": "cloud", "jevEndpoint": "cloud", "jevModel": "cloud", "routerKey": "cloud", "routerURL": "cloud"], "all cloud sources")
+        check(m.sources == ["jevKey": "cloud", "jevEndpoint": "cloud", "jevModel": "cloud", "routerKey": "cloud", "routerURL": "cloud", "lane": "cloud"], "all cloud sources")
         local.jevKey = "ts-mine"
         local.routerKey = "  sk-mine "
+        local.routerURL = "https://my.gateway.example"
         m = merge(local: local, cloud: cloud)
-        check(m.keys.jevKey == "ts-mine" && m.keys.routerKey == "  sk-mine ", "local keys win")
-        check(m.keys.routerURL == Keys().routerURL && m.sources["routerURL"] == "default", "a local key is never sent to the cloud's address")
+        check(m.keys.jevKey == "ts-mine" && m.sources["jevKey"] == "local", "a local jev key wins")
+        check(m.keys.routerKey == "sk-cloud" && m.sources["routerKey"] == "cloud", "local .key with its own key: the cloud's gateway key wins")
+        check(m.keys.routerURL == "https://gw.cloud.example" && m.sources["routerURL"] == "cloud", "local .key with its own address: the cloud's address wins")
+        check(m.keys.lane == .key && m.sources["lane"] == "cloud", "local .key: the lane is the cloud's")
         check(m.keys.jevEndpoint == Keys().jevEndpoint && m.sources["jevEndpoint"] == "default", "a local jev key keeps the default endpoint")
         check(m.keys.jevModel == "jev-cloud" && m.sources["jevModel"] == "cloud", "jev model: default local yields to the cloud")
+        let urlOnly = CloudProvided(router: .init(key: nil, url: "https://gw.cloud.example"))
+        m = merge(local: local, cloud: urlOnly)
+        check(m.keys.routerKey == "  sk-mine " && m.keys.routerURL == "https://my.gateway.example" && m.sources["lane"] == "local", "a local key is never sent to the cloud's address")
         local = Keys()
         local.routerKey = "   "
         local.routerURL = "https://my.gateway.example/"
         local.jevModel = "jev-mine"
         m = merge(local: local, cloud: cloud)
         check(m.keys.routerKey == "sk-cloud" && m.sources["routerKey"] == "cloud", "a blank local key is no key")
-        check(m.keys.routerURL == "https://my.gateway.example/" && m.sources["routerURL"] == "local", "a custom local address wins")
+        check(m.keys.routerURL == "https://gw.cloud.example" && m.sources["routerURL"] == "cloud", "the cloud's address over a custom local one")
         check(m.keys.jevModel == "jev-mine" && m.sources["jevModel"] == "local", "a custom local jev model wins")
+        m = merge(local: local, cloud: nil)
+        check(m.keys.routerURL == "https://my.gateway.example/" && m.sources["routerURL"] == "local", "no cloud: a custom local address wins")
         local = Keys()
         local.routerURL = "https://llm.dev.exowatt.com/"
-        m = merge(local: local, cloud: cloud)
-        check(m.sources["routerURL"] == "cloud", "the default address with a slash is still the default")
+        m = merge(local: local, cloud: nil)
+        check(m.sources["routerURL"] == "default", "the default address with a slash is still the default")
         m = merge(local: Keys(), cloud: nil)
-        check(m.keys == Keys() && m.sources["jevKey"] == "none" && m.sources["routerKey"] == "none" && m.sources["routerURL"] == "default", "no cloud, no keys")
+        check(m.keys == Keys() && m.sources == ["jevKey": "none", "jevEndpoint": "default", "jevModel": "default", "routerKey": "none", "routerURL": "default", "lane": "local"], "no cloud, no keys")
         let bad = CloudProvided(router: .init(key: "sk-cloud", url: "ftp://nope"))
         m = merge(local: Keys(), cloud: bad)
         check(m.keys.routerKey == "sk-cloud" && m.keys.routerURL == Keys().routerURL && m.sources["routerURL"] == "default", "a bad cloud address is ignored")
-        check(merge(local: Keys(), cloud: cloud).keys.lane == .key, "lane and tier stay this Mac's")
+
+        // The lane: Copper Cloud's gateway key puts every model call on the
+        // gateway, whatever this Mac chose; this Mac's choice is kept.
+        var claude = Keys()
+        claude.lane = .claude
+        claude.tier = .opus
+        m = merge(local: claude, cloud: cloud)
+        check(m.keys.lane == .key && m.sources["lane"] == "cloud", "local .claude + cloud key: the gateway lane")
+        check(m.keys.routerKey == "sk-cloud" && m.keys.routerURL == "https://gw.cloud.example", "local .claude + cloud key: the cloud's key and address")
+        check(name(for: m.keys.tier, lane: m.keys.lane, keys: m.keys) == "opus" && m.keys.tier == .opus, "local .claude + cloud key: the gateway's name for this Mac's tier")
+        check(claude.lane == .claude, "merging never changes this Mac's lane")
+        m = merge(local: claude, cloud: nil)
+        check(m.keys.lane == .claude && m.sources["lane"] == "local", "local .claude, no cloud: the Claude lane")
+        m = merge(local: claude, cloud: CloudProvided(jev: .init(key: "ts-cloud")))
+        check(m.keys.lane == .claude && m.sources["lane"] == "local", "a cloud Jev key alone leaves the lane")
+        m = merge(local: claude, cloud: urlOnly)
+        check(m.keys.lane == .claude && m.sources["lane"] == "local", "a cloud address without a key leaves the lane")
+        if let saved = try? JSONEncoder().encode(claude), let text = String(data: saved, encoding: .utf8) {
+            check(text.contains("\"lane\":\"claude\"") && !text.contains("sk-cloud"), "intelligence.json keeps .claude and never the cloud's key")
+        } else { check(false, "encode local keys") }
+
+        // The same on the live instance: every caller follows the lane in
+        // force, and the cloud going gives this Mac's choice back untouched.
+        // Synchronous on the main actor, so no fetch lands in between.
+        let me = Intelligence.shared
+        let before = me.cloud
+        let chosen = me.keys.lane
+        let onDisk = try? Data(contentsOf: Intelligence.file)
+        me.adoptCloud(CloudProvided(router: .init(key: "sk-selftest-cloud", url: "https://gw.selftest.example"), host: "selftest.example"))
+        check(me.lane == .key && me.laneSource == "cloud" && me.cloudLane, "live: the cloud's key decides the lane")
+        check(me.effective.routerKey == "sk-selftest-cloud" && me.effective.routerURL == "https://gw.selftest.example", "live: the cloud's key and address")
+        check(me.modelReady && me.modelName == name(for: me.tier, lane: .key, keys: me.effective), "live: ready, with the gateway's name")
+        check(me.status["lane"] as? String == "key" && me.status["laneSource"] as? String == "cloud" && me.status["localLane"] as? String == chosen.rawValue, "live: status says lane key from the cloud")
+        check(me.keys.lane == chosen, "live: this Mac's lane kept")
+        me.adoptCloud(nil)
+        check(me.lane == chosen && me.laneSource == "local" && !me.cloudLane, "live: the cloud gone, this Mac's lane again")
+        check((try? Data(contentsOf: Intelligence.file)) == onDisk, "live: intelligence.json untouched")
+        me.adoptCloud(before)
 
         // What goes on the wire works on Opus 5.5.
         let tool: [[String: Any]] = [["type": "function", "function": ["name": "x"]]]
@@ -816,6 +911,7 @@ extension Intelligence {
         check(Router.body(model: "opus", maxTokens: 1, messages: [])["tool_choice"] == nil, "no tools, no tool_choice")
         let messages = Claude.body(model: "claude-opus-5-5", system: [], messages: [], tools: [["name": "x"]], maxTokens: 10)
         check(messages["temperature"] == nil && messages["thinking"] == nil && (messages["tool_choice"] as? [String: String]) == ["type": "auto"], "claude body")
-        return failures
+        // Prompt-cache marks on both lanes (Fork/PromptCache.swift).
+        return failures + PromptCache.selfTest()
     }
 }

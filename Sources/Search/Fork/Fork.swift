@@ -93,7 +93,8 @@ enum Fork {
             }
             let k = Intelligence.shared.effective
             return ["jev": Intelligence.shared.jevReady, "router": Intelligence.shared.routerReady, "routerModel": k.routerModel,
-                    "routerURL": k.routerURL, "lane": k.lane.rawValue, "tier": k.tier.rawValue,
+                    "routerURL": k.routerURL, "lane": k.lane.rawValue, "laneSource": Intelligence.shared.laneSource,
+                    "localLane": Intelligence.shared.keys.lane.rawValue, "tier": k.tier.rawValue,
                     "model": Intelligence.shared.modelName, "modelReady": Intelligence.shared.modelReady,
                     "claudeReady": Intelligence.shared.claudeReady, "sources": Intelligence.shared.sources,
                     "answeredBy": Intelligence.shared.answeredModel ?? ""]

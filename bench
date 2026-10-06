@@ -125,6 +125,10 @@
                                        longer listed (answer: opened|closed|member|answered, front canvas)
                                        canvases: the canvas_* tools, the pages behind them (ready, room,
                                        store), the cloud invites
+    ./bench canvas chat state|read|members|toggle|key|focus|dom ID · chat type ID TEXT · chat enter|escape ID
+    ./bench canvas chat send ID TEXT [--mention WHO] · chat mentions · chat pill [open|dismiss] · chat frontmost on|off
+                                       chat on a shared canvas (docs/canvas.md, Chat): the panel, the
+                                       composer as typed, canvas_chat, mentions, the pill, test notices
     ./bench canvas rename ID -> NAME|delete ID|leave ID|members ID
                                        what a canvas row's menu does (ID is an id or a name)
     ./bench canvas ui open|close|mode list|new|rename ID|invite ID|members ID|delete ID|picture PATH [dark]

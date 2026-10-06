@@ -43,6 +43,8 @@ import { COLOR_LABEL, SHAPE_COLORS, initials, swatchOf } from '../colors'
 import type { StatusView } from '../status'
 import { facepilePeople, mergePresence } from '../presence'
 import type { CanvasAgent, NamedColor, Shape, ShapeColor } from '../types'
+import { ChatButton } from '../chat/ChatButton'
+import { chat } from '../chat'
 import type { PeerView } from './Overlays'
 import { AgentDot } from './Overlays'
 import { Divider, EDIT_HINT_ID, IconButton, Kbd, MOD, Panel, Tip, cn } from './ui'
@@ -570,6 +572,7 @@ export function TopRight({
     <Panel className="pointer-events-auto absolute right-3 top-3 flex max-w-[calc(100vw-24px)] items-center gap-0.5 p-1">
       <Facepile peers={peers} agents={agents} onPeer={onPeer} onAgent={onAgent} />
       <ShareButton share={share} onShare={onShare} />
+      <ChatButton hub={chat} />
       <IconButton size="sm" label="Search" keys={`${MOD}F`} tipBelow tipEnd active={searchOpen} onClick={onSearch}>
         <Search className="h-4 w-4" />
       </IconButton>
@@ -817,6 +820,7 @@ const SHORTCUTS: [string, string[]][] = [
   ['Nudge', ['←↑↓→', '⇧ ×10']],
   ['Bring to front / send to back', [`${MOD}]`, `${MOD}[`]],
   ['Search', [`${MOD}F`]],
+  ['Chat (shared canvases)', ['C']],
   ['Zoom in / out', ['+', '−']],
   ['Zoom to fit / selection', ['⇧1', '⇧2']],
   ['Zoom to 100%', ['⇧0']],

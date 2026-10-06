@@ -574,7 +574,7 @@ final class CanvasHost {
             CanvasHost.log.debug("page [\(level, privacy: .public)] \(text, privacy: .public)")
             if level == "error" { lastError = text }
         default:
-            break
+            CanvasChat.shared.received(body, from: self) // Fork (canvas chat): chat, chatRead, chatMembers, mention
         }
     }
 
@@ -1060,6 +1060,7 @@ final class CanvasHost {
         if let members = entry?.members { value["members"] = members }
         if let reason { value["reason"] = reason }
         post("const c = window.copperCanvas; if (c && typeof c.setShare === 'function') c.setShare(s);", ["s": value])
+        CanvasChat.shared.tell(self) // chat follows the same entry/cloud changes (CanvasChat.swift)
     }
 
     /// Entry/member/cloud changes should update every open tab immediately.

@@ -27,7 +27,8 @@ enum CanvasTools {
     private static let which = string("Canvas id or name (from canvas_list); omit for the canvas tab in front, else Personal")
 
     static let names: Set<String> = ["canvas_list", "canvas_open", "canvas_read", "canvas_apply", "canvas_select",
-                                     "canvas_focus", "canvas_create", "canvas_invite", "canvas_share_link", "canvas_join", "canvas_screenshot"]
+                                     "canvas_focus", "canvas_create", "canvas_invite", "canvas_share_link", "canvas_join", "canvas_screenshot",
+                                     CanvasChat.toolName]
 
     static var catalogue: [[String: Any]] {
         [
@@ -59,6 +60,7 @@ enum CanvasTools {
             tool("canvas_share_link", "Create or reuse the invite link for a shared canvas", ["id": string("Canvas id or name")], required: ["id"]),
             tool("canvas_join", "Open a Copper canvas invite link in the current window", ["link": string("copper://canvas/join/... or https://cloud/join/...")], required: ["link"]),
             tool("canvas_screenshot", "A PNG of a canvas as it looks in its tab", ["id": which]),
+            CanvasChat.tool,
         ]
     }
 
@@ -187,6 +189,9 @@ enum CanvasTools {
             let data = try await host.picture()
             Tools.summary?.line = "Screenshot of \(entry.name)"
             return [.image(data, mime: "image/png"), .text("Canvas · \(entry.name)")]
+
+        case CanvasChat.toolName:
+            return try await CanvasChat.runTool(args, in: browser)
 
         default:
             throw Failure(text: "Unknown tool \(name)")
@@ -421,6 +426,9 @@ enum CanvasTools {
                     let host = try await open(entry, in: browser, foreground: false)
                     let people = try await host.presence()
                     answer(["canvas": entry.id, "people": people])
+                case "chat":
+                    // `chat …` — the chat panel, mentions and the pill (CanvasChatUI.swift).
+                    answer(try await CanvasChat.bench(arg, in: browser))
                 case "parsetest":
                     // The join-link parser is pure: a self-test, not a probe
                     // round trip — `bench canvas parsetest` runs it standing still.

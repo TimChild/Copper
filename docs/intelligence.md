@@ -28,6 +28,21 @@ Settings › Intelligence › Model says which name is sent (*Sends opus*) and, 
 
 Both lanes send no `temperature`, no `thinking` block (disabled or budgeted) and no forced tool: `tool_choice` is `auto` (`{"type": "auto"}` on the Messages API) whenever tools are offered. Opus 5.5 refuses the first two, and `auto` is the one choice every model takes. `Router.body` and `Claude.body` build every request.
 
+### Prompt caching
+
+The agent re-sends the whole conversation on every turn, and neither Bedrock (behind the gateway) nor Anthropic caches anything unless the request marks where a reusable prefix ends. Both lanes mark it with `cache_control: {"type": "ephemeral"}` — at most four marks, Anthropic's limit (`Fork/PromptCache.swift`):
+
+1. the end of the system prompt (with the tools before it, the part every question shares);
+2. the last tool definition;
+3. the last message — what the next turn reads back;
+4. the message just before the last assistant reply — the previous request's last message, sent again exactly as it was, mark included, so this turn reads what that one wrote.
+
+On the gateway the system prompt and the user and tool messages go as content parts, the mark on the last part (`{"type": "text", "text": …, "cache_control": …}`, or an `image_url` part), and the last tool carries `"cache_control"` beside `"type"` and `"function"` — the shape LiteLLM passes on to both Bedrock routes (Converse for `opus`, Invoke for `sonnet`). On the Messages API the mark sits on the last system block (never on the Claude Code identity block before it), the last tool and the last content block of a message. One-shot asks (Jev's text and extract helpers, Settings' test) mark only the instructions: their question is never sent again.
+
+A cache only hits on the same bytes, so the prefix never changes under it: the system prompt and the tool list carry nothing that changes per turn (the page goes in the question), earlier messages are re-sent as they were kept, and every body is written with sorted keys (a Swift dictionary's key order differs from one copy to the next). A model on the gateway that is not a Claude tier gets no marks — `kimi` refuses them — and an answer that blames the marks (a content-policy fallback to such a model) is asked again without them.
+
+A turn then pays full price only for what is new since the last one: on Opus 5.5 a 10k-token turn costs about $0.005 instead of $0.04. `./bench agent chat` lists each request's `usage` — `prompt`, `cached` (read from the cache), `written` and `output` tokens.
+
 Jev (TypeSafe) is separate and unchanged. Its key and endpoint remain the Jev fast lane; the picker controls the model used when Copper needs a model response.
 
 ## Keys from Copper Cloud
@@ -96,7 +111,7 @@ copper claude cancel
 
 `copper claude signin` opens claude.ai in the running Copper window. Sign in there and let the callback return to Copper. If the callback cannot return, use `copper claude paste -`; stdin is preferred so the code is not put in the process list. `status` reports the lane, tier, model, readiness and account email, never a token. The commands need the loopback server and bearer token, and return 0 on success, 1 when Copper refuses an operation, and 2 for usage errors or an unreachable browser.
 
-`./bench ai` reports the lane in force (with `laneSource` and `localLane`), tier, model, model readiness, Claude-account readiness, `sources` and `answeredBy`. `./bench ai lane key|claude` and `./bench ai tier haiku|sonnet|opus` change this Mac's choice. `./bench ai sources|refresh` are the CLI's two. `./bench ai selftest` (also part of `./bench agent selftest`) checks the model-name migration, the merge of this Mac's keys with the cloud's (including the cloud's gateway key deciding the lane, and the lane coming back when the cloud goes), the `/v1/intelligence` decoder and the request shapes — probe world only.
+`./bench ai` reports the lane in force (with `laneSource` and `localLane`), tier, model, model readiness, Claude-account readiness, `sources` and `answeredBy`. `./bench ai lane key|claude` and `./bench ai tier haiku|sonnet|opus` change this Mac's choice. `./bench ai sources|refresh` are the CLI's two. `./bench ai selftest` (also part of `./bench agent selftest`) checks the model-name migration, the merge of this Mac's keys with the cloud's (including the cloud's gateway key deciding the lane, and the lane coming back when the cloud goes), the `/v1/intelligence` decoder and the request shapes, and both lanes' prompt-cache marks over a four-turn conversation — where they sit, never more than four, and each turn's body beginning with the bytes of the one before — probe world only.
 
 ## Troubleshooting
 

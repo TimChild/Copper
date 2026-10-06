@@ -685,14 +685,23 @@ enum Router {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
         let chosen = await MainActor.run { Intelligence.shared.model(override) }
-        let body = Router.body(model: chosen, maxTokens: maxTokens, messages: [
-            ["role": "system", "content": system],
-            ["role": "user", "content": user],
-        ])
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // The instructions are marked for the cache (PromptCache); the
+        // question is asked once, so it is not.
+        func send(_ marks: PromptCache.Marks) async throws -> (Data, URLResponse) {
+            let body = Router.body(model: chosen, maxTokens: maxTokens, messages: [
+                ["role": "system", "content": system],
+                ["role": "user", "content": user],
+            ], cache: marks)
+            var sending = request
+            sending.httpBody = try PromptCache.json(body)
+            return try await URLSession.shared.data(for: sending)
+        }
 
         let started = Date()
-        let (data, response) = try await URLSession.shared.data(for: request)
+        var (data, response) = try await send(.prefix)
+        if (response as? HTTPURLResponse)?.statusCode != 200, PromptCache.refused(data) {
+            (data, response) = try await send(.none)
+        }
         let latency = Date().timeIntervalSince(started) * 1000
         guard let http = response as? HTTPURLResponse else { throw Failure(detail: "no HTTP response") }
         guard http.statusCode == 200 else {
@@ -718,7 +727,12 @@ enum Router {
     /// One chat-completions body. No `temperature`, no thinking switch and
     /// no forced tool: the newest models (Opus 5.5) refuse a sampling knob,
     /// and `auto` is the one tool_choice every model behind a gateway takes.
-    static func body(model: String, maxTokens: Int, messages: [[String: Any]], tools: [[String: Any]] = []) -> [String: Any] {
+    /// A Claude model gets prompt-cache marks (PromptCache); write it with
+    /// `PromptCache.json` so the same history is the same bytes every turn.
+    static func body(model: String, maxTokens: Int, messages: [[String: Any]], tools: [[String: Any]] = [],
+                     cache: PromptCache.Marks = .prefix) -> [String: Any] {
+        let marks = PromptCache.gatewayCaches(model) ? cache : .none
+        let (messages, tools) = PromptCache.chat(messages: messages, tools: tools, marks: marks)
         var body: [String: Any] = ["model": model, "max_tokens": maxTokens, "messages": messages]
         if !tools.isEmpty {
             body["tools"] = tools
@@ -743,7 +757,8 @@ enum Router {
 
 extension Intelligence {
     /// The model-name migration, the local-over-cloud merge, the cloud
-    /// answer's decoder and the request shapes. Pure: no file, no network.
+    /// answer's decoder, the request shapes and their prompt-cache marks.
+    /// Pure: no file, no network.
     static func selfTest() -> [String] {
         var failures: [String] = []
         func check(_ ok: Bool, _ name: String) { if !ok { failures.append("intelligence: \(name)") } }
@@ -896,6 +911,7 @@ extension Intelligence {
         check(Router.body(model: "opus", maxTokens: 1, messages: [])["tool_choice"] == nil, "no tools, no tool_choice")
         let messages = Claude.body(model: "claude-opus-5-5", system: [], messages: [], tools: [["name": "x"]], maxTokens: 10)
         check(messages["temperature"] == nil && messages["thinking"] == nil && (messages["tool_choice"] as? [String: String]) == ["type": "auto"], "claude body")
-        return failures
+        // Prompt-cache marks on both lanes (Fork/PromptCache.swift).
+        return failures + PromptCache.selfTest()
     }
 }

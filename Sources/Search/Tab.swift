@@ -716,6 +716,22 @@ final class Tab: ObservableObject, Identifiable {
         web.load(URLRequest(url: url))
     }
 
+    /// Fork (download-policy): the address this tab was sent to turned out to
+    /// be a file, now on its way to disk. The tab goes back to the page it was
+    /// showing, if it had one, and forgets the file's address — left in place,
+    /// the load check above, a revisit (`revive`) and the next session each
+    /// fetched it again, and each fetch saved another copy.
+    func becameDownload() {
+        cancelRecovery()
+        let shown = built?.backForwardList.currentItem?.url
+        address = shown
+        title = shown == nil ? "" : (built?.title ?? "")
+        pending = nil
+        failure = nil
+        loading = false
+        progress = 0
+    }
+
     /// Brought back from the last session: everything the row needs to draw it,
     /// and nothing fetched.
     func restore(url: URL, title: String) {

@@ -2302,13 +2302,24 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         return tab.web
     }
 
-    /// Anything the window can't show is something to keep instead.
+    /// Page, file, or nothing — Fork (download-policy): see
+    /// Fork/DownloadPolicy.swift for why this is no longer just
+    /// `canShowMIMEType`.
     func webView(
         _ webView: WKWebView,
         decidePolicyFor response: WKNavigationResponse,
         decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
     ) {
-        decisionHandler(response.canShowMIMEType ? .allow : .download)
+        switch DownloadPolicy.decide(response) {
+        case .show: decisionHandler(.allow)
+        case .download: decisionHandler(.download)
+        case .drop(let reason):
+            decisionHandler(.cancel)
+            if let reason, let tab = tab(for: webView) {
+                tab.uncover()
+                tab.failure = reason
+            }
+        }
     }
 
     func webView(
@@ -2325,6 +2336,23 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         didBecome download: WKDownload
     ) {
         keep(download)
+        guard navigationResponse.isForMainFrame, let tab = tab(for: webView) else { return }
+        // Fork (download-policy): the tab forgets the file's address, so
+        // nothing fetches — and saves — it a second time.
+        tab.becameDownload()
+        // A tab that exists only for this file — a link that opened it in a
+        // new window, a ⌘-click, an address typed into ⌘T — has nothing left
+        // to show once it is a file: close it and go back to where the click
+        // came from, as Chrome and Safari do, rather than leave a blank tab.
+        if webView.backForwardList.currentItem == nil, tab.pin == nil, tabs.count > 1 {
+            DispatchQueue.main.async { [weak self, weak tab] in
+                guard let self, let tab, tab.built?.backForwardList.currentItem == nil else { return }
+                if let opener = tab.opener, let home = self.tabs.first(where: { $0.id == opener }) {
+                    self.select(home)
+                }
+                self.close(tab)
+            }
+        }
     }
 
     /// Every download this window has going, heard from until it ends — and

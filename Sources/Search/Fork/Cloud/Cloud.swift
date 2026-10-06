@@ -143,12 +143,16 @@ final class Cloud: ObservableObject {
         /// yet (`invitee`), and `DELETE /v1/canvases/:id/invites/:invite_id`
         /// withdraws one.
         case inviteReminders
+        /// Canvas chat mentions: `POST /v1/canvases/:id/mentions`,
+        /// `GET /v1/mentions`, `POST /v1/mentions/read` (CanvasChat.swift).
+        case mentions
 
         /// The first copper-cloud release with it.
         var since: String {
             switch self {
             case .shareLinks, .people: return "0.3.0"
             case .inviteReminders: return "0.5.0"
+            case .mentions: return "0.6.0"
             }
         }
     }

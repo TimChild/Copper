@@ -2,10 +2,15 @@
 import { useSyncExternalStore } from 'react'
 import { controller } from '../../controller'
 import { Board } from './Board'
+import { ChatDock } from '../chat/ChatDock'
 
 export function CanvasApp() {
   useSyncExternalStore(controller.subscribe, controller.getVersion)
   const session = controller.session
   if (!session) return <div className="h-full w-full" style={{ background: 'var(--bg)' }} aria-busy="true" />
-  return <Board key={session.serial} session={session} />
+  return (
+    <ChatDock>
+      <Board key={session.serial} session={session} />
+    </ChatDock>
+  )
 }

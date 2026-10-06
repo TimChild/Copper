@@ -22,6 +22,7 @@ export type PageMessage =
   | { type: 'wsClose' }
   | { type: 'openUrl'; url: string }
   | { type: 'log'; level: 'debug' | 'info' | 'warn' | 'error'; msg: string }
+  | import('./canvas/chat/bridge').ChatPageMessage
 
 export interface HostDouble {
   /** Every message posted, oldest first (capped). */

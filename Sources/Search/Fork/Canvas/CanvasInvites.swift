@@ -71,7 +71,8 @@ struct CanvasInviteBar: View {
     @ObservedObject private var canvases = Canvases.shared
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
+            CanvasMentionStack(browser: browser) // Fork (canvas chat): a mention of you (CanvasChatUI.swift)
             if let invite = canvases.newInvite {
                 CanvasInvitePill(invite: invite, browser: browser)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -89,6 +90,7 @@ struct CanvasInviteSlot: View {
     @ObservedObject private var canvases = Canvases.shared
 
     var body: some View {
+        CanvasMentionStack(browser: browser, placeholder: true)
         if let invite = canvases.newInvite {
             CanvasInvitePill(invite: invite, browser: browser)
                 .hidden()

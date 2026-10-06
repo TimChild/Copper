@@ -94,6 +94,12 @@ enum CommandBar {
         // Fork (canvas): signed in, a canvas to share — the door's New, at its name field.
         if Canvases.shared.cloudReady {
             list.append(.init(id: "canvas-new-shared", name: "New Shared Canvas…", glyph: "person.2") { CanvasUI.shared.newCanvas(in: $0) })
+            // Each invite waiting for an answer: join it and open it (Fork/Canvas/CanvasInvites.swift).
+            for invite in Canvases.shared.invites {
+                list.append(.init(id: "canvas-join-\(invite.id)", name: "Join Canvas · \(invite.canvasName)", glyph: "person.crop.circle.badge.plus") { browser in
+                    Task { await CanvasInvites.join(invite, in: browser) }
+                })
+            }
         }
         for space in Spaces.shared.all where space.id != Spaces.shared.current(in: browser) {
             // The space's own symbol when it has one; an emoji has no place

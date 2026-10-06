@@ -323,11 +323,61 @@ extension Canvases {
         refreshSoon()
     }
 
+    // MARK: what an invite came to, in words
+
+    /// The Share sheet's line under the field once an invite (or a Resend)
+    /// has been answered. `name` is who it is for as the sheet knows them
+    /// (the directory's name, else the address); `nobody` is true when the
+    /// directory looked the address up and found no account — the only
+    /// way to tell on a cloud before 0.5.0, which doesn't say.
+    static func sheetLine(_ outcome: InviteOutcome, email: String, name: String, nobody: Bool) -> String {
+        let host = cloudHost
+        let invite = outcome.invite
+        let known = invite?.inviteeKnown == true
+        let who = invite?.invitee.map { $0.name.isEmpty ? name : $0.name } ?? name
+        let noAccount = known ? invite?.invitee == nil : nobody
+        if outcome.made {
+            if noAccount { return "Invited \(email) — waiting for them to make an account on \(host)" }
+            return "Invited \(who) — it's waiting for them in Copper"
+        }
+        switch outcome.nudged {
+        case true?: return "Reminded \(who)"
+        case false?:
+            // A cloud reminds someone at most every 30 seconds, counting from the invite itself.
+            if noAccount { return "\(email) has no account on \(host) yet — the invite is waiting for them" }
+            if invite?.nudgedAt == nil { return "Invited \(who) moments ago — you can remind them in a minute" }
+            return "Reminded \(who) moments ago — you can remind them again in a minute"
+        case nil:
+            if noAccount { return "\(email) is already invited — waiting for them to make an account on \(host)" }
+            return "\(who) is already invited — it's waiting for them in Copper"
+        }
+    }
+
+    /// `canvas_invite`'s answer: the same outcome, naming the canvas.
+    static func inviteLine(_ outcome: InviteOutcome, email: String, canvas: String) -> String {
+        let host = cloudHost
+        let invite = outcome.invite
+        let who = invite?.invitee.map { $0.name.isEmpty ? email : $0.name } ?? email
+        let noAccount = invite?.inviteeKnown == true && invite?.invitee == nil
+        let waiting = noAccount ? " — it waits for them to make an account on \(host)" : ""
+        if outcome.made { return "Invited \(who) to \(canvas)\(waiting)" }
+        switch outcome.nudged {
+        case true?: return "Reminded \(who) about \(canvas)"
+        case false?:
+            if noAccount { return "\(email) was already invited to \(canvas)\(waiting)" }
+            if invite?.nudgedAt == nil { return "\(who) was invited to \(canvas) moments ago — too soon to remind them" }
+            return "\(who) was reminded about \(canvas) moments ago — too soon to remind them again"
+        case nil: return "\(email) was already invited to \(canvas)"
+        }
+    }
+
     // MARK: refusals, in words
 
     /// What the sheet (or a join) was doing when something went wrong.
     enum ShareAction {
         case inviting(String)
+        case reminding(String)
+        case withdrawing(String)
         case linking
         case resetting
         case removing(String)
@@ -345,6 +395,8 @@ extension Canvases {
         let fallback: String
         switch action {
         case .inviting(let email): fallback = "Couldn't invite \(email) — try again."
+        case .reminding(let name): fallback = "Couldn't remind \(name) — try again."
+        case .withdrawing(let name): fallback = "Couldn't withdraw the invite to \(name) — try again."
         case .linking: fallback = "Couldn't make an invite link — try again."
         case .resetting: fallback = "Couldn't reset the link — try again."
         case .removing(let name): fallback = "Couldn't remove \(name) — try again."
@@ -374,10 +426,12 @@ extension Canvases {
             return fallback
         case (409, _), (_, "conflict"):
             if case .inviting(let email) = action { return "\(email) is already a member of this canvas." }
+            if case .reminding(let name) = action { return "\(name) has already joined this canvas." }
             return "That changed somewhere else first — try again."
         case (403, _):
             switch action {
-            case .inviting: return "Only members of this canvas can invite people to it."
+            case .inviting, .reminding: return "Only members of this canvas can invite people to it."
+            case .withdrawing: return "Only the canvas's owner or whoever sent an invite can withdraw it."
             case .linking: return "Only members of this canvas can make an invite link."
             case .resetting: return "Only the canvas's owner can reset its link."
             case .removing: return "Only the canvas's owner can remove people."
@@ -385,6 +439,7 @@ extension Canvases {
             }
         case (404, _):
             if case .joining = action { return "This invite link no longer works — ask for a new one." }
+            if case .withdrawing = action { return "That invite was already answered or withdrawn." }
             return "This canvas isn't on \(host) any more."
         case (429, _), (_, "rate_limited"):
             return "Too many tries — wait a minute and try again."
@@ -426,11 +481,18 @@ final class CanvasShareModel: ObservableObject {
     /// The query `people` is the directory's answer to.
     @Published private(set) var searched: String?
     @Published private(set) var members: [Canvases.Member] = []
+    /// The invites waiting on this canvas (`GET /v1/canvases/:id/invites`),
+    /// newest first — with one made here a moment ago standing in until the
+    /// server's copy arrives, so a row says Invited the instant it is clicked.
+    @Published private(set) var pending: [Canvases.Invite] = []
     @Published private(set) var madeLink: (link: String, webLink: String)?
     @Published private(set) var copied = false
+    /// Copy invite link is on its way.
     @Published private(set) var working = false
-    /// Under the invite field: what the last invite or removal came to, and
-    /// whether it went wrong (orange) or right (muted).
+    /// Addresses (lowercased) with an invite, a reminder or a withdrawal on its way.
+    @Published private(set) var acting: Set<String> = []
+    /// Under the invite field: what the last invite, reminder, withdrawal or
+    /// removal came to, and whether it went wrong (orange) or right (muted).
     @Published private(set) var said: (text: String, failed: Bool)?
     /// Under the link buttons: why the last copy or reset didn't work.
     @Published private(set) var linkFailure: String?
@@ -438,11 +500,16 @@ final class CanvasShareModel: ObservableObject {
     @Published private(set) var checking = true
     private var search: Task<Void, Never>?
     private var watching: AnyCancellable?
+    /// Invites being withdrawn: gone from the rows until the server says otherwise.
+    private var withdrawing: Set<String> = []
+
+    /// A stand-in's id: an invite made here that the server hasn't answered for yet.
+    private static let local = "local-"
 
     init(canvasId: String) {
         self.canvasId = canvasId
         Task { await self.load() }
-        // Someone accepting, leaving or being removed shows while the sheet is open.
+        // Someone accepting, declining, leaving or being removed shows while the sheet is open.
         watching = Canvases.shared.$refreshed.dropFirst().sink { [weak self] _ in
             Task { @MainActor in await self?.reloadMembers() }
         }
@@ -455,6 +522,10 @@ final class CanvasShareModel: ObservableObject {
     var links: Bool? { Cloud.shared.supports(.shareLinks) }
     /// The people directory: everything but a known "no".
     var directory: Bool { Cloud.shared.supports(.people) != false }
+    /// Resend and withdraw (copper-cloud 0.5.0). Before that an invite sent
+    /// again reminds nobody and can't be taken back, so neither is offered:
+    /// the row only says Invited.
+    var reminders: Bool { Cloud.shared.supports(.inviteReminders) == true }
 
     func load() async {
         guard canShare else { checking = false; return }
@@ -465,8 +536,21 @@ final class CanvasShareModel: ObservableObject {
         if directory { await runSearch(query) }
     }
 
+    /// The members and the invites still waiting, read again.
     func reloadMembers() async {
         if let fresh = try? await Canvases.shared.members(canvasId) { members = fresh }
+        if let waiting = try? await Canvases.shared.canvasInvites(canvasId) { adopt(waiting) }
+    }
+
+    /// The server's list, keeping the stand-ins whose invite is still on its
+    /// way and leaving out the ones being withdrawn.
+    private func adopt(_ server: [Canvases.Invite]) {
+        let keys = Set(server.map { $0.email.lowercased() })
+        let standing = pending.filter { invite in
+            let key = invite.email.lowercased()
+            return invite.id.hasPrefix(Self.local) && acting.contains(key) && !keys.contains(key)
+        }
+        pending = standing + server.filter { !withdrawing.contains($0.id) }
     }
 
     private func searchSoon() {
@@ -485,6 +569,29 @@ final class CanvasShareModel: ObservableObject {
         guard text == query else { return }
         people = found
         searched = text
+        for person in found where !person.name.isEmpty { names[person.email.lowercased()] = person.name }
+    }
+
+    /// Names the directory has given this sheet, by lowercased address: an
+    /// invited person keeps theirs after the search moves on.
+    private var names: [String: String] = [:]
+
+    // MARK: who is where
+
+    /// What a person's row says, and offers.
+    enum RowState: Equatable {
+        case you
+        case member(role: String)
+        case invited(Canvases.Invite)
+        case invite
+    }
+
+    func state(of email: String) -> RowState {
+        let key = email.lowercased()
+        if key == Cloud.shared.account?.email.lowercased() { return .you }
+        if let member = members.first(where: { $0.email.lowercased() == key }) { return .member(role: member.role) }
+        if let invite = pending.first(where: { $0.email.lowercased() == key }) { return .invited(invite) }
+        return .invite
     }
 
     /// The typed text, when it is an address.
@@ -500,12 +607,19 @@ final class CanvasShareModel: ObservableObject {
 
     private var isMe: Bool { typedEmail?.lowercased() == Cloud.shared.account?.email.lowercased() }
 
-    /// "Invite <email>": a typed address that isn't on the canvas, isn't
-    /// yours, and isn't already a directory row below.
-    var emailRow: String? {
+    /// A typed address that isn't yours, isn't on the canvas and isn't
+    /// already a directory row below: its own row — Invite, or Invited
+    /// when it already has one waiting.
+    var typedRow: String? {
         guard let email = typedEmail, !isMember(email), !isMe else { return nil }
         let key = email.lowercased()
         if people.contains(where: { $0.email.lowercased() == key }) { return nil }
+        return email
+    }
+
+    /// "Invite <email>": the typed row, when it has nothing waiting yet.
+    var emailRow: String? {
+        guard let email = typedRow, state(of: email) == .invite else { return nil }
         return email
     }
 
@@ -517,33 +631,113 @@ final class CanvasShareModel: ObservableObject {
         return nil
     }
 
+    /// Who an invite is for, in words: their account's name, the
+    /// directory's, else the address itself.
+    func name(for email: String, invite: Canvases.Invite? = nil) -> String {
+        if let name = invite?.invitee?.name, !name.isEmpty { return name }
+        let key = email.lowercased()
+        if let person = people.first(where: { $0.email.lowercased() == key }), !person.name.isEmpty { return person.name }
+        return names[key] ?? email
+    }
+
+    /// Resend on a waiting invite: a 0.5.0 cloud, the server's own copy, and
+    /// someone to remind — an address with no account yet has no Copper
+    /// to bring it up in.
+    func canRemind(_ invite: Canvases.Invite) -> Bool {
+        reminders && !invite.id.hasPrefix(Self.local) && !(invite.inviteeKnown && invite.invitee == nil)
+    }
+
+    /// The × on a waiting invite: a 0.5.0 cloud, the canvas's owner or whoever sent it.
+    func canWithdraw(_ invite: Canvases.Invite) -> Bool {
+        reminders && !invite.id.hasPrefix(Self.local) && Canvases.shared.mayWithdraw(invite, on: canvasId)
+    }
+
+    // MARK: doing
+
     /// Return in the field: invite the typed address, if it is one.
     func submit() {
         if let email = emailRow { invite(email) }
     }
 
     func invite(_ email: String) {
-        guard !working else { return }
         let address = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = address.lowercased()
+        guard !address.isEmpty, !acting.contains(key) else { return }
+        if case .invited(let waiting) = state(of: address) {
+            if canRemind(waiting) { resend(waiting) }
+            return
+        }
+        let who = self.name(for: address)
         // The directory looked this exact address up and found nobody: the
-        // invite waits for an account with it.
+        // invite waits for an account with it (a cloud before 0.5.0 says
+        // nothing about that itself).
         let nobody = Cloud.shared.supports(.people) == true
             && searched?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == key
             && !people.contains { $0.email.lowercased() == key }
-        working = true
+        acting.insert(key)
+        said = nil
+        // The row says Invited now; the server's copy takes this one's place.
+        let me = Canvases.shared.identity
+        let standIn = Canvases.Invite(id: Self.local + key, canvasId: canvasId, canvasName: entry?.name ?? "", from: me.name,
+                                      createdAt: Date(), email: address, fromId: Canvases.account)
+        pending.insert(standIn, at: 0)
+        Task {
+            do {
+                let outcome = try await Canvases.shared.invite(canvasId, email: address)
+                if let made = outcome.invite, let index = pending.firstIndex(where: { $0.id == standIn.id }) {
+                    pending[index] = made
+                }
+                said = (Canvases.sheetLine(outcome, email: address, name: who, nobody: nobody), false)
+                CanvasUI.shared.note = "Invited \(address)"
+            } catch {
+                pending.removeAll { $0.id == standIn.id }
+                said = (Canvases.plain(error, while: .inviting(address)), true)
+            }
+            acting.remove(key)
+            await reloadMembers()
+        }
+    }
+
+    /// Resend: the same invite again, which a 0.5.0 cloud turns into a
+    /// reminder on the invitee's Copper (its pill comes back up).
+    func resend(_ invite: Canvases.Invite) {
+        let key = invite.email.lowercased()
+        guard canRemind(invite), !acting.contains(key) else { return }
+        let who = self.name(for: invite.email, invite: invite)
+        acting.insert(key)
         said = nil
         Task {
             do {
-                let made = try await Canvases.shared.invite(canvasId, email: address)
-                let when = nobody ? " once they have an account on \(Canvases.cloudHost)" : ""
-                query = ""
-                said = (made ? "Invited \(address) — they'll see it in Copper\(when)" : "\(address) is already invited — they'll see it in Copper\(when)", false)
-                CanvasUI.shared.note = "Invited \(address)"
+                let outcome = try await Canvases.shared.invite(canvasId, email: invite.email)
+                said = (Canvases.sheetLine(outcome, email: invite.email, name: who, nobody: false), false)
             } catch {
-                said = (Canvases.plain(error, while: .inviting(address)), true)
+                said = (Canvases.plain(error, while: .reminding(who)), true)
             }
-            working = false
+            acting.remove(key)
+            await reloadMembers()
+        }
+    }
+
+    /// The ×: the invite taken back. The row goes at once, and comes back
+    /// with the reason if the server says no.
+    func withdraw(_ invite: Canvases.Invite) {
+        let key = invite.email.lowercased()
+        guard canWithdraw(invite), !acting.contains(key) else { return }
+        let who = self.name(for: invite.email, invite: invite)
+        acting.insert(key)
+        withdrawing.insert(invite.id)
+        said = nil
+        pending.removeAll { $0.id == invite.id }
+        Task {
+            do {
+                try await Canvases.shared.withdraw(canvasId, invite: invite)
+                said = ("Withdrew the invite to \(who)", false)
+            } catch {
+                said = (Canvases.plain(error, while: .withdrawing(who)), true)
+            }
+            withdrawing.remove(invite.id)
+            acting.remove(key)
+            await reloadMembers()
         }
     }
 
@@ -618,19 +812,39 @@ final class CanvasShareModel: ObservableObject {
         return (Canvases.shared.presence[id] ?? []).filter { $0.id != me && seen.insert($0.id).inserted }
     }
 
+    /// A row's state, as the bench says it.
+    private func word(_ state: RowState) -> String {
+        switch state {
+        case .you: return "you"
+        case .member(let role): return role == "owner" ? "owner" : "member"
+        case .invited(let invite): return invite.id.hasPrefix(Self.local) ? "invited (sending)" : "invited"
+        case .invite: return "invite"
+        }
+    }
+
     /// For `bench canvas ui share state`: what the sheet shows, as data.
     var describe: [String: Any] {
         let others = CanvasShareModel.others(in: canvasId)
         let here = CanvasPresence.shared.open.contains(canvasId)
+        let stamp = ISO8601DateFormatter()
         var out: [String: Any] = [
             "canvas": canvasId, "canShare": canShare, "checking": checking,
             "serverVersion": Cloud.shared.serverVersion ?? NSNull(),
-            "links": links.map { $0 as Any } ?? NSNull(), "directory": directory,
-            "query": query, "people": people.map { ["name": $0.name, "email": $0.email] },
+            "links": links.map { $0 as Any } ?? NSNull(), "directory": directory, "reminders": reminders,
+            "query": query,
+            "people": people.prefix(6).map { ["name": $0.name, "email": $0.email, "state": word(state(of: $0.email))] },
             "members": members.map { ["name": $0.name, "email": $0.email, "role": $0.role] },
+            "pending": pending.map { invite -> [String: Any] in
+                var row: [String: Any] = ["email": invite.email, "name": name(for: invite.email, invite: invite),
+                                          "state": word(.invited(invite)), "resend": canRemind(invite), "withdraw": canWithdraw(invite),
+                                          "nudgedAt": invite.nudgedAt.map { stamp.string(from: $0) as Any } ?? NSNull()]
+                if invite.inviteeKnown { row["account"] = invite.invitee != nil }
+                return row
+            },
             "presence": CanvasShareModel.presenceLine(others: others.count, here: here) ?? NSNull(),
             "emailRow": emailRow ?? NSNull(), "emailNote": emailNote ?? NSNull(),
-            "working": working, "copied": copied,
+            "typedRow": typedRow.map { ["email": $0, "state": word(state(of: $0))] as Any } ?? NSNull(),
+            "working": working, "acting": Array(acting).sorted(), "copied": copied,
         ]
         if links == false { out["note"] = Canvases.linksUnsupported }
         if let said { out["said"] = said.text; out["failed"] = said.failed }
@@ -663,8 +877,21 @@ struct CanvasShareSheet: View {
             } else {
                 presenceRow
                 linkSection
-                peopleSection
-                membersSection
+                inviteField
+                // The rows, the members and the invites waiting scroll
+                // together under the field, so the line above them — what an
+                // invite came to — is never pushed out of the card.
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        peopleRows
+                        membersSection
+                        invitedSection
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollIndicators(.automatic, axes: .vertical)
+                .frame(maxHeight: 360)
+                .fixedSize(horizontal: false, vertical: true)
                 if entry.isOwner, model.links != false, !model.checking {
                     Button("Reset link", role: .destructive) { model.reset() }.buttonStyle(CanvasButtonStyle(kind: .plain))
                 }
@@ -710,52 +937,160 @@ struct CanvasShareSheet: View {
         }
     }
 
-    private var peopleSection: some View {
+    /// The heading, the field, and right under it what the last invite came to.
+    private var inviteField: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(model.directory ? "People on this cloud" : "Invite by email").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
             TextField(model.directory ? "Search people or type an email" : "Type an email to invite", text: $model.query)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { model.submit() }
-                .disabled(model.working)
-            if let email = model.emailRow {
-                HStack(spacing: 6) {
-                    Image(systemName: "envelope").font(.system(size: 10.5)).foregroundStyle(Palette.muted)
-                    Text("Invite \(email)").font(.system(size: 11.5)).lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    if model.working { ProgressView().controlSize(.mini) }
-                    Button("Invite") { model.invite(email) }.buttonStyle(CanvasButtonStyle(kind: .plain)).disabled(model.working)
-                }
-            } else if let note = model.emailNote {
-                Text(note).font(.system(size: 11)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
-            }
-            if model.directory {
-                ForEach(model.people.prefix(6)) { person in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(person.name.isEmpty ? person.email : person.name).font(.system(size: 11.5))
-                            Text(person.email).font(.system(size: 10)).foregroundStyle(Palette.muted)
-                        }
-                        Spacer()
-                        if model.isMember(person.email) {
-                            Text("Member").font(.system(size: 10)).foregroundStyle(Palette.muted)
-                        } else {
-                            Button("Invite") { model.invite(person.email) }.buttonStyle(CanvasButtonStyle(kind: .plain)).disabled(model.working)
-                        }
-                    }
-                }
-            }
             if let said = model.said {
-                Text(said.text).font(.system(size: 11)).foregroundStyle(said.failed ? Color.orange : Palette.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if !said.failed {
+                        Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.muted)
+                    }
+                    Text(said.text).font(.system(size: 11)).foregroundStyle(said.failed ? Color.orange : Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .combine)
+                .transition(.opacity)
             }
         }
+        .animation(Motion.quick, value: model.said?.text)
+    }
+
+    @ViewBuilder private var peopleRows: some View {
+        let typed = model.typedRow
+        let directory = model.directory ? Array(model.people.prefix(6)) : []
+        if typed != nil || model.emailNote != nil || !directory.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                if let email = typed {
+                    person(name: nil, email: email)
+                } else if let note = model.emailNote {
+                    Text(note).font(.system(size: 11)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(directory) { person in
+                    self.person(name: person.name.isEmpty ? nil : person.name, email: person.email)
+                }
+            }
+        }
+    }
+
+    /// One person: who, and where they stand — You, Owner, Member,
+    /// Invited (· Resend · ×), or Invite.
+    private func person(name: String?, email: String) -> some View {
+        HStack(spacing: 8) {
+            if let name {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(.system(size: 11.5)).foregroundStyle(Palette.ink).lineLimit(1).truncationMode(.tail)
+                    Text(email).font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1).truncationMode(.middle)
+                }
+            } else {
+                Image(systemName: "envelope").font(.system(size: 10.5)).foregroundStyle(Palette.muted)
+                Text(email).font(.system(size: 11.5)).foregroundStyle(Palette.ink).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer(minLength: 6)
+            standing(email)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func standing(_ email: String) -> some View {
+        switch model.state(of: email) {
+        case .you:
+            Text("You").font(.system(size: 10)).foregroundStyle(Palette.muted)
+        case .member(let role):
+            Text(role == "owner" ? "Owner" : "Member").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                .help("\(role.capitalized) of this canvas")
+        case .invited(let invite):
+            invited(invite)
+        case .invite:
+            Button("Invite") { model.invite(email) }
+                .buttonStyle(CanvasButtonStyle(kind: .plain))
+                .disabled(model.acting.contains(email.lowercased()))
+        }
+    }
+
+    /// "Invited", then Resend and × where the cloud and the account allow
+    /// them. Under the Invited heading the word itself would only repeat it.
+    private func invited(_ invite: Canvases.Invite, label: Bool = true) -> some View {
+        let busy = model.acting.contains(invite.email.lowercased())
+        return HStack(spacing: 6) {
+            if label {
+                Text("Invited").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                    .help(waiting(invite))
+            }
+            if busy {
+                ProgressView().controlSize(.mini)
+            } else {
+                if model.canRemind(invite) {
+                    Button("Resend") { model.resend(invite) }
+                        .buttonStyle(CanvasButtonStyle(kind: .plain))
+                        .help("Remind them — the invite comes up again in their Copper")
+                }
+                if model.canWithdraw(invite) {
+                    Button { model.withdraw(invite) } label: {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                            .frame(width: 16, height: 16).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Palette.muted)
+                    .help("Withdraw the invite")
+                    .accessibilityLabel("Withdraw the invite to \(model.name(for: invite.email, invite: invite))")
+                }
+            }
+        }
+    }
+
+    /// The Invited label's help: what the invite is waiting for.
+    private func waiting(_ invite: Canvases.Invite) -> String {
+        if invite.inviteeKnown, invite.invitee == nil { return "Waiting for them to make an account on \(Canvases.cloudHost)" }
+        return "Waiting for them to join — it's in their Copper"
     }
 
     private var membersSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Members").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
             ForEach(model.members) { member in
-                HStack { Text(member.name.isEmpty ? member.email : member.name).font(.system(size: 11.5)); Spacer(); Text(member.role.capitalized).font(.system(size: 10)).foregroundStyle(Palette.muted); if entry.isOwner && member.role != "owner" { Button("Remove") { model.remove(member) }.buttonStyle(CanvasButtonStyle(kind: .plain)) } }
+                HStack(spacing: 8) {
+                    Text(member.name.isEmpty ? member.email : member.name).font(.system(size: 11.5)).lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 6)
+                    Text(member.role.capitalized).font(.system(size: 10)).foregroundStyle(Palette.muted)
+                    if entry.isOwner && member.role != "owner" {
+                        Button("Remove") { model.remove(member) }.buttonStyle(CanvasButtonStyle(kind: .plain))
+                    }
+                }
+            }
+        }
+    }
+
+    /// The invites waiting on this canvas, whoever sent them: by name once
+    /// they have an account, else by address, with a line under each that
+    /// says what it is waiting for.
+    @ViewBuilder private var invitedSection: some View {
+        if !model.pending.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Invited").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
+                ForEach(model.pending) { invite in
+                    HStack(spacing: 8) {
+                        let name = model.name(for: invite.email, invite: invite)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(name).font(.system(size: 11.5)).foregroundStyle(Palette.ink)
+                                .lineLimit(1).truncationMode(.middle)
+                            if invite.inviteeKnown, invite.invitee == nil {
+                                Text("No account on \(Canvases.cloudHost) yet").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                                    .lineLimit(1).truncationMode(.middle)
+                            } else if name != invite.email {
+                                Text(invite.email).font(.system(size: 10)).foregroundStyle(Palette.muted)
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
+                        }
+                        Spacer(minLength: 6)
+                        invited(invite, label: false)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }

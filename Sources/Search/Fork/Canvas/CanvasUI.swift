@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 // The Canvas door at the foot of the sidebar, beside Bookmarks and
-// Extensions, and the card it opens: Personal, the canvases you made, the
-// ones shared with you, invites waiting for an answer, and New canvas. Each
+// Extensions, and the card it opens: Personal, Invitations (invites waiting
+// for your answer, with Join and Decline), the canvases you made, the ones
+// shared with you, and New canvas. Each
 // row opens its canvas in a tab; its context menu renames, invites, lists
 // members, leaves or deletes. Sharing needs Copper Cloud — signed out, the
 // card says so in one line and everything cloud-shaped stays out of sight.
@@ -108,26 +109,38 @@ struct CanvasDoor: View {
     let tint: SpaceTint
     @ObservedObject private var ui = CanvasUI.shared
     @ObservedObject private var presence = CanvasPresence.shared
+    @ObservedObject private var canvases = Canvases.shared
 
     private var others: Int { presence.peers.values.reduce(0, +) }
+    /// Invites waiting for an answer: a dot in ink, until they are answered.
+    private var waiting: Int { canvases.invites.count }
+
+    private var help: String {
+        var parts = ["Canvas"]
+        if waiting > 0 { parts.append("\(waiting) invitation\(waiting == 1 ? "" : "s")") }
+        if others > 0 { parts.append(CanvasRow.live(others)) }
+        return parts.joined(separator: " · ") + "   ⌘⇧O"
+    }
 
     var body: some View {
-        Door(icon: "scribble.variable", help: others > 0 ? "Canvas · \(CanvasRow.live(others))   ⌘⇧O" : "Canvas   ⌘⇧O",
+        Door(icon: "scribble.variable", help: help,
              size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
             ui.popoverOpen.toggle()
         }
         .overlay(alignment: .topTrailing) {
-            if others > 0 {
-                Circle().fill(Color.green).frame(width: 6, height: 6).offset(x: -4, y: 4)
+            if others > 0 || waiting > 0 {
+                // Live people are the green dot; an invite alone, the space's ink.
+                Circle().fill(others > 0 ? Color.green : tint.ink).frame(width: 6, height: 6).offset(x: -4, y: 4)
                     .transition(.scale.combined(with: .opacity))
                     .accessibilityHidden(true)
             }
         }
-        .accessibilityLabel("Canvas")
+        .accessibilityLabel(waiting > 0 ? "Canvas, \(waiting) invitation\(waiting == 1 ? "" : "s")" : "Canvas")
         .popover(isPresented: $ui.popoverOpen, arrowEdge: .top) {
             CanvasPopover(browser: browser)
         }
         .animation(Motion.quick, value: others)
+        .animation(Motion.quick, value: waiting)
     }
 }
 
@@ -198,8 +211,8 @@ struct CanvasPopover: View {
                 VStack(alignment: .leading, spacing: 0) {
                     CanvasRow(entry: canvases.personal, browser: browser)
                     if !canvases.invites.isEmpty {
-                        CanvasSection(title: "Waiting for you")
-                        ForEach(canvases.invites) { invite in CanvasInviteRow(invite: invite) }
+                        CanvasSection(title: "Invitations")
+                        ForEach(canvases.invites) { invite in CanvasInviteRow(invite: invite, browser: browser) }
                     }
                     let mine = canvases.mine
                     if !mine.isEmpty {
@@ -496,8 +509,12 @@ struct CanvasRow: View {
     }
 }
 
+/// An invite waiting for your answer: Join (accepts and opens the canvas)
+/// or Decline. It stays listed until it is answered — "Not now" on the
+/// pill only puts the pill away.
 private struct CanvasInviteRow: View {
     let invite: Canvases.Invite
+    @ObservedObject var browser: Browser
     @ObservedObject private var ui = CanvasUI.shared
     /// Which answer is on its way, if one is.
     @State private var working: Bool?
@@ -516,7 +533,7 @@ private struct CanvasInviteRow: View {
                         .font(.system(size: 12.5)).foregroundStyle(Palette.ink)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(invite.from.isEmpty ? "Invited you" : "From \(invite.from)")
+                    Text((invite.from.isEmpty ? "Invited you" : "From \(invite.from)") + (invite.nudgedAt != nil ? " · reminded you" : ""))
                         .font(.system(size: 11)).foregroundStyle(Palette.muted)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -539,9 +556,10 @@ private struct CanvasInviteRow: View {
                 Button("Decline") { answer(false) }
                     .buttonStyle(CanvasButtonStyle(kind: .plain))
                     .disabled(working != nil)
-                Button("Accept") { answer(true) }
+                Button("Join") { answer(true) }
                     .buttonStyle(CanvasButtonStyle(kind: .primary))
                     .disabled(working != nil)
+                    .help("Join “\(invite.canvasName)” and open it")
             }
         }
         .padding(.horizontal, 14)
@@ -559,6 +577,10 @@ private struct CanvasInviteRow: View {
             do {
                 try await Canvases.shared.answer(invite, accept: accept)
                 ui.note = accept ? "Joined “\(invite.canvasName)”" : "Declined “\(invite.canvasName)”"
+                if accept, let entry = Canvases.shared.entry(invite.canvasId) {
+                    ui.popoverOpen = false
+                    CanvasHost.show(entry.id, in: browser, foreground: true)
+                }
             } catch {
                 failure = Canvases.explain(error)
             }
@@ -649,7 +671,7 @@ private struct CanvasInviteForm: View {
                 .focused($focused)
                 .onSubmit(submit)
                 .disabled(working)
-            Text("They'll see it under Waiting for you once they sign in to the same cloud.")
+            Text("They'll see it under Invitations once they sign in to the same cloud.")
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
             if let failure { Text(failure).font(.system(size: 11)).foregroundStyle(Color.orange).lineLimit(2) }
@@ -674,8 +696,9 @@ private struct CanvasInviteForm: View {
         failure = nil
         Task {
             do {
-                try await Canvases.shared.invite(entry.id, email: email)
-                ui.note = "Invited \(email.trimmingCharacters(in: .whitespaces))"
+                let address = email.trimmingCharacters(in: .whitespaces)
+                let outcome = try await Canvases.shared.invite(entry.id, email: address)
+                ui.note = Canvases.inviteLine(outcome, email: address, canvas: entry.name)
                 ui.mode = .list
             } catch {
                 failure = Canvases.explain(error)

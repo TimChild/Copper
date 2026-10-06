@@ -135,9 +135,19 @@ final class Cloud: ObservableObject {
         case shareLinks
         /// `GET /v1/people`.
         case people
+        /// Inviting someone already invited reminds them (`nudged`,
+        /// `nudged_at`), an invite says whether its address has an account
+        /// yet (`invitee`), and `DELETE /v1/canvases/:id/invites/:invite_id`
+        /// withdraws one.
+        case inviteReminders
 
         /// The first copper-cloud release with it.
-        var since: String { "0.3.0" }
+        var since: String {
+            switch self {
+            case .shareLinks, .people: return "0.3.0"
+            case .inviteReminders: return "0.5.0"
+            }
+        }
     }
 
     /// This Copper, as the server knows it: minted once per data folder, so

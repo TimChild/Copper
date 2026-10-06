@@ -155,6 +155,9 @@ enum Fork {
                     browser.keep(download)
                 }
                 return ["started": true]
+            case "policy-check":
+                let failures = DownloadPolicy.selfCheck()
+                return ["ok": failures.isEmpty, "failures": failures]
             case "list": break
             default: return ["error": "unknown downloads operation \(op)"]
             }

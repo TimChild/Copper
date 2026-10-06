@@ -24,9 +24,10 @@ its own, was folded into Canvas on 2026-10-01 — see [What happened to easels](
   New Canvas), right-click the **plus** at the foot (New Space / New Canvas; a click on it still
   makes a space), or **New Canvas in Space** on a space's menu (its header, its chip, ⌘K's space
   rows).
-- **Sidebar › Canvas door** (at the foot, beside Bookmarks and Extensions): Personal, *My
-  canvases*, *Shared with me*, *Waiting for you* (invites, with Accept / Decline) and **New
-  canvas**. Click a row to open it. Right-click a row: Open, Open in Background, Copy Link,
+- **Sidebar › Canvas door** (at the foot, beside Bookmarks and Extensions): Personal,
+  *Invitations* (invites waiting for your answer, with Decline / **Join**), *My canvases*, *Shared
+  with me* and **New canvas**. While an invite waits the door wears a small dot in the space's ink
+  (green when someone is live on a canvas) and its help says *1 invitation*. Click a row to open it. Right-click a row: Open, Open in Background, Copy Link,
   Rename…, Share…, Members…, Leave… / Delete….
 - **⌘K / ⌘T**, typing a canvas's name: an **Open Canvas · <name>** row for each match, three at
   most. `canvas` alone (or `canvases`, or `canv`) lists them all, newest first; `canvas plan`
@@ -109,9 +110,10 @@ is CanvasHost's, made for it, never an extension's).
   canvas", "Delete canvas") over the canvas's whole name, wrapped. Delete is a red **Delete
   canvas** that says what it does — *Permanently deletes this canvas and everything on it, for
   every member. This can't be undone.* — with Cancel first: Escape cancels and Return confirms
-  nothing. An invitation row shows the whole name and who sent it above Decline / **Accept**, says
-  *Joining…* in the row while the answer is on its way, and stays — with the reason, in the row —
-  until the server has said yes.
+  nothing. An invitation row shows the whole name and who sent it (*From Ann · reminded you* once
+  its sender has reminded you) above Decline / **Join**, says *Joining…* in the row while the
+  answer is on its way, and stays — with the reason, in the row — until the server has said yes.
+  **Join** accepts and opens the canvas in front.
 
 ## Live web frames
 
@@ -333,8 +335,10 @@ design), `personal-synced`, `shared-live` (room open and the server's SyncStep2 
 
 Create `POST /v1/canvases {name}`, rename `PATCH /v1/canvases/:id`, delete `DELETE
 /v1/canvases/:id` (owner), leave `DELETE /v1/canvases/:id/members/<me>`, members `GET
-/v1/canvases/:id/members`, invite `POST /v1/canvases/:id/invites {email}`, answer `POST
-/v1/invites/:id/accept|decline`.
+/v1/canvases/:id/members`, invite `POST /v1/canvases/:id/invites {email}` (on 0.5.0 a second one
+for the same address is a reminder: `200` with `nudged`), the invites waiting on a canvas `GET
+/v1/canvases/:id/invites`, withdraw one `DELETE /v1/canvases/:id/invites/:invite_id` (0.5.0), answer
+`POST /v1/invites/:id/accept|decline`.
 
 ## The page ↔ host bridge
 
@@ -448,12 +452,47 @@ nothing when it isn't open here and nobody is in it), **Copy invite link** / **C
 token is made once through `POST /v1/canvases/:id/links` and cached per canvas in
 `canvas/share-links.json`, 0600, never the keychain — later copies reuse it), **People on this
 cloud** (*Search people or type an email*: debounced `GET /v1/people?q=`; a typed address that
-isn't a member gets its own **Invite \<email>** row; every Invite is the email-invite path,
-`POST /v1/canvases/:id/invites`), **Members** (owner can remove), and **Reset link** (owner;
-`DELETE /v1/canvases/:id/links`, drops the cached token). A local or Personal canvas explains it
-can't be shared and offers **New shared canvas** or **Connect to Copper Cloud** instead. The
-sheet's state is a `CanvasShareModel` that `CanvasUI.mode` makes and drops, so `bench canvas ui
-share state|type TEXT|invite [EMAIL]|copy` reads and drives the same sheet a person sees.
+isn't a member gets its own row; every Invite is the email-invite path, `POST
+/v1/canvases/:id/invites`), **Members** (owner can remove), **Invited** (the invites waiting on
+this canvas, `GET /v1/canvases/:id/invites`, read with the members when the sheet opens and on
+every list refresh — someone accepting or declining shows while it is open), and **Reset link**
+(owner; `DELETE /v1/canvases/:id/links`, drops the cached token). A local or Personal canvas
+explains it can't be shared and offers **New shared canvas** or **Connect to Copper Cloud**
+instead. The sheet's state is a `CanvasShareModel` that `CanvasUI.mode` makes and drops, so
+`bench canvas ui share state|type TEXT|invite [EMAIL] [--instant]|resend EMAIL|withdraw
+EMAIL|reload|copy` reads and drives the same sheet a person sees.
+
+**Where each person stands.** Every person's row — a directory row, the typed address's row, an
+Invited row — says one of: **You**; **Owner** / **Member** (with the role on hover); **Invited**
+(· **Resend** · **×**); or an **Invite** button. Clicking Invite flips the row to *Invited* at once
+(a stand-in invite until the server's copy arrives; it goes back, with the reason, if the server
+says no) and the line right under the field — above the rows, so a long list never pushes it out
+of the card — says what happened: *Invited Ada Lovelace — it's waiting for them in Copper*, or
+*Invited dana@example.com — waiting for them to make an account on \<host>* when no account has
+that address yet. The rows, Members and Invited scroll together below that line (360 pt at most),
+vertically only.
+
+- **Resend** invites the same address again. On copper-cloud 0.5.0 that is a reminder: the server
+  stamps the invite's `nudged_at`, answers `"nudged": true` and sends the invitee a `canvas` event,
+  so the pill comes back up in their Copper — *Reminded Ada Lovelace*. It reminds someone at most every
+  30 s, counting from the invite itself (*Invited Ada Lovelace moments ago — you can remind them in a
+  minute*). It is not offered for an address with no account yet (there is no Copper to bring it
+  up in; the row's second line says *No account on \<host> yet*). Any member may resend.
+- **×** withdraws the invite (`DELETE /v1/canvases/:id/invites/:invite_id`, 0.5.0): the row goes at
+  once, the sheet says *Withdrew the invite to Ada Lovelace*, and the invitee's pill and Invitations
+  row go on the `invite_revoked` event. Only the canvas's owner, or whoever sent that invite, sees
+  it. A refusal is a sentence (*That invite was already answered or withdrawn.*).
+- **On a cloud before 0.5.0** (`Cloud.Feature.inviteReminders`, by `/v1/info`'s version) there is
+  no Resend and no ×: inviting again reminds nobody there and an invite can't be taken back, so
+  the row only says *Invited* (its help: *Waiting for them to join — it's in their Copper*) and
+  the Invited list still shows every invite waiting. The confirmation reads the same; whether an
+  address has an account is known only from the directory (an address it looked up and didn't
+  find: *…waiting for them to make an account on \<host>*).
+
+`canvas_invite` answers in the same words, naming the canvas: *Invited Ada Lovelace to Roadmap*,
+*Reminded Ada Lovelace about Roadmap*, *Ada Lovelace was invited to Roadmap moments ago — too soon to
+remind them*, or on an older cloud *tim@example.com was already invited to Roadmap*. `canvas_list`
+adds `invitations: [{canvas, from}]` while any invite waits for the user's answer.
 
 **Older clouds.** Share links and the people directory arrived in copper-cloud 0.3.0. Copper
 reads the instance's version from `GET /v1/info` (`Cloud.serverVersion`, once per link and again
@@ -465,8 +504,8 @@ links need Copper Cloud 0.3.0 — \<host> runs \<version>. You can still invite 
 with the field titled **Invite by email**. Email invites work on every version. No failure in
 the sheet shows the server's own short text ("not found", "conflict"): `Canvases.plain` turns
 each refusal into a sentence (an address that isn't one, yourself, someone already a member, a
-canvas no longer there, a cloud that can't be reached), and a success reads *Invited \<email> —
-they'll see it in Copper*.
+canvas no longer there, a cloud that can't be reached), and a success reads *Invited \<name> —
+it's waiting for them in Copper*.
 
 **The join flow** (`CanvasJoinLink.parse` + `CanvasJoinFlow`) is one parser and one actor reached
 from four places: LaunchServices/AppleEvents (`Links.swift`), the address bar (`Browser.arrive` /
@@ -484,11 +523,24 @@ before 0.3.0 (by its version, or by a bare `not_found` for the route) says *"Thi
 doesn't support invite links yet (runs \<version>)."* `canvas_join` waits for the outcome and
 answers with it.
 
-**The new-invite banner** (`ContentView.inviteBanner` in `App.swift`) rises the moment
-`Canvases.refresh()` sees an invite id it hasn't shown before: *"\<owner> invited you to
-“\<name>” · Open"*, with a dismiss × that declines without opening. **Open** accepts and opens
-the canvas in one step — it is a shortcut over the sidebar's existing Accept/Decline invite rows,
-not a second invite system.
+**Being invited** (`Fork/Canvas/CanvasInvites.swift`). Three places say an invite is waiting, all
+reading `Canvases.invites` (`GET /v1/invites`, read again on every `canvas` event — `invited`,
+`invite_revoked`, `invite_declined`, `member_added` — and whenever the event stream comes back):
+
+- **The pill** at the window's foot: *"\<sender> invited you to “\<name>” · Open ×"*. It rises
+  for every invite waiting the first time the list is read after a launch or a sign-in, for each
+  new one after that, and again whenever its sender reminds you (the invite's `nudged_at` moved —
+  it then reads *"\<sender> reminded you about “\<name>”"*). **Open** joins and opens the canvas
+  in front; **×** is *Not now* — the pill goes, the invite stays under Invitations, and a reminder
+  or the next launch brings the pill back. An invite withdrawn or answered on another Mac takes
+  its pill with it. The pill is drawn **over the panels** — Settings, History, Downloads,
+  Passwords — so signing up in Settings › Cloud no longer hides the invite that was waiting for
+  the new account (`CanvasInviteBar`, overlaid after `panels` in `App.swift`; `CanvasInviteSlot`
+  keeps its place in `bars`, so the other lines there stack above it).
+- **Invitations** in the Canvas card (above), with Decline / **Join**, for as long as it waits,
+  and the dot on the door.
+- **⌘K**: *Join Canvas · \<name>* for each invite waiting (type *join* or the canvas's name) —
+  the way in when the sidebar is off.
 
 ## Testing it
 
@@ -508,7 +560,11 @@ $C call canvas_read '{"reason":"t"}'
 $C shot /tmp/canvas.png
 ./bench --world canvasE canvas hosts      # each open canvas: ready, online, roomId, room, synced, status{mode,pending}, clients, collaborators, store
 ./bench --world canvasE canvas list | open ID | read [ID] | apply JSON | create NAME
-./bench --world canvasE canvas invites | accept INVITE | decline INVITE      # INVITE: id or canvas name
+./bench --world canvasE canvas invites | accept INVITE | decline INVITE      # INVITE: id or canvas name; invites also says the pill's
+./bench --world canvasE canvas pill [dismiss|open]                          # the invite pill: what it shows; its × (Not now) and Open
+./bench --world canvasE canvas pending ID                                   # the invites waiting on canvas ID, as its members see them
+./bench --world canvasE canvas remind ID EMAIL | withdraw ID EMAIL          # invite again (a reminder on 0.5.0) / take an invite back
+./bench --world canvasE canvas ui share resend EMAIL | withdraw EMAIL       # the Share sheet's Resend and × (after ui mode share ID)
 ./bench --world canvasE canvas rename ID -> NAME | delete ID | leave ID | members ID
 ./bench --world canvasE canvas ui mode new | picture /tmp/card.png [dark]  # the card, drawn off screen
 ./bench --world canvasE canvas new | tabs [ID] | menu [press] | flush ID    # ⌘K's New Canvas; every canvas's tabs (window, space, section, row, asleep, lean, mark, pill)

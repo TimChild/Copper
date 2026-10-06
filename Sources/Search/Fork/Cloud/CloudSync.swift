@@ -365,7 +365,7 @@ final class CloudSync: ObservableObject {
         guard on else { return }
         await pullAll()
         for domain in Domain.allCases where active(domain) && domain != .history { await push(domain) }
-        if active(.history) { await pushHistory() }
+        if active(.history) { await pushHistory(force: true) }
     }
 
     private func pullAll() async {
@@ -387,7 +387,7 @@ final class CloudSync: ObservableObject {
         switch domain {
         case .history:
             await pullHistory()
-            await pushHistory()
+            await pushHistory(force: true)
         case .tabs:
             await push(.tabs)
             await refreshDevices()
@@ -770,53 +770,94 @@ final class CloudSync: ObservableObject {
         return f.string(from: date)
     }
 
-    /// New places visited here, oldest first, 500 at a time. A place last
-    /// visited on another Mac (and merged in from there) isn't sent back.
-    func pushHistory() async {
+    /// New places visited here, oldest first, in requests the cloud takes —
+    /// CloudHistory measures them, and splits and skips around what it
+    /// refuses. A place last visited on another Mac (and merged in from
+    /// there) isn't sent back. After a push fails, the next one waits 30 s,
+    /// then twice as long each time up to 15 minutes, unless `force` (Sync
+    /// now, sign-in, a switch turned on).
+    func pushHistory(force: Bool = false) async {
         guard active(.history) else { return }
+        if !force, let hold = historyHold, hold.until > Date() { return }
         await serialized("history-push") {
-            await self.work("history") {
-                let through = self.cloud.sync.pushedThrough ?? 0
-                let visits = CloudApply.visits()
-                    .filter { $0.last.timeIntervalSince1970 > through }
-                    .sorted { $0.last < $1.last }
-                guard !visits.isEmpty else { return }
-                var newest = through
-                var sent = 0
-                var batch: [[String: Any]] = []
-                /// Send what is gathered, then move the cursor past it — and
-                /// past the places skipped for having come from elsewhere.
-                @MainActor func flush() async throws {
-                    if !batch.isEmpty {
-                        try await self.postHistory(batch)
-                        sent += batch.count
-                        batch = []
-                    }
-                    var prefs = self.cloud.sync
-                    prefs.pushedThrough = newest
-                    self.cloud.sync = prefs
-                    self.remote = self.remote.filter { $0.value > newest }
-                    self.saveState()
-                }
-                for visit in visits {
-                    guard self.active(.history) else { return }
-                    let at = visit.last.timeIntervalSince1970
-                    if let theirs = self.remote[visit.key], abs(theirs - at) < 1 {
-                        newest = max(newest, at)
-                        continue
-                    }
-                    batch.append(["url": visit.url, "title": visit.title, "visited_at": CloudSync.stamp(visit.last)])
-                    newest = max(newest, at)
-                    if batch.count == 500 { try await flush() }
-                }
-                try await flush()
-                if sent > 0 { self.note("Pushed \(sent) visit\(sent == 1 ? "" : "s")") }
-            }
+            let ok = await self.work("history") { try await self.uploadHistory() }
+            self.historyPushed(ok)
         }
     }
 
-    private func postHistory(_ batch: [[String: Any]]) async throws {
-        _ = try await cloud.request("POST", "/v1/sync/history", json: ["entries": batch])
+    private func uploadHistory() async throws {
+        let limits = await cloud.limitsForHistory()
+        let now = Date().timeIntervalSince1970
+        // A cursor in the future (an older Copper sent a visit stamped there)
+        // would pass over everything visited until then.
+        let through = min(cloud.sync.pushedThrough ?? 0, now)
+        let visits = CloudApply.visits().map {
+            CloudHistory.Visit(key: $0.key, url: $0.url, title: $0.title, at: $0.last.timeIntervalSince1970)
+        }
+        let plan = CloudHistory.plan(visits, after: through, known: remote, now: now, limits: limits)
+        guard !plan.isEmpty else { return }
+        let upload = CloudHistory.Upload(plan, limits: limits, from: through, now: now)
+        var told = 0
+        var refusals = 0
+        /// The cursor as far as the upload says, visits stamped ahead of now
+        /// remembered, and what was left out said in the log.
+        func keep() {
+            var prefs = cloud.sync
+            prefs.pushedThrough = upload.through
+            cloud.sync = prefs
+            for (key, at) in upload.ahead { remote[key] = at }
+            remote = remote.filter { $0.value > upload.through }
+            saveState()
+            for skip in upload.skipped.dropFirst(told).prefix(max(0, 5 - told)) {
+                let size = skip.bytes > 0 ? ", \(skip.bytes) bytes" : ""
+                note("History: left out a visit to \(skip.host) (\(skip.why)\(size))")
+            }
+            told = max(told, min(upload.skipped.count, 5))
+        }
+        defer {
+            keep()
+            if upload.skipped.count > 5 { note("History: \(upload.skipped.count - 5) more visits left out") }
+            if upload.shortened > 0 { note("History: shortened \(upload.shortened) long title\(upload.shortened == 1 ? "" : "s") to fit the cloud's \(upload.limits.entryBytes) bytes per visit") }
+            if upload.limits != limits { cloud.historyLimits = upload.limits }
+            if upload.sent > 0 { note("Pushed \(upload.sent) visit\(upload.sent == 1 ? "" : "s")") }
+        }
+        while let entries = upload.next() {
+            guard active(.history) else { return }
+            do {
+                let (answer, _) = try await cloud.request("POST", "/v1/sync/history", body: CloudHistory.body(entries))
+                upload.accepted(rejected: CloudHistory.rejected(in: answer))
+            } catch let failure as Cloud.Failure where CloudHistory.refuses(failure) {
+                // The server's reason once per push; what ends up skipped is
+                // said visit by visit.
+                if refusals == 0 { note("History: the cloud refused \(entries.count) visit\(entries.count == 1 ? "" : "s") (\(failure.status): \(failure.message)) — finding which") }
+                refusals += 1
+                try upload.refused(failure)
+            }
+            keep()
+        }
+    }
+
+    /// After a failed push: when the next one may run, and the wait before it.
+    private var historyHold: (until: Date, wait: TimeInterval)?
+    private var historyRetry: DispatchWorkItem?
+
+    private func historyPushed(_ ok: Bool) {
+        historyRetry?.cancel()
+        historyRetry = nil
+        guard !ok, active(.history) else {
+            historyHold = nil
+            return
+        }
+        let wait = min(900, max(30, (historyHold?.wait ?? 15) * 2))
+        historyHold = (Date().addingTimeInterval(wait), wait)
+        note("History: trying again in \(Int(wait)) s")
+        // Forced: this is the wait running out (the timer's clock and the
+        // wall clock needn't agree to the millisecond).
+        let retry = DispatchWorkItem { [weak self] in
+            Task { await self?.pushHistory(force: true) }
+        }
+        historyRetry = retry
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: retry)
     }
 
     /// Places other Macs visited since the last pull, merged into History —
@@ -864,7 +905,9 @@ final class CloudSync: ObservableObject {
 
     /// The last copy of each document known to be on the server and applied
     /// here — the base of every three-way merge — and the history places
-    /// that came from elsewhere. Browsing data, so 0600 like cloud.json.
+    /// already on the server at their time (`remote`): merged in from
+    /// elsewhere, or sent stamped ahead of now. Browsing data, so 0600 like
+    /// cloud.json.
     struct Base: Codable {
         var version: Int64
         var payload: Data
@@ -929,6 +972,7 @@ final class CloudSync: ObservableObject {
             "lastSync": lastSync.map { CloudSync.stamp($0) } ?? NSNull(),
             "versions": bases.mapValues { $0.version },
             "historyPushedThrough": cloud.sync.pushedThrough ?? NSNull(),
+            "historyRetryAt": historyHold.map { CloudSync.stamp($0.until) } ?? NSNull(),
             "historyPulledSeq": cloud.sync.pulledSeq,
         ]
         out["devices"] = otherDevices.map { ["name": $0.name, "tabs": $0.tabs.count, "domain": $0.domain] }

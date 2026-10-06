@@ -99,10 +99,14 @@
                                        link for ID (default: the front canvas), join opens an invite
                                        link the way clicking it would, presence prints who
                                        copperCanvas.presence() says is in the room right now
-    ./bench canvas ui mode share ID; ./bench canvas ui share state|type TEXT|invite [EMAIL]|copy
+    ./bench canvas ui mode share ID; ./bench canvas ui share state|type TEXT|invite [EMAIL] [--instant]|resend EMAIL|withdraw EMAIL|reload|copy
                                        the Share sheet itself: what it shows (version, link note,
-                                       presence line, rows, last result), the field typed into,
-                                       its Invite row or Copy invite link pressed
+                                       presence line, rows and their state, invites waiting, last
+                                       result), the field typed into, its Invite, Resend, × or Copy
+                                       invite link pressed (--instant: the row before the server answers)
+    ./bench canvas pill [dismiss|open] | pending ID | remind ID EMAIL | withdraw ID EMAIL
+                                       invites: the pill (its × = Not now, its Open), the invites
+                                       waiting on canvas ID, invite again (a reminder on 0.5.0), take one back
                                        canvases: the canvas_* tools, the pages behind them (ready, room,
                                        store), the cloud invites
     ./bench canvas rename ID -> NAME|delete ID|leave ID|members ID

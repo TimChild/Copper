@@ -112,12 +112,42 @@ final class Canvases: ObservableObject {
         var isOwner: Bool { kind != .shared || role == nil || role == "owner" }
     }
 
+    /// An invite, as the person invited sees it (`GET /v1/invites`) and as
+    /// the canvas's members see it (`GET /v1/canvases/:id/invites`).
     struct Invite: Identifiable, Equatable {
         let id: String
         let canvasId: String
         let canvasName: String
         let from: String
         let createdAt: Date?
+        /// The address it was sent to.
+        var email: String = ""
+        /// Who sent it (user id, lowercased) — they may withdraw it.
+        var fromId: String? = nil
+        /// copper-cloud 0.5.0: the last time the inviter reminded them.
+        var nudgedAt: Date? = nil
+        /// copper-cloud 0.5.0: the account with that address, nil while
+        /// there is none yet. `inviteeKnown` is false on an older cloud,
+        /// which doesn't say either way.
+        var invitee: CloudPerson? = nil
+        var inviteeKnown = false
+
+        /// Who it is for, in words: their name once they have an account, else the address.
+        var who: String {
+            if let name = invitee?.name, !name.isEmpty { return name }
+            return email
+        }
+    }
+
+    /// What `invite` came to.
+    struct InviteOutcome {
+        /// The server made a new invite (201); false: one was already waiting (200).
+        let made: Bool
+        /// On a waiting one: whether they were reminded (0.5.0); nil on an
+        /// older cloud, which never reminds.
+        let nudged: Bool?
+        /// The invite as the server answered with it.
+        let invite: Invite?
     }
 
     struct Member: Identifiable, Equatable {
@@ -160,7 +190,11 @@ final class Canvases: ObservableObject {
 
     @Published private(set) var all: [Entry] = []
     @Published private(set) var invites: [Invite] = []
-    /// Invites newly observed by refresh, consumed by the in-app banner.
+    /// The invite the pill at the window's foot is showing: one this Copper
+    /// hasn't shown since it started, or one its sender has just reminded
+    /// you about (`nudged_at` moved). Answering, "Not now" or the invite
+    /// going (withdrawn, answered elsewhere) puts it away; it stays under
+    /// Invitations in the Canvas card either way until it is answered.
     @Published var newInvite: Invite?
     /// Presence reported by each open canvas page, keyed by canvas id.
     @Published private(set) var presence: [String: [PresencePerson]] = [:]
@@ -171,6 +205,8 @@ final class Canvases: ObservableObject {
     @Published private(set) var refreshed: Date?
 
     private var me: Me
+    /// Each listed invite's `nudged_at` as last read, so a reminder is noticed.
+    private var nudges: [String: Date?] = [:]
     private var observers: [NSObjectProtocol] = []
     private var refreshing: Task<Void, Never>?
     /// The account the list was last read for: a different one signing in
@@ -372,12 +408,16 @@ final class Canvases: ObservableObject {
             listAccount = account
             refreshed = nil
             invites = []
+            nudges = [:]
+            newInvite = nil
             problem = nil
         }
         if cloudReady {
             refreshSoon()
         } else {
             invites = []
+            nudges = [:]
+            newInvite = nil
         }
         if Cloud.shared.isSignedIn { CanvasJoinFlow.resumePending() }
         CanvasHost.cloudChanged()
@@ -416,10 +456,20 @@ final class Canvases: ObservableObject {
             let (pending, _) = try await Cloud.shared.request("GET", "/v1/invites")
             guard Canvases.account == account else { again = true; return }
             let incoming = Canvases.rows(pending).compactMap(Canvases.invite)
-            let known = Set(invites.map(\.id))
+            let before = nudges
             invites = incoming
-            if let fresh = incoming.first(where: { !known.contains($0.id) }) {
+            nudges = Dictionary(incoming.map { ($0.id, $0.nudgedAt) }, uniquingKeysWith: { first, _ in first })
+            // New since the last read (every one, the first time after a
+            // launch or a sign-in), or reminded since: the pill comes up.
+            if let fresh = incoming.first(where: { invite in
+                guard let seen = before[invite.id] else { return true }
+                return invite.nudgedAt != nil && invite.nudgedAt != seen
+            }) {
                 newInvite = fresh
+            } else if let shown = newInvite {
+                // Withdrawn, or answered on another Mac: the pill goes; a
+                // rename comes with the fresh copy.
+                newInvite = incoming.first { $0.id == shown.id }
             }
             problem = nil
             refreshed = Date()
@@ -539,10 +589,12 @@ final class Canvases: ObservableObject {
     }
 
     /// An email invite (`POST /v1/canvases/:id/invites`, every copper-cloud
-    /// has it). True when the server made a new one (201), false when that
-    /// address already had one waiting (200).
+    /// has it). `made` when the server made a new one (201); otherwise that
+    /// address already had one waiting (200), and copper-cloud 0.5.0 has
+    /// reminded them (`nudged`) unless it did so moments ago or they have no
+    /// account yet.
     @discardableResult
-    func invite(_ id: String, email: String) async throws -> Bool {
+    func invite(_ id: String, email: String) async throws -> InviteOutcome {
         guard let entry = entry(id) else { throw Cloud.Failure(status: 404, code: "missing", message: "No canvas \(id)") }
         guard !entry.isPersonal else { throw Cloud.Failure(status: 400, code: "personal", message: "The Personal canvas can't be shared") }
         guard cloudReady else { throw Canvases.offline }
@@ -551,8 +603,41 @@ final class Canvases: ObservableObject {
         }
         let address = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Canvases.isEmail(address) else { throw Cloud.Failure(status: 400, code: "email", message: "That isn't an email address") }
-        let (_, response) = try await Cloud.shared.request("POST", "/v1/canvases/\(remote)/invites", json: ["email": address])
-        return response.statusCode == 201
+        let (data, response) = try await Cloud.shared.request("POST", "/v1/canvases/\(remote)/invites", json: ["email": address])
+        let row = Canvases.object(data)
+        let invite = row.flatMap(Canvases.invite)
+        return InviteOutcome(made: response.statusCode == 201, nudged: row?["nudged"] as? Bool, invite: invite)
+    }
+
+    /// The invites waiting on a shared canvas (`GET /v1/canvases/:id/invites`,
+    /// any member may read them): who has been asked and hasn't answered.
+    func canvasInvites(_ id: String) async throws -> [Invite] {
+        guard let entry = entry(id), entry.isShared, let remote = entry.remoteId else { return [] }
+        guard cloudReady else { throw Canvases.offline }
+        let (data, _) = try await Cloud.shared.request("GET", "/v1/canvases/\(remote)/invites")
+        return Canvases.rows(data).compactMap(Canvases.invite)
+    }
+
+    /// Takes an invite back (`DELETE /v1/canvases/:id/invites/:invite`,
+    /// copper-cloud 0.5.0; the canvas's owner or whoever sent it). Its pill
+    /// and its row leave the invitee's Copper on the event that follows.
+    func withdraw(_ id: String, invite: Invite) async throws {
+        guard let entry = entry(id), entry.isShared, let remote = entry.remoteId else { return }
+        guard cloudReady else { throw Canvases.offline }
+        _ = try await Cloud.shared.request("DELETE", "/v1/canvases/\(remote)/invites/\(invite.id)")
+    }
+
+    /// May this account withdraw the invite: the canvas's owner, or its sender.
+    func mayWithdraw(_ invite: Invite, on id: String) -> Bool {
+        if entry(id)?.isOwner == true { return true }
+        guard let me = Canvases.account, let sender = invite.fromId else { return false }
+        return sender == me
+    }
+
+    /// "Not now" on the pill: it goes until the invite is new again —
+    /// reminded, or the next launch. The invite itself stays listed.
+    func dismissNewInvite() {
+        newInvite = nil
     }
 
     /// Shaped like an address the way copper-cloud checks one before it
@@ -583,6 +668,7 @@ final class Canvases: ObservableObject {
         guard cloudReady else { throw Canvases.offline }
         _ = try await Cloud.shared.request("POST", "/v1/invites/\(invite.id)/\(accept ? "accept" : "decline")")
         invites.removeAll { $0.id == invite.id }
+        nudges[invite.id] = nil
         if newInvite?.id == invite.id { newInvite = nil }
         await refresh()
     }
@@ -678,7 +764,20 @@ final class Canvases: ObservableObject {
         let canvasId = string(row["canvas_id"]) ?? string(canvas?["id"]) ?? ""
         let name = string(row["canvas_name"]) ?? string(canvas?["name"]) ?? "A canvas"
         let from = person(row["invited_by_name"]) ?? person(row["invited_by"]) ?? person(row["from"]) ?? ""
-        return Invite(id: id, canvasId: canvasId, canvasName: name, from: from, createdAt: date(row["created_at"]))
+        var invite = Invite(id: id, canvasId: canvasId, canvasName: name, from: from, createdAt: date(row["created_at"]))
+        invite.email = string(row["email"]) ?? ""
+        invite.fromId = string((row["invited_by"] as? [String: Any])?["id"])?.lowercased()
+        invite.nudgedAt = date(row["nudged_at"])
+        // 0.5.0 always says: an object, or null for an address with no
+        // account yet. An older cloud leaves the key out.
+        if let value = row["invitee"] {
+            invite.inviteeKnown = true
+            if let object = value as? [String: Any], let user = string(object["id"]) {
+                invite.invitee = CloudPerson(id: user.lowercased(), name: string(object["display_name"]) ?? string(object["name"]) ?? "",
+                                             email: string(object["email"]) ?? invite.email)
+            }
+        }
+        return invite
     }
 }
 

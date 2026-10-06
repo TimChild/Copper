@@ -110,7 +110,7 @@ is CanvasHost's, made for it, never an extension's).
   canvas", "Delete canvas") over the canvas's whole name, wrapped. Delete is a red **Delete
   canvas** that says what it does — *Permanently deletes this canvas and everything on it, for
   every member. This can't be undone.* — with Cancel first: Escape cancels and Return confirms
-  nothing. An invitation row shows the whole name and who sent it (*From Felipe · reminded you* once
+  nothing. An invitation row shows the whole name and who sent it (*From Ann · reminded you* once
   its sender has reminded you) above Decline / **Join**, says *Joining…* in the row while the
   answer is on its way, and stays — with the reason, in the row — until the server has said yes.
   **Join** accepts and opens the canvas in front.
@@ -467,19 +467,19 @@ Invited row — says one of: **You**; **Owner** / **Member** (with the role on h
 (· **Resend** · **×**); or an **Invite** button. Clicking Invite flips the row to *Invited* at once
 (a stand-in invite until the server's copy arrives; it goes back, with the reason, if the server
 says no) and the line right under the field — above the rows, so a long list never pushes it out
-of the card — says what happened: *Invited Tim Child — it's waiting for them in Copper*, or
+of the card — says what happened: *Invited Ada Lovelace — it's waiting for them in Copper*, or
 *Invited dana@example.com — waiting for them to make an account on \<host>* when no account has
 that address yet. The rows, Members and Invited scroll together below that line (360 pt at most),
 vertically only.
 
 - **Resend** invites the same address again. On copper-cloud 0.5.0 that is a reminder: the server
   stamps the invite's `nudged_at`, answers `"nudged": true` and sends the invitee a `canvas` event,
-  so the pill comes back up in their Copper — *Reminded Tim Child*. It reminds someone at most every
-  30 s, counting from the invite itself (*Invited Tim Child moments ago — you can remind them in a
+  so the pill comes back up in their Copper — *Reminded Ada Lovelace*. It reminds someone at most every
+  30 s, counting from the invite itself (*Invited Ada Lovelace moments ago — you can remind them in a
   minute*). It is not offered for an address with no account yet (there is no Copper to bring it
   up in; the row's second line says *No account on \<host> yet*). Any member may resend.
 - **×** withdraws the invite (`DELETE /v1/canvases/:id/invites/:invite_id`, 0.5.0): the row goes at
-  once, the sheet says *Withdrew the invite to Tim Child*, and the invitee's pill and Invitations
+  once, the sheet says *Withdrew the invite to Ada Lovelace*, and the invitee's pill and Invitations
   row go on the `invite_revoked` event. Only the canvas's owner, or whoever sent that invite, sees
   it. A refusal is a sentence (*That invite was already answered or withdrawn.*).
 - **On a cloud before 0.5.0** (`Cloud.Feature.inviteReminders`, by `/v1/info`'s version) there is
@@ -489,8 +489,8 @@ vertically only.
   address has an account is known only from the directory (an address it looked up and didn't
   find: *…waiting for them to make an account on \<host>*).
 
-`canvas_invite` answers in the same words, naming the canvas: *Invited Tim Child to Roadmap*,
-*Reminded Tim Child about Roadmap*, *Tim Child was invited to Roadmap moments ago — too soon to
+`canvas_invite` answers in the same words, naming the canvas: *Invited Ada Lovelace to Roadmap*,
+*Reminded Ada Lovelace about Roadmap*, *Ada Lovelace was invited to Roadmap moments ago — too soon to
 remind them*, or on an older cloud *tim@example.com was already invited to Roadmap*. `canvas_list`
 adds `invitations: [{canvas, from}]` while any invite waits for the user's answer.
 

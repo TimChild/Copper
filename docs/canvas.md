@@ -119,7 +119,8 @@ is CanvasHost's, made for it, never an extension's).
 
 A checklist card (`type: "checklist"`, the toolbar's list tool or `R`) is a title, one to four
 columns — *Yes* / *No* by default — and up to sixty rows: people for an RSVP, tasks for a to-do
-list (one column draws plain task boxes and strikes done ones through). Each row has at most one
+list (one column draws plain task boxes; a ticked row keeps its label as it was, never struck
+through, since a ticked name on an RSVP is a yes, not crossed out). Each row has at most one
 pick. **One click** on a box picks it, a second click clears it — anyone who can edit, selected
 or not, without opening the card; the title, the labels and the edges still drag it, and a
 read-only board shows the picks without taking clicks. Each column header carries its count; a

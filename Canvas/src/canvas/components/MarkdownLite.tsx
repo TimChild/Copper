@@ -127,7 +127,7 @@ function renderBlock(block: Block, i: number, h: MarkdownHandlers): ReactNode {
               )}
             </button>
           )}
-          <span className={cn(item.checked && 'line-through opacity-60')}>{renderInline(item.children, h)}</span>
+          <span>{renderInline(item.children, h)}</span>
         </li>
       ))
       if (block.ordered)

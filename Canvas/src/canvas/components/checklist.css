@@ -141,11 +141,6 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.cl-done .cl-label-text {
-  color: var(--ink-3);
-  text-decoration: line-through;
-  text-decoration-color: color-mix(in srgb, var(--ink-3) 60%, transparent);
-}
 .cl-row-remove {
   position: absolute;
   right: 2px;

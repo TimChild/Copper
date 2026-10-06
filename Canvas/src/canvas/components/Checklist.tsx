@@ -428,7 +428,7 @@ export const ChecklistView = memo(function ChecklistView({
             const label = (
               <span
                 role="rowheader"
-                className={cn('cl-label', single && pick && 'cl-done')}
+                className="cl-label"
                 data-part={`cl-row:${row.id}`}
               >
                 {editingRow ? (

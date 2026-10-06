@@ -91,7 +91,7 @@ struct BitwardenCard: View {
         case .unauthenticated:
             // Fork (settings-revamp): the card says whose it is first, as the
             // other states do, now that it shares a section with other managers.
-            Line("Bitwarden", "Not connected — sign in to fill and save from an existing vault") {
+            Line("Bitwarden", "Sign in to fill and save from an existing vault") {
                 Text("Not connected")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Palette.muted)

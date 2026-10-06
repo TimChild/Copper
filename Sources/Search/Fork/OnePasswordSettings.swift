@@ -90,7 +90,9 @@ struct OnePasswordCard: View {
     @ViewBuilder
     private var signedOut: some View {
         Line("1Password", "Copper reads your vaults through the 1Password CLI and keeps them in memory while unlocked") {
-            EmptyView()
+            Text("Not connected")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Palette.muted)
         }
         Rule()
         Line("Sign in with") {

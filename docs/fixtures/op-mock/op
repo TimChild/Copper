@@ -22,7 +22,11 @@ Mock-only commands (not in the real CLI):
 
     op mock show            the state without any secret (passwords as sha256 prefixes)
     op mock expire          every session and app authorisation ends now
-    op mock set KEY VALUE   a flag: app_integration, app_approve, latency_ms, app_delay_ms
+    op mock set KEY VALUE   a flag: app_integration, app_approve, latency_ms, app_delay_ms,
+                            hang_ms (every command but `mock` sleeps this long first, outside
+                            the state lock — an op that hangs), malformed (item list/get
+                            answer with broken JSON)
+    op mock bulk N          add N generated logins (unicode titles, several URLs, shared hosts)
     op mock reset           back to the seed
     op mock check TITLE USER PASSWORD   does that login hold exactly this? (true/false)
 
@@ -281,8 +285,14 @@ def as_json(flags):
     return flags.get("--format", os.environ.get("OP_FORMAT", "")) == "json"
 
 
+MALFORMED = False
+
+
 def emit(obj):
-    sys.stdout.write(json.dumps(obj, indent=2) + "\n")
+    text = json.dumps(obj, indent=2) + "\n"
+    if MALFORMED:
+        text = text[: len(text) // 2] + "\n<<garbage>> }}} ]\n"
+    sys.stdout.write(text)
 
 
 # ---------------------------------------------------------------- auth
@@ -669,8 +679,10 @@ def cmd_vault(st, flags, args):
 
 
 def cmd_item(st, flags, args):
+    global MALFORMED
     sub = args[0] if args else ""
     p = authenticate(st, flags, "item")
+    MALFORMED = bool(st.data["flags"].get("malformed"))
     latency = st.data["flags"].get("latency_ms", 0)
     if latency:
         time.sleep(latency / 1000)
@@ -694,7 +706,7 @@ def cmd_item(st, flags, args):
             specs = specs_from_stdin()
             for iid, vid in specs:
                 item = find_item(st, p, iid, vid)
-                sys.stdout.write(json.dumps(full(st, item, reveal), indent=2) + "\n")
+                emit(full(st, item, reveal))
             return
         if p.kind == "service" and not flags.get("--vault"):
             fail("When using service accounts, you must specify a vault with the '--vault' flag or through piped input.")
@@ -777,6 +789,23 @@ def cmd_mock(st, args):
         st.data["flags"][key] = json.loads(value) if value not in ("on", "off") else value == "on"
         st.save()
         print(json.dumps(st.data["flags"]))
+    elif sub == "bulk":
+        count = int(args[1]) if len(args) > 1 else 1500
+        vaults = [VAULT_PRIVATE, VAULT_SHARED]
+        names = ["Café", "Ünïcode 🔐", "日本語サイト", "Ελληνικά", "Plain", "Bank", "Mail"]
+        for n in range(count):
+            host = f"login.shop{n % 600}.com"
+            urls = [f"https://{host}/login"]
+            if n % 5 == 0:
+                urls.append(f"https://www.shop{n % 600}.com")
+            if n % 97 == 0:
+                urls = []  # an item without any website
+            user = f"user{n}+{names[n % len(names)].split()[0].lower()}@example.net"
+            st.data["items"].append(login_item(
+                pad(f"bulk{n:06d}"), f"{names[n % len(names)]} {n}", vaults[n % 2], user, f"bulk-pw-{n}", urls,
+                totp=("otpauth://totp/Bulk?secret=JBSWY3DPEHPK3PXP" if n % 50 == 0 else None)))
+        st.save()
+        print(f"bulk {count}")
     elif sub == "check":
         title, user, password = args[1], args[2], args[3]
         hit = False
@@ -810,6 +839,13 @@ def main(argv):
         return 0
     stdin_len = 0
     log_call(argv, stdin_len)
+    try:
+        with open(state_path()) as f:
+            early = json.load(f).get("flags", {})
+    except (OSError, ValueError):
+        early = {}
+    if early.get("hang_ms"):
+        time.sleep(early["hang_ms"] / 1000)
     flags, positional = parse(argv)
     if flags.get("--version") or flags.get("-v"):
         print(VERSION)

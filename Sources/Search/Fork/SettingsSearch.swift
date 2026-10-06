@@ -152,7 +152,9 @@ enum SettingsMatcher {
         }
         // A slip keeps the first letter (or swaps the first two): "bitwardn",
         // "dowloads", "privcy" — but not "block" for "lock".
-        let sameStart = q[0] == w[0] || (q.count > 1 && w.count > 1 && q[0] == w[1] && q[1] == w[0])
+        // (Two steps, not one long chain: kind to the older type checker.)
+        let swapped = q.count > 1 && w.count > 1 && q[0] == w[1] && q[1] == w[0]
+        let sameStart = q[0] == w[0] || swapped
         if q.count >= 4, sameStart {
             let most = q.count >= 8 ? 2 : 1
             let whole = distance(q, w, cap: most)

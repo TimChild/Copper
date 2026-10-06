@@ -116,24 +116,46 @@ struct Line<Control: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Palette.ink)
-                if let detail {
-                    Text(detail)
-                        .font(.system(size: SettingsMetrics.detailSize(settings))) // Fork (settings-revamp)
-                        .foregroundStyle(SettingsMetrics.detailInk(settings)) // Fork (settings-revamp)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
+        Group {
+            if settings {
+                // Fork (settings-revamp): in a narrow Settings window a wide
+                // control (a segmented chooser, a key field) goes under its
+                // text rather than squeezing it into a truncated sliver.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 16) {
+                        words.frame(minWidth: 200, idealWidth: 200, maxWidth: .infinity, alignment: .leading)
+                        control()
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        words.frame(maxWidth: .infinity, alignment: .leading)
+                        control()
+                    }
+                }
+            } else {
+                HStack(alignment: .center, spacing: 16) {
+                    words
+                    Spacer(minLength: 8)
+                    control()
                 }
             }
-            Spacer(minLength: 8)
-            control()
         }
         .padding(.horizontal, SettingsMetrics.lineInset(settings)) // Fork (settings-revamp)
         .padding(.vertical, SettingsMetrics.lineHeight(settings)) // Fork (settings-revamp)
+    }
+
+    private var words: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.ink)
+            if let detail {
+                Text(detail)
+                    .font(.system(size: SettingsMetrics.detailSize(settings))) // Fork (settings-revamp)
+                    .foregroundStyle(SettingsMetrics.detailInk(settings)) // Fork (settings-revamp)
+                    .lineLimit(settings ? nil : 3) // Fork (settings-revamp): Settings never cuts a sentence off
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

@@ -95,6 +95,10 @@ final class OnePassword: ObservableObject {
     private var refreshTimer: Timer?
     /// Bumped by lock/sign-out so a load that was under way drops its result.
     private var generation = 0
+    /// Bumped each time a session opens. A command that was started under an
+    /// older session and then fails as "not signed in" says nothing about
+    /// the one open now, and must not lock it.
+    private var sessionEpoch = 0
     /// A read (list and details) is under way; another was asked for meanwhile.
     private var reading = false
     private var readAgain = false
@@ -193,8 +197,12 @@ final class OnePassword: ObservableObject {
             state = Self.installed ? .signedOut : .missing
             return
         }
+        // Someone already unlocked (or is unlocking) while the version and
+        // accounts were read: the stored session is theirs to replace.
+        guard !isUnlocked, !signingIn else { return }
         state = .locked
         guard stayUnlocked else { return }
+        let epoch = sessionEpoch
         switch mode {
         case .password:
             guard let token = readFile(sessionFile) else { return }
@@ -207,8 +215,11 @@ final class OnePassword: ObservableObject {
         }
         do {
             try await confirm()
+            guard epoch == sessionEpoch, !isUnlocked else { return }
             opened()
         } catch {
+            // A sign-in that finished meanwhile owns the session now.
+            guard epoch == sessionEpoch, !isUnlocked else { return }
             sessionToken = nil
             if mode == .password { forgetSessionFile() }
             state = .locked
@@ -268,6 +279,7 @@ final class OnePassword: ObservableObject {
             }
         }
         let environment = OnePasswordCLI.environment(adding: additions)
+        let epoch = sessionEpoch
         let path = executable.path
         let input = stdin
         let result = try await Task.detached(priority: .userInitiated) {
@@ -277,7 +289,7 @@ final class OnePassword: ObservableObject {
             let raw = OnePasswordCLI.message(from: result.stderr)
             let problem = OnePasswordCLI.classify(raw, appPath: appPath)
             let failure = Failure(problem, OnePasswordCLI.explain(problem, raw: raw))
-            if auth, isUnlocked, problem == .notSignedIn || problem == .sessionExpired {
+            if auth, isUnlocked, epoch == sessionEpoch, problem == .notSignedIn || problem == .sessionExpired {
                 expire()
             }
             throw failure
@@ -469,6 +481,7 @@ final class OnePassword: ObservableObject {
     }
 
     private func opened() {
+        sessionEpoch += 1
         state = .unlocked(lastSync: lastSync)
         problem = nil
         startTimers()
@@ -480,13 +493,26 @@ final class OnePassword: ObservableObject {
     /// Close the vault: the cache and the session go, and `op signout` ends the
     /// session on 1Password's side too (for the app: the CLI's authorization).
     func lock() async {
-        if mode == .password || mode == .app {
-            _ = try? await run(["signout"], timeout: 10)
-        }
+        // Secrets go first: an `op signout` that hangs (up to its ten
+        // seconds) must not keep the vault readable meanwhile. The session it
+        // ends is handed to it explicitly, since it is already gone from here.
+        let ending = (mode: mode, token: sessionToken, account: account)
         wipe()
         sessionToken = nil
+        // A service token is re-read from its 0600 file on unlock.
+        serviceToken = nil
         forgetSessionFile()
         state = mode == nil ? (Self.installed ? .signedOut : .missing) : .locked
+        guard ending.mode == .password || ending.mode == .app else { return }
+        var args = ["signout"]
+        var env: [String: String] = [:]
+        if let account = ending.account {
+            args += ["--account", account.userID]
+            if ending.mode == .password, let token = ending.token {
+                env[OnePasswordCLI.sessionVariable(for: account.userID)] = token
+            }
+        }
+        _ = try? await run(args, env: env, auth: false, timeout: 10)
     }
 
     /// Forget Copper's connection: lock, and drop the mode, the account and a
@@ -499,7 +525,9 @@ final class OnePassword: ObservableObject {
         mode = nil
         account = nil
         problem = nil
-        for key in [Self.modeKey, Self.accountKey, Self.emailKey, Self.urlKey] { Store.settings.removeObject(forKey: key) }
+        for key in [Self.modeKey, Self.accountKey, Self.emailKey, Self.urlKey, Self.saveVaultKey] {
+            Store.settings.removeObject(forKey: key)
+        }
         state = Self.installed ? .signedOut : .missing
     }
 
@@ -810,7 +838,12 @@ final class OnePassword: ObservableObject {
         var get = ["item", "get", id, "--reveal", "--format", "json"]
         if !vault.isEmpty { get += ["--vault", vault] }
         let data = try await run(get, timeout: 30)
-        guard var object = OnePasswordCLI.objects(in: data).first else {
+        // Strictly the whole item, never a salvaged fragment: whatever goes
+        // back through `op item edit` replaces the item's fields, so a
+        // truncated read must stop here rather than wipe the rest.
+        guard var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              object["id"] as? String == id, object["fields"] is [[String: Any]]
+        else {
             throw Failure(.other, "1Password returned an unreadable item")
         }
         if Self.holdsPasskey(object) {
@@ -831,6 +864,17 @@ final class OnePassword: ObservableObject {
         Task { await self.load() }
     }
 
+    /// A dev server on this Mac or the LAN speaks plain http; the item's
+    /// website should open where the page was, not at an https that isn't there.
+    static func scheme(for host: String) -> String {
+        let value = host.lowercased()
+        if value == "localhost" || value.contains(":") { return "http" }
+        if [".localhost", ".local"].contains(where: { value.hasSuffix($0) }) { return "http" }
+        let pieces = value.split(separator: ".")
+        let numeric = pieces.count == 4 && pieces.allSatisfy { UInt8($0) != nil }
+        return numeric ? "http" : "https"
+    }
+
     static func holdsPasskey(_ object: [String: Any]) -> Bool {
         if object["passkey"] != nil || object["passkeys"] != nil { return true }
         let fields = object["fields"] as? [[String: Any]] ?? []
@@ -849,7 +893,7 @@ final class OnePassword: ObservableObject {
                 ["id": "username", "type": "STRING", "purpose": "USERNAME", "label": "username", "value": user],
                 ["id": "password", "type": "CONCEALED", "purpose": "PASSWORD", "label": "password", "value": password],
             ],
-            "urls": [["label": "website", "primary": true, "href": "https://\(host)"]],
+            "urls": [["label": "website", "primary": true, "href": "\(Self.scheme(for: host))://\(host)"]],
         ]
         let body = try JSONSerialization.data(withJSONObject: template)
         let data = try await run(["item", "create", "--vault", vault.id, "--format", "json", "-"], stdin: body, timeout: 30)

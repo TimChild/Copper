@@ -481,7 +481,8 @@ enum Fork {
             default: return ["error": "render bitwarden|onepassword[-app|-password|-service|-dark]|managers[-dark]|picker|drive|agent|agent-dark|hands|hands-dark|pill|pill-dark PATH"]
             }
             let pane = ["drive", "agent", "agent-dark"].contains(which)
-            if pane || which.hasPrefix("pill") || which.hasPrefix("onepassword") || which.hasPrefix("managers") || which == "picker" {
+            let hosted = ["pill", "onepassword", "managers", "picker"].contains { which.hasPrefix($0) }
+            if pane || hosted {
                 // The pane's rows are in a ScrollView, which ImageRenderer
                 // leaves out: drawn through a hosting view instead, whole.
                 // The pills' shadows and materials want a real view too.

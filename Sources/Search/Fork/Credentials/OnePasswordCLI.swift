@@ -46,7 +46,7 @@ enum OnePasswordCLI {
     /// Homebrew's two prefixes, then `$PATH`.
     /// Where `op` is. Asked often (every card draw), so the answer is kept:
     /// a found path until it disappears, a miss for five seconds — long enough
-    /// not to fork `which` per frame, short enough that a fresh
+    /// not to walk the disk per frame, short enough that a fresh
     /// `brew install 1password-cli` shows up without a relaunch.
     /// `SEARCH_OP_PATH=none` is a Mac without the CLI, for a test world.
     static var executableURL: URL? {
@@ -79,28 +79,15 @@ enum OnePasswordCLI {
         for path in [local, "/opt/homebrew/bin/op", "/usr/local/bin/op"] where files.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
-        // Last, the PATH a GUI app was given — `which`, bounded and with
-        // nothing on its stdin.
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["op"]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return nil
+        // Last, the PATH a GUI app was given, walked here rather than by
+        // forking `which`: this is asked from the main thread (at launch, by
+        // the card), and a stat per directory costs nothing.
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        for directory in path.split(separator: ":") where !directory.isEmpty {
+            let candidate = (String(directory) as NSString).appendingPathComponent("op")
+            if files.isExecutableFile(atPath: candidate) { return URL(fileURLWithPath: candidate) }
         }
-        let deadline = Date().addingTimeInterval(2)
-        while process.isRunning, Date() < deadline { usleep(10_000) }
-        if process.isRunning { process.terminate(); return nil }
-        guard process.terminationStatus == 0 else { return nil }
-        let path = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty, files.isExecutableFile(atPath: path) else { return nil }
-        return URL(fileURLWithPath: path)
+        return nil
     }
 
     /// The 1Password desktop app, whose own Touch ID prompt approves the CLI
@@ -339,6 +326,9 @@ enum OnePasswordCLI {
                 if depth == 0 { start = index }
                 depth += 1
             case 0x7D:
+                // A stray brace in broken output must not push the depth
+                // below zero and hide every object after it.
+                guard depth > 0 else { continue }
                 depth -= 1
                 if depth == 0, let from = start {
                     let slice = Data(bytes[from...index])

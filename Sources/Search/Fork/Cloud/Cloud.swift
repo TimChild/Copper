@@ -128,6 +128,9 @@ final class Cloud: ObservableObject {
     @Published private(set) var lacking: Set<Feature> = []
     /// The link `serverVersion` and `lacking` were learned for.
     private var infoFor: URL?
+    /// What `/v1/info` says a history push may weigh (`limits`), read with
+    /// the version; smaller if a refusal has said so since. Nil until known.
+    var historyLimits: CloudHistory.Limits?
 
     /// Things a copper-cloud has from some version on.
     enum Feature: String {
@@ -562,6 +565,7 @@ final class Cloud: ObservableObject {
         let object = (try? JSONSerialization.jsonObject(with: answer.0)) as? [String: Any]
         let version = (object?["version"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         infoFor = link.url
+        if let object { historyLimits = CloudHistory.Limits(info: object) }
         if let version, !version.isEmpty, version != serverVersion {
             serverVersion = version
             // A version is the better witness: what a 404 suggested goes.
@@ -586,8 +590,16 @@ final class Cloud: ObservableObject {
         lacking.insert(feature)
     }
 
+    /// The history limits for this link, asking `/v1/info` once if they
+    /// aren't known yet; copper-cloud's defaults if it doesn't answer.
+    func limitsForHistory() async -> CloudHistory.Limits {
+        if historyLimits == nil, infoFor != link?.url { await loadInfo() }
+        return historyLimits ?? .standard
+    }
+
     private func forgetInfo() {
         infoFor = nil
+        historyLimits = nil
         if serverVersion != nil { serverVersion = nil }
         if !lacking.isEmpty { lacking = [] }
     }
@@ -658,11 +670,16 @@ final class Cloud: ObservableObject {
     /// tried up to three times when the network or a gateway fails it;
     /// nothing else is ever repeated. A non-2xx answer throws the server's
     /// own `{error, message}`; a 401 `session` signs this Copper out.
-    func request(_ method: String, _ path: String, json: Any? = nil, query: [String: String] = [:]) async throws -> (Data, HTTPURLResponse) {
+    /// `body` is JSON already encoded, sent as it is (history entries are
+    /// measured before they go — CloudHistory).
+    func request(_ method: String, _ path: String, json: Any? = nil, body: Data? = nil, query: [String: String] = [:]) async throws -> (Data, HTTPURLResponse) {
         guard let link else { throw Failure(status: 0, code: "not_linked", message: "Copper isn't connected to a cloud") }
         var request = try makeRequest(method, path, query: query, link: link)
         if let json {
             request.httpBody = try JSONSerialization.data(withJSONObject: json)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        } else if let body {
+            request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let idempotent = method.uppercased() == "GET"

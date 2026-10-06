@@ -27,7 +27,8 @@ enum CanvasTools {
     private static let which = string("Canvas id or name (from canvas_list); omit for the canvas tab in front, else Personal")
 
     static let names: Set<String> = ["canvas_list", "canvas_open", "canvas_read", "canvas_apply", "canvas_select",
-                                     "canvas_focus", "canvas_create", "canvas_invite", "canvas_share_link", "canvas_join", "canvas_screenshot"]
+                                     "canvas_focus", "canvas_create", "canvas_invite", "canvas_share_link", "canvas_join", "canvas_screenshot",
+                                     CanvasChat.toolName]
 
     static var catalogue: [[String: Any]] {
         [
@@ -36,10 +37,10 @@ enum CanvasTools {
                 "id": which, "name": string("Canvas name, if you have no id"),
                 "foreground": bool("Bring its tab to the front; default false"),
             ]),
-            tool("canvas_read", "Read a canvas: {canvas, viewport, shapes:[{id,type,x,y,w,h,color,text|title|label|url,live?,by}], agents, selection}. Text is cut at 500 characters unless full is true. Read before you write.", [
+            tool("canvas_read", "Read a canvas: {canvas, viewport, shapes:[{id,type,x,y,w,h,color,text|title|label|url,live?,by}], agents, selection}; a checklist card (a sticky with view:'checklist') also has title, columns, rows:[{label,pick,by?,at?}] and tally {column: count}. Text is cut at 500 characters unless full is true. Read before you write.", [
                 "id": which, "full": bool("Whole texts instead of the first 500 characters"),
             ]),
-            tool("canvas_apply", "Change a canvas in one transaction (opens its tab in the background if needed). Returns {applied, ids, errors}. Ops: {op:'add', shape:{type:'sticky'|'text'|'frame'|'arrow'|'image'|'link', id?, x?, y?, w?, h?, color?, text?|title?|url?|from?/to?|label?}} (omit x/y to place it in free space near the view; give it your own id, e.g. 'n1', to connect it later in the same call). A link with live:true (or type:'web') shows the site itself on the board, an iframe everyone on the board can browse — each person signed in as themselves; it defaults to 960×640 and needs an http(s) url; update {live:false} turns it back into a card. {op:'update', id, patch:{…}}; {op:'move', id, dx, dy}; {op:'resize', id, w, h}; {op:'delete', id}; {op:'connect', from:id, to:id, label?} (an arrow); {op:'clear', confirm:true} only when the user explicitly asked to wipe the board.", [
+            tool("canvas_apply", "Change a canvas in one transaction (opens its tab in the background if needed). Returns {applied, ids, errors}. Ops: {op:'add', shape:{type:'sticky'|'text'|'frame'|'arrow'|'image'|'link'|'checklist', id?, x?, y?, w?, h?, color?, text?|title?|url?|from?/to?|label?}} (omit x/y to place it in free space near the view; give it your own id, e.g. 'n1', to connect it later in the same call). A link with live:true (or type:'web') shows the site itself on the board, an iframe everyone on the board can browse — each person signed in as themselves; it defaults to 960×640 and needs an http(s) url; update {live:false} turns it back into a card. A checklist is a clickable RSVP / to-do card: {type:'checklist', title, columns?:['Yes','No'] (1–4; one column = to-do boxes), rows:['Ann', …] (≤60), picks?:{'Ann':'Yes'}} — it is stored as a sticky with view:'checklist' whose text is the list ('### Title' then '- [ ] Ann' / '- [x] Ann · No' lines), so older Coppers show it as a note with task boxes; each row has at most one pick; in update, picks name a row by label and null clears it, and rows/columns/title replace them in the text (rows keep their picks by label). {op:'update', id, patch:{view:'checklist', columns?}} turns a sticky that holds a heading and a task list into a card, ticks kept; view:null turns it back into a note. {op:'update', id, patch:{…}}; {op:'move', id, dx, dy}; {op:'resize', id, w, h}; {op:'delete', id}; {op:'connect', from:id, to:id, label?} (an arrow); {op:'clear', confirm:true} only when the user explicitly asked to wipe the board.", [
                 "id": which,
                 "ops": ["type": "array", "items": ["type": "object"], "description": "The operations, applied in order in one transaction"] as [String: Any],
                 "as": string("Name to attribute the change to; defaults to the calling agent"),
@@ -59,6 +60,7 @@ enum CanvasTools {
             tool("canvas_share_link", "Create or reuse the invite link for a shared canvas", ["id": string("Canvas id or name")], required: ["id"]),
             tool("canvas_join", "Open a Copper canvas invite link in the current window", ["link": string("copper://canvas/join/... or https://cloud/join/...")], required: ["link"]),
             tool("canvas_screenshot", "A PNG of a canvas as it looks in its tab", ["id": which]),
+            CanvasChat.tool,
         ]
     }
 
@@ -187,6 +189,9 @@ enum CanvasTools {
             let data = try await host.picture()
             Tools.summary?.line = "Screenshot of \(entry.name)"
             return [.image(data, mime: "image/png"), .text("Canvas · \(entry.name)")]
+
+        case CanvasChat.toolName:
+            return try await CanvasChat.runTool(args, in: browser)
 
         default:
             throw Failure(text: "Unknown tool \(name)")
@@ -421,6 +426,9 @@ enum CanvasTools {
                     let host = try await open(entry, in: browser, foreground: false)
                     let people = try await host.presence()
                     answer(["canvas": entry.id, "people": people])
+                case "chat":
+                    // `chat …` — the chat panel, mentions and the pill (CanvasChatUI.swift).
+                    answer(try await CanvasChat.bench(arg, in: browser))
                 case "parsetest":
                     // The join-link parser is pure: a self-test, not a probe
                     // round trip — `bench canvas parsetest` runs it standing still.

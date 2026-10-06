@@ -3,6 +3,8 @@
  * board and the ops share, and an undo manager scoped to `shapes`.
  */
 import * as Y from 'yjs'
+import { readColumns, readNoteChecklist, readPicks, readRows } from './checklist'
+import { VIEW_CHECKLIST } from './checklist-text'
 import { SIDES, type Point, type Side } from './geometry'
 import { textSplice } from './text-diff'
 import {
@@ -42,6 +44,10 @@ export type ShapeProps = Partial<Omit<Shape, 'id' | 'type'>>
 export type ShapeInput = { type: ShapeType; id?: string } & ShapeProps
 
 const TEXT_KEYS = new Set(['text'])
+/** Read-side only: a checklist's picks live under their own `pick:<rowId>` keys (`checklist.ts`). */
+const DERIVED_KEYS = new Set(['picks'])
+/** A note in the checklist view reads its title and rows from its text: never stored as props. */
+const NOTE_DERIVED = new Set(['title', 'rows'])
 const ROUNDED = new Set(['x', 'y', 'w', 'h'])
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
@@ -133,6 +139,21 @@ export function readShape(id: string, m: unknown): Shape | null {
     const favicon = str(m.get('favicon'))
     if (favicon) shape.favicon = favicon
     if (m.get('live') === true) shape.live = true
+  }
+  if (type === 'sticky' && m.get('view') === VIEW_CHECKLIST) {
+    const list = readNoteChecklist(m, shape.text)
+    shape.view = VIEW_CHECKLIST
+    shape.title = list.title
+    shape.columns = list.columns
+    shape.rows = list.rows
+    shape.picks = list.picks
+  }
+  if (type === 'checklist') {
+    const columns = readColumns(m.get('columns'))
+    const rows = readRows(m.get('rows'))
+    shape.columns = columns
+    shape.rows = rows
+    shape.picks = readPicks(m, rows, columns)
   }
   return shape
 }
@@ -275,7 +296,7 @@ export class CanvasStore {
       m.set('id', id)
       m.set('type', type)
       for (const [k, v] of Object.entries(full)) {
-        if (TEXT_KEYS.has(k)) continue
+        if (TEXT_KEYS.has(k) || DERIVED_KEYS.has(k) || (type === 'sticky' && NOTE_DERIVED.has(k))) continue
         const value = storeValue(k, v)
         if (value !== undefined) m.set(k, value)
       }
@@ -290,9 +311,10 @@ export class CanvasStore {
   update(id: string, patch: ShapeProps, origin: Origin = LOCAL, touch = true) {
     const m = this.shapes.get(id)
     if (!m) return
+    const note = m.get('type') === 'sticky'
     this.transact(() => {
       for (const [k, v] of Object.entries(patch)) {
-        if (v === undefined) continue
+        if (v === undefined || DERIVED_KEYS.has(k) || (note && NOTE_DERIVED.has(k))) continue
         if (k === 'text' && typeof v === 'string') {
           this.spliceText(m, v)
           continue

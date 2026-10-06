@@ -7,6 +7,8 @@ import { BridgeSocket } from './bridge-socket'
 import { VERSION, controller, type Controller, type ImportResult } from './controller'
 import { hostLog } from './host-bridge'
 import { setTheme } from './theme'
+import { chat } from './canvas/chat'
+import { withChat } from './canvas/chat/api'
 
 export interface CopperCanvasApi {
   readonly version: string
@@ -137,7 +139,7 @@ export function createApi(c: Controller = controller): CopperCanvasApi {
 
 export function installApi(): CopperCanvasApi {
   window.addEventListener('pagehide', () => controller.session?.clearAgents())
-  const api = createApi()
+  const api = withChat(createApi(), chat)
   Object.defineProperty(window, 'copperCanvas', { value: api, configurable: true, writable: false, enumerable: true })
   return api
 }

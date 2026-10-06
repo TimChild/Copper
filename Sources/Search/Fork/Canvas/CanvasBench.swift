@@ -32,6 +32,8 @@ import WebKit
 //   canvas rowmenu ID PATH      right-click the canvas's row; the window with its menu, as a PNG
 //   canvas picture PATH         the window with whatever hangs from it (rename popover, sheet)
 //   canvas import [status|run]  the easel migration (CanvasImport.swift)
+//   canvas checklist [SHAPE] · check SHAPE COL ROW…
+//                               the checklist shape: read it, or click a box (CanvasChecklistBench.swift)
 
 extension CanvasTools {
     @MainActor
@@ -137,11 +139,14 @@ extension CanvasTools {
             answer(["path": CanvasBench.write(image, to: path) ? path : "", "size": [image.width, image.height], "extras": extras.map(\.className)])
         case "import":
             CanvasImport.bench(words.first ?? "status", answer: answer)
+        case "checklist", "check":
+            CanvasChecklistBench.run(op, words, in: browser, answer: answer)
         default:
             answer(["error": "canvas list|open ID|read [ID]|apply JSON|create NAME|invites|accept|decline INVITE|rename ID NAME|delete ID|leave ID"
                 + "|members ID|hosts|ui open|close|mode …|picture PATH [dark]|new|tabs [ID]|menu [press]|flush ID|click X Y [N]|draw X,Y …"
                 + "|scroll DX DY [STEPS] [--zoom] [--app]|scroll stats|perf start|stop|lean|ask-rename ID|ask-delete ID"
-                + "|answer delete|leave|cancel|sheet|rowmenu ID PATH|picture PATH|import [status|run]"])
+                + "|answer delete|leave|cancel|sheet|rowmenu ID PATH|picture PATH|import [status|run]"
+                + "|checklist [SHAPE]|check SHAPE COL ROW…"])
         }
     }
 }

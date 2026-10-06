@@ -26,12 +26,15 @@ export function ResizeHandles({
   zoom,
   corners = true,
   edges = true,
+  widthOnly = false,
   onStart,
 }: {
   box: Box
   zoom: number
   corners?: boolean
   edges?: boolean
+  /** Only the side handles (a checklist's height follows its rows). */
+  widthOnly?: boolean
   onStart: (handle: Handle, e: ReactPointerEvent<HTMLElement>) => void
 }) {
   const corner = CORNER_PX / zoom
@@ -48,7 +51,7 @@ export function ResizeHandles({
       style={{ width: box.w, height: box.h, transform: `translate(${box.x}px, ${box.y}px)` }}
     >
       {edges &&
-        EDGE_HANDLES.map(handle => {
+        EDGE_HANDLES.filter(h => !widthOnly || h === 'e' || h === 'w').map(handle => {
           const vertical = handle === 'e' || handle === 'w'
           const { x, y } = at(handle)
           return (
@@ -64,6 +67,7 @@ export function ResizeHandles({
           )
         })}
       {corners &&
+        !widthOnly &&
         CORNER_HANDLES.map(handle => {
           const { x, y } = at(handle)
           return (

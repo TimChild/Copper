@@ -115,6 +115,56 @@ is CanvasHost's, made for it, never an extension's).
   answer is on its way, and stays — with the reason, in the row — until the server has said yes.
   **Join** accepts and opens the canvas in front.
 
+## Checklists (RSVP)
+
+A checklist card (the toolbar's list tool or `R`, or an agent's `{type:'checklist'}`) is a title,
+one to four columns — *Yes* / *No* by default — and up to sixty rows: people for an RSVP, tasks for
+a to-do list (one column draws plain task boxes; a ticked row keeps its label as it was, never
+struck through, since a ticked name on an RSVP is a yes, not crossed out). Each row has at most one
+pick. **One click** on a box picks it, a second click clears it — anyone who can edit, selected
+or not, without opening the card; the title, the labels and the edges still drag it, and a
+read-only board shows the picks without taking clicks. Each column header carries its count; a
+picked box's tooltip says who picked it and when (*Ann · 4 min ago*). The boxes are buttons
+(`role="checkbox"`): Tab reaches them, Space or Return toggles, the arrows move between them.
+Double-click the title, a label or a column to rename it in place: Return in the title goes on to
+the first row, Return in a row adds the next one, Backspace in an empty row removes it, and a
+row left empty is dropped. While the card is hovered or selected, *Add row* and *Column* sit just
+under it; a selected card shows × on a row to remove it. The height follows the rows (only the
+side edges resize).
+
+**Stored as a note**, so every Copper shows it: a `sticky` with `view: "checklist"` whose text is
+the list, in the markdown any note draws as task boxes —
+
+```
+### Going
+- [ ] Ann
+- [x] Ada Lovelace
+- [x] Bob · No
+```
+
+The first `#`/`##`/`###` heading is the title and each `- [ ]` / `- [x]` line a row. `columns` is a
+prop; with several, a pick is the line's ` · Column` suffix, and a ticked line with no (or an
+unknown) suffix is the first column — that is how an older Copper's tick reads. A click rewrites
+only its own line (box and suffix) through the note's `Y.Text`, so ticks on different rows from
+old and new clients at the same moment all stick. Who picked and when are kept beside it
+(`who:<label>` on the shape) and shown only while they agree with the text. Copper
+1.0.20261006.28 and older draw the same shape as a note with clickable task boxes; their ticks
+show on the card and the card's on the note. Model and rules: `Canvas/src/canvas/checklist.ts`
+and `checklist-text.ts`.
+
+Agents add one with `{type:'checklist', title, columns?, rows:['Ann', …], picks?:{'Ann':'Yes'}}`
+and update `picks` by row label (`null` clears), `rows`, `columns` and `title` (each an edit of the
+text). `{op:'update', id, patch:{view:'checklist', columns?:[…]}}` turns a note that already holds
+a heading and a task list into a card in place — the text, and so its ticks, untouched;
+`view: null` makes it a plain note again. `canvas_read` gives `view`, `title`, `columns`,
+`rows:[{label, pick, by?, at?}]`, `tally` and the `text`. `./bench --world W canvas checklist
+[SHAPE]` reads them and `canvas check SHAPE COL ROW…` clicks a box with real mouse input
+(`CanvasChecklistBench.swift`).
+
+The first cut stored a checklist as its own `type: "checklist"` (picks under `pick:<rowId>`);
+copper-cloud 0.6.0's REST `/ops` still makes those, and this page still draws, clicks and
+updates them. Older Coppers don't draw that type at all.
+
 ## Live web frames
 
 A link on the board can show the site itself instead of its card: an `<iframe>` under a slim title
@@ -549,6 +599,92 @@ longer pending", not as an error: the invite leaves the pill, the list and ⌘K,
 again, and a Join opens the canvas when this account is a member of it already; otherwise the
 window says *That invite is no longer open*. Joining through a share link also takes any invite
 to that canvas off this Copper at once (`Canvases.drop(canvas:)`), before the lists are read again.
+
+## Chat
+
+*Page: `Canvas/src/canvas/chat/` (model, hub, panel, composer, button, dock, API). Host:
+`Sources/Search/Fork/Canvas/CanvasChat.swift` (state, mentions) and `CanvasChatUI.swift` (pill,
+notifications, `canvas_chat`, bench). Server: copper-cloud 0.6.0's mentions API.*
+
+**Where.** Only canvases that live on a Copper Cloud — a shared canvas, while signed in. Personal and
+local canvases have no chat (`setChat({enabled:false})`; no button, no panel, no shortcut).
+
+**Stored in the canvas.** Messages are a top-level `Y.Array` named `chat` in the canvas document,
+plain objects `{id, authorId, authorName, text, mentions:[userId], at (ms), editedAt?, deleted?}`.
+A message is appended locally (instant) and goes out with the rest of the board's updates — stored
+in `updates.log`, relayed to the room, kept by the server untouched; the board's undo never sees it
+(origin `chat`). At most 1000 are kept: the client that appends past the cap deletes the oldest in
+the same transaction. Text is at most 4000 characters, plain text only (rendered as text nodes; a
+URL becomes a link that opens in a tab). Deleting your own message leaves a tombstone
+(`deleted: true`, text and mentions cleared). A mention is the token `<@userId|Name>` in the text
+**and** the id in `mentions`; only a token whose id is listed is drawn as a chip, so pasted text
+that looks like one stays text. Agents and older readers see `@Name`.
+
+**The panel.** The chat button sits beside Share (badge: the unread count; `@` in the accent when one
+of them mentions you); **C** shows and hides the panel from the board (never from a field or a
+dialog). Docked on the right — the board keeps working beside it, its view resized — and its edge
+drags from 260 to 520 px; under 960 px of window it floats over the board's right edge instead.
+Shown or hidden is remembered per canvas per account in `canvas/chat.json` and survives a
+relaunch; every tab on that canvas follows. Messages group by author (five minutes, one day), with
+day lines, short relative times (full time on hover), your own on the right; it follows the newest
+message unless you scrolled up, then a "N new messages" pill takes you down. Messages on screen
+with the page visible are read; the read mark (message id and time) is kept per canvas per account
+too. The first time a canvas is opened on this Mac its history counts as read — except an
+unanswered mention of you, from which on it is new. Keys, copy and paste inside the panel stay in
+the panel (the board's delete, nudge and shape clipboard never see them).
+
+**The composer.** Enter sends, Shift+Enter is a new line, paste is plain text (a textarea). `@` opens
+the people on this canvas — `GET /v1/canvases/:id/members`, asked for again when the picker opens
+(at most every 15–20 s) and on `member_*`/`invite*` events, kept in `chat.json` so it is instant and
+works offline — never yourself, never anyone else. Invites still waiting whose address has an
+account are listed under **Invited** and can't be picked: they can be mentioned once they join.
+Filtering is by name start, word start, email, then anywhere; ↑/↓, Enter or Tab picks, Esc closes,
+the mouse works. A picked "@Name" is tinted in the field and bound to its id; on send each still
+bound to a current member becomes a token (typed over, or a person who left: plain text).
+
+**Mentions** (copper-cloud 0.6.0, `Cloud.Feature.mentions`). After a message that mentions someone
+else, the page posts `{type:"mention", messageId, userIds, excerpt}` and Copper calls `POST
+/v1/canvases/:id/mentions` (retried a few times while the cloud is away). Copper reads `GET
+/v1/mentions?unread=1` when signed in, when the event stream comes (back) up and on every `canvas`
+event of kind `mention`/`mention_read`. A new one, unless you are already looking at that canvas's
+chat in the app in front:
+
+- the **pill** at the window's foot, over the panels (stacked with the invite pill): "Ada mentioned
+  you in “Team dinners”" with the excerpt, **Open** and × (Not now — the mention stays unread);
+- an accent **dot on the Canvas door** and an `@` on the canvas's row in the card;
+- the canvas's chat **button badge** (`setChat({mentioned:[messageId]})` keeps a mention unread in
+  the page until it is seen, even before the read mark);
+- a **macOS notification** when Copper isn't the app in front (`UNUserNotificationCenter`; macOS
+  is asked once, when the first mention arrives — declined, never again). Clicking it is Open.
+
+**Open** shows the canvas in front with its chat, scrolls to the message and flashes it, and marks
+the mention read (`POST /v1/mentions/read {ids}`); the server tells your other Macs
+(`mention_read`) and their pill, dot and badge go. Reading the message in the panel does the same.
+On an older cloud chat works the same (it is in the document); a mention is a chip and a badge in
+the canvas only — Copper never calls the API.
+
+**Page ↔ host.** Page → host: `{type:"chat", open}` (remember it; other tabs follow),
+`{type:"chatRead", id, at, mentionIds}` (the read mark; mentions of you among `mentionIds` are read
+on the server), `{type:"chatMembers"}` (a fresh member list, please), `{type:"mention", messageId,
+userIds, excerpt}`. Host → page (all guarded by `typeof … === 'function'`):
+`copperCanvas.setChat({enabled, open, members:[{id,name,email,color}], invited:[{name,email}],
+mentionsApi, lastReadId, lastReadAt, known?, mentioned})` (a patch, after `ready` and whenever
+the entry, the members or the mentions change), `revealChat({id})`, `showChat(bool)`,
+`chatSend({text, mentions:[id|name|email]}) → json`, `chatRead(limit) → [...]`, `chatState() → json`.
+`copperCanvas.read` (so `canvas_read`) carries the last 50 messages under `chat`
+(`{id, from, fromId, text, mentions:[{id,name}], at}`, text cut at 500 unless `full`).
+
+**Tool.** `canvas_chat {id?, text, mentions?:[name|email]}` posts as the signed-in person: each
+mentioned person must be on the canvas; one whose `@Name` isn't in the text gets it added in front.
+
+```sh
+./bench --world canvasE canvas chat state ID | read ID [N] | members ID       # page + host state; last N messages; the picker's people
+./bench --world canvasE canvas chat send ID TEXT… [--mention WHO]…            # canvas_chat (WHO: one word — an email or a first name)
+./bench --world canvasE canvas chat toggle ID | key ID                        # the button; the C key
+./bench --world canvasE canvas chat focus ID | type ID TEXT | enter ID | escape ID | dom ID   # the composer as typed; what the panel shows
+./bench --world canvasE canvas chat mentions | pill [open|dismiss] | frontmost on|off       # mentions, the pill, notices; act as if in front
+docs/fixtures/canvas-chat-e2e.sh "<link code>"      # three probe worlds: picker, chips, live, relaunch, mentions (0.6.0) or the degrade (older)
+```
 
 ## Testing it
 

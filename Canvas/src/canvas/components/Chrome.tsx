@@ -19,6 +19,7 @@ import {
   ImageOff,
   Keyboard,
   Link2,
+  ListChecks,
   Lock,
   Maximize,
   Minus,
@@ -42,11 +43,13 @@ import { COLOR_LABEL, SHAPE_COLORS, initials, swatchOf } from '../colors'
 import type { StatusView } from '../status'
 import { facepilePeople, mergePresence } from '../presence'
 import type { CanvasAgent, NamedColor, Shape, ShapeColor } from '../types'
+import { ChatButton } from '../chat/ChatButton'
+import { chat } from '../chat'
 import type { PeerView } from './Overlays'
 import { AgentDot } from './Overlays'
 import { Divider, EDIT_HINT_ID, IconButton, Kbd, MOD, Panel, Tip, cn } from './ui'
 
-export type Tool = 'select' | 'hand' | 'sticky' | 'text' | 'frame' | 'arrow' | 'image' | 'link' | 'laser'
+export type Tool = 'select' | 'hand' | 'sticky' | 'text' | 'frame' | 'arrow' | 'image' | 'link' | 'checklist' | 'laser'
 
 export const TOOL_KEYS: Record<string, Tool> = {
   v: 'select',
@@ -59,6 +62,7 @@ export const TOOL_KEYS: Record<string, Tool> = {
   x: 'arrow',
   i: 'image',
   l: 'link',
+  r: 'checklist',
   k: 'laser',
 }
 
@@ -80,6 +84,7 @@ const TOOLS: { tool: Tool; label: string; key: string; icon: ReactNode; edit?: b
   { tool: 'arrow', label: 'Arrow', key: 'A', icon: <ArrowUpRight className="h-[18px] w-[18px]" />, edit: true },
   { tool: 'image', label: 'Image', key: 'I', icon: <ImageIcon className="h-[18px] w-[18px]" />, edit: true },
   { tool: 'link', label: 'Link', key: 'L', icon: <Link2 className="h-[18px] w-[18px]" />, edit: true },
+  { tool: 'checklist', label: 'Checklist', key: 'R', icon: <ListChecks className="h-[18px] w-[18px]" />, edit: true },
   { tool: 'laser', label: 'Laser pointer', key: 'K', icon: <LaserIcon className="h-[18px] w-[18px]" /> },
 ]
 
@@ -567,6 +572,7 @@ export function TopRight({
     <Panel className="pointer-events-auto absolute right-3 top-3 flex max-w-[calc(100vw-24px)] items-center gap-0.5 p-1">
       <Facepile peers={peers} agents={agents} onPeer={onPeer} onAgent={onAgent} />
       <ShareButton share={share} onShare={onShare} />
+      <ChatButton hub={chat} />
       <IconButton size="sm" label="Search" keys={`${MOD}F`} tipBelow tipEnd active={searchOpen} onClick={onSearch}>
         <Search className="h-4 w-4" />
       </IconButton>
@@ -611,7 +617,7 @@ export function SelectionBar({
   const single = shapes.length === 1 ? shapes[0]! : null
   const colorable = shapes.some(s => s.type !== 'image')
   const current = single?.color
-  const texty = shapes.length > 0 && shapes.every(s => s.type === 'sticky' || s.type === 'text')
+  const texty = shapes.length > 0 && shapes.every(s => (s.type === 'sticky' && s.view !== 'checklist') || s.type === 'text')
   const font = single?.fontSize ?? (single?.type === 'text' ? 20 : 16)
   const sizes = single?.type === 'text' ? [16, 20, 28, 40] : [12, 16, 22, 30]
   return (
@@ -802,6 +808,7 @@ const SHORTCUTS: [string, string[]][] = [
   ['Arrow', ['A']],
   ['Image', ['I']],
   ['Link', ['L']],
+  ['Checklist (RSVP)', ['R']],
   ['Laser pointer (everyone sees it)', ['K']],
   ['Edit the selected note', ['↵']],
   ['New note beside / below', [`${MOD}↵`, `⇧${MOD}↵`]],
@@ -813,6 +820,7 @@ const SHORTCUTS: [string, string[]][] = [
   ['Nudge', ['←↑↓→', '⇧ ×10']],
   ['Bring to front / send to back', [`${MOD}]`, `${MOD}[`]],
   ['Search', [`${MOD}F`]],
+  ['Chat (shared canvases)', ['C']],
   ['Zoom in / out', ['+', '−']],
   ['Zoom to fit / selection', ['⇧1', '⇧2']],
   ['Zoom to 100%', ['⇧0']],

@@ -1,6 +1,6 @@
 /** The board's search box (screen space, top centre). State lives in `useBoardSearch`. */
 import { Fragment, useEffect, useId, useRef, type KeyboardEvent } from 'react'
-import { ArrowUpRight, ChevronDown, ChevronUp, Frame, Link2, Search, StickyNote, Type, X } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronUp, Frame, Link2, ListChecks, Search, StickyNote, Type, X } from 'lucide-react'
 import type { Highlighted, SearchKind, SearchResult } from '../search'
 import type { BoardSearch } from '../use-search'
 import { IconButton, Panel, cn } from './ui'
@@ -11,6 +11,7 @@ const KIND_ICON: Record<SearchKind, typeof StickyNote> = {
   text: Type,
   arrow: ArrowUpRight,
   link: Link2,
+  checklist: ListChecks,
 }
 const KIND_LABEL: Record<SearchKind, string> = {
   frame: 'Frame',
@@ -18,6 +19,7 @@ const KIND_LABEL: Record<SearchKind, string> = {
   text: 'Text',
   arrow: 'Arrow label',
   link: 'Link',
+  checklist: 'Checklist',
 }
 
 const MAX_ROWS = 100

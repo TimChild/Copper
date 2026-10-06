@@ -110,13 +110,16 @@ struct CanvasDoor: View {
     @ObservedObject private var ui = CanvasUI.shared
     @ObservedObject private var presence = CanvasPresence.shared
     @ObservedObject private var canvases = Canvases.shared
+    @ObservedObject private var chat = CanvasChat.shared // Fork (canvas chat): mentions of you
 
     private var others: Int { presence.peers.values.reduce(0, +) }
+    private var mentioned: Int { chat.mentions.count }
     /// Invites waiting for an answer: a dot in ink, until they are answered.
     private var waiting: Int { canvases.invites.count }
 
     private var help: String {
         var parts = ["Canvas"]
+        if mentioned > 0 { parts.append("\(mentioned) mention\(mentioned == 1 ? "" : "s") of you") }
         if waiting > 0 { parts.append("\(waiting) invitation\(waiting == 1 ? "" : "s")") }
         if others > 0 { parts.append(CanvasRow.live(others)) }
         return parts.joined(separator: " · ") + "   ⌘⇧O"
@@ -128,14 +131,14 @@ struct CanvasDoor: View {
             ui.popoverOpen.toggle()
         }
         .overlay(alignment: .topTrailing) {
-            if others > 0 || waiting > 0 {
-                // Live people are the green dot; an invite alone, the space's ink.
-                Circle().fill(others > 0 ? Color.green : tint.ink).frame(width: 6, height: 6).offset(x: -4, y: 4)
+            if others > 0 || waiting > 0 || mentioned > 0 {
+                // A mention of you is the accent dot; live people the green; an invite alone, the space's ink.
+                Circle().fill(mentioned > 0 ? CanvasChatColors.mention : others > 0 ? Color.green : tint.ink).frame(width: 6, height: 6).offset(x: -4, y: 4)
                     .transition(.scale.combined(with: .opacity))
                     .accessibilityHidden(true)
             }
         }
-        .accessibilityLabel(waiting > 0 ? "Canvas, \(waiting) invitation\(waiting == 1 ? "" : "s")" : "Canvas")
+        .accessibilityLabel(mentioned > 0 ? "Canvas, \(mentioned) mention\(mentioned == 1 ? "" : "s") of you" : waiting > 0 ? "Canvas, \(waiting) invitation\(waiting == 1 ? "" : "s")" : "Canvas")
         .popover(isPresented: $ui.popoverOpen, arrowEdge: .top) {
             CanvasPopover(browser: browser)
         }
@@ -384,9 +387,11 @@ struct CanvasRow: View {
     @ObservedObject private var canvases = Canvases.shared
     @ObservedObject private var ui = CanvasUI.shared
     @ObservedObject private var sync = CloudSync.shared
+    @ObservedObject private var chat = CanvasChat.shared
     @State private var hovering = false
 
     private var peers: Int { presence.peers[entry.id] ?? 0 }
+    private var mentioned: Int { chat.mentionCount(entry.id) }
     private var isOpen: Bool { CanvasHost.tab(showing: entry.id, in: browser) != nil }
     private var isFront: Bool { CanvasHost.active(in: browser) == entry.id }
     /// Shared, but its account isn't the one signed in: an offline copy.
@@ -447,6 +452,16 @@ struct CanvasRow: View {
                         .truncationMode(.tail)
                 }
                 Spacer(minLength: 4)
+                if mentioned > 0 {
+                    // Fork (canvas chat): unread mentions of you in its chat.
+                    Text(mentioned > 1 ? "@\(mentioned)" : "@")
+                        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(CanvasChatColors.mention, in: Capsule())
+                        .help("\(mentioned) mention\(mentioned == 1 ? "" : "s") of you in its chat")
+                }
                 if peers > 0 {
                     HStack(spacing: 4) {
                         Circle().fill(Color.green).frame(width: 6, height: 6)

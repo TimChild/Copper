@@ -114,7 +114,7 @@ that certificate from then on, exactly as an `fp=` would have.
 | Settings | The allowlist below | Never passwords, passkeys, paths, keys, accounts or agent setup. |
 | Bookmarks | The whole tree, ids and folders kept | |
 | Open tabs | This Mac's open (non-pinned) tabs, for the others to see under *On your other devices* | One way: another Mac's tabs never open here by themselves — click one to open it. Turning the switch (or sync) off publishes an empty list. |
-| History | Places visited | Append-only: pushed in batches of 500 from where the last push stopped; pulled from where the last pull stopped. Clearing history here doesn't clear it on the server or other Macs. |
+| History | Places visited | Append-only: pushed oldest first, at most 500 a request (fewer if the cloud says so), from where the last push stopped; pulled from where the last pull stopped. A title too long for the cloud is shortened; an address too big to store stays on this Mac (the log says so). Clearing history here doesn't clear it on the server or other Macs. |
 
 Those five are *Browser sync*. The page shows the **Personal canvas** switch
 apart from them, under *Canvas*, once CloudSync has it: Personal's room
@@ -178,6 +178,39 @@ History is not a document: new visits go up with `POST /v1/sync/history`
 down with `GET /v1/sync/history?since=…&exclude_device=me` (cursor
 `pulledSeq`). A visit already known within one second is skipped; one merged
 in from elsewhere is remembered so it isn't sent back up.
+
+Pushing never gets stuck on one visit (`Fork/Cloud/CloudHistory.swift`). The
+cloud's limits come from `GET /v1/info` (`max_history_entry_bytes`,
+`max_history_batch`; copper-cloud's defaults, 16,384 bytes and 2,000, when it
+doesn't say), and every entry is encoded once — keys sorted, slashes as they
+are — measured, and sent as those bytes:
+
+- a title that makes the entry too big is shortened (with *…*) to fit; an
+  address too big on its own is left out — a cut address is another place —
+  and the log says *History: left out a visit to HOST (…, N bytes)*, never the
+  address itself;
+- `visited_at` is always a time the server reads: never later than now, never
+  before 1601;
+- a request the cloud refuses (400, 413, 422) is split in halves until the
+  refused visit stands alone; that one is skipped and logged, the rest goes up,
+  and no refused request is sent again. A 0.4.0 refusal that names the entry
+  (`entry 3 …`) skips it at once; one that names a smaller limit (`exceeds N
+  bytes`, `at most N entries`) is believed, and a 413 halves the request size,
+  for the rest of the push. A 0.5.0
+  cloud stores what it can and lists what it skipped (`rejected`), which is
+  logged the same way;
+- eight refusals in a row with nothing accepted between them is the cloud
+  refusing history, not one visit: the push stops and nothing more is skipped;
+- after any failed push the next automatic one waits 30 s, then 1, 2, 4, 8 and
+  15 minutes; *Sync now*, sign-in and turning History on don't wait.
+  `cloud status` shows `historyRetryAt`.
+
+`pushedThrough` moves after each request, only past visits that went up or
+were left out — never past one still to send (visits at the same instant keep
+it just short of that instant) and never past now. A visit stamped in the
+future (a bad import, another Mac's clock) goes up with the time now and is
+remembered beside the merged-in ones, so it isn't sent again and doesn't hide
+everything visited until then.
 
 The per-domain state — the last-synced copy of each document and the history
 cursors — lives in `cloud-sync.json` (0600) beside `cloud.json`; signing in as
@@ -250,6 +283,10 @@ and history cursors.
 - **Status stays "Can't reach the cloud"** — sync retries on its own once the
   event stream reconnects; **Sync now** tries at once. The log (at the foot of
   the page) has the last 200 lines.
+- **"History: left out a visit to …"** — that place's entry is bigger than
+  the cloud takes (`max_history_entry_bytes`); it stays in History on this Mac
+  and everything else syncs. *History: the cloud refused …* followed by *trying
+  again in N s* means the cloud is refusing history itself — its log says why.
 - **Something didn't sync** — check the switch is on for that domain and the
   log says *Pushed …*/*Pulled …*. Remember what doesn't travel (Today tabs,
   groups, pictures, the non-allowlisted settings).
@@ -265,7 +302,7 @@ In a probe world (never your own Copper), with *Let a script drive Copper* on:
 ./bench --world NAME cloud status          # no secrets in it
 ./bench --world NAME cloud devices         # other devices' tabs
 ./bench --world NAME cloud doc spaces      # this Mac's document as it would be pushed
-./bench --world NAME cloud selftest        # link codes, the allowlist, the merges
+./bench --world NAME cloud selftest        # link codes, the allowlist, the merges, history pushes against a pretend cloud
 ./bench --world NAME cloud wstest          # a canvas WebSocket through the pinned session
 ./bench --world NAME cloud picture /tmp/cloud.png [dark] [CODE]   # the whole page, drawn off screen
 ./bench --world NAME cloud pairing-code    # signed in: a code for another Mac → {id, code, link, expiresAt}
@@ -282,7 +319,9 @@ fingerprint the server showed as `seen`). `cloud picture … CODE` draws the pag
 with CODE already in the Connect field, to see what it makes of it.
 
 Also `cloud signin EMAIL PW`, `signout`, `disconnect`, `sync off|now`,
-`sync set DOMAIN on|off`, `log`, and — in test worlds only — `bookmark URL
+`sync set DOMAIN on|off`, `log`, `history-limits` (what a history push
+believes the cloud takes; `history-limits ENTRY_BYTES BATCH`, in test worlds
+only, plants a stale belief so a push meets the cloud's own refusals), and — in test worlds only — `bookmark URL
 [TITLE]`, `pin URL` and `open URL` to make something worth syncing. The bench
 splits its words on spaces, so a password given there can't contain one (the
 page has no such limit). Two probe worlds on one Mac are two devices:

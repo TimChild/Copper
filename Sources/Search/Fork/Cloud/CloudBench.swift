@@ -21,7 +21,11 @@ import Foundation
 //   cloud devices                    other devices' open tabs
 //   cloud doc DOMAIN                 this Mac's document for DOMAIN, as it would be pushed
 //   cloud log                        the last lines of the log
-//   cloud selftest                   the pure parts: link codes, the settings allowlist, merges
+//   cloud history-limits [ENTRY BATCH]
+//                                    what a history push believes the cloud takes; with numbers
+//                                    (test worlds only) believe those until /v1/info is read again
+//   cloud selftest                   the pure parts: link codes, the settings allowlist, merges,
+//                                    history pushes against a pretend cloud (CloudHistory)
 //   cloud bookmark URL [TITLE]       test worlds only: add a bookmark
 //   cloud pin URL                    test worlds only: open URL as a pinned tab
 //   cloud open URL                   test worlds only: open URL as an ordinary tab
@@ -156,6 +160,16 @@ enum CloudBench {
             answer(["log": sync.log.suffix(60).map { "\(CloudSync.stamp($0.at)) \($0.text)" }])
         case "selftest":
             answer(CloudSelfTest.run())
+        case "history-limits":
+            // A stale belief, on purpose: the push then meets the cloud's own
+            // refusals (400 at most N / entry I exceeds N) and must learn from them.
+            if words.count == 2, let entry = Int(words[0]), let batch = Int(words[1]), entry > 0, batch > 0 {
+                guard Store.testing else { return answer(["error": "test worlds only"]) }
+                cloud.historyLimits = CloudHistory.Limits(entryBytes: entry, batch: min(batch, CloudHistory.most), requestBytes: max(1 << 20, entry + 64))
+            } else if !words.isEmpty {
+                return answer(["error": "usage: cloud history-limits [ENTRY_BYTES BATCH]"])
+            }
+            answer(["historyLimits": cloud.historyLimits.map { ["entryBytes": $0.entryBytes, "batch": $0.batch, "requestBytes": $0.requestBytes] } ?? NSNull()])
         case "bookmark":
             guard Store.testing, let raw = words.first, let url = URL(string: raw) else { return answer(["error": "usage (test worlds only): cloud bookmark URL [TITLE]"]) }
             browser.bookmarks.add(url, title: words.dropFirst().joined(separator: " "))
@@ -209,7 +223,7 @@ enum CloudBench {
             browser.pin(tab)
             answer(["pinned": url.absoluteString, "pins": browser.pinnedCount])
         default:
-            answer(["error": "unknown cloud op \(op) — status|link|pair|pairing-code|pairing-codes|revoke-pairing|signup|signin|signout|disconnect|sync|devices|doc|log|selftest|wstest|picture"])
+            answer(["error": "unknown cloud op \(op) — status|link|pair|pairing-code|pairing-codes|revoke-pairing|signup|signin|signout|disconnect|sync|devices|doc|log|history-limits|selftest|wstest|picture"])
         }
     }
 
@@ -451,6 +465,196 @@ enum CloudSelfTest {
         check(CloudMerge.sameVisit(now, now.addingTimeInterval(0.6)) && !CloudMerge.sameVisit(now, now.addingTimeInterval(1.5)), "history: same visit within 1 s")
         check(CloudSync.date(CloudSync.stamp(now)).map { abs($0.timeIntervalSince(now)) < 0.01 } == true, "history: RFC 3339 round trip")
 
+        historyPush(check)
+
         return ["checks": count, "passed": count - failures.count, "failures": failures]
+    }
+
+    /// History going up (CloudHistory) against a pretend copper-cloud: what
+    /// 0.4.0 refuses, what 0.5.0 skips, a dropped connection. Deterministic —
+    /// no network, no clock but the one given.
+    private static func historyPush(_ check: (Bool, String) -> Void) {
+        typealias H = CloudHistory
+        let now = 2_000_000_000.0
+        let start = now - 100_000
+        func visits(_ count: Int, at: ((Int) -> Double)? = nil) -> [H.Visit] {
+            (0..<count).map { H.Visit(key: "site\($0).example/p", url: "https://site\($0).example/p", title: "Page \($0)", at: at?($0) ?? start + Double($0) + 1) }
+        }
+        func fields(_ entry: Data) -> [String: Any] {
+            (try? JSONSerialization.jsonObject(with: entry)) as? [String: Any] ?? [:]
+        }
+        func refusal(_ message: String, _ status: Int = 400) -> Cloud.Failure {
+            Cloud.Failure(status: status, code: status == 400 ? "bad_request" : "payload_too_large", message: message)
+        }
+        /// copper-cloud 0.4.0's checks of `POST /v1/sync/history`, in its
+        /// order and words; a title with POISON in it stands for a rule this
+        /// Copper doesn't know (refused without naming the entry).
+        func server040(entryBytes: Int = 16_384, batch: Int = 2_000) -> ([Data]) throws -> [(index: Int, why: String)] {
+            return { entries in
+                if H.body(entries).count > batch * (entryBytes + 8) + 1_024 { throw refusal("payload too large", 413) }
+                if entries.count > batch { throw refusal("at most \(batch) entries per request") }
+                for (i, entry) in entries.enumerated() {
+                    if entry.count > entryBytes { throw refusal("entry \(i) exceeds \(entryBytes) bytes") }
+                    if entry.first != UInt8(ascii: "{") { throw refusal("entry \(i) must be a JSON object") }
+                    let object = fields(entry)
+                    if object.isEmpty { throw refusal("entry \(i): expected value") }
+                    if let at = object["visited_at"] as? String, CloudSync.date(at) == nil { throw refusal("visited_at must be RFC 3339 or a Unix timestamp") }
+                    if (object["title"] as? String)?.contains("POISON") == true { throw refusal("visited_at must be RFC 3339 or a Unix timestamp") }
+                }
+                return []
+            }
+        }
+        struct Run {
+            var stored: [[String: Any]] = []
+            var error: Error?
+            var resentRefused = false
+        }
+        /// What CloudSync's push does with the network, against `server`;
+        /// `dropAt` makes that request fail as a dropped connection would.
+        func drive(_ upload: H.Upload, _ server: ([Data]) throws -> [(index: Int, why: String)], dropAt: Int? = nil) -> Run {
+            var run = Run()
+            var refused = Set<Data>()
+            while let entries = upload.next() {
+                let body = H.body(entries)
+                if refused.contains(body) { run.resentRefused = true }
+                if upload.requests == dropAt {
+                    run.error = Cloud.Failure(status: 0, code: "network", message: "dropped")
+                    return run
+                }
+                do {
+                    let rejected = try server(entries)
+                    let skipped = Set(rejected.map { $0.index })
+                    run.stored += entries.indices.filter { !skipped.contains($0) }.map { fields(entries[$0]) }
+                    upload.accepted(rejected: rejected)
+                } catch let failure as Cloud.Failure where H.refuses(failure) {
+                    refused.insert(body)
+                    do { try upload.refused(failure) } catch { run.error = error; return run }
+                } catch {
+                    run.error = error
+                    return run
+                }
+                if upload.requests > 5_000 { run.error = refusal("runaway"); return run }
+            }
+            return run
+        }
+        func upload(_ list: [H.Visit], limits: H.Limits = .standard, from through: Double = 0, known: [String: Double] = [:]) -> H.Upload {
+            H.Upload(H.plan(list, after: through, known: known, now: now, limits: limits), limits: limits, from: through, now: now)
+        }
+        let big = String(repeating: "a", count: 20_000)
+
+        // The limits /v1/info gives.
+        let info = H.Limits(info: ["limits": ["max_blob_bytes": 8_000_000, "max_history_batch": 100, "max_history_entry_bytes": 4_096]])
+        check(info.entryBytes == 4_096 && info.batch == 100 && info.requestBytes == 100 * (4_096 + 8) + 1_024, "history: limits from /v1/info")
+        check(H.Limits(info: ["limits": ["max_history_batch": 2_000, "max_history_entry_bytes": 16_384]]).batch == H.most, "history: never more than 500 a request")
+        check(H.Limits(info: ["version": "0.1.0"]) == .standard, "history: no limits said, copper-cloud's own")
+        check(H.number(after: "entry ", in: "entry 12 exceeds 16384 bytes") == 12
+              && H.number(after: "exceeds ", in: "entry 12 exceeds 16384 bytes") == 16_384
+              && H.number(after: "at most ", in: "too many entries: 900 in one request; at most 500 (see GET /v1/info limits)") == 500
+              && H.number(after: "entry ", in: "too many entries: 900") == nil, "history: reading the server's refusals")
+
+        // One entry, measured as sent.
+        let plain = H.Visit(key: "a.example/x/y", url: "https://a.example/x/y?q=1", title: "A \"quoted\" title", at: start)
+        if case .fits(let item) = H.item(plain, now: now, limit: 16_384) {
+            let text = String(decoding: item.data, as: UTF8.self)
+            check(text.contains("https://a.example/x/y?q=1") && !text.contains("\\/") && !item.shortened, "history: slashes as they are")
+            check(fields(item.data)["title"] as? String == plain.title && fields(item.data)["url"] as? String == plain.url, "history: entry round trip")
+            check(fields(H.body([item.data, item.data]))["entries"].map { ($0 as? [Any])?.count == 2 } == true, "history: body is {entries: […]}")
+        } else { check(false, "history: slashes as they are") }
+        let wordy = H.Visit(key: "b.example", url: "https://b.example/", title: String(repeating: "é", count: 40_000), at: start)
+        if case .fits(let item) = H.item(wordy, now: now, limit: 16_384) {
+            let title = fields(item.data)["title"] as? String ?? ""
+            check(item.shortened && item.data.count <= 16_384 && item.data.count > 16_000 && title.hasSuffix("…") && title.hasPrefix("ééé"), "history: a long title is shortened to fit")
+        } else { check(false, "history: a long title is shortened to fit") }
+        let huge = H.Visit(key: "c.example", url: "https://c.example/?state=" + big, title: "Sign in", at: start)
+        if case .tooBig(let skip) = H.item(huge, now: now, limit: 16_384) {
+            check(skip.host == "c.example" && skip.bytes > 20_000, "history: an address too big is left out")
+        } else { check(false, "history: an address too big is left out") }
+        let later = H.Visit(key: "d.example", url: "https://d.example/", title: "", at: now + 86_400 * 365)
+        let ancient = H.Visit(key: "e.example", url: "https://e.example/", title: "", at: -1e12)
+        if case .fits(let a) = H.item(later, now: now, limit: 16_384), case .fits(let b) = H.item(ancient, now: now, limit: 16_384) {
+            check(a.sentAt == now && b.sentAt == H.earliest
+                  && (fields(b.data)["visited_at"] as? String).flatMap(CloudSync.date) != nil, "history: visited_at always a time the server reads")
+        } else { check(false, "history: visited_at always a time the server reads") }
+
+        // The wedge: 1,200 places, one with a 20 KB address and one with a
+        // 40 KB title, against 0.4.0. Nothing is refused; the address is left
+        // out, the title shortened, the cursor reaches the newest visit.
+        var wedge = visits(1_200)
+        wedge[700].url = "https://sso.example/saml?SAMLRequest=" + big
+        wedge[800].title = String(repeating: "T", count: 40_000)
+        let fixed = upload(wedge)
+        let first = drive(fixed, server040())
+        check(first.error == nil && first.stored.count == 1_199 && fixed.requests == 3, "history: an oversized place no longer wedges the push")
+        check(fixed.skipped.count == 1 && fixed.skipped.first?.host == "sso.example" && fixed.shortened == 1, "history: left out and shortened, said")
+        check(fixed.through == wedge[1_199].at, "history: cursor past everything dealt with")
+        check(upload(wedge, from: fixed.through).next() == nil, "history: nothing sent twice")
+
+        // A server whose limit is smaller than the one believed: it names the
+        // entry and the limit; the limit is learned, nothing refused is resent.
+        let stale = upload(wedge, limits: H.Limits(entryBytes: 65_536, batch: 500, requestBytes: 1 << 22))
+        let second = drive(stale, server040())
+        check(second.error == nil && second.stored.count == 1_199 && !second.resentRefused, "history: a named entry is skipped, the rest resent")
+        check(stale.limits.entryBytes == 16_384 && stale.through == wedge[1_199].at && stale.requests <= 6, "history: the server's limit is learned")
+
+        // Refusals that name no entry: halves until each stands alone.
+        var poisoned = visits(1_200)
+        for index in [300, 301, 900] { poisoned[index].title = "POISON \(index)" }
+        let split = upload(poisoned)
+        let third = drive(split, server040())
+        let titles = Set(third.stored.compactMap { $0["title"] as? String })
+        check(third.error == nil && third.stored.count == 1_197 && !titles.contains("POISON 300") && titles.contains("Page 302"), "history: unnamed refusals are found and skipped")
+        check(split.skipped.count == 3 && !third.resentRefused && split.requests < 60 && split.through == poisoned[1_199].at, "history: no identical batch resent, cursor through the end")
+
+        // All of it believed wrong (16 KB, 500 a request) against a cloud
+        // taking 1 KB and 100: bodies too big (413), then an entry too big.
+        var wordy2 = visits(300)
+        for index in 0..<296 { wordy2[index].title = String(repeating: "long title ", count: 140) }
+        for index in [296, 297] { wordy2[index].url = "https://big\(index).example/?q=" + String(repeating: "x", count: 2_048) }
+        let small = upload(wordy2)
+        let ninth = drive(small, server040(entryBytes: 1_024, batch: 100))
+        check(ninth.error == nil && ninth.stored.count == 298 && small.skipped.count == 2 && small.shortened == 296 && !ninth.resentRefused
+              && small.limits.entryBytes == 1_024 && small.limits.requestBytes <= 100 * (1_024 + 8) + 1_024 && small.through == wordy2[299].at,
+              "history: a body too big is split, and the size learned")
+
+        // "at most N entries": smaller requests, nothing skipped.
+        let fewer = upload(visits(1_200))
+        let fourth = drive(fewer, server040(batch: 100))
+        check(fourth.error == nil && fourth.stored.count == 1_200 && fewer.skipped.isEmpty && fewer.limits.batch == 100, "history: the batch limit is learned")
+
+        // A dropped connection: the cursor stays where what went up ends.
+        let list = visits(1_200)
+        let dropped = upload(list)
+        let fifth = drive(dropped, server040(), dropAt: 2)
+        check(fifth.error != nil && fifth.stored.count == 500 && dropped.through == list[499].at, "history: cursor stops at what went up")
+        let resumed = upload(list, from: dropped.through)
+        check(drive(resumed, server040()).stored.count == 700, "history: the rest goes next time")
+
+        // Visits at the same instant split across requests: the cursor stops
+        // just short of that instant, so none of them is passed over.
+        let tied = visits(10) { _ in start }
+        let ties = upload(tied, limits: H.Limits(entryBytes: 16_384, batch: 5, requestBytes: 1 << 20))
+        _ = drive(ties, server040(), dropAt: 2)
+        check(ties.through < start && ties.through > start - 1, "history: tied visits aren't passed over")
+
+        // A server refusing everything: the push stops, nothing is skipped.
+        let closed = upload(visits(40))
+        let sixth = drive(closed, { _ in throw refusal("history is closed") })
+        check((sixth.error as? Cloud.Failure)?.code == "history_refused" && closed.skipped.isEmpty && closed.through == 0, "history: a server refusing everything skips nothing")
+
+        // Stamped in the future: sent as now, the cursor stays at now, and
+        // it is remembered so it isn't sent again.
+        var ahead = visits(3)
+        ahead[2].at = now + 86_400 * 365
+        let future = upload(ahead)
+        let seventh = drive(future, server040())
+        let stamp = (seventh.stored.last?["visited_at"] as? String).flatMap(CloudSync.date)?.timeIntervalSince1970 ?? .infinity
+        check(seventh.stored.count == 3 && stamp <= now && future.through == now, "history: a future visit doesn't move the cursor past now")
+        let known = Dictionary(uniqueKeysWithValues: future.ahead.map { ($0.key, $0.at) })
+        check(upload(ahead, from: future.through, known: known).next() == nil, "history: a future visit isn't sent again")
+
+        // 0.5.0 stores what it can and lists what it skipped.
+        let newer = upload(visits(10))
+        let eighth = drive(newer, { entries in entries.count > 3 ? [(index: 3, why: "entry is 20000 bytes; the limit is 16384")] : [] })
+        check(eighth.error == nil && newer.sent == 9 && newer.skipped.count == 1 && newer.through == start + 10, "history: a 0.5.0 server's skips are said, the cursor moves on")
     }
 }

@@ -793,6 +793,10 @@ struct ContentView: View {
         // Return and ⌘1–9 are its own.
         if browser.launching, Launcher.key(event, in: browser) { return true }
 
+        // Fork (settings-revamp): while Settings is open, ⌘F, Esc (the query
+        // before the panel), ↑ ↓ ↩ over results and type-to-search are its own.
+        if browser.tuning, SettingsKeys.take(event, in: browser) { return true }
+
         // Escape puts the page back. On a blank tab there is no page to put
         // back, so it belongs to whatever else wants it.
         if event.keyCode == 53 {

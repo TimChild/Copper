@@ -93,7 +93,7 @@ struct LabsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Card {
+            SettingsSection("Flights", note: "Labs are previews of what Copper is trying next. Each one is off until you turn it on here, and turning it off puts everything back exactly as it was.") {
                 Line("Trails — organise tabs by what you were doing (preview)",
                      "Today's tabs gather into lines of intent: a search, or an address you typed, and every page you opened from it. The trail you're on opens out; the rest fold to one row each.") {
                     Switch(on: Binding(
@@ -101,6 +101,7 @@ struct LabsPage: View {
                         set: { on in withAnimation(Motion.settle) { flights.trails = on } }
                     ))
                 }
+                .settingsAnchor("labs.trails")
                 Rule()
                 Line("Tide", "Trails left alone this long drift under Earlier, quieter, and their pages may sleep. Nothing is closed.") {
                     Segmented(options: Tide.allCases.map { ($0, $0.title) }, selection: $flights.tide)
@@ -108,12 +109,8 @@ struct LabsPage: View {
                 .opacity(flights.trails ? 1 : 0.4)
                 .allowsHitTesting(flights.trails)
                 .animation(Motion.quick, value: flights.trails)
+                .settingsAnchor("labs.tide")
             }
-            Text("Labs are previews of what Copper is trying next. Each one is off until you turn it on here, and turning it off puts everything back exactly as it was.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
         }
     }
 }

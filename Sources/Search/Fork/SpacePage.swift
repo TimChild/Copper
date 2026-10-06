@@ -34,6 +34,7 @@ struct SpacesSettingsPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             picker
+                .settingsAnchor("spaces.picker") // Fork (settings-revamp): search anchors
             SpacePage(browser: browser, id: shown)
                 .id(shown)
         }
@@ -196,13 +197,16 @@ struct SpacePage: View {
                     VStack(alignment: .leading, spacing: 16) {
                         header(space)
                         section("Name") { name }
+                            .settingsAnchor("spaces.name")
                         section("Look", trailing: kind == Kind(look) ? nil : "pick a picture below") {
                             // Settings' own segmented control, so the page reads
                             // as one with the rest of Settings.
                             Segmented(options: Kind.allCases.map { ($0, $0.title) },
                                       selection: Binding(get: { kind }, set: choose(kind:)), wide: true)
                         }
+                        .settingsAnchor("spaces.look")
                         section("Profile") { profile(space) }
+                            .settingsAnchor("spaces.profile")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -264,6 +268,7 @@ struct SpacePage: View {
     private func controls(_ space: Space) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             group { section("Icon", trailing: space.symbol ?? (space.icon == nil ? (space.emoji == nil ? "None" : "From the name") : "Emoji")) { icons(space) } }
+                .settingsAnchor("spaces.icon", card: true)
             group {
                 VStack(alignment: .leading, spacing: 18) {
                     section(kind == .picture ? "Tint" : "Colours", trailing: colourName(space)) { colours }
@@ -271,7 +276,9 @@ struct SpacePage: View {
                     if kind == .animated { section("Scene", trailing: AnimatedBackdrop.styles.first { $0.id == look.motion?.style }?.name) { scenes } }
                 }
             }
+            .settingsAnchor("spaces.colours", card: true)
             group { section("Adjust") { adjust } }
+                .settingsAnchor("spaces.adjust", card: true)
         }
     }
 
@@ -678,6 +685,7 @@ struct SpacePage: View {
                     Pill("Delete Space…", tint: .red) { SpaceDelete.ask(id, in: browser) }
                 }
             }
+            .settingsAnchor("spaces.delete", card: true)
         }
     }
 }

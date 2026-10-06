@@ -39,7 +39,6 @@ struct OnePasswordCard: View {
                 .foregroundStyle(.red.opacity(0.78))
             }
         }
-        .id("onepassword")
         .onAppear {
             if initialPath == nil, let mode = onePassword.mode { path = mode }
             if chosenAccount.isEmpty { chosenAccount = onePassword.account?.userID ?? onePassword.accounts.first?.userID ?? "" }
@@ -98,6 +97,7 @@ struct OnePasswordCard: View {
             Segmented(options: paths, selection: $path)
                 .fixedSize()
         }
+        .settingsAnchor("onepassword.method")
         Rule()
         switch path {
         case .app: appSignIn
@@ -118,11 +118,13 @@ struct OnePasswordCard: View {
     private var appSignIn: some View {
         if onePassword.accounts.count > 1 {
             Line("Account") { accountMenu(allowNew: false) }
+                .settingsAnchor("onepassword.account")
             Rule()
         }
         Line("Unlock with 1Password", "1Password asks for Touch ID in its own window — no password is typed into Copper") {
             actionPill(onePassword.signingIn ? "Waiting for 1Password…" : "Unlock with 1Password") { unlockWithApp() }
         }
+        .settingsAnchor("onepassword.unlock")
         if onePassword.problem?.problem == .integrationOff {
             Rule()
             integrationGuide
@@ -137,6 +139,7 @@ struct OnePasswordCard: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 240)
             }
+            .settingsAnchor("onepassword.account")
             Rule()
             Line("Email") {
                 TextField("you@example.com", text: $email)
@@ -166,8 +169,10 @@ struct OnePasswordCard: View {
                 }
                 .fixedSize()
             }
+            .settingsAnchor("onepassword.unlock")
         } else {
             Line("Account", "Already known to 1Password on this Mac") { accountMenu(allowNew: true) }
+                .settingsAnchor("onepassword.account")
             Rule()
             Line("Account password") {
                 HStack(spacing: 8) {
@@ -178,6 +183,7 @@ struct OnePasswordCard: View {
                     actionPill("Sign in") { signIn() }
                 }
             }
+            .settingsAnchor("onepassword.unlock")
         }
     }
 
@@ -192,6 +198,7 @@ struct OnePasswordCard: View {
                 actionPill("Connect") { connectToken() }
             }
         }
+        .settingsAnchor("onepassword.service")
     }
 
     private var integrationGuide: some View {
@@ -230,6 +237,7 @@ struct OnePasswordCard: View {
         Line("1Password", "Locked" + accountSuffix) {
             Pill("Sign out") { signOut() }
         }
+        .settingsAnchor("onepassword.account")
         Rule()
         switch onePassword.mode {
         case .password:
@@ -242,14 +250,17 @@ struct OnePasswordCard: View {
                     actionPill("Unlock") { unlock() }
                 }
             }
+            .settingsAnchor("onepassword.unlock")
         case .service:
             Line("Service account", "The token is kept on this Mac, readable by this user only") {
                 actionPill("Unlock") { unlock() }
             }
+            .settingsAnchor("onepassword.unlock")
         case .app, .none:
             Line("Unlock with 1Password", "Touch ID in 1Password's own window") {
                 actionPill(onePassword.signingIn ? "Waiting for 1Password…" : "Unlock with 1Password") { unlock() }
             }
+            .settingsAnchor("onepassword.unlock")
             if onePassword.problem?.problem == .integrationOff {
                 Rule()
                 integrationGuide
@@ -278,17 +289,27 @@ struct OnePasswordCard: View {
             }
             .fixedSize()
         }
+        .settingsAnchor("onepassword.sync")
         Rule()
         Line("Account", accountLine) {
             Pill("Sign out") { signOut() }
         }
+        .settingsAnchor("onepassword.account")
         Rule()
         Line("Vaults", vaultsLine) { EmptyView() }
-        Rule()
-        SaveTargetLine(browser: browser, prefs: browser.prefs)
-        if browser.prefs.passwordsBackend == .onePassword, !onePassword.writableVaults.isEmpty || !onePassword.vaults.isEmpty {
+        // Once the vaults are read: which one takes a new login, or that
+        // none can (a read-only service account).
+        if !onePassword.vaults.isEmpty {
             Rule()
-            Line("New logins go to", "A login saved from a page is created in this vault") { vaultMenu }
+            if onePassword.writableVaults.isEmpty {
+                Line("New logins go to", "None of these vaults lets this account create items — saves stay in the keychain") {
+                    Text("Read-only").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                }
+                .settingsAnchor("onepassword.vault")
+            } else {
+                Line("New logins go to", saveVaultDetail) { vaultMenu }
+                    .settingsAnchor("onepassword.vault")
+            }
         }
         Rule()
         Line("Stay unlocked between launches", stayDetail) {
@@ -297,6 +318,7 @@ struct OnePasswordCard: View {
                 set: { onePassword.stayUnlocked = $0 }
             ))
         }
+        .settingsAnchor("onepassword.stay")
     }
 
     private var accountLine: String {
@@ -322,6 +344,12 @@ struct OnePasswordCard: View {
         return "\(names.joined(separator: ", ")) — \(what)"
     }
 
+    private var saveVaultDetail: String {
+        browser.prefs.passwordsBackend == .onePassword
+            ? "A login saved from a page is created in this vault"
+            : "Used when new passwords are saved to 1Password"
+    }
+
     private var stayDetail: String {
         switch onePassword.mode {
         case .password:
@@ -334,9 +362,8 @@ struct OnePasswordCard: View {
     }
 
     private var vaultMenu: some View {
-        let pool = onePassword.writableVaults.isEmpty ? onePassword.vaults : onePassword.writableVaults
-        return Menu {
-            ForEach(pool) { vault in
+        Menu {
+            ForEach(onePassword.writableVaults) { vault in
                 Button(vault.name) { onePassword.setSaveVault(vault) }
             }
         } label: {
@@ -458,8 +485,23 @@ struct OnePasswordCard: View {
 }
 
 /// "Save new passwords to: Keychain | Bitwarden | 1Password" — one chooser
-/// for every backend. A vault that is set up but locked stays offered; its
-/// saves go to the keychain until it opens, and the line says so.
+/// for every backend, at the head of Settings › Passwords › Password
+/// managers, drawn once a password manager is connected. A vault that is set
+/// up but locked stays offered; its saves go to the keychain until it opens,
+/// and the line says so.
+struct SaveTargetCard: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject private var bitwarden = Bitwarden.shared
+    @ObservedObject private var onePassword = OnePassword.shared
+
+    var body: some View {
+        if SaveTargetLine.choices(prefs: browser.prefs).count > 1 {
+            Card { SaveTargetLine(browser: browser) }
+                .settingsAnchor("passwords.backend")
+        }
+    }
+}
+
 struct SaveTargetLine: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
@@ -473,17 +515,23 @@ struct SaveTargetLine: View {
 
     var body: some View {
         Line("Save new passwords to", detail) {
-            Segmented(options: options, selection: $prefs.passwordsBackend)
+            Segmented(options: Self.choices(prefs: prefs), selection: $prefs.passwordsBackend)
                 .fixedSize()
         }
     }
 
-    private var options: [(Credentials.Backend, String)] {
+    /// Keychain always; a manager once it is connected (locked or open), or
+    /// while it is the chosen one.
+    @MainActor
+    static func choices(prefs: Preferences) -> [(Credentials.Backend, String)] {
         var list: [(Credentials.Backend, String)] = [(.keychain, "Keychain")]
-        switch bitwarden.state {
-        case .locked, .unlocked: list.append((.bitwarden, "Bitwarden"))
-        default: if prefs.passwordsBackend == .bitwarden { list.append((.bitwarden, "Bitwarden")) }
+        var bitwardenConnected = false
+        switch Bitwarden.shared.state {
+        case .locked, .unlocked: bitwardenConnected = true
+        default: break
         }
+        if bitwardenConnected || prefs.passwordsBackend == .bitwarden { list.append((.bitwarden, "Bitwarden")) }
+        let onePassword = OnePassword.shared
         if onePassword.isUnlocked || onePassword.isLocked || prefs.passwordsBackend == .onePassword {
             list.append((.onePassword, "1Password"))
         }
@@ -492,13 +540,20 @@ struct SaveTargetLine: View {
 
     private var detail: String {
         let chosen = prefs.passwordsBackend
-        guard chosen != .keychain else { return "New save offers go to the macOS keychain; fills use every source" }
+        guard chosen != .keychain else { return "Offers to save go to the macOS keychain; filling uses every source" }
         if Credentials.saveTarget == chosen {
             if chosen == .onePassword, let vault = onePassword.saveVault {
-                return "New logins go to the \(vault.name) vault; fills still use every source"
+                return "New logins go to 1Password's \(vault.name) vault; filling still uses every source"
             }
-            return "New save offers go to \(chosen.title); fills still use every source"
+            return "Offers to save go to \(chosen.title); filling still uses every source"
         }
-        return "\(chosen.title) is locked — saves go to the keychain until it opens"
+        if chosen == .onePassword, onePassword.isUnlocked {
+            return "1Password has no vault this account may add to — saves go to the keychain"
+        }
+        var locked = chosen == .onePassword && onePassword.isLocked
+        if chosen == .bitwarden, case .locked = bitwarden.state { locked = true }
+        return locked
+            ? "\(chosen.title) is locked — saves go to the keychain until it opens"
+            : "\(chosen.title) isn't connected — saves go to the keychain"
     }
 }

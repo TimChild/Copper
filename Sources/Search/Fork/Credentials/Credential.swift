@@ -76,7 +76,7 @@ struct Credential: Identifiable, Hashable {
             switch self {
             case .keychain: return "key"
             case .bitwarden: return "shield"
-            case .onePassword: return "lock.circle"
+            case .onePassword: return "1.circle"
             }
         }
     }

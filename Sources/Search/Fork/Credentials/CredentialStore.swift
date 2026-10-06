@@ -40,7 +40,9 @@ enum Credentials {
         let chosen = Store.settings.string(forKey: "passwords.backend").flatMap(Backend.init(rawValue:)) ?? .keychain
         switch chosen {
         case .bitwarden where isBitwardenUnlocked: return .bitwarden
-        case .onePassword where isOnePasswordUnlocked: return .onePassword
+        // A 1Password that may create nothing (a read-only service account)
+        // can't take a save.
+        case .onePassword where isOnePasswordUnlocked && OnePassword.shared.saveVault != nil: return .onePassword
         default: return .keychain
         }
     }

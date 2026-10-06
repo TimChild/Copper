@@ -373,8 +373,31 @@ def authenticate(st, flags, command):
     fail("You are not currently signed in. Please run `op signin --help` for instructions")
 
 
+def read_stdin(gap=2.0, cap=20.0):
+    """stdin, without ever hanging: nothing from a terminal, and from a pipe
+    only what arrives — a pipe nobody writes to or closes (a harness's
+    inherited stdin) gives up after `gap` seconds of silence."""
+    try:
+        if sys.stdin is None or sys.stdin.closed or sys.stdin.isatty():
+            return ""
+        fd = sys.stdin.fileno()
+    except (OSError, ValueError):
+        return ""
+    import select
+    chunks, started = [], time.time()
+    while time.time() - started < cap:
+        ready, _, _ = select.select([fd], [], [], gap)
+        if not ready:
+            break
+        block = os.read(fd, 65536)
+        if not block:
+            break
+        chunks.append(block)
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
 def read_password(prompt):
-    data = sys.stdin.read() if not sys.stdin.isatty() else ""
+    data = read_stdin()
     line = data.split("\n", 1)[0] if data else ""
     if not line:
         sys.stderr.write(prompt)
@@ -486,7 +509,7 @@ def find_item(st, principal, spec, vault=None):
 
 
 def specs_from_stdin():
-    raw = sys.stdin.read()
+    raw = read_stdin()
     text = raw.strip()
     if not text:
         return []
@@ -687,7 +710,7 @@ def cmd_item(st, flags, args):
     if sub == "create":
         template = {}
         if len(args) > 1 and args[1] == "-":
-            template = json.loads(sys.stdin.read() or "{}")
+            template = json.loads(read_stdin() or "{}")
         vault = find_vault(st, flags.get("--vault") or "Private", p.vaults(st))
         if not vault:
             fail(f"\"{flags.get('--vault')}\" isn't a vault in this account.")
@@ -715,7 +738,7 @@ def cmd_item(st, flags, args):
         item = find_item(st, p, args[1], flags.get("--vault"))
         if item["vault"]["id"] not in {v["id"] for v in p.writable(st)}:
             fail("You do not have permission to perform this action.")
-        raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+        raw = read_stdin()
         if raw.strip():
             template = json.loads(raw)
             if "fields" in template:

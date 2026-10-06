@@ -128,7 +128,7 @@ final class OnePassword: ObservableObject {
 
     /// The vault new logins are created in.
     var saveVault: Vault? {
-        let pool = writableVaults.isEmpty ? vaults : writableVaults
+        let pool = writableVaults
         if let id = Store.settings.string(forKey: Self.saveVaultKey), let kept = pool.first(where: { $0.id == id }) {
             return kept
         }
@@ -376,7 +376,9 @@ final class OnePassword: ObservableObject {
     func connect(serviceToken raw: String) async throws {
         let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard token.hasPrefix("ops_"), token.count > 10 else {
-            throw Failure(.badToken, "A service account token starts with ops_")
+            let failure = Failure(.badToken, "A service account token starts with ops_")
+            problem = failure
+            throw failure
         }
         try await signing {
             let previous = (mode, account, serviceToken)
@@ -414,6 +416,7 @@ final class OnePassword: ObservableObject {
     private func signing(_ work: () async throws -> Void) async throws {
         guard !signingIn else { throw Failure(.other, "A 1Password sign-in is already running") }
         signingIn = true
+        problem = nil
         defer { signingIn = false }
         do {
             try await work()
@@ -629,13 +632,23 @@ final class OnePassword: ObservableObject {
                 }
             }
         }
-        let vaultData = try await run(["vault", "list", "--format", "json"], timeout: 30)
-        let listData = try await run(["item", "list", "--categories", Self.categories, "--format", "json"], timeout: 60)
+        // The three reads at once; which vaults take a new item is settled
+        // before either list is shown, so the card never flashes
+        // "Read-only" in between.
+        async let vaultRead = run(["vault", "list", "--format", "json"], timeout: 30)
+        async let listRead = run(["item", "list", "--categories", Self.categories, "--format", "json"], timeout: 60)
+        async let writableRead = writableVaultIDs()
+        let vaultData = try await vaultRead
+        let listData = try await listRead
+        let writableIDs = await writableRead
         guard generation == started else { return }
-        vaults = OnePasswordCLI.objects(in: vaultData).compactMap { object in
+        let readable = OnePasswordCLI.objects(in: vaultData).compactMap { object -> Vault? in
             guard let id = object["id"] as? String else { return nil }
             return Vault(id: id, name: object["name"] as? String ?? "")
         }
+        let writable = writableIDs.map { ids in readable.filter { ids.contains($0.id) } } ?? readable
+        vaults = readable
+        writableVaults = writable
         let names = Dictionary(vaults.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         let previous = Dictionary(cachedItems.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var fresh: [Item] = []
@@ -666,21 +679,18 @@ final class OnePassword: ObservableObject {
         loadingList = false
         cacheVersion += 1
 
-        await loadWritableVaults()
         guard !stale.isEmpty else { return }
         await loadDetails(stale, generation: started)
     }
 
-    private func loadWritableVaults() async {
-        if let data = try? await run(["vault", "list", "--permission", "create_items", "--format", "json"], timeout: 20) {
-            let found = OnePasswordCLI.objects(in: data).compactMap { object -> Vault? in
-                guard let id = object["id"] as? String else { return nil }
-                return Vault(id: id, name: object["name"] as? String ?? "")
-            }
-            writableVaults = found.isEmpty ? vaults : found
-        } else {
-            writableVaults = vaults
+    /// The ids of the vaults this account may create items in; nil when
+    /// op is too old for `--permission` (then every readable vault is
+    /// assumed). An empty set is an answer: a read-only service account.
+    private func writableVaultIDs() async -> Set<String>? {
+        guard let data = try? await run(["vault", "list", "--permission", "create_items", "--format", "json"], timeout: 20) else {
+            return nil
         }
+        return Set(OnePasswordCLI.objects(in: data).compactMap { $0["id"] as? String })
     }
 
     /// `op item get - --reveal`, fed the list rows on stdin, a batch at a
@@ -887,7 +897,7 @@ final class OnePassword: ObservableObject {
             "serviceFile": FileManager.default.fileExists(atPath: serviceFile.path),
         ]
         if let lastSync { out["lastSync"] = ISO8601DateFormatter().string(from: lastSync) }
-        if let problem { out["problem"] = problem.problem.rawValue; out["error"] = problem.message }
+        if let problem { out["problem"] = problem.problem.rawValue; out["problemMessage"] = problem.message }
         return out
     }
 

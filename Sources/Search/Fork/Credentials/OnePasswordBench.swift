@@ -47,16 +47,19 @@ enum OnePasswordBench {
         case "accounts":
             return start("accounts") { await vault.refreshAccounts() }
         case "signin":
-            // op signin app [ACCOUNT] | password PW [ACCOUNT] | token TOKEN
-            guard let how = words.first else { return ["error": "op signin app [ACCOUNT]|password PW [ACCOUNT]|token TOKEN"] }
+            // op signin app [ACCOUNT] | password [--account A] PW… | token TOKEN
+            // A password is the rest of the line, spaces and all.
+            guard let how = words.first else { return ["error": "op signin app [ACCOUNT]|password [--account A] PW|token TOKEN"] }
             switch how {
             case "app":
                 let account = words.count > 1 ? words[1] : nil
                 return start("signin-app") { try await vault.unlockWithApp(account: account) }
             case "password":
-                guard words.count >= 2 else { return ["error": "op signin password PW [ACCOUNT]"] }
-                let password = words[1]
-                let account = words.count > 2 ? words[2] : nil
+                var rest = Array(words.dropFirst())
+                var account: String?
+                if rest.count >= 2, rest[0] == "--account" { account = rest[1]; rest.removeFirst(2) }
+                guard !rest.isEmpty else { return ["error": "op signin password [--account A] PW"] }
+                let password = rest.joined(separator: " ")
                 return start("signin-password", secrets: [password]) { try await vault.signIn(password: password, account: account) }
             case "token":
                 guard words.count == 2 else { return ["error": "op signin token TOKEN"] }
@@ -66,14 +69,15 @@ enum OnePasswordBench {
                 return ["error": "op signin app|password|token"]
             }
         case "account":
-            // op account add ADDRESS EMAIL SECRETKEY PW
-            guard words.count == 5, words[0] == "add" else { return ["error": "op account add ADDRESS EMAIL SECRETKEY PW"] }
-            let (address, email, key, password) = (words[1], words[2], words[3], words[4])
+            // op account add ADDRESS EMAIL SECRETKEY PW…
+            guard words.count >= 5, words[0] == "add" else { return ["error": "op account add ADDRESS EMAIL SECRETKEY PW"] }
+            let (address, email, key) = (words[1], words[2], words[3])
+            let password = words[4...].joined(separator: " ")
             return start("account-add", secrets: [key, password]) {
                 try await vault.addAccount(address: address, email: email, secretKey: key, password: password)
             }
         case "unlock":
-            let password = words.first
+            let password = words.isEmpty ? nil : words.joined(separator: " ")
             return start("unlock", secrets: password.map { [$0] } ?? []) { try await vault.unlock(password: password) }
         case "lock":
             return start("lock") { await vault.lock() }
@@ -91,7 +95,7 @@ enum OnePasswordBench {
         case "vault":
             guard !words.isEmpty else { return ["saveVault": vault.saveVault?.name ?? NSNull()] }
             let name = words.joined(separator: " ")
-            let pool = vault.writableVaults.isEmpty ? vault.vaults : vault.writableVaults
+            let pool = vault.writableVaults
             guard let chosen = pool.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame || $0.id == name }) else {
                 return ["error": "no writable vault \(name)", "vaults": pool.map(\.name)]
             }
@@ -212,15 +216,27 @@ enum OnePasswordBench {
     /// PATH [HOST]` — the card in its current state (or the sign-in on one
     /// path), and the account picker as it would hang under HOST's sign-in box.
     static func view(_ which: String, host: String?, in browser: Browser) -> AnyView? {
+        /// As Settings draws it: its greys, its row metrics, its width.
+        func settings<V: View>(_ card: V) -> AnyView {
+            AnyView(card.frame(width: 600).padding(16).background(SettingsInk.content)
+                .environment(\.settingsLook, true))
+        }
         switch which {
-        case "onepassword":
-            return AnyView(OnePasswordCard(browser: browser).frame(width: 460).padding(12).background(Palette.wash))
+        case "onepassword", "onepassword-dark":
+            return settings(OnePasswordCard(browser: browser))
         case "onepassword-app", "onepassword-password", "onepassword-service":
             let path = OnePassword.Mode(rawValue: String(which.dropFirst("onepassword-".count)))
-            return AnyView(OnePasswordCard(browser: browser, path: path).frame(width: 460).padding(12).background(Palette.wash))
-        case "onepassword-dark":
-            return AnyView(OnePasswordCard(browser: browser).frame(width: 460).padding(12).background(Palette.wash)
-                .environment(\.colorScheme, .dark))
+            return settings(OnePasswordCard(browser: browser, path: path))
+        case "managers", "managers-dark":
+            // Settings › Passwords › Password managers, the whole section.
+            return settings(VStack(alignment: .leading, spacing: 8) {
+                SettingsSectionTitle("Password managers")
+                VStack(alignment: .leading, spacing: 12) {
+                    SaveTargetCard(browser: browser)
+                    BitwardenCard(browser: browser)
+                    OnePasswordCard(browser: browser)
+                }
+            })
         case "picker":
             let site = host ?? "localhost"
             let credentials = Credentials.candidates(for: site)

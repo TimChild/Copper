@@ -474,21 +474,21 @@ enum Fork {
             case "pill", "pill-dark":
                 // Every update pill state on every space (Fork/UpdatePill.swift).
                 view = AnyView(UpdatePillSheet(browser: browser, dark: which == "pill-dark"))
-            case "onepassword", "onepassword-app", "onepassword-password", "onepassword-service", "onepassword-dark", "picker":
+            case "onepassword", "onepassword-app", "onepassword-password", "onepassword-service", "onepassword-dark", "managers", "managers-dark", "picker":
                 // The 1Password card, or the account picker under a sign-in box.
                 guard let made = OnePasswordBench.view(which, host: request["host"] as? String, in: browser) else { return ["error": "no view"] }
                 view = made
-            default: return ["error": "render bitwarden|onepassword[-app|-password|-service|-dark]|picker|drive|agent|agent-dark|hands|hands-dark|pill|pill-dark PATH"]
+            default: return ["error": "render bitwarden|onepassword[-app|-password|-service|-dark]|managers[-dark]|picker|drive|agent|agent-dark|hands|hands-dark|pill|pill-dark PATH"]
             }
             let pane = ["drive", "agent", "agent-dark"].contains(which)
-            if pane || which.hasPrefix("pill") || which.hasPrefix("onepassword") || which == "picker" {
+            if pane || which.hasPrefix("pill") || which.hasPrefix("onepassword") || which.hasPrefix("managers") || which == "picker" {
                 // The pane's rows are in a ScrollView, which ImageRenderer
                 // leaves out: drawn through a hosting view instead, whole.
                 // The pills' shadows and materials want a real view too.
                 let host = NSHostingView(rootView: pane ? AnyView(view.background(Palette.ground)) : view)
                 host.frame = NSRect(origin: .zero, size: pane ? NSSize(width: AgentPane.width, height: 720) : host.fittingSize)
                 let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
-                if which == "agent-dark" || which == "onepassword-dark" { window.appearance = NSAppearance(named: .darkAqua) }
+                if which.hasSuffix("-dark") { window.appearance = NSAppearance(named: .darkAqua) }
                 window.contentView = host
                 host.layoutSubtreeIfNeeded()
                 // A turn of the run loop, so the scroll view has laid out and

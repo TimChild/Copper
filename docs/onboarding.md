@@ -260,13 +260,23 @@ They live in the macOS keychain by default (<kbd>⌥⌘L</kbd> opens the list).
 Vaultwarden), email and master password, **Sign in**; a two-step or new-device
 code is asked for next if your account needs one. Fills then merge keychain and
 Bitwarden accounts, one-time codes fill from the stored authenticator key, and
-**Save new passwords to Bitwarden** routes new saves there. **Stay unlocked
+**Save new passwords to › Bitwarden** routes new saves there. **Stay unlocked
 between launches** is on by default.
+
+**1Password (optional).** Install the CLI (`brew install 1password-cli`), then
+**Settings › Passwords › 1Password**: with the 1Password app on this Mac,
+**Unlock with 1Password** — the app asks for Touch ID in its own window and no
+password is typed into Copper (turn on 1Password › Settings › Developer ›
+Integrate with 1Password CLI first). Without the app, sign in with the account
+password, or paste a service account token on a Mac nobody sits at. Fills,
+codes, addresses and cards then come from 1Password too, and **Save new
+passwords to › 1Password** routes new saves there (docs/passwords.md).
 
 **Agents and passwords.** Agents never receive a password. They can only ask
 Copper to fill a saved sign-in you allowed under **Settings › Passwords ›
 Agent access** (per account, or share everything; in Bitwarden, items in a
-folder named `Agents` are allowed).
+folder named `Agents` are allowed; in 1Password, a vault named `Agents` or the
+`copper-agent` tag).
 
 ## Troubleshooting
 

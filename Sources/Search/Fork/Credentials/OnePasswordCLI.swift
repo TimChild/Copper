@@ -44,10 +44,34 @@ enum OnePasswordCLI {
     /// Where `op` is, first match wins: `SEARCH_OP_PATH` (a test world points
     /// it at the mock, an installer at the CLI it put down), `~/.local/bin/op`,
     /// Homebrew's two prefixes, then `$PATH`.
+    /// Where `op` is. Asked often (every card draw), so the answer is kept:
+    /// a found path until it disappears, a miss for five seconds — long enough
+    /// not to fork `which` per frame, short enough that a fresh
+    /// `brew install 1password-cli` shows up without a relaunch.
+    /// `SEARCH_OP_PATH=none` is a Mac without the CLI, for a test world.
     static var executableURL: URL? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        let files = FileManager.default
+        if let found = cachedExecutable {
+            if let url = found, files.isExecutableFile(atPath: url.path) { return url }
+            if found == nil, Date().timeIntervalSince(cachedAt) < 5 { return nil }
+        }
+        let url = locateExecutable()
+        cachedExecutable = .some(url)
+        cachedAt = Date()
+        return url
+    }
+
+    private static let cacheLock = NSLock()
+    private static var cachedExecutable: URL??
+    private static var cachedAt = Date.distantPast
+
+    private static func locateExecutable() -> URL? {
         let files = FileManager.default
         if let raw = ProcessInfo.processInfo.environment["SEARCH_OP_PATH"]?
             .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            if raw == "none" { return nil }
             let path = (raw as NSString).expandingTildeInPath
             if files.isExecutableFile(atPath: path) { return URL(fileURLWithPath: path) }
         }
@@ -55,18 +79,23 @@ enum OnePasswordCLI {
         for path in [local, "/opt/homebrew/bin/op", "/usr/local/bin/op"] where files.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
+        // Last, the PATH a GUI app was given — `which`, bounded and with
+        // nothing on its stdin.
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["op"]
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return nil
         }
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning, Date() < deadline { usleep(10_000) }
+        if process.isRunning { process.terminate(); return nil }
         guard process.terminationStatus == 0 else { return nil }
         let path = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,7 +155,11 @@ enum OnePasswordCLI {
     // MARK: - Running one
 
     /// Start `op`, write `stdin` (and close it, so a prompt never waits on a
-    /// terminal), and wait for it — or kill it after `timeout`.
+    /// terminal), and wait for it — or kill it after `timeout`. Nothing here
+    /// can hang: stdin is fed off this thread (a big batch can't deadlock
+    /// against a full stdout), a child that shrugs off SIGTERM gets SIGKILL,
+    /// and a grandchild still holding the pipes (op's own helper) is not
+    /// waited for past a short grace.
     static func execute(path: String, args: [String], environment: [String: String],
                         stdin: Data?, timeout: TimeInterval) throws -> Execution {
         let process = Process()
@@ -139,44 +172,58 @@ enum OnePasswordCLI {
         process.standardOutput = output
         process.standardError = errors
         process.standardInput = input
+        // A child that exits before reading its stdin must not take Copper
+        // down with SIGPIPE on the write below.
+        _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         try process.run()
-        if let stdin, !stdin.isEmpty {
-            try? input.fileHandleForWriting.write(contentsOf: stdin)
-        }
-        try? input.fileHandleForWriting.close()
 
         let group = DispatchGroup()
+        let lock = NSLock()
         var stdout = Data()
         var stderr = Data()
+        let feed = stdin ?? Data()
+        DispatchQueue.global(qos: .utility).async {
+            if !feed.isEmpty { try? input.fileHandleForWriting.write(contentsOf: feed) }
+            try? input.fileHandleForWriting.close()
+        }
         group.enter()
         DispatchQueue.global(qos: .utility).async {
-            stdout = output.fileHandleForReading.readDataToEndOfFile()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            lock.lock(); stdout = data; lock.unlock()
             group.leave()
         }
         group.enter()
         DispatchQueue.global(qos: .utility).async {
-            stderr = errors.fileHandleForReading.readDataToEndOfFile()
+            let data = errors.fileHandleForReading.readDataToEndOfFile()
+            lock.lock(); stderr = data; lock.unlock()
             group.leave()
         }
-        let lock = NSLock()
         var timedOut = false
+        let pid = process.processIdentifier
         let killer = DispatchWorkItem {
             lock.lock()
-            if process.isRunning {
-                timedOut = true
-                process.terminate()
-            }
+            let running = process.isRunning
+            if running { timedOut = true }
             lock.unlock()
+            guard running else { return }
+            process.terminate()
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+                if process.isRunning { kill(pid, SIGKILL) }
+            }
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: killer)
         process.waitUntilExit()
         killer.cancel()
-        group.wait()
+        // The pipes close when op does; a helper op left running may still
+        // hold them, and its output is not ours to wait for.
+        _ = group.wait(timeout: .now() + 3)
         lock.lock()
         let didTimeOut = timedOut
+        let out = stdout
+        let err = stderr
         lock.unlock()
         if didTimeOut { throw Failure(.timeout, "1Password took too long to answer") }
-        return Execution(stdout: stdout, stderr: stderr, status: process.terminationStatus)
+        return Execution(stdout: out, stderr: err, status: process.terminationStatus)
     }
 
     // MARK: - Reading its errors

@@ -1,11 +1,18 @@
 # Passwords in Copper
 
-Copper keeps the two password sources side by side:
+Copper keeps its password sources side by side:
 
 - **The macOS keychain** remains the default save destination.
 - **Bitwarden** is an optional backend driven by the official `bw` command-line
   client. When it is connected, fills merge keychain and Bitwarden accounts;
   choosing Bitwarden only changes where new save offers go.
+- **1Password** is an optional backend driven by the official `op` command-line
+  client, with the same shape as Bitwarden — see [1Password](#1password).
+
+**Save new passwords to** (Settings › Passwords › Password managers, shown once
+a manager is connected) chooses Keychain, Bitwarden or 1Password for new save
+offers. A chosen manager that is locked sends saves to the keychain until it
+opens, and the line says so. Fills always merge every unlocked source.
 
 Copper never needs a browser extension for either source. A saved account is
 read only when the user picks it (or an agent is allowed to use it), not while
@@ -106,10 +113,10 @@ it — one box, or one box per digit. Codes kept only in the separate Bitwarden
 Authenticator app are invisible to `bw`: the key has to be on a Password
 Manager login item with the site's URL.
 
-While Bitwarden is unlocked, turn on **Save new passwords to Bitwarden** in its
-Settings card to route new save offers there. Turn it off (or leave Bitwarden
-unavailable) to keep saving to the keychain. Existing fills continue to include
-both sources.
+Choose **Bitwarden** under **Save new passwords to** (Settings › Passwords ›
+Password managers) to route new save offers there while it is unlocked; choose
+Keychain (or leave Bitwarden locked) to keep saving to the keychain. Existing
+fills continue to include every source.
 
 ## Autofill everything
 
@@ -219,6 +226,84 @@ accounts shared one by one in Settings. `share: all` shares everything
 (Settings' share-everything switch). `copper-agent: deny` always wins. Either
 way, agents never receive the secret itself (next section).
 
+## 1Password
+
+Copper reads 1Password through the official CLI, `op` 2.x — the browser
+extension route is closed to Copper (1Password's desktop link checks the
+browser's code signature, and Copper is ad-hoc signed). Install it first:
+
+```sh
+brew install 1password-cli
+```
+
+Copper looks for `op` at `SEARCH_OP_PATH`, `~/.local/bin/op`,
+`/opt/homebrew/bin/op`, `/usr/local/bin/op`, then the `PATH`. It uses op's own
+configuration, so accounts already added (`op account list`) are simply there;
+`SEARCH_OP_CONFIG_DIR` points op at another config folder for a test.
+
+Open **Settings › Passwords › Password managers › 1Password** and pick a way in:
+
+- **1Password app** (preferred; offered when `/Applications/1Password.app` or
+  `~/Applications/1Password.app` exists). **Unlock with 1Password** runs `op
+  signin`; the 1Password app shows its own Touch ID / approval sheet. No
+  password ever enters Copper, and the authorization lasts as long as
+  1Password's own rules say. If the app doesn't answer, the card says how to
+  fix it: 1Password › Settings › Developer › **Integrate with 1Password CLI**
+  (Touch ID unlock has to be on too), with an **Open 1Password** button.
+- **Account password** (no app). Pick an account op already knows and type its
+  password: `op signin --account <id> --raw`, the password on stdin. An
+  account this Mac hasn't seen takes a sign-in address (default
+  `my.1password.com`), email, Secret Key and password: `op account add --signin
+  --raw`, the Secret Key through `OP_SECRET_KEY` and the password on stdin. The
+  session token goes to every later `op` as `OP_SESSION_<user id>`. op ends a
+  password session after 30 idle minutes; Copper runs a light `op whoami` every
+  four minutes while unlocked, and when op says the session is over the card
+  locks cleanly ("The 1Password session ended — unlock again") and the picker
+  offers **Unlock 1Password…**.
+- **Service account** (a Mac nobody sits at). Paste an `ops_…` token; it is
+  used as `OP_SERVICE_ACCOUNT_TOKEN`. The card shows the vaults it can see.
+  A token that may create items in no vault is read-only: the card says so and
+  saves stay in the keychain.
+
+**Security model.** No secret is ever an `op` argument (nothing shows in `ps`):
+passwords go on stdin, the Secret Key and tokens through the child's
+environment, item JSON for a save on stdin (`op item create -`, `op item edit ID` with the item JSON
+piped in). Every `op` runs with a timeout, its stdin closed when nothing is
+fed, and a child that outstays its timeout is killed. The session token (with
+**Stay unlocked between launches**, on by default) and a service account token
+are kept in 0600 files under Copper's support folder —
+`<support>/1password/session` and `<support>/1password/service-account` —
+never the keychain. Lock forgets the session and its file; Sign out also
+forgets the token, the account and the mode. In app mode nothing is kept: at
+launch Copper asks op whether the app still approves it.
+
+**Data.** On unlock Copper lists the vaults and the item metadata (`op vault
+list`, `op item list --categories Login,Password,Credit Card,Identity`) so the
+picker fills at once ("Loading your 1Password vault…" until then), then reads
+the items' details and secrets in the background in batches of 25 fed to `op
+item get - --reveal` on stdin, a few batches at a time. They stay in memory
+while unlocked and are dropped on lock; a pick that arrives before its batch
+reads that one item. The list is read again every five minutes and on **Sync
+now** (only changed items are read again). Logins map username/password by
+field purpose, sites from the item's URLs, one-time codes from the OTP field
+(computed locally by `TOTP.swift`), other fields as custom fields (hidden ones
+treated like passwords); identities and credit cards feed the address and card
+picker. Picker rows from 1Password carry a ① glyph; the footer names the
+sources ("From 1Password", "From your keychain, Bitwarden and 1Password").
+
+**Saves.** With 1Password chosen under *Save new passwords to*, a save offer
+reads "Save to 1Password" — or "Update in 1Password" when the site already has
+an item for that username, whose password is then changed in place (`op item
+edit`) rather than a twin added. New logins are created in the vault chosen
+under **New logins go to** (default Private / Personal / Employee, else the
+first vault the account may create items in).
+
+**Agents.** 1Password items share with agents exactly like Bitwarden ones (ids
+`op:<item id>` in Agent access): a per-item toggle or share-everything, a vault
+named `Agents` or a `copper-agent` tag allows, a `copper-agent: deny` field
+always denies. `browser_sign_in`, `browser_autofill`, `copper signin|autofill`
+and Jev's `SIGN_IN` / `AUTOFILL_*` fill in-process and return status only.
+
 ## Agent access
 
 Open **Settings › Passwords › Agent access** to decide which saved accounts an
@@ -293,3 +378,61 @@ returns stripped usernames and matching metadata; `share` changes Copper's
 agent policy. Use placeholders in examples and avoid shell history or
 transcripts containing credentials—never paste a real password, TOTP, or session
 key into documentation or a report.
+
+## Testing with `./bench op`
+
+The same, for 1Password, in a probe world whose `SEARCH_OP_PATH` points at the
+mock CLI in `docs/fixtures/op-mock/op` (python3; op 2.x's subcommands and JSON
+shapes from a state file — `OP_MOCK_STATE`, default
+`~/.config/op-mock/state.json` — seeded with two localhost logins (one with
+a TOTP seed and two custom fields), one other login, an identity and a card
+across a Private and a Shared vault; every call is appended to `calls.log`
+beside the state, argv and env *names* only):
+
+```sh
+W=op1p; P=4211
+mkdir -p /tmp/$W-mock /tmp/$W-fake/1Password.app     # a stand-in app path
+defaults write com.officecommun.search.test.$W bench -bool true
+defaults write com.officecommun.search.test.$W welcomed -bool true
+open -n -g --stderr /tmp/copper-$W.log --env SEARCH_PROBE=$W --env SEARCH_HEADLESS=1 \
+  --env SEARCH_MCP_PORT=$P --env SEARCH_OP_PATH="$PWD/docs/fixtures/op-mock/op" \
+  --env OP_MOCK_STATE=/tmp/$W-mock/state.json \
+  --env SEARCH_OP_APP_PATH=/tmp/$W-fake/1Password.app "$PWD/build/Copper.app"
+(cd docs/fixtures && nohup python3 -m http.server 8765 --bind 127.0.0.1 </dev/null >/tmp/$W-http.log 2>&1 &)
+```
+
+`SEARCH_OP_APP_PATH=none` is a Mac without the app; `SEARCH_OP_PATH=none` a Mac
+without the CLI. The mock's own switches (run it with the same
+`OP_MOCK_STATE`): `op mock set app_integration on|off`, `op mock set
+app_approve on|off` (the Touch ID sheet approved or dismissed), `op mock set
+app_delay_ms N`, `op mock set latency_ms N` (every item call slow — the
+loading state), `op mock expire` (every session ends), `op mock show` (items
+with password fingerprints, never values), `op mock check TITLE USER PW`, `op
+mock reset`. Seeded secrets: account password `correct horse battery staple`,
+service tokens `ops_mockServiceTokenReadOnly0001` (Shared, read-only) and
+`ops_mockServiceTokenWriter0002` (both vaults, writes to Shared); a second
+account to add is `team.1password.com` / `new@example.com` / Secret Key
+`A3-NEW123-ABCDEF-GHIJK-LMNOP-QRSTU-VWXYZ` / `new account password`. The mock
+never blocks: it reads stdin only for the subcommands that take it, and gives
+up on a pipe nobody writes to.
+
+```text
+./bench op status | accounts | counts
+./bench op signin app [ACCOUNT]
+./bench op signin password [--account A] PW…        # the rest of the line is the password
+./bench op signin token TOKEN
+./bench op account add ADDRESS EMAIL SECRETKEY PW…
+./bench op unlock [PW…] | lock | signout | sync | keepalive
+./bench op stay on|off | vault NAME | backend keychain|bitwarden|onepassword
+./bench op candidates HOST | choose ID | rows | pick ROW | offer [keep|drop]
+./bench op identities | cards | fields HOST | usernames
+./bench op autofill card|identity ID
+./bench op share all on|off | share op:<item-id> on|off
+./bench render onepassword[-app|-password|-service|-dark] PATH
+./bench render managers[-dark] PATH                     # the whole Password managers section
+```
+
+Long operations start and return; `status` says where they got to (`step`,
+`lastError`, `problem`) and never holds a secret. `docs/fixtures/login.html` is
+a sign-in form (it "signs in" by removing the form, the cue the save offer
+waits for) with a one-time-code box and two custom-field boxes.

@@ -17,6 +17,7 @@ struct IntelligencePage: View {
     @State private var pasted = ""
 
     var body: some View {
+        let _ = SettingsPerf.tick("intelligencePage") // Fork (settings-perf)
         VStack(alignment: .leading, spacing: 26) {
             SettingsSection("Model access") {
                 Line("Use", useDetail) {
@@ -322,6 +323,7 @@ struct UpdatesPage: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("updatesPage") // Fork (settings-perf)
         VStack(alignment: .leading, spacing: 10) {
             SettingsSection("This Copper") {
                 Line(currentLine, latestLine) {
@@ -410,6 +412,7 @@ struct AgentsPage: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("agentsPage") // Fork (settings-perf)
         VStack(alignment: .leading, spacing: 26) {
             SettingsSection("MCP server") {
                 Line("Let agents drive this window", "An MCP server on this Mac only (127.0.0.1). Claude Code, phi, Cursor and the rest see your open tabs and act in them — the same tools as Playwright MCP, on the browser you're already signed into.") {

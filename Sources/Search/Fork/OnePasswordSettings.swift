@@ -29,6 +29,7 @@ struct OnePasswordCard: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("onePasswordCard") // Fork (settings-perf)
         Card {
             content
             if let problem = onePassword.problem, problem.problem != .integrationOff, !isMissing {
@@ -497,6 +498,7 @@ struct SaveTargetCard: View {
     @ObservedObject private var onePassword = OnePassword.shared
 
     var body: some View {
+        let _ = SettingsPerf.tick("saveTarget") // Fork (settings-perf)
         if SaveTargetLine.choices(prefs: browser.prefs).count > 1 {
             Card { SaveTargetLine(browser: browser) }
                 .settingsAnchor("passwords.backend")

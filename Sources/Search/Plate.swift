@@ -83,6 +83,7 @@ struct Card<Content: View>: View {
     @Environment(\.settingsLook) private var settings // Fork (settings-revamp)
 
     var body: some View {
+        let _ = SettingsPerf.tick("card") // Fork (settings-perf)
         VStack(spacing: 0) { content() }
             .background(SettingsMetrics.cardFill(settings)) // Fork (settings-revamp)
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
@@ -116,6 +117,7 @@ struct Line<Control: View>: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("line") // Fork (settings-perf)
         Group {
             if settings {
                 // Fork (settings-revamp): in a narrow Settings window a wide

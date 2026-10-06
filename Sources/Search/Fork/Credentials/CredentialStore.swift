@@ -293,11 +293,15 @@ enum Credentials {
 
     private static func deduplicated(_ values: [Credential]) -> [Credential] {
         var result: [Credential] = []
+        result.reserveCapacity(values.count)
+        // Where each host+user key first landed (settings-perf): the old
+        // search rebuilt every earlier row's key for every row — quadratic,
+        // and ~185 ms for a vault of 800 logins on each Settings redraw.
+        var at: [String: Int] = [:]
         for value in values {
             let key = "\(normalized(value.host))\u{1}\(value.user.lowercased())"
-            guard let existing = result.firstIndex(where: {
-                "\(normalized($0.host))\u{1}\($0.user.lowercased())" == key
-            }) else {
+            guard let existing = at[key] else {
+                at[key] = result.count
                 result.append(value)
                 continue
             }

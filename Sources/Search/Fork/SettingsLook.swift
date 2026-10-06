@@ -101,6 +101,7 @@ struct SettingsSection<Content: View>: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("section") // Fork (settings-perf)
         VStack(alignment: .leading, spacing: 8) {
             if let title {
                 SettingsSectionTitle(title)
@@ -167,6 +168,7 @@ struct SettingsAnchor: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var still
 
     func body(content: Content) -> some View {
+        SettingsPerf.tick("anchor")
         let lit = flash == id
         let radius: CGFloat = card ? 11 : 8
         return content
@@ -196,6 +198,48 @@ extension View {
 }
 
 // MARK: - the page header
+
+/// Whether the open page has scrolled under its header (settings-perf): its
+/// own object, watched only by the hairline, so the moment a scroll crosses
+/// the edge redraws one line rather than the whole panel and its page.
+@MainActor
+final class SettingsScrollEdge: ObservableObject {
+    @Published var scrolled = false
+}
+
+/// The hairline under the page header, shown once the page has scrolled.
+struct SettingsHeaderRule: View {
+    @ObservedObject var edge: SettingsScrollEdge
+    /// The results are showing: they have no header edge.
+    let hidden: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(SettingsInk.cardEdge)
+            .frame(height: 1)
+            .opacity(edge.scrolled && !hidden ? 1 : 0)
+            .animation(Motion.quick, value: edge.scrolled)
+    }
+}
+
+/// Is Copper the default browser — asked of LaunchServices once per opening
+/// of Settings (settings-perf). `SettingsPanel` is made anew on every redraw
+/// of the window while it is open, and its `isDefault` starting value was a
+/// LaunchServices round trip each time, though only the first is ever used.
+@MainActor
+enum SettingsDefaultBrowser {
+    private static var cached: Bool?
+
+    static var isDefault: Bool {
+        if let cached { return cached }
+        let now = Links.isDefault
+        cached = now
+        return now
+    }
+
+    /// Settings closed: the next opening asks again.
+    static func forget() { cached = nil }
+}
 
 /// The page's title and what it is for, in a sentence.
 struct SettingsHeader<Trailing: View>: View {

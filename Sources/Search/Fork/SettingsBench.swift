@@ -150,6 +150,12 @@ enum SettingsBench {
             toggle.wrappedValue.toggle()
             answer(["title": hit.entry.title, "before": before, "after": toggle.wrappedValue])
 
+        case "perf":
+            // perf [reset|stop|run|switch N|churn SOURCE N|scroll|layers]: what the panel costs the main thread (Fork/SettingsPerf.swift).
+            SettingsPerf.publishers["onepassword"] = { _ in { OnePassword.shared.objectWillChange.send() } }
+            SettingsPerf.publishers["finder"] = { b in { SettingsFinder.of(b).objectWillChange.send() } }
+            SettingsPerf.handle(arg, in: browser, type: { finder.query += $0 }, clear: { _ = finder.clear() }, answer: answer)
+
         case "index":
             guard arg.isEmpty || arg == "check" else { answer(["error": "settings index check"]); return }
             check(in: browser, answer: answer)

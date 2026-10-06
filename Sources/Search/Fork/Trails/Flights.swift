@@ -92,6 +92,7 @@ struct LabsPage: View {
     @ObservedObject private var flights = Flights.shared
 
     var body: some View {
+        let _ = SettingsPerf.tick("labsPage") // Fork (settings-perf)
         VStack(alignment: .leading, spacing: 18) {
             SettingsSection("Flights", note: "Labs are previews of what Copper is trying next. Each one is off until you turn it on here, and turning it off puts everything back exactly as it was.") {
                 Line("Trails — organise tabs by what you were doing (preview)",

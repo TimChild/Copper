@@ -38,6 +38,7 @@ struct BitwardenCard: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("bitwardenCard") // Fork (settings-perf)
         Card {
             stateContent
             if let error {
@@ -453,7 +454,10 @@ struct BitwardenCard: View {
 /// The user's explicit agent-sharing policy. Nothing here reads a secret;
 /// rows are stripped metadata from the keychain and Bitwarden cache only.
 struct AgentAccessCard: View {
-    @ObservedObject var browser: Browser
+    /// Not observed (settings-perf): nothing here reads the browser, and a
+    /// tab loading must not redraw — or re-read — every saved account. Its
+    /// saved-logins list is still watched below, for a keychain save.
+    let browser: Browser
     @ObservedObject private var bitwarden = Bitwarden.shared
     @ObservedObject private var onePassword = OnePassword.shared
 
@@ -461,18 +465,15 @@ struct AgentAccessCard: View {
     @State private var hunt = ""
     @State private var shareAll = AgentAccess.shareAll
     @State private var policyRevision = 0
+    /// Bumped when the accounts themselves change, to draw them again.
+    @State private var listRevision = 0
+    /// The accounts, read once and kept until a vault or the keychain
+    /// changes (settings-perf): `Credentials.all()` is a keychain query plus
+    /// every Bitwarden and 1Password login merged and sorted, and it used to
+    /// run several times per redraw.
+    @State private var list = AgentAccessList()
 
-    private var credentials: [Credential] { Credentials.all() }
-
-    private var filtered: [Credential] {
-        let needle = hunt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return credentials }
-        return credentials.filter {
-            $0.name.lowercased().contains(needle)
-                || $0.host.lowercased().contains(needle)
-                || $0.user.lowercased().contains(needle)
-        }
-    }
+    private var filtered: [Credential] { list.filtered(hunt) }
 
     private var identities: [AutofillIdentity] { Autofill.identities }
     private var cards: [AutofillCard] { Autofill.cards }
@@ -499,6 +500,8 @@ struct AgentAccessCard: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("agentAccess") // Fork (settings-perf)
+        let _ = listRevision
         Card {
             Line("Share every saved account with agents", "Agents can use saved sign-ins in Copper without receiving the password") {
                 Switch(on: Binding(
@@ -517,7 +520,10 @@ struct AgentAccessCard: View {
                     Nothing("Nothing kept yet — sign in somewhere or connect Bitwarden or 1Password.")
                 } else {
                     ScrollView(showsIndicators: false) {
-                        VStack(spacing: 0) {
+                        // Lazy (settings-perf): a whole 1Password vault is
+                        // hundreds of rows; only the ones in the 400 pt
+                        // window are built, laid out and kept as views.
+                        LazyVStack(spacing: 0) {
                             ForEach(Array(filtered.enumerated()), id: \.element.id) { index, credential in
                                 if index > 0 { Rule(inset: 0) }
                                 AgentCredentialRow(
@@ -593,8 +599,12 @@ struct AgentAccessCard: View {
         }
         // Bitwarden publishes lock/unlock/cache changes; keeping this observed
         // makes the union list redraw without a manual refresh button.
-        .onChange(of: bitwarden.state) { _, _ in policyRevision += 1 }
-        .onChange(of: onePassword.cacheVersion) { _, _ in policyRevision += 1 }
+        .onChange(of: bitwarden.state) { _, _ in list.forget(); policyRevision += 1 }
+        .onChange(of: bitwarden.cacheVersion) { _, _ in list.forget(); listRevision += 1 }
+        .onChange(of: onePassword.cacheVersion) { _, _ in list.forget(); policyRevision += 1 }
+        .onChange(of: onePassword.isUnlocked) { _, _ in list.forget(); listRevision += 1 }
+        // A login saved to the keychain while Settings is open.
+        .onReceive(browser.$saved.dropFirst()) { _ in list.forget(); listRevision += 1 }
     }
 
     private struct AgentIdentityRow: View {
@@ -723,5 +733,35 @@ struct AgentAccessCard: View {
                 .padding(.vertical, 2)
                 .background(Palette.wash, in: Capsule())
         }
+    }
+}
+
+/// The agent-access card's accounts (settings-perf): `Credentials.all()` read
+/// once, kept until `forget()`, and the search over it kept per query.
+@MainActor
+final class AgentAccessList {
+    private var all: [Credential]?
+    private var last: (needle: String, rows: [Credential])?
+
+    func forget() {
+        all = nil
+        last = nil
+    }
+
+    func filtered(_ hunt: String) -> [Credential] {
+        let needle = hunt.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let last, last.needle == needle { return last.rows }
+        let everything: [Credential]
+        if let all { everything = all } else {
+            everything = Credentials.all()
+            all = everything
+        }
+        let rows = needle.isEmpty ? everything : everything.filter {
+            $0.name.lowercased().contains(needle)
+                || $0.host.lowercased().contains(needle)
+                || $0.user.lowercased().contains(needle)
+        }
+        last = (needle, rows)
+        return rows
     }
 }

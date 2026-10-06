@@ -11,6 +11,10 @@ in [ROADMAP.md](ROADMAP.md).
 
 ## Unreleased
 
+### Fixed
+
+- **Settings is fast again.** The rebuilt panel lagged: its shadow was cast from the panel's own content, so every scrolled frame, hover and keystroke re-blurred all of it offscreen; it now comes from a plain shape behind the panel and is drawn once. The panel also stopped redrawing for every tab, find and announcement in the window (it watched the whole browser for one value), the agent-access list reads your accounts once instead of several times per redraw (and builds only the rows in view), duplicate-account merging is linear instead of quadratic (~185 ms per redraw for 800 logins), and the scrolled-header hairline no longer redraws the whole page. `./bench settings perf run|switch|churn|scroll` measures it.
+
 ### Added
 
 - **1Password, natively.** Settings › Passwords › Password managers now has a 1Password card beside Bitwarden. Copper talks to 1Password through its CLI (`op`), three ways: **Unlock with 1Password** hands the approval to the 1Password app — Touch ID there, no password ever typed into Copper (turn on 1Password › Settings › Developer › *Integrate with 1Password CLI* once); **account password** signs in to an account already on this Mac or adds one (sign-in address, email, Secret Key), with the password and Secret Key passed on stdin and in the environment, never on a command line; and a **service account token** for a Mac nobody sits at, read-only when the token is. The vault's list shows at once and its details load behind it (1,500 items in about four seconds); 1Password logins, one-time codes, identities, cards and custom fields fill exactly as Bitwarden's do, *Save new passwords to* offers Keychain, Bitwarden or 1Password with a vault to save into, and a changed password updates the item rather than adding a twin. Agents sign in and autofill with 1Password items you share in Agent access (off by default) and never receive a secret. The session stays in a file only you can read when *Stay unlocked* is on; Lock wipes what Copper holds first. `./bench op …` and a mock `op` in docs/fixtures/op-mock test it all without an account (docs/passwords.md).

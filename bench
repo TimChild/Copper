@@ -238,6 +238,15 @@
     ./bench settings index check       every page opened in turn: each index entry's anchor is drawn,
                                        every drawn anchor has an entry, every page has rows
     ./bench settings [state]|close     what the panel and its search are doing; close it
+    ./bench settings perf run          what Settings costs the main thread: open, idle, every page,
+                                       a typed query, a scroll, idle on Passwords (busy ms, longest
+                                       hitch, CPU, body evaluations per step)
+    ./bench settings perf switch [N]   every page N times, each pushed to the screen at once: page latency
+    ./bench settings perf churn browser|prefs|onepassword|bitwarden|finder|updater|shield [N]
+                                       that object says it changed N times: what one redraw of the open page costs
+    ./bench settings perf scroll|layers|[reset]|stop
+                                       a scripted scroll of the open page; the window's view/layer count;
+                                       the meters since reset
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, folded on|off, peek on|off,
                                        tabswitch row|recent, page general|tabs (which Settings page), focus none (the keyboard to the window itself), width N (the sidebar),

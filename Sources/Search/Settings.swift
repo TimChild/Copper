@@ -11,16 +11,23 @@ import SwiftUI
 /// `Fork/SettingsLook.swift`). Every setting, storage key and behaviour is
 /// the same as before; only where it is drawn changed.
 struct SettingsPanel: View {
-    @ObservedObject var browser: Browser
+    /// Fork (settings-perf): not observed. The browser publishes for every
+    /// tab, find, hover and announcement; watching it redrew the whole panel
+    /// each time. Only the page matters here, kept below via `onReceive`.
+    let browser: Browser
     @ObservedObject var prefs: Preferences
 
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var shield = Shield.shared
-    @State private var isDefault = Links.isDefault
+    @State private var isDefault = SettingsDefaultBrowser.isDefault // Fork (settings-perf): one LaunchServices ask per opening, not per redraw
     /// Fork (settings-revamp): the panel's own width, for the rail's.
     @State private var width: CGFloat = 900
     /// Fork (settings-revamp): the page has scrolled under its header.
-    @State private var scrolled = false
+    /// Fork (settings-perf): an object only the header's hairline watches,
+    /// so crossing the edge redraws the hairline rather than the panel.
+    /// (Held in `@State`, not `@StateObject`, which would redraw the panel
+    /// on every change of it all the same.)
+    @State private var edge = SettingsScrollEdge()
     @Environment(\.accessibilityReduceMotion) private var still
 
     /// Fork (settings-revamp): this window's search, observed so the rail,
@@ -31,6 +38,7 @@ struct SettingsPanel: View {
         self.browser = browser
         self.prefs = prefs
         self._finder = ObservedObject(wrappedValue: SettingsFinder.of(browser))
+        self._page = State(initialValue: browser.settingsPage) // Fork (settings-perf)
     }
 
     enum Page: String, CaseIterable, Identifiable {
@@ -79,9 +87,10 @@ struct SettingsPanel: View {
 
     private var rail: CGFloat { width < 760 ? 190 : 220 }
 
-    private var page: Page { browser.settingsPage }
+    @State private var page: Page = .general // Fork (settings-perf): mirrors browser.settingsPage
 
     var body: some View {
+        let _ = SettingsPerf.tick("panel") // Fork (settings-perf)
         HStack(spacing: 0) {
             pages(finder)
             Rectangle().fill(Palette.hairline).frame(width: 1)
@@ -97,17 +106,29 @@ struct SettingsPanel: View {
                 .strokeBorder(Palette.hairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 40, y: 14)
+        // Fork (settings-perf): the shadow is cast by a plain shape behind the
+        // panel. A `.shadow` on the panel itself is drawn from its content, so
+        // every scrolled frame, hover and keystroke re-blurred all 920 × 700 pt
+        // of it offscreen — the lag. The shape never changes, so its shadow is
+        // drawn once.
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(SettingsInk.content)
+                .shadow(color: .black.opacity(0.18), radius: 40, y: 14)
+        )
         .environment(\.settingsLook, true)
         .onAppear {
             finder.opened()
             Task { await Bitwarden.shared.refreshStatus() }
             CloudIntelligence.shared.settingsOpened() // Fork (cloud-intelligence)
         }
-        .onChange(of: browser.settingsPage) { _, page in
-            Store.settings.set(page.rawValue, forKey: "settings.page")
-            scrolled = false
+        .onReceive(browser.$settingsPage.removeDuplicates()) { now in // Fork (settings-perf)
+            guard now != page else { return }
+            page = now
+            Store.settings.set(now.rawValue, forKey: "settings.page")
+            edge.scrolled = false
         }
+        .onDisappear { SettingsDefaultBrowser.forget() } // Fork (settings-perf)
     }
 
     // MARK: - the rail
@@ -167,11 +188,7 @@ struct SettingsPanel: View {
             .padding(.horizontal, 32)
             .padding(.top, 22)
             .padding(.bottom, 16)
-            Rectangle()
-                .fill(SettingsInk.cardEdge)
-                .frame(height: 1)
-                .opacity(scrolled && !finder.showingResults ? 1 : 0)
-                .animation(Motion.quick, value: scrolled)
+            SettingsHeaderRule(edge: edge, hidden: finder.showingResults) // Fork (settings-perf): Fork/SettingsLook.swift
             if finder.showingResults {
                 SettingsResults(finder: finder, browser: browser)
             } else {
@@ -223,7 +240,9 @@ struct SettingsPanel: View {
                 .padding(.top, 4)
                 .padding(.bottom, 36)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .onGeometryChange(for: Bool.self) { $0.frame(in: .scrollView).minY < -2 } action: { scrolled = $0 }
+                .onGeometryChange(for: Bool.self) { $0.frame(in: .scrollView).minY < -2 } action: { now in
+                    if edge.scrolled != now { edge.scrolled = now }
+                }
             }
             .onPreferenceChange(SettingsAnchorsKey.self) { finder.drawn[page] = $0 }
             .task(id: finder.pending?.token) {
@@ -674,6 +693,7 @@ struct Switch: View {
     @Binding var on: Bool
 
     var body: some View {
+        let _ = SettingsPerf.tick("switch") // Fork (settings-perf)
         Capsule()
             .fill(on ? Palette.ink : Palette.faint)
             .frame(width: 30, height: 18)
@@ -707,6 +727,7 @@ struct Pill: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("pill") // Fork (settings-perf)
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11.5))
@@ -725,3 +746,4 @@ struct Pill: View {
         .animation(Motion.quick, value: hovering)
     }
 }
+

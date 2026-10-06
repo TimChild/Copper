@@ -12,6 +12,7 @@ struct SettingsSearchField: View {
     @FocusState private var focused: Bool
 
     var body: some View {
+        let _ = SettingsPerf.tick("searchField") // Fork (settings-perf)
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .medium))
@@ -87,6 +88,7 @@ struct SettingsRailRow: View {
     private var dimmed: Bool { count == nil ? false : (empty && !hovering) }
 
     var body: some View {
+        let _ = SettingsPerf.tick("railRow") // Fork (settings-perf)
         Button(action: act) {
             HStack(spacing: 9) {
                 Image(systemName: page.icon)
@@ -137,6 +139,7 @@ struct SettingsResults: View {
     static let suggestions = ["dark mode", "passwords", "downloads folder", "agents", "default browser", "updates", "block ads", "1Password"]
 
     var body: some View {
+        let _ = SettingsPerf.tick("results") // Fork (settings-perf)
         if finder.results.isEmpty {
             empty
         } else {
@@ -183,14 +186,20 @@ struct SettingsResults: View {
 
     private func row(_ hit: SettingsHit) -> some View {
         let index = finder.results.firstIndex { $0.id == hit.id } ?? -1
+        let toggle = hit.entry.toggle?(browser)
         return SettingsResultRow(
             hit: hit,
+            index: index,
             chosen: index == finder.selection,
             crumb: wide,
-            toggle: hit.entry.toggle?(browser),
+            switched: toggle?.wrappedValue,
+            toggle: toggle,
             hover: { if index >= 0 { finder.selection = index } },
             pick: { finder.pick(hit) }
         )
+        // Only the rows whose choice changed redraw as the pointer or the
+        // arrows walk the list (settings-perf), not all sixty.
+        .equatable()
         .id(hit.id)
     }
 
@@ -219,15 +228,28 @@ struct SettingsResults: View {
     }
 }
 
-struct SettingsResultRow: View {
+struct SettingsResultRow: View, Equatable {
     let hit: SettingsHit
+    /// Where the row is in the results; its `hover` closure carries it.
+    var index = -1
     let chosen: Bool
     var crumb = true
+    /// The in-place switch's value when the list was drawn, so a flip redraws its row.
+    var switched: Bool? = nil
     let toggle: Binding<Bool>?
     let hover: () -> Void
     let pick: () -> Void
 
+    /// The closures are made afresh on every redraw of the list; what they do
+    /// follows from the hit and its index, so those stand in for them.
+    nonisolated static func == (a: SettingsResultRow, b: SettingsResultRow) -> Bool {
+        a.hit.id == b.hit.id && a.index == b.index && a.chosen == b.chosen && a.crumb == b.crumb
+            && a.hit.titleMarks == b.hit.titleMarks && a.hit.subtitleMarks == b.hit.subtitleMarks
+            && (a.toggle == nil) == (b.toggle == nil) && a.switched == b.switched
+    }
+
     var body: some View {
+        let _ = SettingsPerf.tick("resultRow") // Fork (settings-perf)
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(SettingsMarks.title(hit.entry.title, hit.titleMarks))

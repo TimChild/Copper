@@ -32,6 +32,7 @@ struct SpacesSettingsPage: View {
     }
 
     var body: some View {
+        let _ = SettingsPerf.tick("spacesPage") // Fork (settings-perf)
         VStack(alignment: .leading, spacing: 18) {
             picker
                 .settingsAnchor("spaces.picker") // Fork (settings-revamp): search anchors

@@ -61,7 +61,9 @@ enum CanvasChecklistBench {
         let read = try await host.read(full: true)
         let shapes = read["shapes"] as? [[String: Any]] ?? []
         return shapes.filter { s in
-            s["type"] as? String == "checklist" && (only == nil || s["id"] as? String == only)
+            // A note in the checklist view (what this build writes) or a legacy checklist shape.
+            (s["type"] as? String == "checklist" || s["view"] as? String == "checklist")
+                && (only == nil || s["id"] as? String == only)
         }
     }
 

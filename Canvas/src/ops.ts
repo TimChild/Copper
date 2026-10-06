@@ -14,6 +14,12 @@
  * A checklist (`checklist.ts`) takes `title`, `columns` (1–4, default Yes/No),
  * `rows` (labels or {label, id?}, ≤ 60) and `picks` ({rowIdOrLabel: column |
  * true | null}) on add and update; `rows` and `columns` replace the lists.
+ * An add makes a note in the checklist view (`type:"sticky"`, `view:"checklist"`,
+ * the list in its text — `checklist-text.ts`), which older Coppers show and tick
+ * as a note. `update {view:"checklist", columns?}` turns a note that holds a
+ * heading and a task list into a card in place, its text (and ticks) untouched;
+ * `view:null` makes it a plain note again. A legacy `type:"checklist"` shape
+ * still updates as before.
  *   {op:"move", id, dx, dy}                                    // a frame carries what sits inside it
  *   {op:"resize", id, w, h}
  *   {op:"delete", id}                                          // arrows ending on it go too
@@ -29,12 +35,29 @@ import {
   cleanColumns,
   cleanPicks,
   cleanRows,
+  noteRowId,
+  readNoteColumns,
   summarizeChecklist,
+  summarizeNoteChecklist,
   writeColumns,
+  writeNoteColumns,
+  writeNotePick,
   writePick,
   writeRows,
   type Picker,
 } from './canvas/checklist'
+import {
+  VIEW_CHECKLIST,
+  WHO_PREFIX,
+  checklistMarkdown,
+  noteText,
+  parseChecklistText,
+  replaceRows,
+  rowKey,
+  rowLine,
+  whoKey,
+  writeTitle,
+} from './canvas/checklist-text'
 import { liveAgents, readAgents } from './canvas/agents'
 import { center, containsBox, boxesOverlap, SIDES, type Box, type Point, type Side } from './canvas/geometry'
 import { MIN_SIZE, isResizable, minSizeOf } from './canvas/resize'
@@ -322,6 +345,179 @@ function writeChecklist(ctx: OpsContext, id: string, props: ShapeProps, picks: u
   if ((props.rows || props.columns) && !sized.h) m.set('h', checklistHeight(columns.length, rows.length))
 }
 
+// ---- a checklist kept as a note (checklist-text.ts) --------------------------------
+
+const NOTE_LIST_KEYS = ['view', 'title', 'columns', 'rows', 'picks'] as const
+
+/** What an add or update said about a checklist note, checked; box props and text go through `cleanProps`. */
+interface NoteListInput {
+  props: ShapeProps
+  view?: typeof VIEW_CHECKLIST | null
+  title?: string
+  columns?: string[]
+  rows?: string[]
+  picks?: unknown
+}
+
+function cleanNoteList(type: 'sticky' | 'checklist', raw: Record<string, unknown>, store: CanvasStore, selfId?: string): NoteListInput {
+  if (type === 'checklist') {
+    // The checklist type's own names and spellings (`text` is its title).
+    const props = cleanProps('checklist', raw, store, selfId)
+    const { title, columns, rows, ...box } = props
+    return { props: box, title, columns, rows: rows?.map(r => r.label), picks: raw.picks }
+  }
+  const rest: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(raw)) if (!(NOTE_LIST_KEYS as readonly string[]).includes(k)) rest[k] = v
+  const out: NoteListInput = { props: cleanProps('sticky', rest, store, selfId) }
+  if (raw.view !== undefined) {
+    if (raw.view === VIEW_CHECKLIST) out.view = VIEW_CHECKLIST
+    else if (raw.view === null || raw.view === false || raw.view === '' || raw.view === 'note') out.view = null
+    else fail('`view` must be "checklist" or null')
+  }
+  if (raw.title !== undefined) {
+    if (typeof raw.title !== 'string') fail('`title` must be a string')
+    out.title = (raw.title as string).slice(0, MAX_TITLE)
+  }
+  if (raw.columns !== undefined) out.columns = cleanColumns(raw.columns)
+  if (raw.rows !== undefined) out.rows = cleanRows(raw.rows).map(r => r.label)
+  if (raw.picks !== undefined) out.picks = raw.picks
+  return out
+}
+
+const listRows = (labels: readonly string[]): ChecklistRow[] => labels.map((label, i) => ({ id: noteRowId(i), label }))
+const pickerOf = (as: Actor | null): Picker => ({ name: as?.name ?? 'Agent', id: as?.id ?? 'agent' })
+
+/** A new checklist: a note in the checklist view whose text is the list. */
+function addChecklistNote(type: 'sticky' | 'checklist', raw: Record<string, unknown>, ctx: OpsContext, as: Actor | null, id: string | undefined) {
+  const input = cleanNoteList(type, raw, ctx.store, id)
+  if (input.view === null) fail('a checklist note needs `view:"checklist"`')
+  const { props } = input
+  const listed = type === 'checklist' || input.rows !== undefined || input.title !== undefined || input.picks !== undefined
+  if (listed && props.text !== undefined && type === 'sticky') fail('give the note `text`, or `title`/`rows`/`picks`, not both')
+  const columns = input.columns ?? (type === 'checklist' ? [...DEFAULT_COLUMNS] : undefined)
+  const cols = columns ?? readNoteColumns(undefined)
+  let text = props.text ?? ''
+  let rowCount = parseChecklistText(text, cols).rows.length
+  const picked: [string, string][] = []
+  if (listed) {
+    const rows = listRows(input.rows ?? [])
+    // Checked before anything is written: a bad pick fails the whole add.
+    const resolved = new Map(input.picks === undefined ? [] : cleanPicks(input.picks, rows, cols))
+    text = checklistMarkdown(
+      input.title ?? '',
+      rows.map(r => ({ label: r.label, pick: resolved.get(r.id) ?? null })),
+      cols
+    )
+    for (const r of rows) {
+      const col = resolved.get(r.id)
+      if (col) picked.push([r.label, col])
+    }
+    rowCount = rows.length
+  }
+  const shape: ShapeInput = {
+    ...props,
+    type: 'sticky',
+    view: VIEW_CHECKLIST,
+    text,
+    color: props.color ?? 'green',
+    by: as?.name ?? 'Agent',
+  }
+  if (columns) shape.columns = columns
+  if (id) shape.id = id
+  const min = minSizeOf({ type: 'sticky', view: VIEW_CHECKLIST })
+  const size = {
+    w: Math.max(props.w ?? checklistWidth(cols.length), min.w),
+    h: Math.max(props.h ?? checklistHeight(cols.length, rowCount), min.h),
+  }
+  shape.w = size.w
+  shape.h = size.h
+  if (props.x === undefined || props.y === undefined) {
+    const spot = findFreeSpot(boxesOf(ctx.store), size, ctx.viewportCenter(), { gap: 24, step: 32 })
+    if (props.x === undefined) shape.x = spot.x
+    if (props.y === undefined) shape.y = spot.y
+  }
+  const newId = ctx.store.create(shape, AGENT)
+  const m = ctx.store.shapes.get(newId)
+  if (m && picked.length) {
+    const by = pickerOf(as)
+    const now = Date.now()
+    ctx.store.transact(() => {
+      for (const [label, col] of picked) m.set(whoKey(label), { col, by: by.name, byId: by.id, at: now })
+    }, AGENT)
+  }
+  return { id: newId, anchor: center({ x: shape.x!, y: shape.y!, w: size.w, h: size.h }) }
+}
+
+/**
+ * An update to a note that is (or is becoming) a checklist: box props and
+ * `text` as for any note, then `view`, `columns`, `rows`, `title`, `picks` —
+ * each an edit of the note's text. Turning the view on leaves the text alone.
+ */
+function updateChecklistNote(ctx: OpsContext, shape: Shape, raw: Record<string, unknown>, as: Actor | null): string {
+  const m = ctx.store.shapes.get(shape.id)!
+  const was = shape.view === VIEW_CHECKLIST
+  const input = cleanNoteList('sticky', raw, ctx.store, shape.id)
+  const { props } = input
+  const listed = input.view === VIEW_CHECKLIST || (input.view === undefined && was)
+  if (!listed) {
+    // Back to (or still) a plain note: what is left is a plain note's update.
+    for (const k of ['columns', 'rows', 'picks'] as const) if (input[k] !== undefined) fail(`\`${k}\` is for a checklist: set \`view:"checklist"\``)
+    if (input.title !== undefined) props.text = input.title
+    if (props.w !== undefined) props.w = Math.max(props.w, MIN_SIZE.sticky.w)
+    if (props.h !== undefined) props.h = Math.max(props.h, MIN_SIZE.sticky.h)
+    ctx.store.update(shape.id, props, AGENT)
+    if (input.view === null && m.has('view')) m.delete('view')
+    return shape.id
+  }
+  // Everything is checked against the list as it will be before anything is written.
+  const columns = input.columns ?? readNoteColumns(m.get('columns'))
+  const text = props.text ?? shape.text
+  const rows = input.rows ? listRows(input.rows) : listRows(parseChecklistText(text, columns).rows.map(r => r.label))
+  if (input.picks !== undefined) cleanPicks(input.picks, rows, columns)
+  const min = MIN_SIZE.checklist
+  if (props.w !== undefined) props.w = Math.max(props.w, min.w)
+  if (props.h !== undefined) props.h = Math.max(props.h, min.h)
+  ctx.store.update(shape.id, props, AGENT)
+  ctx.store.transact(() => {
+    const t = noteText(m)
+    if (!was) {
+      m.set('view', VIEW_CHECKLIST)
+      if (input.columns) m.set('columns', [...input.columns])
+      if (props.w === undefined && shape.w < checklistWidth(columns.length)) m.set('w', checklistWidth(columns.length))
+    } else if (input.columns) writeNoteColumns(m, input.columns)
+    if (input.rows) {
+      const now = parseChecklistText(t.toString(), columns)
+      const left = [...now.rows]
+      const carry = (label: string) => {
+        const i = left.findIndex(r => r.label === label) >= 0 ? left.findIndex(r => r.label === label) : left.findIndex(r => rowKey(r.label) === rowKey(label))
+        return i >= 0 ? left.splice(i, 1)[0]!.pick : null
+      }
+      replaceRows(
+        t,
+        now,
+        input.rows.map(label => rowLine(label, carry(label), columns))
+      )
+      const keep = new Set(input.rows.map(whoKey))
+      for (const key of [...m.keys()]) if (key.startsWith(WHO_PREFIX) && !keep.has(key)) m.delete(key)
+    }
+    if (input.title !== undefined) writeTitle(t, parseChecklistText(t.toString(), columns), input.title)
+    if (input.picks !== undefined) {
+      const now = parseChecklistText(t.toString(), columns)
+      const resolved = cleanPicks(input.picks, listRows(now.rows.map(r => r.label)), columns)
+      const by = pickerOf(as)
+      const at = Date.now()
+      // Last row first: each write stays inside its own line.
+      const byIndex = resolved.map(([id, col]) => [now.rows[Number(id.slice(1))]!, col] as const).sort((a, b) => b[0].index - a[0].index)
+      for (const [row, col] of byIndex) writeNotePick(m, t, row, col, columns, by, at)
+    }
+    if (was && (input.rows || input.columns) && props.h === undefined)
+      m.set('h', checklistHeight(columns.length, parseChecklistText(t.toString(), columns).rows.length))
+    if (was && input.columns && props.w === undefined) m.set('w', Math.max(shape.w, checklistWidth(columns.length)))
+    m.set('updatedAt', Date.now())
+  }, AGENT)
+  return shape.id
+}
+
 function checkEnd(end: Endpoint, store: CanvasStore, key: string, selfId?: string) {
   if (!isRefEndpoint(end)) return
   if (end.ref === selfId) fail(`\`${key}\` cannot be the arrow itself`)
@@ -355,6 +551,9 @@ function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): 
     if (ctx.store.shapes.has(raw.id as string)) fail(`a shape with id ${raw.id as string} already exists`)
     id = raw.id as string
   }
+  // A checklist is a note in the checklist view: every Copper shows its text.
+  if (type === 'sticky' && (raw.view === null || raw.view === false)) raw = { ...raw, view: undefined }
+  if (type === 'checklist' || (type === 'sticky' && raw.view !== undefined)) return addChecklistNote(type, raw, ctx, as, id)
   const props = cleanProps(type, raw, ctx.store, id)
   const input: ShapeInput = { type, ...props }
   if (id) input.id = id
@@ -395,15 +594,6 @@ function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): 
     if (!props.title) input.title = hostOf(props.url!)
     if (props.live && !frameUrl(props.url)) fail('a live frame needs an http(s) `url`')
   }
-  if (type === 'checklist') {
-    input.columns = props.columns ?? [...DEFAULT_COLUMNS]
-    input.rows = props.rows ?? []
-    input.title = props.title ?? ''
-    // Checked before anything is written: a bad pick fails the whole add.
-    if (rawPicks(raw) !== undefined) cleanPicks(rawPicks(raw), input.rows, input.columns)
-    input.w ??= checklistWidth(input.columns.length)
-    input.h ??= checklistHeight(input.columns.length, input.rows.length)
-  }
   const base = type === 'link' && props.live ? LIVE_SIZE : SHAPE_SIZE[type]
   const size = { w: input.w ?? base.w, h: input.h ?? base.h }
   if (isResizable(type)) {
@@ -419,7 +609,6 @@ function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): 
     if (props.y === undefined) input.y = spot.y
   }
   const newId = ctx.store.create(input, AGENT)
-  if (type === 'checklist' && rawPicks(raw) !== undefined) writeChecklist(ctx, newId, {}, rawPicks(raw), as, { w: true, h: true })
   return { id: newId, anchor: center({ x: input.x!, y: input.y!, w: size.w, h: size.h }) }
 }
 
@@ -443,6 +632,7 @@ function anchorOf(ctx: OpsContext, id: string): Point {
 function opUpdate(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null = null): string {
   const shape = needShape(ctx, op.id)
   const raw = isObject(op.patch) ? op.patch : isObject(op.props) ? op.props : fail('`update` needs `patch:{…}`')
+  if (shape.type === 'sticky' && (shape.view === VIEW_CHECKLIST || raw.view !== undefined)) return updateChecklistNote(ctx, shape, raw, as)
   const props = cleanProps(shape.type, raw, ctx.store, shape.id)
   if (shape.type === 'checklist') {
     const { columns, rows, ...rest } = props
@@ -678,9 +868,11 @@ export interface ShapeSummary {
   naturalW?: number
   naturalH?: number
   image?: { src: string; naturalW: number; naturalH: number }
-  /** checklist: its columns, rows with each one's pick (and who made it, when), and the count per column. */
+  /** sticky: shown as a checklist card (its text is the list). */
+  view?: 'checklist'
+  /** checklist (and a note in that view): its columns, rows with each one's pick (and who made it, when, when known), and the count per column. */
   columns?: string[]
-  rows?: { id: string; label: string; pick: string | null; by?: string; at?: number }[]
+  rows?: { id?: string; label: string; pick: string | null; by?: string; at?: number }[]
   tally?: Record<string, number>
   /** The innermost frame this shape sits in. */
   frame?: string
@@ -753,7 +945,7 @@ export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead 
   const out: ShapeSummary[] = []
   for (const s of all) {
     if (ids && !ids.has(s.id)) continue
-    if (types && !types.has(s.type)) continue
+    if (types && !types.has(s.type) && !(s.view === VIEW_CHECKLIST && types.has('checklist'))) continue
     let box: Box = { x: s.x, y: s.y, w: s.w, h: s.h }
     if (s.type === 'arrow') {
       const path = arrowPath(s, boxOf)
@@ -777,6 +969,11 @@ export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead 
         sum.text = clip(s.text, full)
         if (s.fontSize) sum.fontSize = s.fontSize
         if (s.align) sum.align = s.align
+        if (s.view === VIEW_CHECKLIST) {
+          sum.view = VIEW_CHECKLIST
+          sum.title = clip(s.title, full)
+          Object.assign(sum, summarizeNoteChecklist(s.columns ?? [], s.rows ?? [], s.picks ?? {}))
+        }
         break
       case 'frame':
         sum.title = clip(s.title, full)

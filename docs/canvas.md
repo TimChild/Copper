@@ -117,10 +117,10 @@ is CanvasHost's, made for it, never an extension's).
 
 ## Checklists (RSVP)
 
-A checklist card (`type: "checklist"`, the toolbar's list tool or `R`) is a title, one to four
-columns — *Yes* / *No* by default — and up to sixty rows: people for an RSVP, tasks for a to-do
-list (one column draws plain task boxes; a ticked row keeps its label as it was, never struck
-through, since a ticked name on an RSVP is a yes, not crossed out). Each row has at most one
+A checklist card (the toolbar's list tool or `R`, or an agent's `{type:'checklist'}`) is a title,
+one to four columns — *Yes* / *No* by default — and up to sixty rows: people for an RSVP, tasks for
+a to-do list (one column draws plain task boxes; a ticked row keeps its label as it was, never
+struck through, since a ticked name on an RSVP is a yes, not crossed out). Each row has at most one
 pick. **One click** on a box picks it, a second click clears it — anyone who can edit, selected
 or not, without opening the card; the title, the labels and the edges still drag it, and a
 read-only board shows the picks without taking clicks. Each column header carries its count; a
@@ -132,19 +132,38 @@ row left empty is dropped. While the card is hovered or selected, *Add row* and 
 under it; a selected card shows × on a row to remove it. The height follows the rows (only the
 side edges resize).
 
-Picks are stored one per row (`pick:<rowId>` on the shape's map; `rows` and `columns` are whole
-values), so two people clicking different rows at the same moment both stick — the model, the
-rules and the agent input live in `Canvas/src/canvas/checklist.ts`, mirrored by copper-cloud
-(`crates/canvas/src/checklist.rs`) for its REST `/ops` and `/read`. Agents add one with
-`{type:'checklist', title, columns?, rows:['Ann', …], picks?:{'Ann':'Yes'}}` and update `picks`
-by row label or id (`null` clears); `canvas_read` gives `columns`, `rows:[{id, label, pick, by,
-at}]` and `tally`. `./bench --world W canvas checklist [SHAPE]` reads them and `canvas check SHAPE
-COL ROW…` clicks a box with real mouse input (`CanvasChecklistBench.swift`).
+**Stored as a note**, so every Copper shows it: a `sticky` with `view: "checklist"` whose text is
+the list, in the markdown any note draws as task boxes —
 
-Copper 1.0.20261006.28 and older don't know the type: they neither draw nor read a checklist
-(and can't select or delete what they don't draw), but leave it, and every pick, intact for
-everyone else; their agents get `no shape …` for one. copper-cloud 0.5.0 relays and stores it
-like any other shape; only its REST `/read` and `/ops` skip it until 0.6.0.
+```
+### Going
+- [ ] Ann
+- [x] Ada Lovelace
+- [x] Bob · No
+```
+
+The first `#`/`##`/`###` heading is the title and each `- [ ]` / `- [x]` line a row. `columns` is a
+prop; with several, a pick is the line's ` · Column` suffix, and a ticked line with no (or an
+unknown) suffix is the first column — that is how an older Copper's tick reads. A click rewrites
+only its own line (box and suffix) through the note's `Y.Text`, so ticks on different rows from
+old and new clients at the same moment all stick. Who picked and when are kept beside it
+(`who:<label>` on the shape) and shown only while they agree with the text. Copper
+1.0.20261006.28 and older draw the same shape as a note with clickable task boxes; their ticks
+show on the card and the card's on the note. Model and rules: `Canvas/src/canvas/checklist.ts`
+and `checklist-text.ts`.
+
+Agents add one with `{type:'checklist', title, columns?, rows:['Ann', …], picks?:{'Ann':'Yes'}}`
+and update `picks` by row label (`null` clears), `rows`, `columns` and `title` (each an edit of the
+text). `{op:'update', id, patch:{view:'checklist', columns?:[…]}}` turns a note that already holds
+a heading and a task list into a card in place — the text, and so its ticks, untouched;
+`view: null` makes it a plain note again. `canvas_read` gives `view`, `title`, `columns`,
+`rows:[{label, pick, by?, at?}]`, `tally` and the `text`. `./bench --world W canvas checklist
+[SHAPE]` reads them and `canvas check SHAPE COL ROW…` clicks a box with real mouse input
+(`CanvasChecklistBench.swift`).
+
+The first cut stored a checklist as its own `type: "checklist"` (picks under `pick:<rowId>`);
+copper-cloud 0.6.0's REST `/ops` still makes those, and this page still draws, clicks and
+updates them. Older Coppers don't draw that type at all.
 
 ## Live web frames
 

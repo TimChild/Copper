@@ -419,7 +419,8 @@ export function boardSearchItems(shapes: Iterable<Shape>): SearchItem[] {
     if (s.type === 'image') continue
     if (!text.trim() && !(s.type === 'link' && s.url)) continue
     if (s.type === 'arrow' && !arrowPath(s, id => boxes.get(id) ?? null)) continue
-    const item: SearchItem = { ref: s.id, kind: s.type, text }
+    // A note in the checklist view is found by its text, and shown as a checklist.
+    const item: SearchItem = { ref: s.id, kind: s.view === 'checklist' ? 'checklist' : s.type, text }
     if (s.type === 'link' && s.url) item.url = s.url
     if (s.type !== 'arrow') item.at = { x: s.x, y: s.y }
     if (s.by) item.by = s.by

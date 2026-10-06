@@ -39,8 +39,9 @@ export const isResizable = (type: string): type is ResizableType => type in MIN_
 /** A live web frame (a link with `live`) keeps room for its title bar and a usable page. */
 export const LIVE_MIN = { w: 320, h: 200 } as const satisfies Size
 
-/** The smallest this shape may get: its type's, or a live frame's. */
-export function minSizeOf(shape: { type: ResizableType; live?: boolean }): Size {
+/** The smallest this shape may get: its type's, a live frame's, or a checklist card's (a note in that view). */
+export function minSizeOf(shape: { type: ResizableType; live?: boolean; view?: string }): Size {
+  if (shape.type === 'sticky' && shape.view === 'checklist') return MIN_SIZE.checklist
   return shape.type === 'link' && shape.live ? LIVE_MIN : MIN_SIZE[shape.type]
 }
 

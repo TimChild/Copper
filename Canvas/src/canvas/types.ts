@@ -99,7 +99,17 @@ export interface Shape {
    * the shape as a link card and keeps the flag when it copies or edits it.
    */
   live?: boolean
-  /** checklist: 1–4 column labels, its rows, and each row's pick by row id. */
+  /**
+   * sticky: `"checklist"` draws the note as a checklist card read from its own
+   * text (`checklist-text.ts`); an older client ignores the key and shows the
+   * note, task boxes and all.
+   */
+  view?: 'checklist'
+  /**
+   * checklist (and a sticky in the checklist view): 1–4 column labels, its rows,
+   * and each row's pick by row id. On a note, `title`, `rows` and `picks` are
+   * read from the text; only `columns` is stored.
+   */
   columns?: string[]
   rows?: ChecklistRow[]
   picks?: Readonly<Record<string, ChecklistPick>>

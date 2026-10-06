@@ -617,7 +617,7 @@ export function SelectionBar({
   const single = shapes.length === 1 ? shapes[0]! : null
   const colorable = shapes.some(s => s.type !== 'image')
   const current = single?.color
-  const texty = shapes.length > 0 && shapes.every(s => s.type === 'sticky' || s.type === 'text')
+  const texty = shapes.length > 0 && shapes.every(s => (s.type === 'sticky' && s.view !== 'checklist') || s.type === 'text')
   const font = single?.fontSize ?? (single?.type === 'text' ? 20 : 16)
   const sizes = single?.type === 'text' ? [16, 20, 28, 40] : [12, 16, 22, 30]
   return (

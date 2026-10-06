@@ -1,9 +1,15 @@
 /**
- * The checklist (RSVP) shape: a title, 1–4 columns ("Yes", "No") and up to
+ * The checklist (RSVP) card: a title, 1–4 columns ("Yes", "No") and up to
  * 60 rows (people, tasks). Each row has at most one pick; one column makes
  * plain to-do boxes.
  *
- * Stored on the shape's own `Y.Map`, beside the usual box props:
+ * Two stored forms, one card:
+ *
+ * - **A note** (`type:"sticky"`, `view:"checklist"`, what this page writes):
+ *   the note's text is the checklist, as markdown every Copper draws as task
+ *   boxes — see `checklist-text.ts`. Older Coppers show and tick it as a note.
+ * - **Legacy** (`type:"checklist"`, written by the first cut and still taken
+ *   by copper-cloud's REST `/ops`), on the shape's own `Y.Map`:
  *
  *   title    string
  *   columns  string[]                   whole value, last writer wins
@@ -20,6 +26,24 @@
  * (`crates/canvas/src/checklist.rs`) share these rules.
  */
 import * as Y from 'yjs'
+import {
+  TICK_COLUMN,
+  VIEW_CHECKLIST,
+  WHO_PREFIX,
+  insertRowLine,
+  noteText,
+  oneLine,
+  parseChecklistText,
+  removeRowLine,
+  rowKey,
+  rowLine,
+  whoKey,
+  writeRowLabel,
+  writeRowPick,
+  writeTitle,
+  type ParsedChecklist,
+  type TextRow,
+} from './checklist-text'
 import type { CanvasStore, Origin } from './doc'
 import type { ChecklistPick, ChecklistRow } from './types'
 
@@ -51,8 +75,8 @@ const fold = (s: string) => s.trim().toLowerCase()
 
 // ---- tolerant reads -------------------------------------------------------------
 
-/** Columns as stored: strings, deduplicated, at most four; none → Yes / No. */
-export function readColumns(v: unknown): string[] {
+/** Columns as stored: strings, deduplicated, at most four; none → `fallback` (Yes / No). */
+export function readColumns(v: unknown, fallback: readonly string[] = DEFAULT_COLUMNS): string[] {
   const out: string[] = []
   for (const c of list(v) ?? []) {
     if (typeof c !== 'string' || !c.trim()) continue
@@ -60,7 +84,7 @@ export function readColumns(v: unknown): string[] {
     out.push(c)
     if (out.length === MAX_COLUMNS) break
   }
-  return out.length ? out : [...DEFAULT_COLUMNS]
+  return out.length ? out : [...fallback]
 }
 
 /** Rows as stored: `{id, label}` with unique ids, at most sixty. */
@@ -189,26 +213,147 @@ export function writeRows(m: Y.Map<unknown>, next: readonly ChecklistRow[]) {
   for (const key of [...m.keys()]) if (key.startsWith(PICK_PREFIX) && !keep.has(key)) m.delete(key)
 }
 
+// ---- a note shown as a checklist (checklist-text.ts) -----------------------------
+
+/** Whether a shape is drawn as a checklist card: either stored form. */
+export const isChecklist = (s: { type: string; view?: string } | null | undefined): boolean =>
+  !!s && (s.type === 'checklist' || (s.type === 'sticky' && s.view === VIEW_CHECKLIST))
+
+/** A note's columns: its own, else one column of ticks. */
+export const readNoteColumns = (v: unknown) => readColumns(v, [TICK_COLUMN])
+
+/** The id a note's row goes by on the board: its place among the rows. */
+export const noteRowId = (index: number) => `t${index}`
+const noteRowIndex = (id: string) => (/^t\d{1,4}$/.test(id) ? Number(id.slice(1)) : -1)
+
+/** Who picked a note's row, when that still agrees with the text. */
+function noteWho(m: Y.Map<unknown>, row: TextRow): ChecklistPick | null {
+  if (!row.pick) return null
+  const who = readPick(m.get(whoKey(row.label)))
+  return who && fold(who.col) === fold(row.pick) ? { ...who, col: row.pick } : null
+}
+
+/** A note's checklist as the board reads it. */
+export function readNoteChecklist(m: Y.Map<unknown>, text: string) {
+  const columns = readNoteColumns(m.get('columns'))
+  const parsed = parseChecklistText(text, columns)
+  const rows: ChecklistRow[] = parsed.rows.map(r => ({ id: noteRowId(r.index), label: r.label }))
+  const picks: Record<string, ChecklistPick> = {}
+  for (const r of parsed.rows) {
+    if (!r.pick) continue
+    picks[noteRowId(r.index)] = noteWho(m, r) ?? { col: r.pick, by: '', byId: '', at: 0 }
+  }
+  return { title: parsed.title, columns, rows, picks }
+}
+
+/** The note's row `id` (or, when the text moved under it, the row with that label). */
+function noteRow(parsed: ParsedChecklist, id: string, label?: string): TextRow | null {
+  const at = parsed.rows[noteRowIndex(id)]
+  if (at && (label === undefined || at.label === label)) return at
+  if (label === undefined) return null
+  return parsed.rows.find(r => r.label === label) ?? null
+}
+
+/** Set (or clear) a note row's pick and who made it. */
+export function writeNotePick(m: Y.Map<unknown>, t: Y.Text, row: TextRow, col: string | null, columns: readonly string[], by: Picker, at = Date.now()) {
+  writeRowPick(t, row, col, columns)
+  const key = whoKey(row.label)
+  if (col) m.set(key, { col, by: by.name, byId: by.id, at })
+  else if (m.has(key)) m.delete(key)
+}
+
+/**
+ * New columns for a note. Each row keeps its pick when the column stays
+ * (renamed via `renames`, or the same name in any case) and loses it when the
+ * column goes; only lines whose meaning would change are rewritten.
+ */
+export function writeNoteColumns(m: Y.Map<unknown>, next: readonly string[], renames: Readonly<Record<string, string>> = {}) {
+  const t = noteText(m)
+  const old = readNoteColumns(m.get('columns'))
+  const before = parseChecklistText(t.toString(), old)
+  const after = parseChecklistText(t.toString(), next)
+  const byFold = new Map(next.map(c => [fold(c), c] as const))
+  const want = (pick: string | null) => {
+    if (!pick) return null
+    const to = renames[pick] ?? byFold.get(fold(pick))
+    return to && next.includes(to) ? to : null
+  }
+  // Last row first: each write stays inside its own line, so earlier offsets hold.
+  for (let i = before.rows.length - 1; i >= 0; i--) {
+    const row = before.rows[i]!
+    const to = want(row.pick)
+    const now = after.rows[i]
+    if (now && now.pick === to && now.label === row.label && !(next.length === 1 && row.suffix)) continue
+    writeRowPick(t, row, to, next)
+  }
+  m.set('columns', [...next])
+  for (const key of [...m.keys()]) {
+    if (!key.startsWith(WHO_PREFIX)) continue
+    const who = readPick(m.get(key))
+    const to = who ? want(who.col) : null
+    if (!who || !to) m.delete(key)
+    else if (to !== who.col) m.set(key, { ...who, col: to })
+  }
+}
+
 // ---- what the board does ---------------------------------------------------------
 
+type Current =
+  | { kind: 'legacy'; m: Y.Map<unknown>; rows: ChecklistRow[]; columns: string[] }
+  | { kind: 'note'; m: Y.Map<unknown>; t: Y.Text; columns: string[]; parsed: ParsedChecklist; rows: ChecklistRow[] }
+
 /** The live map and its rows and columns (inside a transaction the snapshot lags). */
-function current(store: CanvasStore, id: string) {
+function current(store: CanvasStore, id: string): Current | null {
   const m = store.shapes.get(id)
-  if (!m || m.get('type') !== 'checklist') return null
-  return { m, rows: readRows(m.get('rows')), columns: readColumns(m.get('columns')) }
+  if (!m) return null
+  if (m.get('type') === 'checklist') return { kind: 'legacy', m, rows: readRows(m.get('rows')), columns: readColumns(m.get('columns')) }
+  if (m.get('type') !== 'sticky' || m.get('view') !== VIEW_CHECKLIST) return null
+  const t = noteText(m)
+  const columns = readNoteColumns(m.get('columns'))
+  const parsed = parseChecklistText(t.toString(), columns)
+  return { kind: 'note', m, t, columns, parsed, rows: parsed.rows.map(r => ({ id: noteRowId(r.index), label: r.label })) }
 }
 
 function touch(m: Y.Map<unknown>) {
   m.set('updatedAt', Date.now())
 }
 
-/** One click on a cell: pick it, or clear it when it is already the pick. */
-export function togglePick(store: CanvasStore, id: string, rowId: string, col: string, by: Picker, origin: Origin = 'local') {
+/**
+ * One click on a cell: pick it, or clear it when it is already the pick.
+ * `label` is the row's label as the click saw it: should the note's text
+ * have moved under the click, the row with that label is the one meant.
+ */
+export function togglePick(store: CanvasStore, id: string, rowId: string, col: string, by: Picker, origin: Origin = 'local', label?: string) {
   store.transact(() => {
     const c = current(store, id)
-    if (!c || !c.rows.some(r => r.id === rowId) || !c.columns.includes(col)) return
+    if (!c || !c.columns.includes(col)) return
+    if (c.kind === 'note') {
+      const row = noteRow(c.parsed, rowId, label)
+      if (!row) return
+      writeNotePick(c.m, c.t, row, row.pick === col ? null : col, c.columns, by)
+      touch(c.m)
+      return
+    }
+    if (!c.rows.some(r => r.id === rowId)) return
     const now = readPick(c.m.get(pickKey(rowId)))
     writePick(c.m, rowId, now?.col === col ? null : col, by)
+    touch(c.m)
+  }, origin)
+}
+
+/** The card's title. */
+export function setTitle(store: CanvasStore, id: string, title: string, origin: Origin = 'local') {
+  store.transact(() => {
+    const c = current(store, id)
+    if (!c) return
+    const clean = oneLine(title).slice(0, 500)
+    if (c.kind === 'note') {
+      if (c.parsed.title === clean) return
+      writeTitle(c.t, c.parsed, clean)
+    } else {
+      if (c.m.get('title') === clean) return
+      c.m.set('title', clean)
+    }
     touch(c.m)
   }, origin)
 }
@@ -218,6 +363,22 @@ export function setRowLabel(store: CanvasStore, id: string, rowId: string, label
     const c = current(store, id)
     if (!c) return
     const clean = label.slice(0, MAX_ROW_LABEL)
+    if (c.kind === 'note') {
+      const row = noteRow(c.parsed, rowId)
+      const next = oneLine(clean)
+      if (!row || row.label === next) return
+      // Who picked it follows the row to its new name.
+      const from = whoKey(row.label)
+      const to = whoKey(next)
+      const who = c.m.get(from)
+      if (from !== to && who !== undefined && !c.parsed.rows.some(r => r !== row && rowKey(r.label) === rowKey(row.label))) {
+        c.m.delete(from)
+        if (next.trim()) c.m.set(to, who)
+      }
+      writeRowLabel(c.t, row, next)
+      touch(c.m)
+      return
+    }
     if (!c.rows.some(r => r.id === rowId && r.label !== clean)) return
     writeRows(
       c.m,
@@ -233,6 +394,14 @@ export function addRow(store: CanvasStore, id: string, after: string | null = nu
   store.transact(() => {
     const c = current(store, id)
     if (!c || c.rows.length >= MAX_ROWS) return
+    if (c.kind === 'note') {
+      const ref = after ? noteRow(c.parsed, after) : null
+      if (after && !ref) return
+      const index = insertRowLine(c.t, c.parsed, ref ? ref.index : null, rowLine(label.slice(0, MAX_ROW_LABEL), null, c.columns))
+      touch(c.m)
+      made = noteRowId(index)
+      return
+    }
     const row = { id: newRowId(), label: label.slice(0, MAX_ROW_LABEL) }
     const at = after ? c.rows.findIndex(r => r.id === after) + 1 : c.rows.length
     const next = [...c.rows]
@@ -247,7 +416,16 @@ export function addRow(store: CanvasStore, id: string, after: string | null = nu
 export function removeRow(store: CanvasStore, id: string, rowId: string, origin: Origin = 'local') {
   store.transact(() => {
     const c = current(store, id)
-    if (!c || !c.rows.some(r => r.id === rowId)) return
+    if (!c) return
+    if (c.kind === 'note') {
+      const row = noteRow(c.parsed, rowId)
+      if (!row) return
+      removeRowLine(c.t, row)
+      if (!c.parsed.rows.some(r => r !== row && rowKey(r.label) === rowKey(row.label))) c.m.delete(whoKey(row.label))
+      touch(c.m)
+      return
+    }
+    if (!c.rows.some(r => r.id === rowId)) return
     writeRows(
       c.m,
       c.rows.filter(r => r.id !== rowId)
@@ -263,6 +441,12 @@ export function nextColumnLabel(columns: readonly string[]): string {
   for (let n = columns.length + 1; ; n++) if (!taken.has(`option ${n}`)) return `Option ${n}`
 }
 
+/** New columns on either form; picks follow `renames`, picks of columns that went are dropped. */
+function setColumns(c: Current, next: string[], renames: Record<string, string> = {}) {
+  if (c.kind === 'note') writeNoteColumns(c.m, next, renames)
+  else writeColumns(c.m, next, renames)
+}
+
 /** Add a column at the end; its index, or -1 when there are four already. */
 export function addColumn(store: CanvasStore, id: string, label?: string, origin: Origin = 'local'): number {
   let index = -1
@@ -271,7 +455,7 @@ export function addColumn(store: CanvasStore, id: string, label?: string, origin
     if (!c || c.columns.length >= MAX_COLUMNS) return
     const clean = (label ?? nextColumnLabel(c.columns)).trim().slice(0, MAX_COLUMN_LABEL)
     if (!clean || c.columns.some(o => fold(o) === fold(clean))) return
-    writeColumns(c.m, [...c.columns, clean])
+    setColumns(c, [...c.columns, clean])
     touch(c.m)
     index = c.columns.length
   }, origin)
@@ -291,8 +475,8 @@ export function renameColumn(store: CanvasStore, id: string, index: number, labe
     const clean = label.trim().slice(0, MAX_COLUMN_LABEL)
     if (!clean || clean === old) return
     if (c.columns.some((o, i) => i !== index && fold(o) === fold(clean))) return
-    writeColumns(
-      c.m,
+    setColumns(
+      c,
       c.columns.map((o, i) => (i === index ? clean : o)),
       { [old]: clean }
     )
@@ -307,8 +491,8 @@ export function removeColumn(store: CanvasStore, id: string, index: number, orig
   store.transact(() => {
     const c = current(store, id)
     if (!c || c.columns.length <= 1 || index < 0 || index >= c.columns.length) return
-    writeColumns(
-      c.m,
+    setColumns(
+      c,
       c.columns.filter((_, i) => i !== index)
     )
     touch(c.m)
@@ -419,6 +603,19 @@ export function summarizeChecklist(columns: readonly string[], rows: readonly Ch
     rows: rows.map(r => {
       const p = picks[r.id]
       return p ? { id: r.id, label: r.label, pick: p.col, by: p.by, at: p.at } : { id: r.id, label: r.label, pick: null }
+    }),
+    tally: tally(columns, rows, picks),
+  }
+}
+
+/** A note's checklist as an agent reads it: rows by label (their place is their id), who and when only when known. */
+export function summarizeNoteChecklist(columns: readonly string[], rows: readonly ChecklistRow[], picks: Readonly<Record<string, ChecklistPick>>) {
+  return {
+    columns: [...columns],
+    rows: rows.map(r => {
+      const p = picks[r.id]
+      if (!p) return { label: r.label, pick: null }
+      return { label: r.label, pick: p.col, ...(p.by ? { by: p.by } : {}), ...(p.at ? { at: p.at } : {}) }
     }),
     tally: tally(columns, rows, picks),
   }

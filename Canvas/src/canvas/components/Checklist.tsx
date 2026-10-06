@@ -4,7 +4,8 @@
  * it (or clears it) for anyone who can edit — selected or not, no edit mode;
  * the title, labels and edges still drag the card. Double-click a title,
  * label or column to rename it; while one is open, a click on another moves
- * the editor there. Model and rules: `../checklist.ts`.
+ * the editor there. Model and rules: `../checklist.ts` — the same card for a
+ * note in the checklist view (its text is the list) and the legacy shape.
  */
 import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { Plus, Trash2, X } from 'lucide-react'
@@ -21,6 +22,7 @@ import {
   removeRow,
   renameColumn,
   setRowLabel,
+  setTitle,
   tally,
   togglePick,
 } from '../checklist'
@@ -341,7 +343,7 @@ export const ChecklistView = memo(function ChecklistView({
                 value={shape.title}
                 placeholder="Title"
                 max={500}
-                onChange={title => store.update(shape.id, { title })}
+                onChange={title => setTitle(store, shape.id, title)}
                 onKey={e => {
                   if (e.key !== 'Enter' && e.key !== 'Tab') return false
                   // Enter goes on to the first row: naming people in one go.
@@ -501,7 +503,7 @@ export const ChecklistView = memo(function ChecklistView({
                 col={col}
                 pick={pick}
                 readOnly={readOnly}
-                onToggle={() => togglePick(store, shape.id, row.id, col, me)}
+                onToggle={() => togglePick(store, shape.id, row.id, col, me, 'local', row.label)}
                 onKey={cellKey(ri, ci)}
               />
             ))

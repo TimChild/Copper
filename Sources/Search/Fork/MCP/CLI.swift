@@ -1281,7 +1281,7 @@ enum CLI {
       signin [--account USER] [--otp] [--no-submit]
                                                 fill a shared saved account on the current tab
       autofill card|identity|field [--name NAME] [--submit]
-                                                fill a shared Bitwarden card, identity, or field
+                                                fill a shared Bitwarden or 1Password card, identity, or field
       observe [--no-text] [-n N]                fast Jev observation
       run "GOAL…" [--url URL] [--new-tab [--focus]] [--max N] [--no-elements]
       step "GOAL…"                              supervise one Jev decision

@@ -1,10 +1,15 @@
 import SwiftUI
 
-/// Everything there is to set. Pages down the left, one page at a time on
-/// the right, each a short list of lines with a hairline between them —
-/// nothing to scroll through, nothing to hunt for. The same white and
-/// hairline as the rest of the app; the same pill for the page you are on
-/// as for the tab you are on.
+/// Everything there is to set. Pages down the left in four groups under a
+/// search field, one page at a time on the right: its title and what it is
+/// for, then titled sections of lines — what it is, a plain sentence, the
+/// control at the right. The panel takes the room the window gives it.
+///
+/// Fork (settings-revamp): sized to the window, grouped rail, page headers,
+/// sections, and search over every setting (`Fork/SettingsSearch.swift`,
+/// `Fork/SettingsIndex.swift`, `Fork/SettingsSearchUI.swift`,
+/// `Fork/SettingsLook.swift`). Every setting, storage key and behaviour is
+/// the same as before; only where it is drawn changed.
 struct SettingsPanel: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
@@ -12,7 +17,21 @@ struct SettingsPanel: View {
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var shield = Shield.shared
     @State private var isDefault = Links.isDefault
-    @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
+    /// Fork (settings-revamp): the panel's own width, for the rail's.
+    @State private var width: CGFloat = 900
+    /// Fork (settings-revamp): the page has scrolled under its header.
+    @State private var scrolled = false
+    @Environment(\.accessibilityReduceMotion) private var still
+
+    /// Fork (settings-revamp): this window's search, observed so the rail,
+    /// the header and the results follow the query.
+    @ObservedObject private var finder: SettingsFinder
+
+    init(browser: Browser, prefs: Preferences) {
+        self.browser = browser
+        self.prefs = prefs
+        self._finder = ObservedObject(wrappedValue: SettingsFinder.of(browser))
+    }
 
     enum Page: String, CaseIterable, Identifiable {
         case general, tabs, spaces, intelligence, agents, cloud, updates, extensions, passwords, downloads, privacy, labs, about // Fork: spaces, intelligence, agents, cloud, updates, labs
@@ -53,204 +72,269 @@ struct SettingsPanel: View {
         }
     }
 
-    private static let rail: CGFloat = 168
-    private static let width: CGFloat = 660
-    private static let height: CGFloat = 500
+    /// Fork (settings-revamp): as big as reads well, never past the window.
+    static func span(_ length: CGFloat, most: CGFloat, least: CGFloat) -> CGFloat {
+        min(most, max(min(least, length - 24), length - 80))
+    }
+
+    private var rail: CGFloat { width < 760 ? 190 : 220 }
+
+    private var page: Page { browser.settingsPage }
 
     var body: some View {
         HStack(spacing: 0) {
-            pages
+            pages(finder)
             Rectangle().fill(Palette.hairline).frame(width: 1)
-            content
+            content(finder)
         }
-        .frame(width: SettingsPanel.width, height: SettingsPanel.height)
-        .background(Palette.ground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .containerRelativeFrame(.horizontal) { length, _ in SettingsPanel.span(length, most: 920, least: 600) }
+        .containerRelativeFrame(.vertical) { length, _ in SettingsPanel.span(length, most: 700, least: 440) }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .background(SettingsInk.content, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Palette.hairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
+        .shadow(color: .black.opacity(0.18), radius: 40, y: 14)
+        .environment(\.settingsLook, true)
         .onAppear {
-            page = browser.settingsPage
+            finder.opened()
             Task { await Bitwarden.shared.refreshStatus() }
             CloudIntelligence.shared.settingsOpened() // Fork (cloud-intelligence)
         }
-        .onChange(of: page) { _, page in
+        .onChange(of: browser.settingsPage) { _, page in
             Store.settings.set(page.rawValue, forKey: "settings.page")
-            if browser.settingsPage != page { browser.settingsPage = page }
+            scrolled = false
         }
-        .onReceive(browser.$settingsPage) { page = $0 }
-        // Bench can choose Passwords without a native click. Changing the
-        // identity also discards any in-flight sidebar animation.
-        .id(browser.settingsPage)
     }
 
     // MARK: - the rail
 
-    private var pages: some View {
-        VStack(alignment: .leading, spacing: 2) {
+    private func pages(_ finder: SettingsFinder) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Settings")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Palette.ink)
-                .padding(.horizontal, 10)
-                .padding(.top, 14)
+                .padding(.horizontal, 6)
+                .padding(.top, 20)
                 .padding(.bottom, 12)
-            ForEach(Page.allCases) { item in
-                PageRow(page: item, on: page == item) { page = item }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(8)
-        .frame(width: SettingsPanel.rail, alignment: .leading)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(Palette.wash.opacity(0.45))
-    }
-
-    private struct PageRow: View {
-        let page: Page
-        let on: Bool
-        let act: () -> Void
-        @State private var hovering = false
-
-        var body: some View {
-            Button(action: act) {
-                HStack(spacing: 9) {
-                    Image(systemName: page.icon)
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(width: 16)
-                    Text(page.title)
-                        .font(.system(size: 13, weight: on ? .medium : .regular))
-                    Spacer(minLength: 0)
+            SettingsSearchField(finder: finder)
+                .padding(.bottom, 12)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Page.Group.allCases, id: \.self) { group in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(group.rawValue)
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(SettingsInk.detail)
+                                .padding(.horizontal, 10)
+                                .padding(.bottom, 4)
+                            ForEach(Page.railOrder.filter { $0.group == group }) { item in
+                                SettingsRailRow(
+                                    page: item,
+                                    on: page == item && !finder.showingResults,
+                                    count: finder.searching ? (finder.counts[item] ?? 0) : nil
+                                ) {
+                                    finder.leaveResults()
+                                    browser.settingsPage = item
+                                }
+                            }
+                        }
+                    }
                 }
-                .foregroundStyle(on ? Palette.ink : (hovering ? Palette.ink.opacity(0.75) : Palette.muted))
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(on ? Palette.ground : (hovering ? Palette.hover : .clear))
-                        .shadow(color: .black.opacity(on ? 0.06 : 0), radius: 3, y: 1)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.bottom, 14)
             }
-            .buttonStyle(.plain)
-            .onHover { hovering = $0 }
-            .animation(Motion.quick, value: hovering)
         }
+        .padding(.horizontal, 12)
+        .frame(width: rail, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(SettingsInk.rail)
     }
 
     // MARK: - the page
 
-    private var content: some View {
+    private func content(_ finder: SettingsFinder) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(page.title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
-                Spacer()
-                Door(icon: "xmark", help: "Done   esc") { browser.tuning = false }
-            }
-            .padding(.bottom, 16)
-
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    switch page {
-                    case .general: general
-                    case .tabs: tabs
-                    case .spaces: SpacesSettingsPage(browser: browser) // Fork
-                    case .intelligence: IntelligencePage(browser: browser) // Fork
-                    case .agents: AgentsPage(browser: browser) // Fork
-                    case .cloud: CloudPage(browser: browser) // Fork
-                    case .updates: UpdatesPage(browser: browser) // Fork
-                    case .extensions: ExtensionsPage(browser: browser)
-                    case .passwords: passwords
-                    case .downloads: downloads
-                    case .privacy: privacy
-                    case .labs: LabsPage(browser: browser) // Fork (trails): Fork/Trails/Flights.swift
-                    case .about: about
-                    }
+            Group {
+                if finder.showingResults {
+                    SettingsHeader(title: "Search", blurb: resultsLine(finder)) { close }
+                } else {
+                    SettingsHeader(title: page.title, blurb: page.blurb) { close }
                 }
-                .padding(.bottom, 4)
+            }
+            .padding(.horizontal, 32)
+            .padding(.top, 22)
+            .padding(.bottom, 16)
+            Rectangle()
+                .fill(SettingsInk.cardEdge)
+                .frame(height: 1)
+                .opacity(scrolled && !finder.showingResults ? 1 : 0)
+                .animation(Motion.quick, value: scrolled)
+            if finder.showingResults {
+                SettingsResults(finder: finder, browser: browser)
+            } else {
+                scroll(finder)
+                    .id(page)
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 18)
-        .padding(.bottom, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .environment(\.settingsFlash, finder.flashing)
+    }
+
+    private var close: some View {
+        Door(icon: "xmark", help: "Done   esc") { browser.tuning = false }
+    }
+
+    private func resultsLine(_ finder: SettingsFinder) -> String {
+        let shown = finder.query.trimmingCharacters(in: .whitespaces)
+        let n = finder.results.count
+        if n == 0 { return "Every page searched" }
+        let pages = finder.groups.count
+        return "\(n) result\(n == 1 ? "" : "s") for “\(shown)”" + (pages > 1 ? " on \(pages) pages" : "") + "  ·  ↑↓ to choose, ↩ to go"
+    }
+
+    private func scroll(_ finder: SettingsFinder) -> some View {
+        let page = page
+        return ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 1).settingsAnchor(page.topAnchor)
+                    VStack(alignment: .leading, spacing: 26) {
+                        switch page {
+                        case .general: general
+                        case .tabs: tabs
+                        case .spaces: SpacesSettingsPage(browser: browser) // Fork
+                        case .intelligence: IntelligencePage(browser: browser) // Fork
+                        case .agents: AgentsPage(browser: browser) // Fork
+                        case .cloud: CloudPage(browser: browser) // Fork
+                        case .updates: UpdatesPage(browser: browser) // Fork
+                        case .extensions: ExtensionsPage(browser: browser)
+                        case .passwords: passwords
+                        case .downloads: downloads
+                        case .privacy: privacy
+                        case .labs: LabsPage(browser: browser) // Fork (trails): Fork/Trails/Flights.swift
+                        case .about: about
+                        }
+                    }
+                }
+                .padding(.horizontal, 32)
+                .padding(.top, 4)
+                .padding(.bottom, 36)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .onGeometryChange(for: Bool.self) { $0.frame(in: .scrollView).minY < -2 } action: { scrolled = $0 }
+            }
+            .onPreferenceChange(SettingsAnchorsKey.self) { finder.drawn[page] = $0 }
+            .task(id: finder.pending?.token) {
+                guard let target = finder.pending else { return }
+                // The page draws first, and says which anchors it has.
+                try? await Task.sleep(nanoseconds: 140_000_000)
+                let anchor = finder.resolve(target, on: page)
+                let spot = target.flash ? UnitPoint(x: 0.5, y: 0.22) : UnitPoint.top
+                withAnimation(still ? nil : Motion.glide) {
+                    if let anchor { proxy.scrollTo(anchor, anchor: spot) }
+                    // A card another build marks with a plain `.id` still
+                    // scrolls into view, even though the index check can't see it.
+                    if anchor != target.anchor { proxy.scrollTo(target.anchor, anchor: spot) }
+                }
+                finder.landed(target, on: anchor)
+            }
+        }
     }
 
     // MARK: - general
 
     private var general: some View {
-        Card {
-            Line(
-                "Open links from other apps",
-                isDefault ? "Copper is the default browser on this Mac" : "Mail, Slack and the rest still send links elsewhere"
-            ) {
-                if isDefault {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Palette.ink)
-                        .frame(width: 24)
-                } else {
-                    Pill("Make default", filled: true) {
-                        Links.becomeDefault { worked in
-                            isDefault = Links.isDefault
-                            browser.announce(worked && isDefault ? "Links now open here" : "macOS didn't change it")
+        Group {
+            SettingsSection("Copper on this Mac") {
+                Line(
+                    "Open links from other apps",
+                    isDefault ? "Copper is the default browser on this Mac" : "Mail, Slack and the rest still send links elsewhere"
+                ) {
+                    if isDefault {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Palette.ink)
+                            .frame(width: 24)
+                    } else {
+                        Pill("Make default", filled: true) {
+                            Links.becomeDefault { worked in
+                                isDefault = Links.isDefault
+                                browser.announce(worked && isDefault ? "Links now open here" : "macOS didn't change it")
+                            }
                         }
                     }
                 }
+                .settingsAnchor("general.default")
+                Rule()
+                Line("Appearance", "Light, dark, or whatever the Mac is doing — pages follow it too") {
+                    Segmented(options: Look.allCases.map { ($0, $0.title) }, selection: $prefs.look)
+                }
+                .settingsAnchor("general.appearance")
+                Rule()
+                Line("Correct spelling as you type", "macOS's autocorrect inside pages — the one that capitalises for you") {
+                    Switch(on: $prefs.autocorrect)
+                }
+                .settingsAnchor("general.autocorrect")
             }
-            Rule()
-            Line("Appearance", "Light, dark, or whatever the Mac is doing — pages follow it too") {
-                Segmented(options: Look.allCases.map { ($0, $0.title) }, selection: $prefs.look)
+            SettingsSection("Moving in") {
+                FlowSettingsLine(browser: browser)
+                    .settingsAnchor("general.flow")
+                Rule()
+                HistorySettingsLine(browser: browser)
+                    .settingsAnchor("general.history")
             }
-            Rule()
-            Line("Correct spelling as you type", "macOS's autocorrect inside pages — the one that capitalises for you") {
-                Switch(on: $prefs.autocorrect)
+            SettingsSection("Developer") {
+                Line("Let a script drive Copper", "A local socket for testing. Its tabs open beside yours with a flask on them and never take over — see ./bench") {
+                    Switch(on: $prefs.bench)
+                }
+                .settingsAnchor("general.bench")
             }
-            Rule()
-            Line("Let a script drive Copper", "A local socket for testing. Its tabs open beside yours with a flask on them and never take over — see ./bench") {
-                Switch(on: $prefs.bench)
-            }
-            Rule()
-            FlowSettingsLine(browser: browser)
-            Rule()
-            HistorySettingsLine(browser: browser)
         }
     }
 
     // MARK: - tabs
 
     private var tabs: some View {
-        Card {
-            Line("Tabs in a sidebar", "Down the left instead of across the top. Pull its edge to make it wider; double-click the edge to reset.") {
-                Switch(on: Binding(
-                    get: { prefs.sidebar },
-                    set: { on in withAnimation(Motion.glide) { prefs.sidebar = on } }
-                ))
+        Group {
+            SettingsSection("Layout") {
+                Line("Tabs in a sidebar", "Down the left instead of across the top. Pull its edge to make it wider; double-click the edge to reset.") {
+                    Switch(on: Binding(
+                        get: { prefs.sidebar },
+                        set: { on in withAnimation(Motion.glide) { prefs.sidebar = on } }
+                    ))
+                }
+                .settingsAnchor("tabs.sidebar")
+                Rule()
+                Line("Tabs show", "Beside the title, and on a pinned square") {
+                    Segmented(options: Glyph.allCases.map { ($0, $0.title) }, selection: $prefs.glyph)
+                }
+                .settingsAnchor("tabs.glyph")
             }
-            Rule()
-            Line("Tabs show", "Beside the title, and on a pinned square") {
-                Segmented(options: Glyph.allCases.map { ($0, $0.title) }, selection: $prefs.glyph)
+            SettingsSection("Switching") {
+                Line("⌃Tab switches to", "Choose whether Control-Tab follows the row or your most recent tabs") {
+                    Segmented(options: TabSwitching.allCases.map { ($0, $0.title) }, selection: $prefs.tabSwitching)
+                }
+                .settingsAnchor("tabs.switching")
+                Rule()
+                // Fork (swipe-direction): here rather than on the Spaces page,
+                // which is the editor for one space at a time; this is how the
+                // column itself answers the trackpad, like ⌃Tab above it.
+                Line("Swipe between spaces", "Two fingers across the tabs. Natural moves them with your fingers, Inverted the other way; Like scrolling follows the Mac's Natural scrolling") {
+                    Segmented(options: SwipeDirection.allCases.map { ($0, $0.title) }, selection: $prefs.swipeDirection)
+                }
+                .settingsAnchor("tabs.swipe")
             }
-            Rule()
-            Line("⌃Tab switches to", "Choose whether Control-Tab follows the row or your most recent tabs") {
-                Segmented(options: TabSwitching.allCases.map { ($0, $0.title) }, selection: $prefs.tabSwitching)
+            SettingsSection("Tabs you leave") {
+                Line("Sleep tabs you aren't using",  "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
+                    Switch(on: $prefs.sleepsTabs)
+                }
+                .settingsAnchor("tabs.sleep")
+                Rule()
+                ArchiveLine() // Fork: sections
+                    .settingsAnchor("tabs.archive")
             }
-            Rule()
-            // Fork (swipe-direction): here rather than on the Spaces page,
-            // which is the editor for one space at a time; this is how the
-            // column itself answers the trackpad, like ⌃Tab above it.
-            Line("Swipe between spaces", "Two fingers across the tabs. Natural moves them with your fingers, Inverted the other way; Like scrolling follows the Mac's Natural scrolling") {
-                Segmented(options: SwipeDirection.allCases.map { ($0, $0.title) }, selection: $prefs.swipeDirection)
-            }
-            Rule()
-            Line("Sleep tabs you aren't using",  "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
-                Switch(on: $prefs.sleepsTabs)
-            }
-            Rule()
-            ArchiveLine() // Fork: sections
         }
     }
 
@@ -265,26 +349,30 @@ struct SettingsPanel: View {
     }
 
     private var passwords: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Card {
+        Group {
+            SettingsSection("Saved passwords") {
                 Line("Your passwords", "In the macOS keychain, shown with Touch ID") {
                     Pill("Open…") {
                         browser.tuning = false
                         browser.managing = true
                     }
                 }
+                .settingsAnchor("passwords.list")
                 Rule()
                 Line("Offer to save passwords", savingDetail) {
                     Switch(on: $prefs.savesPasswords)
                 }
+                .settingsAnchor("passwords.save")
                 Rule()
                 Line("Fill in sign-ins", "Click a sign-in box and the accounts kept for the site hang from it") {
                     Switch(on: $prefs.fillsPasswords)
                 }
+                .settingsAnchor("passwords.fill")
                 Rule()
-                Line("Fill addresses and cards", "Click into a checkout or address form and your Bitwarden identities and cards hang from it") {
+                Line("Fill addresses and cards", "Click into a checkout or address form and your Bitwarden and 1Password identities and cards hang from it") { // Fork: 1Password
                     Switch(on: $prefs.fillsEverything)
                 }
+                .settingsAnchor("passwords.everything")
                 Rule()
                 Line(
                     "Offer passkeys",
@@ -294,6 +382,7 @@ struct SettingsPanel: View {
                 ) {
                     Switch(on: $prefs.passkeys)
                 }
+                .settingsAnchor("passwords.passkeys")
                 if !Vault.never.isEmpty {
                     Rule()
                     Line("Sites never asked", "\(Vault.never.count) sites told to stop offering") {
@@ -302,44 +391,66 @@ struct SettingsPanel: View {
                             browser.announce("Every site can ask again")
                         }
                     }
+                    .settingsAnchor("passwords.never")
                 }
             }
-            BitwardenCard(browser: browser)
-            AgentAccessCard(browser: browser)
-            Card {
+            // Fork (settings-revamp): one card per password manager, one
+            // under the other — Bitwarden's here, 1Password's beside it.
+            SettingsSection("Password managers", carded: false) {
+                VStack(alignment: .leading, spacing: 12) {
+                    SaveTargetCard(browser: browser) // Fork: Keychain / Bitwarden / 1Password (Fork/OnePasswordSettings.swift)
+                    BitwardenCard(browser: browser)
+                        .settingsAnchor("bitwarden", card: true)
+                    OnePasswordCard(browser: browser) // Fork: 1Password (Fork/OnePasswordSettings.swift)
+                        .settingsAnchor("onepassword", card: true)
+                }
+                .settingsAnchor("passwords.managers", card: true)
+            }
+            SettingsSection("Agent access", carded: false) {
+                AgentAccessCard(browser: browser)
+                    .settingsAnchor("passwords.agents", card: true)
+            }
+            SettingsSection("Import") {
                 Line("Bring yours in", "From Dia, Chrome, Arc, Brave or Edge on this Mac — nothing leaves it") {
                     Pill("Import…") {
                         browser.tuning = false
                         browser.managing = true
                     }
                 }
+                .settingsAnchor("passwords.import")
             }
-            PasskeysSettings()
+            SettingsSection("Passkeys", carded: false) {
+                PasskeysSettings()
+                    .settingsAnchor("passwords.passkeylist", card: true)
+            }
         }
     }
 
     // MARK: - downloads
 
     private var downloads: some View {
-        Card {
+        SettingsSection("Downloads") {
             Line("Save to", prefs.downloads.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) {
                 Pill("Change…") { chooseFolder() }
             }
+            .settingsAnchor("downloads.folder")
             Rule()
             Line("Ask where to save each file") {
                 Switch(on: $prefs.asksWhereToSave)
             }
+            .settingsAnchor("downloads.ask")
         }
     }
 
     // MARK: - privacy
 
     private var privacy: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Card {
+        Group {
+            SettingsSection("Blocking") {
                 Line("Block ads and trackers", shield.trouble ?? "Third parties whose only job is to watch") {
                     Switch(on: $prefs.shielded)
                 }
+                .settingsAnchor("privacy.shield")
                 if let trouble = shield.trouble {
                     Rule()
                     Line(trouble, "Nothing is being blocked until this clears — try again, or restart Copper") {
@@ -357,24 +468,30 @@ struct SettingsPanel: View {
                             }
                         ))
                     }
+                    .settingsAnchor("privacy.site")
                 }
-                Rule()
+            }
+            SettingsSection("Permissions") {
                 Line("Camera and microphone", "What each site was allowed or refused") {
                     Pill("Forget choices") { browser.forgetCaptureChoices() }
                 }
+                .settingsAnchor("privacy.capture")
             }
-            Card {
+            SettingsSection("Clear browsing data") {
                 Line("History", "Every address you have been to") {
                     Pill("Clear") { browser.clearHistory() }
                 }
+                .settingsAnchor("privacy.history")
                 Rule()
                 Line("Cookies and sign-ins", "Signs you out of every site") {
                     Pill("Sign out of everything") { browser.clearSites() }
                 }
+                .settingsAnchor("privacy.cookies")
                 Rule()
                 Line("Cache", "Only what was fetched to draw pages") {
                     Pill("Clear") { browser.clearCache() }
                 }
+                .settingsAnchor("privacy.cache")
             }
         }
     }
@@ -382,52 +499,46 @@ struct SettingsPanel: View {
     // MARK: - about
 
     private var about: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 14) {
-                CopperIcon(size: 56)
-                VStack(alignment: .leading, spacing: 3) {
+        Group {
+            HStack(spacing: 16) {
+                CopperIcon(size: 60)
+                VStack(alignment: .leading, spacing: 4) {
                     Text(Fork.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Palette.ink)
                     Text(verbatim: "by Collin and Felipe · version \(Updater.version) · build \(Updater.build)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.muted)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(SettingsInk.detail)
                         .textSelection(.enabled)
                     Text("Built on Search by Office Commun")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.muted.opacity(0.8))
+                        .font(.system(size: 12))
+                        .foregroundStyle(SettingsInk.detail.opacity(0.85))
                 }
+                Spacer(minLength: 0)
             }
-            .padding(.bottom, 2)
+            .padding(16)
+            .background(SettingsInk.card, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(SettingsInk.cardEdge, lineWidth: 1))
+            .settingsAnchor("about.identity", card: true)
 
-            Card {
+            SettingsSection("Version") {
                 Line(versionTitle, versionDetail) { versionControl }
+                    .settingsAnchor("about.version")
                 Rule()
                 Line("Found something wrong?", "Opens a draft with the version already in it") {
                     Pill("Send Feedback") { Links.writeFeedback() }
                 }
+                .settingsAnchor("about.feedback")
             }
 
-            Card {
-                Shortcut("⌘L", "Address")
-                Rule()
-                Shortcut("⌘K", "Switch tab")
-                Rule()
-                Shortcut("⌘T  ⌘W  ⇧⌘T", "New, close, reopen tab")
-                Rule()
-                Shortcut("⇧⌘S", "Tabs in a sidebar")
-                Rule()
-                Shortcut("⌘S", "Fold the sidebar away")
-                Rule()
-                Shortcut("⌥⌘R", "Reading mode")
-                Rule()
-                Shortcut("⇧⌘R", "Hard reload")
-                Rule()
-                Shortcut("⇧⌘I", "Inspect element")
-                Rule()
-                Shortcut("⇧⌘H", "Hide something on this site")
-                Rule()
-                Shortcut("⇧⌘P", "Float the video")
+            SettingsSection("Keyboard shortcuts", carded: false) {
+                Card {
+                    ForEach(Array(SettingsShortcuts.all.enumerated()), id: \.offset) { index, shortcut in
+                        if index > 0 { Rule() }
+                        Shortcut(shortcut.keys, shortcut.does)
+                    }
+                }
+                .settingsAnchor("about.shortcuts", card: true)
             }
         }
     }
@@ -507,11 +618,11 @@ struct SettingsPanel: View {
                     .foregroundStyle(Palette.ink)
                 Spacer()
                 Text(keys)
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(Palette.muted)
+                    .font(.system(size: 12.5, design: .rounded))
+                    .foregroundStyle(SettingsInk.detail) // Fork (settings-revamp)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
     }
 }

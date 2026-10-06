@@ -558,12 +558,13 @@ struct ContentView: View {
     /// there is nothing to be learned from reading your own password.
     private func keepAsking(_ offer: Browser.Offer) -> some View {
         let login = offer.login
-        let bitwarden = offer.target == .bitwarden
+        let vault = offer.target != .keychain // Fork: Bitwarden or 1Password
+        let name = offer.target.title
         return HStack(spacing: 12) {
-            Text(bitwarden
+            Text(vault
                  ? (offer.changed
-                    ? "Update the password in Bitwarden for \(login.user) on \(login.host)?"
-                    : "Save to Bitwarden for \(login.user) on \(login.host)?")
+                    ? "Update the password in \(name) for \(login.user) on \(login.host)?"
+                    : "Save to \(name) for \(login.user) on \(login.host)?")
                  : (offer.changed
                     ? "Update the password for \(login.user) on \(login.host)?"
                     : (login.user.isEmpty
@@ -572,7 +573,7 @@ struct ContentView: View {
                 .font(.system(size: 12.5))
                 .foregroundStyle(Palette.ink)
                 .lineLimit(1)
-            Button(bitwarden ? "Save to Bitwarden" : (offer.changed ? "Update" : "Save")) { browser.keepOffer() }
+            Button(vault ? (offer.changed ? "Update in \(name)" : "Save to \(name)") : (offer.changed ? "Update" : "Save")) { browser.keepOffer() }
                 .buttonStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(Palette.ground)
@@ -738,6 +739,10 @@ struct ContentView: View {
         // Fork (new-tab-launcher): while the ⌘T card is up, Escape, ⇧/⌥
         // Return and ⌘1–9 are its own.
         if browser.launching, Launcher.key(event, in: browser) { return true }
+
+        // Fork (settings-revamp): while Settings is open, ⌘F, Esc (the query
+        // before the panel), ↑ ↓ ↩ over results and type-to-search are its own.
+        if browser.tuning, SettingsKeys.take(event, in: browser) { return true }
 
         // Escape puts the page back. On a blank tab there is no page to put
         // back, so it belongs to whatever else wants it.

@@ -13,13 +13,38 @@ enum Credentials {
     enum Backend: String {
         case keychain
         case bitwarden
+        case onePassword = "onepassword"
+
+        /// What a person calls it, in save offers and announcements.
+        var title: String {
+            switch self {
+            case .keychain: return "Keychain"
+            case .bitwarden: return "Bitwarden"
+            case .onePassword: return "1Password"
+            }
+        }
+
+        /// The credential source a save to this backend lands in.
+        var source: Credential.Source {
+            switch self {
+            case .keychain: return .keychain
+            case .bitwarden: return .bitwarden
+            case .onePassword: return .onePassword
+            }
+        }
     }
 
+    /// Where a save offer goes: the chosen backend while it is open, the
+    /// keychain otherwise.
     static var saveTarget: Backend {
-        guard Store.settings.string(forKey: "passwords.backend") == Backend.bitwarden.rawValue,
-              isBitwardenUnlocked
-        else { return .keychain }
-        return .bitwarden
+        let chosen = Store.settings.string(forKey: "passwords.backend").flatMap(Backend.init(rawValue:)) ?? .keychain
+        switch chosen {
+        case .bitwarden where isBitwardenUnlocked: return .bitwarden
+        // A 1Password that may create nothing (a read-only service account)
+        // can't take a save.
+        case .onePassword where isOnePasswordUnlocked && OnePassword.shared.saveVault != nil: return .onePassword
+        default: return .keychain
+        }
     }
 
     /// The accounts for a site, best first: the one the page already names
@@ -48,12 +73,13 @@ enum Credentials {
                        host: login.host, user: login.user, sites: [login.host], name: login.user,
                        hasTOTP: false, used: login.used, folder: nil, agentHint: .none)
         }
-        guard isBitwardenUnlocked else { return sorted(deduplicated(keychain)) }
-
-        let folders = Dictionary(uniqueKeysWithValues: Bitwarden.shared.cachedFolders.map { ($0.id, $0.name) })
-        let bitwarden = itemsMatching(host: host)
-            .map { credential(for: $0, folders: folders) }
-        return sorted(deduplicated(keychain + bitwarden))
+        var bitwarden: [Credential] = []
+        if isBitwardenUnlocked {
+            let folders = Dictionary(uniqueKeysWithValues: Bitwarden.shared.cachedFolders.map { ($0.id, $0.name) })
+            bitwarden = itemsMatching(host: host).map { credential(for: $0, folders: folders) }
+        }
+        let onePassword = onePasswordItemsMatching(host: host).map(credential(for:))
+        return sorted(deduplicated(keychain + bitwarden + onePassword))
     }
 
     static func all() -> [Credential] {
@@ -62,12 +88,17 @@ enum Credentials {
                        host: login.host, user: login.user, sites: [login.host], name: login.user,
                        hasTOTP: false, used: login.used, folder: nil, agentHint: .none)
         }
-        guard isBitwardenUnlocked else { return sorted(deduplicated(keychain)) }
-        let folders = Dictionary(uniqueKeysWithValues: Bitwarden.shared.cachedFolders.map { ($0.id, $0.name) })
-        let bitwarden = Bitwarden.shared.cachedItems
-            .filter { $0.type == 1 }
-            .map { credential(for: $0, folders: folders) }
-        return sorted(deduplicated(keychain + bitwarden))
+        var bitwarden: [Credential] = []
+        if isBitwardenUnlocked {
+            let folders = Dictionary(uniqueKeysWithValues: Bitwarden.shared.cachedFolders.map { ($0.id, $0.name) })
+            bitwarden = Bitwarden.shared.cachedItems
+                .filter { $0.type == 1 }
+                .map { credential(for: $0, folders: folders) }
+        }
+        let onePassword = isOnePasswordUnlocked
+            ? OnePassword.shared.cachedItems.filter(\.isLogin).map(credential(for:))
+            : []
+        return sorted(deduplicated(keychain + bitwarden + onePassword))
     }
 
     static func secret(_ id: CredentialID) async throws -> String {
@@ -79,6 +110,8 @@ enum Credentials {
             return password
         case .bitwarden(let itemID):
             return try await Bitwarden.shared.password(for: itemID)
+        case .onePassword(let itemID):
+            return try await OnePassword.shared.password(for: itemID)
         }
     }
 
@@ -88,6 +121,8 @@ enum Credentials {
             throw Failure(message: "Keychain credentials do not have a TOTP code")
         case .bitwarden(let itemID):
             return try await Bitwarden.shared.totp(for: itemID)
+        case .onePassword(let itemID):
+            return try await OnePassword.shared.totp(for: itemID)
         }
     }
 
@@ -106,6 +141,15 @@ enum Credentials {
             } else {
                 _ = try await Bitwarden.shared.create(host: host, user: user, password: password)
             }
+        case .onePassword:
+            // The same account already in 1Password for this site: a new
+            // password on that item, not a twin.
+            if let existing = candidates(for: host).first(where: { $0.source == .onePassword && $0.user == user }),
+               case .onePassword(let id) = existing.id {
+                try await OnePassword.shared.update(id: id, password: password)
+            } else {
+                _ = try await OnePassword.shared.create(host: host, user: user, password: password)
+            }
         }
     }
 
@@ -119,6 +163,41 @@ enum Credentials {
     private static var isBitwardenUnlocked: Bool {
         if case .unlocked = Bitwarden.shared.state { return true }
         return false
+    }
+
+    private static var isOnePasswordUnlocked: Bool { OnePassword.shared.isUnlocked }
+
+    // MARK: - 1Password metadata
+
+    /// A 1Password login as the picker and agents see it. The vault stands
+    /// where Bitwarden's folder does: a vault named `Agents` (or the item's
+    /// `copper-agent` tag) shares it with agents; a `copper-agent: deny`
+    /// field always keeps it back.
+    private static func credential(for item: OnePassword.Item) -> Credential {
+        let denied = item.fields.contains {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "copper-agent"
+                && $0.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "deny"
+        }
+        let tagged = item.tags.contains { $0.trimmingCharacters(in: .whitespaces).lowercased() == "copper-agent" }
+        let hint: Credential.AgentHint
+        if denied {
+            hint = .deny
+        } else if item.vaultName.trimmingCharacters(in: .whitespaces).lowercased() == "agents" || tagged {
+            hint = .allow
+        } else {
+            hint = .none
+        }
+        let host = item.urls.first.flatMap { uriHost($0) } ?? item.title
+        return Credential(id: .onePassword(item.id), source: .onePassword, host: host,
+                          user: item.username, sites: item.urls, name: item.title,
+                          hasTOTP: item.hasTOTP, used: nil, folder: item.vaultName, agentHint: hint)
+    }
+
+    static func onePasswordItemsMatching(host: String) -> [OnePassword.Item] {
+        guard isOnePasswordUnlocked else { return [] }
+        return OnePassword.shared.cachedItems.filter { item in
+            item.isLogin && item.urls.contains { matches(Bitwarden.URI(uri: $0, match: nil), host: host) }
+        }
     }
 
     private static func credential(for item: Bitwarden.Item, folders: [String: String]) -> Credential {
@@ -222,7 +301,9 @@ enum Credentials {
                 result.append(value)
                 continue
             }
-            if value.source == .bitwarden && result[existing].source == .keychain {
+            // A vault's copy wins over the keychain's (it carries a TOTP key,
+            // custom fields, the agent policy); the first vault's over the second.
+            if value.source != .keychain && result[existing].source == .keychain {
                 result[existing] = value
             }
         }

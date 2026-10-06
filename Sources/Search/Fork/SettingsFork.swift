@@ -17,9 +17,8 @@ struct IntelligencePage: View {
     @State private var pasted = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Caption("Model access")
-            Card {
+        VStack(alignment: .leading, spacing: 26) {
+            SettingsSection("Model access") {
                 Line("Use", useDetail) {
                     // While Copper Cloud provides the gateway key it decides
                     // the lane; this Mac's choice is kept for after.
@@ -28,34 +27,34 @@ struct IntelligencePage: View {
                         .disabled(brain.cloudLane)
                         .opacity(brain.cloudLane ? 0.55 : 1)
                 }
+                .settingsAnchor("intelligence.lane")
                 Rule()
                 laneRows
                 Rule()
                 Line("Model", modelDetail) {
                     Segmented(options: Intelligence.Tier.allCases.map { ($0, $0.title) }, selection: $brain.keys.tier)
                 }
+                .settingsAnchor("intelligence.tier")
                 Rule()
                 Line("Model names", brain.lane == .claude ? "What Haiku, Sonnet and Opus are called at Anthropic" : "What Haiku, Sonnet and Opus are called on your gateway") {
                     modelNames
                 }
+                .settingsAnchor("intelligence.names")
                 Rule()
                 Line("Check", verdict ?? "One question each way, so you know before a tab does") {
                     if testing { Ring(size: 12) } else { Pill("Test") { test() } }
                 }
+                .settingsAnchor("intelligence.check")
             }
 
-            Caption("Jev — the fast lane")
-            Card {
+            SettingsSection("Jev — the fast lane", note: brain.cloud == nil
+                 ? "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone."
+                 : "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone. Keys from Copper Cloud stay in cloud-intelligence.json and go when you sign out of the cloud; its gateway key is the one used while it provides one, and a Jev key typed here wins.") {
                 Line("Jev", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? "TypeSafe's System One: answers a typed question — which of these, how likely — in a fifth of a second, with a confidence. The fast lane.") {
                     KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"), ready: brain.jevReady)
                 }
+                .settingsAnchor("intelligence.jev")
             }
-
-            Text(brain.cloud == nil
-                 ? "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone."
-                 : "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone. Keys from Copper Cloud stay in cloud-intelligence.json and go when you sign out of the cloud; its gateway key is the one used while it provides one, and a Jev key typed here wins.")
-                .font(.system(size: 11)).foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -75,11 +74,13 @@ struct IntelligencePage: View {
             Line("Claude account", accountDetail) {
                 accountControl
             }
+            .settingsAnchor("intelligence.account")
         } else {
             Line("API key", brain.cloudLine("routerKey", brain.cloud?.router?.key) ?? "For an OpenAI-compatible gateway — LiteLLM, or anything that speaks /v1/chat/completions") {
                 KeyField(text: brain.cloudLane ? .constant("") : $brain.keys.routerKey, placeholder: brain.cloudPlaceholder("routerKey", brain.cloud?.router?.key, otherwise: "sk-…"), ready: brain.routerReady)
                     .disabled(brain.cloudLane)
             }
+            .settingsAnchor("intelligence.key")
             Rule()
             Line("Gateway address", brain.sources["routerURL"] == "cloud"
                  ? "Provided by Copper Cloud (\(brain.cloud?.host ?? "your cloud"))"
@@ -93,6 +94,7 @@ struct IntelligencePage: View {
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
+            .settingsAnchor("intelligence.gateway")
         }
     }
 
@@ -320,9 +322,8 @@ struct UpdatesPage: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Caption("Updates")
-            Card {
+        VStack(alignment: .leading, spacing: 10) {
+            SettingsSection("This Copper") {
                 Line(currentLine, latestLine) {
                     if updates.checking {
                         Ring(size: 12)
@@ -330,11 +331,13 @@ struct UpdatesPage: View {
                         Pill("Check now") { updates.check(force: true) }
                     }
                 }
+                .settingsAnchor("updates.check")
                 if updates.available, let version = updates.latest?.version {
                     Rule()
                     // The three states of a newer release: on its way, ready
                     // (the only one with an Update button), or not obtained —
                     // with the reason, and a way to try again.
+                    Group {
                     if updates.downloading {
                         Line("Getting Copper \(version) ready", "Downloading from \(updates.feedHost) and verifying the bundle") {
                             Ring(size: 12)
@@ -351,6 +354,8 @@ struct UpdatesPage: View {
                             Pill(updates.stageError == nil ? "Download" : "Retry") { updates.stage(force: true) }
                         }
                     }
+                    }
+                    .settingsAnchor("updates.install")
                 }
                 if let outcome = outcomeLine, updates.outcome?.ok == false {
                     Rule()
@@ -363,24 +368,18 @@ struct UpdatesPage: View {
             // yet", "no longer there"). A refusal that was recorded as the
             // outcome is already in the card above, so it is not repeated.
             if let problem = updates.problem, updates.outcome?.detail != problem {
-                Text(problem)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+                SettingsNote(problem)
             }
-            Text(installLine)
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.muted)
-            if let outcome = outcomeLine, updates.outcome?.ok == true {
-                Text("\(outcome.title) · \(outcome.detail)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
+            VStack(alignment: .leading, spacing: 4) {
+                SettingsNote(installLine)
+                if let outcome = outcomeLine, updates.outcome?.ok == true {
+                    SettingsNote("\(outcome.title) · \(outcome.detail)")
+                }
+                if let checked = updates.checkedAt {
+                    SettingsNote("Last checked \(checked.formatted(.relative(presentation: .named)))")
+                }
             }
-            if let checked = updates.checkedAt {
-                Text("Last checked \(checked.formatted(.relative(presentation: .named)))")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-            }
+            .settingsAnchor("updates.source")
         }
     }
 
@@ -411,19 +410,22 @@ struct AgentsPage: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Card {
+        VStack(alignment: .leading, spacing: 26) {
+            SettingsSection("MCP server") {
                 Line("Let agents drive this window", "An MCP server on this Mac only (127.0.0.1). Claude Code, phi, Cursor and the rest see your open tabs and act in them — the same tools as Playwright MCP, on the browser you're already signed into.") {
                     Switch(on: $mcp.config.enabled)
                 }
+                .settingsAnchor("agents.server")
                 Rule()
                 Line("Status", status) {
                     Circle().fill(mcp.running ? Color.green.opacity(0.8) : Palette.faint).frame(width: 8, height: 8)
                 }
+                .settingsAnchor("agents.status")
                 Rule()
                 Line("Say what the agent does", "Each tool call, in the line at the bottom of the window") {
                     Switch(on: $mcp.config.announces)
                 }
+                .settingsAnchor("agents.announce")
                 Rule()
                 Line("Port", "Change it if something else has \(mcp.config.port)") {
                     TextField("4123", value: $mcp.config.port, format: .number.grouping(.never))
@@ -433,18 +435,20 @@ struct AgentsPage: View {
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
+                .settingsAnchor("agents.port")
             }
 
-            Caption("Jev mode — ultrafast")
-            Card {
+            SettingsSection("Jev mode — ultrafast") {
                 Line("Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract — browser-use's jev-ultrafast loop, run in this window. Jev picks an operation and an element every ~200 ms; Copper does it with real clicks and keys until the goal is done. Seconds, not a round trip per step.") {
                     Switch(on: $mcp.config.jev)
                 }
+                .settingsAnchor("agents.jev")
                 if mcp.config.jev {
                     Rule()
                     Line("Jev key", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? (brain.jevReady ? "TypeSafe System One — the same key as Intelligence" : "Needed. A TypeSafe key (ts-…) — typesafe.ai. Shared with Settings › Intelligence.")) {
                         KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"), ready: brain.jevReady)
                     }
+                    .settingsAnchor("agents.jevkey")
                     Rule()
                     Line("Text model", brain.modelReady ? "Writes what gets typed and answers jev_extract. Small and fast is the point — empty means the model you picked (\(brain.modelName))." : "TYPE_TEXT and jev_extract need a model — Settings › Intelligence › Model access") {
                         HStack(spacing: 8) {
@@ -457,6 +461,7 @@ struct AgentsPage: View {
                                 .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                         }
                     }
+                    .settingsAnchor("agents.textmodel")
                     if !mcp.jevNote.isEmpty {
                         Rule()
                         Line("Last run", mcp.jevNote) { EmptyView() }
@@ -464,21 +469,24 @@ struct AgentsPage: View {
                 }
             }
 
-            Caption("Your agents — let them use this browser")
-            ForEach(links.all) { link in
-                LinkCard(link: link)
-            }
-            Card {
-                Line("Add an agents app", "Paste its address and a personal token") {
-                    Pill("Add…", filled: true) { links.addEmpty() }
+            SettingsSection("Your agents — let them use this browser", carded: false) {
+                ForEach(links.all) { link in
+                    LinkCard(link: link)
+                }
+                Card {
+                    Line("Add an agents app", "Paste its address and a personal token") {
+                        Pill("Add…", filled: true) { links.addEmpty() }
+                    }
+                    .settingsAnchor("agents.add")
                 }
             }
+            .settingsAnchor("agents.links", card: true)
 
-            Caption("The agent in the window — ⌘E")
-            Card {
+            SettingsSection("The agent in the window — ⌘E") {
                 Line("Page in front of every question", "The current tab's address, title and the first 3000 characters of its text. Off, it still has the tools to look.") {
                     Switch(on: $chat.config.pageContext)
                 }
+                .settingsAnchor("agents.context")
                 Rule()
                 Line("Your other MCP servers", serversLine) {
                     HStack(spacing: 8) {
@@ -491,53 +499,61 @@ struct AgentsPage: View {
                         Pill("Reload", filled: true) { Task { await servers.reload() } }
                     }
                 }
+                .settingsAnchor("agents.servers")
                 ForEach(servers.all) { server in
                     Rule()
                     ServerRow(server: server)
                 }
             }
 
-            Caption("Terminal agents")
-            Card {
+            SettingsSection("Terminal agents") {
                 terminalRow(.phi)
+                    .settingsAnchor("agents.phi")
                 Rule()
                 terminalRow(.claude)
+                    .settingsAnchor("agents.claude")
                 Rule()
                 terminalRow(.cli)
+                    .settingsAnchor("agents.cli")
                 Rule()
                 Line("Copy /jev", "A goal-first command for the agent in your terminal") {
                     Pill(copied == "jev" ? "Copied" : "Copy /jev", filled: true) { copy(MCP.jevCommand(goal: nil), "jev") }
                 }
+                .settingsAnchor("agents.copyjev")
                 Rule()
                 Line("Copy prompt", mcp.config.jev ? "Jev-first instructions for this mode" : "Snapshot-first instructions for this mode") {
                     Pill(copied == "prompt" ? "Copied" : "Copy prompt", filled: true) {
                         copy(mcp.config.jev ? mcp.jevPrompt : mcp.agentPrompt, "prompt")
                     }
                 }
+                .settingsAnchor("agents.prompt")
                 Rule()
                 Line("Copy config", "The current HTTP config for a client that is not set up yet") {
                     Pill(copied == "http" ? "Copied" : "Copy config") { copy(mcp.clientConfig, "http") }
                 }
+                .settingsAnchor("agents.config")
                 Rule()
                 VStack(alignment: .leading, spacing: 4) {
                     Line("Copy install command", "The one-liner for the Copper CLI") {
                         Pill(copied == "install" ? "Copied" : "Copy install") { copy(Setup.installCommand, "install") }
                     }
                     Text(Setup.installCommand)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(Palette.muted)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(SettingsInk.detail)
                         .textSelection(.enabled)
-                        .padding(.horizontal, 14)
+                        .lineLimit(2)
+                        .padding(.horizontal, 16)
                     Text("Alternative: \(Setup.brewCommand)")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Palette.muted)
-                        .padding(.horizontal, 14)
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsInk.detail)
+                        .padding(.horizontal, 16)
                         .padding(.bottom, 10)
                 }
+                .settingsAnchor("agents.install")
             }
 
-            Caption("The key")
-            Card {
+            VStack(alignment: .leading, spacing: 10) {
+            SettingsSection("The key") {
                 Line("Bearer token", "Every request must carry it. Kept in agent.json, readable by you alone. Rotate it and every client's config goes stale — on purpose.") {
                     HStack(spacing: 8) {
                         Text(String(mcp.config.token.prefix(8)) + "…")
@@ -546,15 +562,15 @@ struct AgentsPage: View {
                         Pill("Rotate") { mcp.rotateToken() }
                     }
                 }
+                .settingsAnchor("agents.token")
             }
-
-            if mcp.calls > 0 {
-                Text("\(mcp.calls) tool call\(mcp.calls == 1 ? "" : "s") this session — last: \(mcp.lastTool)")
-                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
+            VStack(alignment: .leading, spacing: 4) {
+                if mcp.calls > 0 {
+                    SettingsNote("\(mcp.calls) tool call\(mcp.calls == 1 ? "" : "s") this session — last: \(mcp.lastTool)")
+                }
+                SettingsNote("Agents act as you: whatever you are signed into, they are too. Turn this off when you don't need it.")
             }
-            Text("Agents act as you: whatever you are signed into, they are too. Turn this off when you don't need it.")
-                .font(.system(size: 11)).foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .onAppear { setupStatus = Setup(endpoint: mcp.endpoint, token: mcp.config.token).status() }
     }
@@ -597,7 +613,7 @@ struct AgentsPage: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(result.hasPrefix("Error") ? Color.orange.opacity(0.9) : Palette.muted)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 16)
                     .padding(.bottom, 10)
             }
         }

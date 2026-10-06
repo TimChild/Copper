@@ -7,24 +7,6 @@ struct AccountList: View {
     @ObservedObject var browser: Browser
     let asked: Browser.Suggesting
 
-    private var hasCredentialRows: Bool {
-        asked.rows.contains { suggestion in
-            switch suggestion {
-            case .credential, .code: return true
-            default: return false
-            }
-        }
-    }
-
-    private var hasOtherRows: Bool {
-        asked.rows.contains { suggestion in
-            switch suggestion {
-            case .credential, .code: return false
-            default: return true
-            }
-        }
-    }
-
     /// Loading and locked controls belong to a login picker, not an empty card
     /// or identity picker. A login picker with custom-field rows is not empty.
     private var emptyLogin: Bool { asked.rows.isEmpty && asked.credentials.isEmpty }
@@ -45,39 +27,8 @@ struct AccountList: View {
             }
             .frame(maxHeight: 6 * 44 + 22)
             .fixedSize(horizontal: false, vertical: asked.rows.count <= 6)
-            if isBitwardenLoading && emptyLogin {
-                HStack(spacing: 10) {
-                    Ring(size: 10).frame(width: 22, height: 22)
-                    Text("Loading your Bitwarden vault…")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(Palette.muted)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-            }
-            if isBitwardenLocked && emptyLogin {
-                Button {
-                    browser.tuning = true
-                    browser.managing = false
-                    browser.dropChoice()
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "shield")
-                            .font(.system(size: 11, weight: .medium))
-                            .frame(width: 22, height: 22)
-                            .foregroundStyle(Palette.muted)
-                        Text("Unlock Bitwarden…")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(Palette.ink)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
+            // Fork: "Loading your … vault…" / "Unlock Bitwarden…" / "Unlock 1Password…"
+            VaultPendingRows(browser: browser, emptyLogin: emptyLogin)
             HStack(spacing: 6) {
                 Image(systemName: "key")
                     .font(.system(size: 9, weight: .medium))
@@ -103,17 +54,7 @@ struct AccountList: View {
         .offset(x: asked.spot.minX, y: asked.spot.maxY + 6)
     }
 
-    private var footer: String {
-        if hasOtherRows && !hasCredentialRows { return "From Bitwarden" }
-        let codesOnly = !asked.rows.isEmpty && asked.rows.allSatisfy { suggestion in
-            if case .code = suggestion { return true }
-            return false
-        }
-        if codesOnly { return "From Bitwarden" }
-        return asked.credentials.contains { $0.source == .bitwarden } || isBitwardenLocked || isBitwardenLoading
-            ? "From your keychain and Bitwarden"
-            : "From your keychain"
-    }
+    private var footer: String { PickerFooter.text(for: asked) } // Fork: keychain, Bitwarden, 1Password
 
     private func isFetching(_ suggestion: Browser.Suggestion) -> Bool {
         switch suggestion {
@@ -122,16 +63,6 @@ struct AccountList: View {
         default:
             return false
         }
-    }
-
-    private var isBitwardenLoading: Bool {
-        if case .unlocked = Bitwarden.shared.state { return Bitwarden.shared.isLoadingCache }
-        return false
-    }
-
-    private var isBitwardenLocked: Bool {
-        if case .locked = Bitwarden.shared.state { return true }
-        return false
     }
 
     private struct Row: View {
@@ -170,7 +101,7 @@ struct AccountList: View {
         private func credentialRow(_ credential: Credential, code: Bool = false) -> some View {
             Button(action: pick) {
                 HStack(spacing: 10) {
-                    Image(systemName: code ? "number" : credential.source == .bitwarden ? "shield" : "key")
+                    Image(systemName: code ? "number" : credential.source.symbol) // Fork: per-source glyph
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Palette.muted)
                         .frame(width: 22, height: 22)

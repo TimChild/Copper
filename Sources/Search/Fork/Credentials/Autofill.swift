@@ -124,18 +124,49 @@ struct AutofillField: Hashable {
     let hidden: Bool
 }
 
-/// The in-process view of the unlocked Bitwarden autofill cache.
+/// The in-process view of the unlocked Bitwarden and 1Password autofill
+/// caches. A 1Password identity, card or field carries `op:<item id>` as its
+/// id; Bitwarden's carry the bare item id (shared as `bw:<id>`).
 @MainActor
 enum Autofill {
     static var identities: [AutofillIdentity] {
-        Bitwarden.shared.cachedIdentities
+        Bitwarden.shared.cachedIdentities + (OnePassword.shared.isUnlocked ? OnePassword.shared.cachedIdentities : [])
     }
 
     static var cards: [AutofillCard] {
-        Bitwarden.shared.cachedCards
+        Bitwarden.shared.cachedCards + (OnePassword.shared.isUnlocked ? OnePassword.shared.cachedCards : [])
+    }
+
+    /// The id an identity, card or field is shared with agents under.
+    static func stableID(_ id: String) -> String {
+        id.hasPrefix("op:") ? id : "bw:\(id)"
+    }
+
+    /// Which vault an autofill id came from.
+    static func source(of id: String) -> Credential.Source {
+        id.hasPrefix("op:") ? .onePassword : .bitwarden
     }
 
     static func fields(for host: String) -> [AutofillField] {
+        bitwardenFields(for: host) + onePasswordFields(for: host)
+    }
+
+    private static func onePasswordFields(for host: String) -> [AutofillField] {
+        Credentials.onePasswordItemsMatching(host: host).flatMap { item in
+            item.fields.compactMap { field in
+                guard !field.name.isEmpty else { return nil }
+                return AutofillField(
+                    itemID: OnePassword.stableID(item.id),
+                    itemName: item.title,
+                    name: field.name,
+                    value: OnePassword.shared.fieldValue(itemID: item.id, name: field.name) ?? field.value,
+                    hidden: field.hidden
+                )
+            }
+        }
+    }
+
+    private static func bitwardenFields(for host: String) -> [AutofillField] {
         Credentials.itemsMatching(host: host).flatMap { item in
             item.fields.compactMap { field in
                 guard !field.name.isEmpty else { return nil }
@@ -162,8 +193,11 @@ enum Autofill {
 
     static var topUsernames: [String] {
         var seen: [String: (name: String, count: Int)] = [:]
-        for item in Bitwarden.shared.cachedItems where item.type == 1 {
-            let username = item.username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let onePassword = OnePassword.shared.isUnlocked
+            ? OnePassword.shared.cachedItems.filter(\.isLogin).map(\.username) : []
+        let names = Bitwarden.shared.cachedItems.filter { $0.type == 1 }.map(\.username) + onePassword
+        for name in names {
+            let username = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !username.isEmpty else { continue }
             let key = username.lowercased()
             if let current = seen[key] {
@@ -199,10 +233,11 @@ enum Autofill {
     /// `copper-agent: deny` field count; cards and identities have only the
     /// switch and the list.
     static func isAllowed(_ id: String) -> Bool {
-        if let credential = Credentials.all().first(where: { $0.id == .bitwarden(id) }) {
+        let credentialID: CredentialID = id.hasPrefix("op:") ? .onePassword(String(id.dropFirst(3))) : .bitwarden(id)
+        if let credential = Credentials.all().first(where: { $0.id == credentialID }) {
             return AgentAccess.isAllowed(credential)
         }
-        return AgentAccess.shareAll || AgentAccess.allowed.contains("bw:\(id)")
+        return AgentAccess.shareAll || AgentAccess.allowed.contains(stableID(id))
     }
 
     private static func normalized(_ value: String) -> String {

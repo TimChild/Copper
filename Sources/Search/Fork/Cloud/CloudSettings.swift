@@ -24,20 +24,31 @@ struct CloudPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             CloudSteps(cloud: cloud, sync: sync)
+                .settingsAnchor("cloud.steps", card: true) // Fork (settings-revamp): search anchors
             if !cloud.isLinked {
                 CloudConnectCard(draft: draft)
+                    .settingsAnchor("cloud.connect", card: true)
             } else if !cloud.isSignedIn {
                 CloudConnection(cloud: cloud, sync: sync, opener: "Change…", lead: "Connected to")
+                    .settingsAnchor("cloud.instance", card: true)
                 CloudAccountForm()
+                    .settingsAnchor("cloud.signin", card: true)
             } else {
                 CloudSyncCard(sync: sync, cloud: cloud)
-                if sync.on, !sync.otherDevices.isEmpty { CloudDevicesCard(sync: sync) }
+                    .settingsAnchor("cloud.sync", card: true)
+                if sync.on, !sync.otherDevices.isEmpty {
+                    CloudDevicesCard(sync: sync)
+                        .settingsAnchor("cloud.devices", card: true)
+                }
                 CloudAccountCard(cloud: cloud)
+                    .settingsAnchor("cloud.account", card: true)
                 CloudPairCard(pairing: CloudPairing.shared)
+                    .settingsAnchor("cloud.pair", card: true)
                 VStack(alignment: .leading, spacing: 8) {
                     Caption("Instance")
                     CloudConnection(cloud: cloud, sync: sync, opener: "Details")
                 }
+                .settingsAnchor("cloud.instance", card: true)
                 CloudLogCard(sync: sync)
             }
         }
@@ -1166,7 +1177,7 @@ private struct CloudMoreBelow: ViewModifier {
                 let bottom = viewport - page.minY
                 let more = viewport > 160 && page.height - bottom > 6
                 ZStack(alignment: .bottom) {
-                    LinearGradient(colors: [Palette.ground.opacity(0), Palette.ground], startPoint: .top, endPoint: .bottom)
+                    LinearGradient(colors: [SettingsInk.content.opacity(0), SettingsInk.content], startPoint: .top, endPoint: .bottom) // Fork (settings-revamp): Settings' ground
                     Image(systemName: "chevron.compact.down")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Palette.muted)

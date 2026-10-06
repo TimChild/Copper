@@ -57,7 +57,9 @@
                                        the sidebar's update pill forced into a state (its clicks are
                                        rehearsed, never real); pill click|later|unsnooze|notes [TEXT]|replay
     ./bench downloads [open|close|cancel ID|retry ID|clear|start URL]
-    ./bench render bitwarden|agent|agent-dark|drive|hands|hands-dark|pill|pill-dark PATH  one card drawn to a PNG on its own, no window brought forward
+    ./bench render bitwarden|onepassword[-app|-password|-service|-dark]|managers[-dark]|picker|agent|agent-dark|drive|hands|hands-dark|pill|pill-dark PATH [HOST]
+                                       one card drawn to a PNG on its own, no window brought forward
+                                       (picker: the account list for HOST, default localhost)
     ./bench agent seed chat|running|jev|driver|cutoff|empty   a made-up conversation in the agent pane, for pictures (no model)
     ./bench agent expand all|none      open or fold every activity row and driver card
     ./bench drive [status|stop|resume|clear|pane on|off]
@@ -67,6 +69,13 @@
               |identities|cards|fields HOST|usernames|counts|autofill card|identity ID
               |share all|ID on|off|backend keychain|bitwarden|settings passwords|offer keep
                                        Bitwarden probe controls and Copper feed status
+    ./bench op status|accounts|signin app [ACCOUNT]|signin password [--account A] PW|signin token TOKEN
+              |account add ADDRESS EMAIL SECRETKEY PW|unlock [PW]|lock|signout|sync|keepalive|stay on|off
+              |vault NAME|backend keychain|bitwarden|onepassword|settings passwords|candidates HOST|choose ID
+              |rows|pick ROW|offer [keep|drop]|identities|cards|fields HOST|usernames|counts
+              |autofill card|identity ID|share all|ID on|off
+                                       1Password through the op CLI (SEARCH_OP_PATH may point at
+                                       docs/fixtures/op-mock/op); status never holds a secret
     ./bench spaces [new NAME|select N|next|prev|move N|remove N [--keep]|profile NAME]
                                        lists global pins once and loose tabs per space
     ./bench spaces [icon N EMOJI|sf:symbol|none|colour N NAME|reorder N M]
@@ -212,6 +221,15 @@
     ./bench newtab TEXT --type [--every S] [--settle S]
                                        ⌘T, then TEXT a letter every S seconds (0.08): main-thread busy time,
                                        the longest stretch without a frame, and when the word's history landed
+    ./bench settings open [PAGE]        open Settings (on PAGE: general, tabs, spaces, passwords, …)
+    ./bench settings search QUERY      ranked results as JSON (also fills the open panel's field);
+                                       add --table for one line per result
+    ./bench settings pick N            take result N (1-based) as Return would: page, scroll, highlight
+    ./bench settings select N          move the keyboard's choice to result N, as ↑/↓ would
+    ./bench settings toggle N          flip result N's in-place switch (boolean settings only)
+    ./bench settings index check       every page opened in turn: each index entry's anchor is drawn,
+                                       every drawn anchor has an entry, every page has rows
+    ./bench settings [state]|close     what the panel and its search are doing; close it
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, folded on|off, peek on|off,
                                        tabswitch row|recent, page general|tabs (which Settings page), focus none (the keyboard to the window itself), width N (the sidebar),
@@ -349,15 +367,20 @@ def main(argv):
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
     elif verb == "render":
-        if len(args) < 2: sys.exit("usage: bench render bitwarden|agent|agent-dark|drive|hands|hands-dark|pill|pill-dark PATH")
+        if len(args) < 2: sys.exit("usage: bench render bitwarden|onepassword[-app|-password|-service|-dark]|managers[-dark]|picker|agent|agent-dark|drive|hands|hands-dark|pill|pill-dark PATH [HOST]")
         request["op"] = args[0]
         request["path"] = os.path.abspath(args[1])
+        if len(args) > 2: request["host"] = args[2]
     elif verb == "cloud":
         request["op"] = args[0] if args else "status"
         if request["op"] == "picture" and len(args) > 1: args[1] = os.path.abspath(args[1])
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
-    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "downloads", "drive", "ext-manager", "windows", "flight", "trails"):
-        request["op"] = args[0] if args else ("status" if verb in ("updates", "bw", "drive") else "list")
+    elif verb == "settings":
+        words = [a for a in args if a != "--table"]
+        request["op"] = words[0] if words else "state"
+        request["arg"] = " ".join(words[1:]) if len(words) > 1 else ""
+    elif verb in ("spaces", "groups", "sections", "agent", "ai", "updates", "bw", "op", "downloads", "drive", "ext-manager", "windows", "flight", "trails"):
+        request["op"] = args[0] if args else ("status" if verb in ("updates", "bw", "op", "drive") else "list")
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
     elif verb == "history":
         if not args or args[0] != "import" or len(args) < 2:
@@ -513,8 +536,11 @@ def main(argv):
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
     elif verb == "canvas":
         print(json.dumps(answer, ensure_ascii=False, indent=2, sort_keys=True))
-    elif verb in ("updates", "bw", "drive", "render", "hardreload", "inspect"):
+    elif verb in ("updates", "bw", "op", "drive", "render", "hardreload", "inspect"):
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True))
+    elif verb == "settings" and request["op"] == "search" and "--table" in args:
+        for r in answer.get("results", []):
+            print(f"{r['rank']:>2}  {r['score']:>6}  {r['page']:<12} {r['marked']}")
     elif verb == "cloud":
         print(json.dumps(answer, ensure_ascii=False, sort_keys=True, indent=2))
     elif verb == "newtab" and request.get("type"):

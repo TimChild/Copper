@@ -1,6 +1,7 @@
 import Foundation
 
-/// Fill a shared Bitwarden card, identity, or custom field without returning its value.
+/// Fill a shared Bitwarden or 1Password card, identity, or custom field
+/// without returning its value.
 enum AgentAutofill {
     struct Failure: LocalizedError {
         let message: String
@@ -17,7 +18,12 @@ enum AgentAutofill {
         }
         var host = rawHost.lowercased()
         if host.hasPrefix("www.") { host.removeFirst(4) }
-        guard case .unlocked = Bitwarden.shared.state else {
+        var bitwardenOpen = false
+        if case .unlocked = Bitwarden.shared.state { bitwardenOpen = true }
+        guard bitwardenOpen || OnePassword.shared.isUnlocked else {
+            if OnePassword.shared.isLocked, Bitwarden.shared.state == .unauthenticated || Bitwarden.shared.state == .missing {
+                throw Failure(message: "1password is locked — unlock it in Settings › Passwords")
+            }
             throw Failure(message: "bitwarden is locked — unlock it in Settings › Passwords")
         }
 
@@ -67,7 +73,8 @@ enum AgentAutofill {
             // The boxes were there but already held values: nothing was
             // overwritten, and that is a result, not a failure.
             let submitted = shouldSubmit ? await submit(tab) : false
-            var result: [String: Any] = ["filled": filled, "kind": kind, "name": card.name, "submitted": submitted]
+            var result: [String: Any] = ["filled": filled, "kind": kind, "name": card.name, "submitted": submitted,
+                                         "source": Autofill.source(of: card.id) == .onePassword ? "onepassword" : "bitwarden"]
             if filled == 0 { result["note"] = "the card fields already hold values; nothing overwritten" }
             return result
 
@@ -102,7 +109,8 @@ enum AgentAutofill {
                 tab.fillValues(identity.values()) { count in continuation.resume(returning: count) }
             }
             let submitted = shouldSubmit ? await submit(tab) : false
-            var result: [String: Any] = ["filled": filled, "kind": kind, "name": identity.name, "submitted": submitted]
+            var result: [String: Any] = ["filled": filled, "kind": kind, "name": identity.name, "submitted": submitted,
+                                         "source": Autofill.source(of: identity.id) == .onePassword ? "onepassword" : "bitwarden"]
             if filled == 0 { result["note"] = "the identity fields already hold values; nothing overwritten" }
             return result
 

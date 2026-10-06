@@ -6,6 +6,8 @@ import Foundation
 enum CredentialID: Hashable, Codable {
     case keychain(host: String, user: String)
     case bitwarden(String)
+    /// A 1Password item, by its op item id.
+    case onePassword(String)
 
     var string: String {
         switch self {
@@ -13,6 +15,8 @@ enum CredentialID: Hashable, Codable {
             return "kc:\(host)\u{1}\(user)"
         case .bitwarden(let id):
             return "bw:\(id)"
+        case .onePassword(let id):
+            return "op:\(id)"
         }
     }
 
@@ -28,6 +32,10 @@ enum CredentialID: Hashable, Codable {
             let id = String(string.dropFirst(3))
             guard !id.isEmpty else { return nil }
             self = .bitwarden(id)
+        } else if string.hasPrefix("op:") {
+            let id = String(string.dropFirst(3))
+            guard !id.isEmpty else { return nil }
+            self = .onePassword(id)
         } else {
             return nil
         }
@@ -52,6 +60,25 @@ struct Credential: Identifiable, Hashable {
     enum Source: Hashable {
         case keychain
         case bitwarden
+        case onePassword
+
+        /// How a person reads the source: "Bitwarden", "1Password", "keychain".
+        var title: String {
+            switch self {
+            case .keychain: return "keychain"
+            case .bitwarden: return "Bitwarden"
+            case .onePassword: return "1Password"
+            }
+        }
+
+        /// The picker's glyph for a row from this source.
+        var symbol: String {
+            switch self {
+            case .keychain: return "key"
+            case .bitwarden: return "shield"
+            case .onePassword: return "1.circle"
+            }
+        }
     }
 
     enum AgentHint: Hashable {

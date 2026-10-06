@@ -107,6 +107,9 @@
     ./bench canvas pill [dismiss|open] | pending ID | remind ID EMAIL | withdraw ID EMAIL
                                        invites: the pill (its × = Not now, its Open), the invites
                                        waiting on canvas ID, invite again (a reminder on 0.5.0), take one back
+    ./bench canvas stale accept|decline INVITE_ID CANVAS_ID
+                                       test worlds: answer an invite by id the pill's way, even one no
+                                       longer listed (answer: opened|closed|member|answered, front canvas)
                                        canvases: the canvas_* tools, the pages behind them (ready, room,
                                        store), the cloud invites
     ./bench canvas rename ID -> NAME|delete ID|leave ID|members ID

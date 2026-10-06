@@ -1,8 +1,9 @@
 #!/bin/bash
 # Two headless probe-world Coppers against one copper-cloud: link, accounts,
 # sync both ways, a shared canvas with an invite, live collaboration, agent ops,
-# invites on both ends (pending, reminders, withdraw, accept) and a history
-# push that holds an address too big for the cloud.
+# invites on both ends (pending, reminders, withdraw, accept), a stale invite
+# after a share-link join, and a history push that holds an address too big for
+# the cloud.
 #
 #   docs/fixtures/cloud-e2e.sh "<link code>" [app-path]
 #
@@ -286,6 +287,42 @@ fi
 upto '[ "$(B "$WB" canvas list | q "any(r.get(\"id\")==E[\"INV_CID\"] and r.get(\"role\")==\"editor\" for r in d.get(\"canvases\",[]))")" = True ]' 10
 check "B accepted and is an editor of the canvas" '[ "$(B "$WB" canvas list | q "any(r.get(\"id\")==E[\"INV_CID\"] and r.get(\"role\")==\"editor\" for r in d.get(\"canvases\",[]))")" = True ]' 'B "$WB" canvas list | head -c 600'
 check "A's members list B and nothing waits any more" '[ "$(B "$WA" canvas members "$INV_CID" | q "any(m.get(\"email\")==E[\"B_EMAIL\"] for m in d.get(\"members\",[]))")" = True ] && [ -z "$(b_invite)" ]' 'B "$WA" canvas members "$INV_CID"; b_invite'
+
+echo "== stale invites: a share-link join closes the invite, and Join on it still works"
+# The live bug: B joined through the canvas's share link (which closes B's email
+# invite) but B's Copper kept the pill and the Invitations row, and every Join or
+# Decline on them got 404 and stayed. Now the join takes them off at once, and an
+# answer on the stale invite id is no error: Join opens the canvas.
+STALE_CID=$(B "$WA" canvas create "Stale $STAMP" | q 'd.get("id") or (d.get("canvas") or {}).get("id") or ""'); export STALE_CID
+check "A created a canvas for the stale-invite case" '[ -n "$STALE_CID" ]' 'B "$WA" canvas list | head -c 400'
+B "$WA" canvas remind "$STALE_CID" "$B_EMAIL" >/dev/null
+s_iid() { curl -ksS -H "$H" -H "Authorization: Bearer $BTOKEN" "$HOST/v1/invites" | q 'next((i["id"] for i in L(d) if i.get("canvas_id")==E["STALE_CID"]), "")'; }
+s_pill() { B "$WB" canvas pill | q '(d.get("pill") or {}).get("canvasId","")'; }
+s_listed() { B "$WB" canvas invites | q 'any(i.get("canvasId")==E["STALE_CID"] for i in d.get("invites",[]))'; }
+upto '[ -n "$(s_iid)" ] && [ "$(s_listed)" = True ]' 10
+STALE_IID=$(s_iid)
+check "B has the invite listed before joining by link" '[ -n "$STALE_IID" ] && [ "$(s_listed)" = True ]' 'B "$WB" canvas invites'
+STALE_LINK=$(B "$WA" canvas link "$STALE_CID" | q 'd.get("link") or ""')
+JOINED=$(B "$WB" canvas join "$STALE_LINK")
+check "B joins the canvas through its share link" '! echo "$JOINED" | grep -q "\"error\"" && [ "$(B "$WB" canvas list | q "any(r.get(\"id\")==E[\"STALE_CID\"] for r in d.get(\"canvases\",[]))")" = True ]' 'echo "$JOINED"; B "$WB" canvas list | head -c 500'
+check "the link join closed the invite on the server" '[ -z "$(s_iid)" ]' 's_iid'
+check "B's pill and Invitations row for it are gone right after the join" '[ "$(s_pill)" != "$STALE_CID" ] && [ "$(s_listed)" = False ]' 'B "$WB" canvas pill; B "$WB" canvas invites'
+# Another tab in front first, so "the canvas opens in front" is the Join's doing.
+ELSE_TAB=$(B "$WB" open about:blank 2>/dev/null); B "$WB" select "$ELSE_TAB" >/dev/null 2>&1 || true
+STALE=$(B "$WB" canvas stale accept "$STALE_IID" "$STALE_CID")
+check "Join on the stale invite id: no error, and the canvas opens in front" '[ "$(echo "$STALE" | q "d.get(\"answer\")==\"opened\" and \"error\" not in d and d.get(\"front\")==E[\"STALE_CID\"] and d.get(\"listed\") is False")" = True ]' 'echo "$STALE"'
+STALE=$(B "$WB" canvas stale decline "$STALE_IID" "$STALE_CID")
+check "Decline on the stale invite id: no error, nothing left listed" '[ "$(echo "$STALE" | q "d.get(\"answer\")==\"closed\" and \"error\" not in d and d.get(\"listed\") is False and d.get(\"member\") is True")" = True ]' 'echo "$STALE"'
+# An invite closed while B is not a member (declined on another Mac): Join says
+# so quietly — no error, no canvas — and nothing is left listed.
+GONE_CID=$(B "$WA" canvas create "Gone $STAMP" | q 'd.get("id") or (d.get("canvas") or {}).get("id") or ""'); export GONE_CID
+B "$WA" canvas remind "$GONE_CID" "$B_EMAIL" >/dev/null
+g_iid() { curl -ksS -H "$H" -H "Authorization: Bearer $BTOKEN" "$HOST/v1/invites" | q 'next((i["id"] for i in L(d) if i.get("canvas_id")==E["GONE_CID"]), "")'; }
+upto '[ -n "$(g_iid)" ]' 10
+GONE_IID=$(g_iid)
+GONE_DECLINE=$(curl -ksS -o /dev/null -w '%{http_code}' -X POST -H "$H" -H "Authorization: Bearer $BTOKEN" "$HOST/v1/invites/$GONE_IID/decline")
+STALE=$(B "$WB" canvas stale accept "$GONE_IID" "$GONE_CID")
+check "Join on an invite declined elsewhere: no error, says it is no longer open, no canvas" '[ "$GONE_DECLINE" = 200 ] && [ "$(echo "$STALE" | q "d.get(\"answer\")==\"closed\" and \"error\" not in d and d.get(\"said\")==\"That invite is no longer open\" and d.get(\"member\") is False and d.get(\"listed\") is False and d.get(\"front\")!=E[\"GONE_CID\"]")" = True ]' 'echo "decline $GONE_DECLINE"; echo "$STALE"'
 
 echo "== history: a push holding one address over 16 KiB goes through (no wedge)"
 # 1,200 places the way an import leaves them, oldest first; #700 — in the second

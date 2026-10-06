@@ -18,18 +18,36 @@ import SwiftUI
 
 @MainActor
 enum CanvasInvites {
-    /// Join: accept, then open the canvas in front. Nil when it opened;
-    /// otherwise the sentence that says why not (also announced).
+    /// What a Join came to.
+    enum Joined: Equatable {
+        /// The canvas is open in front (accepted, or a member already).
+        case opened
+        /// The invite had gone and the canvas isn't ours: the window said
+        /// `Canvases.closedInvite`, quietly. Not an error.
+        case closed
+        /// It didn't work; the sentence that says why (also announced).
+        case failed(String)
+
+        var problem: String? { if case .failed(let said) = self { return said }; return nil }
+    }
+
+    /// Join: accept, then open the canvas in front. An invite that is no
+    /// longer open (accepted elsewhere, joined through a link, withdrawn)
+    /// leaves the pill and the list either way, and opens the canvas when
+    /// this account is a member of it already.
     @discardableResult
-    static func join(_ invite: Canvases.Invite, in browser: Browser) async -> String? {
+    static func join(_ invite: Canvases.Invite, in browser: Browser) async -> Joined {
         do {
-            try await Canvases.shared.answer(invite, accept: true)
+            if try await Canvases.shared.answer(invite, accept: true) == .closed {
+                browser.announce(Canvases.closedInvite)
+                return .closed
+            }
             if let entry = Canvases.shared.entry(invite.canvasId) { CanvasHost.show(entry.id, in: browser, foreground: true) }
-            return nil
+            return .opened
         } catch {
             let said = Canvases.explain(error)
             browser.announce(said)
-            return said
+            return .failed(said)
         }
     }
 

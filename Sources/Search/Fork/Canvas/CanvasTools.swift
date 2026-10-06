@@ -321,7 +321,7 @@ enum CanvasTools {
                     case "dismiss": Canvases.shared.dismissNewInvite()
                     case "open":
                         guard let invite = Canvases.shared.newInvite else { answer(["error": "no pill"]); return }
-                        if let problem = await CanvasInvites.join(invite, in: browser) { answer(["error": problem]); return }
+                        if let problem = await CanvasInvites.join(invite, in: browser).problem { answer(["error": problem]); return }
                     default: break
                     }
                     answer(["pill": Canvases.shared.newInvite.map(describe) ?? NSNull(), "invites": Canvases.shared.invites.count])
@@ -359,8 +359,39 @@ enum CanvasTools {
                         answer(["error": "no invite \(arg)", "invites": Canvases.shared.invites.map(\.id)])
                         return
                     }
-                    try await Canvases.shared.answer(invite, accept: op == "accept")
-                    answer(content(try await call("canvas_list", [:], in: browser)))
+                    let outcome = try await Canvases.shared.answer(invite, accept: op == "accept")
+                    var out = content(try await call("canvas_list", [:], in: browser))
+                    out["answer"] = outcome.rawValue
+                    answer(out)
+                case "stale":
+                    // `stale accept|decline INVITE_ID CANVAS_ID` (test worlds): answer
+                    // an invite by id as the pill and the Invitations row would, even
+                    // one this Copper no longer lists — the stale pill a share-link
+                    // join or a withdraw left on screen. Accept goes the pill's way
+                    // (CanvasInvites.join: opens the canvas, or says it has gone).
+                    let words = arg.split(separator: " ").map(String.init)
+                    guard Store.testing, words.count == 3, ["accept", "decline"].contains(words[0]) else {
+                        answer(["error": "stale accept|decline INVITE_ID CANVAS_ID (test worlds only)"]); return
+                    }
+                    let invite = Canvases.shared.invites.first { $0.id == words[1] }
+                        ?? Canvases.Invite(id: words[1], canvasId: words[2], canvasName: "", from: "", createdAt: nil)
+                    var out: [String: Any] = [:]
+                    if words[0] == "accept" {
+                        switch await CanvasInvites.join(invite, in: browser) {
+                        case .opened: out["answer"] = "opened"
+                        case .closed: out["answer"] = "closed"
+                        case .failed(let said): out["error"] = said
+                        }
+                    } else {
+                        out["answer"] = (try await Canvases.shared.answer(invite, accept: false)).rawValue
+                    }
+                    let front = browser.tabs.first { $0.id == browser.activeID }.flatMap(CanvasTabs.showing)
+                    out["front"] = front ?? NSNull()
+                    out["said"] = browser.announcement ?? NSNull()
+                    out["member"] = Canvases.shared.entry(words[2]) != nil
+                    out["listed"] = Canvases.shared.invites.contains { $0.id == words[1] || $0.canvasId == words[2] }
+                    out["pill"] = Canvases.shared.newInvite.map(describe) ?? NSNull()
+                    answer(out)
                 case "rename", "delete", "leave", "members":
                     // `rename ID -> NAME` (or `rename ID NAME` for an id without spaces),
                     // `delete ID`, `leave ID`, `members ID` — the row's menu.

@@ -30,6 +30,7 @@ export const MIN_SIZE = {
   frame: { w: 160, h: 120 },
   image: { w: 32, h: 32 },
   link: { w: 180, h: 56 },
+  checklist: { w: 200, h: 72 },
 } as const satisfies Record<string, Size>
 
 export type ResizableType = keyof typeof MIN_SIZE

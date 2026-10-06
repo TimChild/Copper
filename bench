@@ -104,6 +104,10 @@
                                        the page's status() (clock time, wall, key, frames, fading)
     ./bench canvas list|open [ID]|read [ID]|apply JSON|create NAME|invites|accept|decline INVITE|hosts
     ./bench canvas link [ID]|join LINK|presence [ID]|parsetest
+    ./bench canvas checklist [SHAPE] · canvas check SHAPE COL ROW…
+                                       checklists on the board in front (title, columns, rows with
+                                       picks, tally), or a real click on ROW's COL box (ROW: id or
+                                       label, the rest of the line) and the checklist after it
                                        the Share sheet from the bench: link makes/reuses the invite
                                        link for ID (default: the front canvas), join opens an invite
                                        link the way clicking it would, presence prints who

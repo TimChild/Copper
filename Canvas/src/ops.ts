@@ -10,6 +10,10 @@
  *
  *   {op:"add", shape:{type, id?, x?, y?, w?, h?, color?, …}}  // no x/y → free space near the viewport centre
  *   {op:"update", id, patch:{…}}                              // merges props
+ *
+ * A checklist (`checklist.ts`) takes `title`, `columns` (1–4, default Yes/No),
+ * `rows` (labels or {label, id?}, ≤ 60) and `picks` ({rowIdOrLabel: column |
+ * true | null}) on add and update; `rows` and `columns` replace the lists.
  *   {op:"move", id, dx, dy}                                    // a frame carries what sits inside it
  *   {op:"resize", id, w, h}
  *   {op:"delete", id}                                          // arrows ending on it go too
@@ -18,6 +22,19 @@
  */
 import { arrowBox, arrowPath } from './canvas/arrows'
 import { AGENT, bareId, readEndpoint, type CanvasStore, type ShapeInput, type ShapeProps } from './canvas/doc'
+import {
+  DEFAULT_COLUMNS,
+  checklistHeight,
+  checklistWidth,
+  cleanColumns,
+  cleanPicks,
+  cleanRows,
+  summarizeChecklist,
+  writeColumns,
+  writePick,
+  writeRows,
+  type Picker,
+} from './canvas/checklist'
 import { liveAgents, readAgents } from './canvas/agents'
 import { center, containsBox, boxesOverlap, SIDES, type Box, type Point, type Side } from './canvas/geometry'
 import { MIN_SIZE, isResizable, minSizeOf } from './canvas/resize'
@@ -30,6 +47,7 @@ import {
   isShapeColor,
   isShapeType,
   type CanvasAgent,
+  type ChecklistRow,
   type Endpoint,
   type Shape,
   type ShapeType,
@@ -116,6 +134,7 @@ const BY_TYPE: Record<ShapeType, readonly string[]> = {
   arrow: ['color', 'z', 'from', 'to', 'label'],
   image: [...COMMON, 'src', 'naturalW', 'naturalH'],
   link: [...COMMON, 'url', 'title', 'favicon', 'live'],
+  checklist: [...COMMON, 'title', 'columns', 'rows', 'picks'],
 }
 /** Friendly spellings: `text` on a frame or link is its title, on an arrow its label. */
 const ALIAS: Partial<Record<ShapeType, Record<string, string>>> = {
@@ -124,6 +143,7 @@ const ALIAS: Partial<Record<ShapeType, Record<string, string>>> = {
   arrow: { text: 'label', title: 'label' },
   sticky: { title: 'text' },
   text: { title: 'text' },
+  checklist: { text: 'title', label: 'title' },
 }
 /** Accepted and dropped silently: the page owns these. */
 const IGNORED = new Set(['id', 'type', 'by', 'createdAt', 'updatedAt'])
@@ -254,6 +274,15 @@ function cleanProps(type: ShapeType, raw: Record<string, unknown>, store: Canvas
         }
         out.favicon = value
         break
+      case 'columns':
+        out.columns = cleanColumns(value)
+        break
+      case 'rows':
+        out.rows = cleanRows(value, (selfId && store.live(selfId)?.rows) || [])
+        break
+      case 'picks':
+        // Resolved against the final rows and columns by the op (`checklistPicks`).
+        break
       case 'from':
       case 'to': {
         const end = readEndpoint(value)
@@ -265,6 +294,32 @@ function cleanProps(type: ShapeType, raw: Record<string, unknown>, store: Canvas
     }
   }
   return out as ShapeProps
+}
+
+/** The `picks` an add or update gave (by any alias), if any. */
+function rawPicks(raw: Record<string, unknown>): unknown {
+  return raw.picks
+}
+
+/**
+ * Write a checklist's new rows and columns (dropping picks they orphan) and
+ * the op's `picks`, all in the op's transaction. Fresh lists also size the
+ * card, unless the op sized it.
+ */
+function writeChecklist(ctx: OpsContext, id: string, props: ShapeProps, picks: unknown, as: Actor | null, sized: { w: boolean; h: boolean }) {
+  const m = ctx.store.shapes.get(id)
+  if (!m) return
+  const live = ctx.store.live(id)
+  const rows: ChecklistRow[] = props.rows ?? live?.rows ?? []
+  const columns: string[] = props.columns ?? live?.columns ?? [...DEFAULT_COLUMNS]
+  const resolved = picks === undefined ? [] : cleanPicks(picks, rows, columns)
+  if (props.columns) writeColumns(m, columns)
+  if (props.rows) writeRows(m, rows)
+  const by: Picker = { name: as?.name ?? 'Agent', id: as?.id ?? 'agent' }
+  const now = Date.now()
+  for (const [rowId, col] of resolved) writePick(m, rowId, col, by, now)
+  if (props.columns && !sized.w) m.set('w', Math.max(live?.w ?? 0, checklistWidth(columns.length)))
+  if ((props.rows || props.columns) && !sized.h) m.set('h', checklistHeight(columns.length, rows.length))
 }
 
 function checkEnd(end: Endpoint, store: CanvasStore, key: string, selfId?: string) {
@@ -293,7 +348,7 @@ function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): 
   // `web` (or `iframe`): a live web frame, which is a link with `live` — one shape type, so older clients still show it.
   if (raw.type === 'web' || raw.type === 'iframe') raw = { ...raw, type: 'link', live: raw.live ?? raw.embed ?? true, embed: undefined }
   const type = raw.type
-  if (!isShapeType(type)) return fail('`shape.type` must be sticky, text, frame, arrow, image, link or web')
+  if (!isShapeType(type)) return fail('`shape.type` must be sticky, text, frame, arrow, image, link, checklist or web')
   let id: string | undefined
   if (raw.id !== undefined) {
     if (typeof raw.id !== 'string' || !ID.test(raw.id)) fail('`shape.id` must be 1–64 of A–Z a–z 0–9 _ - : .')
@@ -340,6 +395,15 @@ function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): 
     if (!props.title) input.title = hostOf(props.url!)
     if (props.live && !frameUrl(props.url)) fail('a live frame needs an http(s) `url`')
   }
+  if (type === 'checklist') {
+    input.columns = props.columns ?? [...DEFAULT_COLUMNS]
+    input.rows = props.rows ?? []
+    input.title = props.title ?? ''
+    // Checked before anything is written: a bad pick fails the whole add.
+    if (rawPicks(raw) !== undefined) cleanPicks(rawPicks(raw), input.rows, input.columns)
+    input.w ??= checklistWidth(input.columns.length)
+    input.h ??= checklistHeight(input.columns.length, input.rows.length)
+  }
   const base = type === 'link' && props.live ? LIVE_SIZE : SHAPE_SIZE[type]
   const size = { w: input.w ?? base.w, h: input.h ?? base.h }
   if (isResizable(type)) {
@@ -355,6 +419,7 @@ function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): 
     if (props.y === undefined) input.y = spot.y
   }
   const newId = ctx.store.create(input, AGENT)
+  if (type === 'checklist' && rawPicks(raw) !== undefined) writeChecklist(ctx, newId, {}, rawPicks(raw), as, { w: true, h: true })
   return { id: newId, anchor: center({ x: input.x!, y: input.y!, w: size.w, h: size.h }) }
 }
 
@@ -375,10 +440,20 @@ function anchorOf(ctx: OpsContext, id: string): Point {
   return center(shape)
 }
 
-function opUpdate(op: Record<string, unknown>, ctx: OpsContext): string {
+function opUpdate(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null = null): string {
   const shape = needShape(ctx, op.id)
   const raw = isObject(op.patch) ? op.patch : isObject(op.props) ? op.props : fail('`update` needs `patch:{…}`')
   const props = cleanProps(shape.type, raw, ctx.store, shape.id)
+  if (shape.type === 'checklist') {
+    const { columns, rows, ...rest } = props
+    const picks = rawPicks(raw)
+    if (picks !== undefined) cleanPicks(picks, rows ?? shape.rows ?? [], columns ?? shape.columns ?? [...DEFAULT_COLUMNS])
+    if (rest.w !== undefined) rest.w = Math.max(rest.w, MIN_SIZE.checklist.w)
+    if (rest.h !== undefined) rest.h = Math.max(rest.h, MIN_SIZE.checklist.h)
+    ctx.store.update(shape.id, rest, AGENT)
+    writeChecklist(ctx, shape.id, { columns, rows }, picks, as, { w: rest.w !== undefined, h: rest.h !== undefined })
+    return shape.id
+  }
   if (shape.type === 'link' && props.live && !frameUrl(props.url ?? shape.url)) fail('a live frame needs an http(s) `url`')
   // A new address without a new name: the old page's name and icon would be wrong. The host
   // stands in, and a live frame puts the page's own name back once it has loaded.
@@ -514,7 +589,7 @@ export function applyOps(ctx: OpsContext, raw: unknown): ApplyOutcome {
             break
           }
           case 'update':
-            id = opUpdate(o, ctx)
+            id = opUpdate(o, ctx, as)
             result.anchor = anchorOf(ctx, id)
             break
           case 'move':
@@ -603,6 +678,10 @@ export interface ShapeSummary {
   naturalW?: number
   naturalH?: number
   image?: { src: string; naturalW: number; naturalH: number }
+  /** checklist: its columns, rows with each one's pick (and who made it, when), and the count per column. */
+  columns?: string[]
+  rows?: { id: string; label: string; pick: string | null; by?: string; at?: number }[]
+  tally?: Record<string, number>
   /** The innermost frame this shape sits in. */
   frame?: string
 }
@@ -717,6 +796,10 @@ export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead 
         sum.url = s.url
         sum.title = clip(s.title, full)
         if (s.live) sum.live = true
+        break
+      case 'checklist':
+        sum.title = clip(s.title, full)
+        Object.assign(sum, summarizeChecklist(s.columns ?? [], s.rows ?? [], s.picks ?? {}))
         break
     }
     if (s.type !== 'arrow') {

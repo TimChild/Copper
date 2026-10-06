@@ -12,7 +12,7 @@
  */
 import type { Point, Side } from './geometry'
 
-export const SHAPE_TYPES = ['sticky', 'text', 'frame', 'arrow', 'image', 'link'] as const
+export const SHAPE_TYPES = ['sticky', 'text', 'frame', 'arrow', 'image', 'link', 'checklist'] as const
 export type ShapeType = (typeof SHAPE_TYPES)[number]
 export const isShapeType = (v: unknown): v is ShapeType =>
   typeof v === 'string' && (SHAPE_TYPES as readonly string[]).includes(v)
@@ -41,6 +41,23 @@ export interface ImageRef {
 }
 
 export type TextAlign = 'left' | 'center' | 'right'
+
+/** checklist: one row (a person, a task). */
+export interface ChecklistRow {
+  id: string
+  label: string
+}
+
+/** checklist: a row's pick, stored under its own `pick:<rowId>` key (`checklist.ts`). */
+export interface ChecklistPick {
+  /** The column's label. */
+  col: string
+  /** Who picked it: name and id. */
+  by: string
+  byId: string
+  /** Epoch ms. */
+  at: number
+}
 
 /** A plain read of one shape; see `readShape` for the tolerant parsing. */
 export interface Shape {
@@ -82,6 +99,10 @@ export interface Shape {
    * the shape as a link card and keeps the flag when it copies or edits it.
    */
   live?: boolean
+  /** checklist: 1–4 column labels, its rows, and each row's pick by row id. */
+  columns?: string[]
+  rows?: ChecklistRow[]
+  picks?: Readonly<Record<string, ChecklistPick>>
 }
 
 /** Default size per type; arrows and images size themselves. */
@@ -92,6 +113,7 @@ export const SHAPE_SIZE: Record<ShapeType, { w: number; h: number }> = {
   arrow: { w: 0, h: 0 },
   image: { w: 320, h: 240 },
   link: { w: 300, h: 84 },
+  checklist: { w: 324, h: 120 },
 }
 
 export const DEFAULT_COLOR: Record<ShapeType, NamedColor> = {
@@ -101,6 +123,7 @@ export const DEFAULT_COLOR: Record<ShapeType, NamedColor> = {
   arrow: 'gray',
   image: 'white',
   link: 'white',
+  checklist: 'green',
 }
 
 export const STICKY_FONT = 16

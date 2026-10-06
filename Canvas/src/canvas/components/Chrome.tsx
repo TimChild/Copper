@@ -19,6 +19,7 @@ import {
   ImageOff,
   Keyboard,
   Link2,
+  ListChecks,
   Lock,
   Maximize,
   Minus,
@@ -46,7 +47,7 @@ import type { PeerView } from './Overlays'
 import { AgentDot } from './Overlays'
 import { Divider, EDIT_HINT_ID, IconButton, Kbd, MOD, Panel, Tip, cn } from './ui'
 
-export type Tool = 'select' | 'hand' | 'sticky' | 'text' | 'frame' | 'arrow' | 'image' | 'link' | 'laser'
+export type Tool = 'select' | 'hand' | 'sticky' | 'text' | 'frame' | 'arrow' | 'image' | 'link' | 'checklist' | 'laser'
 
 export const TOOL_KEYS: Record<string, Tool> = {
   v: 'select',
@@ -59,6 +60,7 @@ export const TOOL_KEYS: Record<string, Tool> = {
   x: 'arrow',
   i: 'image',
   l: 'link',
+  r: 'checklist',
   k: 'laser',
 }
 
@@ -80,6 +82,7 @@ const TOOLS: { tool: Tool; label: string; key: string; icon: ReactNode; edit?: b
   { tool: 'arrow', label: 'Arrow', key: 'A', icon: <ArrowUpRight className="h-[18px] w-[18px]" />, edit: true },
   { tool: 'image', label: 'Image', key: 'I', icon: <ImageIcon className="h-[18px] w-[18px]" />, edit: true },
   { tool: 'link', label: 'Link', key: 'L', icon: <Link2 className="h-[18px] w-[18px]" />, edit: true },
+  { tool: 'checklist', label: 'Checklist', key: 'R', icon: <ListChecks className="h-[18px] w-[18px]" />, edit: true },
   { tool: 'laser', label: 'Laser pointer', key: 'K', icon: <LaserIcon className="h-[18px] w-[18px]" /> },
 ]
 
@@ -802,6 +805,7 @@ const SHORTCUTS: [string, string[]][] = [
   ['Arrow', ['A']],
   ['Image', ['I']],
   ['Link', ['L']],
+  ['Checklist (RSVP)', ['R']],
   ['Laser pointer (everyone sees it)', ['K']],
   ['Edit the selected note', ['↵']],
   ['New note beside / below', [`${MOD}↵`, `⇧${MOD}↵`]],

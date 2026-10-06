@@ -10,6 +10,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   useSyncExternalStore,
   type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
@@ -84,6 +85,8 @@ import {
 } from './Overlays'
 import { SearchBox } from './SearchBox'
 import { ArrowLabel, ArrowLayer, FrameView, ImageView, LinkView, StickyView, TextView, type DrawnArrow } from './Shapes'
+import { ChecklistView, checklistEditField } from './Checklist'
+import { checklistText } from '../checklist'
 import { WebFrame, type FrameUser } from './WebFrame'
 import { cn } from './ui'
 
@@ -136,6 +139,9 @@ const isTextField = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.isContentEditable || el.closest('input, textarea, select') !== null)
 
 const NO_USERS: readonly FrameUser[] = []
+
+/** A checklist as plain text for the clipboard: its title, then each row and its pick. */
+const copyChecklist = (s: Shape | undefined) => (s ? checklistText(s.title, s.rows ?? [], s.picks ?? {}, s.columns ?? []) : '')
 
 const sortZ = (a: Shape, b: Shape) => a.z - b.z || a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
@@ -476,7 +482,8 @@ export function Board({ session }: { session: Session }) {
       if (readOnly) return
       const s = store.get(id)
       if (!s) return
-      const field: EditField = s.type === 'frame' ? 'title' : s.type === 'arrow' ? 'label' : 'text'
+      const field: EditField =
+        s.type === 'frame' ? 'title' : s.type === 'arrow' ? 'label' : s.type === 'checklist' ? checklistEditField(null) : 'text'
       if (s.type === 'image' || s.type === 'link') return
       select([id])
       setEditing({ id, field })
@@ -628,9 +635,17 @@ export function Board({ session }: { session: Session }) {
     [store, readOnly, startEdit]
   )
 
+  const editPart = useCallback(
+    (id: string, part: string | null) => {
+      if (part === null) endEdit(id)
+      else if (!readOnly) setEditing({ id, field: `part:${part}` })
+    },
+    [endEdit, readOnly]
+  )
+
   const actions = useMemo<BoardActions>(
-    () => ({ store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky }),
-    [store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky]
+    () => ({ store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky, editPart }),
+    [store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky, editPart]
   )
 
   // ---- acting on the selection ------------------------------------------------
@@ -823,6 +838,12 @@ export function Board({ session }: { session: Session }) {
       return
     }
     if (s.type === 'frame' && part !== 'frame-title' && s.image) return
+    if (s.type === 'checklist') {
+      if (readOnly) return
+      select([hitId])
+      setEditing({ id: hitId, field: checklistEditField(part) })
+      return
+    }
     startEdit(hitId)
   }
 
@@ -899,6 +920,14 @@ export function Board({ session }: { session: Session }) {
     }
     if (!readOnly && tool === 'frame') {
       gesture.current = { kind: 'frame', start: c, startScreen: p }
+      return
+    }
+    if (!readOnly && tool === 'checklist') {
+      keepFocus.current = true
+      const id = createAt({ type: 'checklist', columns: ['Yes', 'No'], rows: [], title: '', color: 'green' }, c)
+      setTool('select')
+      select([id])
+      setEditing({ id, field: checklistEditField(null) })
       return
     }
     if (!readOnly && tool === 'arrow') {
@@ -1394,7 +1423,17 @@ export function Board({ session }: { session: Session }) {
         const items = clipFor(selectionList)
         if (items.length === 0) return
         const text = items
-          .map(s => (s.type === 'link' ? s.url : s.type === 'frame' ? s.title : s.type === 'arrow' ? s.label : s.text))
+          .map(s =>
+            s.type === 'link'
+              ? s.url
+              : s.type === 'frame'
+                ? s.title
+                : s.type === 'arrow'
+                  ? s.label
+                  : s.type === 'checklist'
+                    ? copyChecklist(live.byId.get(s.id))
+                    : s.text
+          )
           .filter((t): t is string => typeof t === 'string' && !!t)
           .join('\n\n')
         clip.current = { text, shapes: items }
@@ -1570,7 +1609,7 @@ export function Board({ session }: { session: Session }) {
   const resizable = tool === 'select' && single && !readOnly && isResizable(single.type) && editId !== single.id ? single : null
   const selectedBoxes = selected.filter(s => s.type !== 'arrow' && s.id !== editId)
   const editShape = editId ? live.byId.get(editId) : undefined
-  const editBox = editShape && (editShape.type === 'sticky' || editShape.type === 'text') ? editShape : null
+  const editBox = editShape && (editShape.type === 'sticky' || editShape.type === 'text' || editShape.type === 'checklist') ? editShape : null
   const group = selected.length > 1 ? unionBox(selected.map(s => boundsOf(s.id)).filter((b): b is Box => !!b)) : null
 
   const toScreen = (p: Point) => ({ x: view.x + p.x * view.z, y: view.y + p.y * view.z })
@@ -1591,7 +1630,8 @@ export function Board({ session }: { session: Session }) {
   // The editing hint goes under the note, or over it when the bottom (or the
   // selection bar) has the space below; always on screen.
   const hintAt = (() => {
-    if (!editBox || size.w === 0) return null
+    // A checklist's fields are one line each, not markdown: no hint.
+    if (!editBox || size.w === 0 || editBox.type === 'checklist') return null
     const top = toScreen({ x: editBox.x, y: editBox.y })
     const bottom = toScreen({ x: editBox.x, y: editBox.y + editBox.h })
     const floor = size.h - 84
@@ -1671,7 +1711,7 @@ export function Board({ session }: { session: Session }) {
         <div
           ref={layer}
           className="absolute left-0 top-0 origin-top-left"
-          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}
+          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})`, '--z': view.z } as CSSProperties}
         >
           {frames.map(s => (
             <FrameView key={s.id} shape={s} editing={editId === s.id} selected={selection.has(s.id)} zoom={view.z} />
@@ -1683,6 +1723,13 @@ export function Board({ session }: { session: Session }) {
               <TextView key={s.id} shape={s} editing={editId === s.id} />
             ) : s.type === 'image' ? (
               <ImageView key={s.id} shape={s} />
+            ) : s.type === 'checklist' ? (
+              <ChecklistView
+                key={s.id}
+                shape={s}
+                editing={editId === s.id ? (editing?.field ?? null) : null}
+                selected={selection.has(s.id)}
+              />
             ) : s.live ? (
               <WebFrame
                 key={s.id}
@@ -1716,6 +1763,7 @@ export function Board({ session }: { session: Session }) {
               box={resizable}
               zoom={view.z}
               edges={resizable.type !== 'image'}
+              widthOnly={resizable.type === 'checklist'}
               onStart={(handle, e) => startResize(resizable, handle, e)}
             />
           )}

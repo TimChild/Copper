@@ -1,0 +1,376 @@
+/*
+ * The checklist card (Checklist.tsx). World px: the board's layer scales it,
+ * except the who-picked tip, which stays readable when zoomed out (--z is
+ * the board's zoom, set on its layer).
+ */
+.cl-card {
+  --cl-col: 64px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-note);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.cl-band {
+  background: color-mix(in srgb, var(--cl-band) 78%, var(--surface));
+  color: var(--cl-band-ink);
+  border-radius: 11px 11px 0 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--cl-accent) 18%, transparent);
+}
+.cl-single .cl-band {
+  border-bottom-color: transparent;
+}
+
+.cl-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 14px 10px;
+  min-height: 48px;
+  box-sizing: border-box;
+}
+.cl-single .cl-title-row {
+  padding-bottom: 8px;
+}
+.cl-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  overflow-wrap: anywhere;
+}
+.cl-count {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+.cl-muted {
+  opacity: 0.45;
+}
+
+.cl-grid {
+  display: grid;
+  grid-template-columns: var(--cl-grid);
+  align-items: center;
+  padding: 0 6px 0 14px;
+}
+.cl-single .cl-grid {
+  padding: 0 14px 0 8px;
+}
+
+.cl-heads {
+  min-height: 28px;
+  padding-bottom: 4px;
+  align-items: end;
+}
+.cl-head {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  column-gap: 4px;
+  padding: 0 2px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.cl-head-label {
+  opacity: 0.86;
+}
+.cl-head-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  opacity: 0.45;
+}
+.cl-head-count-on {
+  opacity: 1;
+  color: var(--cl-accent);
+}
+
+.cl-rows {
+  padding: 4px 0 8px;
+}
+.cl-row {
+  position: relative;
+  min-height: 34px;
+  border-radius: 8px;
+  margin: 0 4px;
+  padding-left: 10px;
+  padding-right: 2px;
+  transition: background-color 0.12s ease;
+}
+.cl-single .cl-row {
+  padding-left: 4px;
+  padding-right: 10px;
+}
+.cl-row:hover {
+  background: color-mix(in srgb, var(--cl-accent) 7%, transparent);
+}
+.cl-row + .cl-row::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 1px;
+  background: var(--line);
+}
+.cl-row:hover::before,
+.cl-row:hover + .cl-row::before {
+  opacity: 0;
+}
+
+.cl-label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 4px 7px 0;
+}
+.cl-label-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cl-done .cl-label-text {
+  color: var(--ink-3);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--ink-3) 60%, transparent);
+}
+.cl-row-remove {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  translate: 0 -50%;
+  opacity: 0;
+  background: var(--surface);
+}
+.cl-row:hover .cl-row-remove,
+.cl-row-remove:focus-visible {
+  opacity: 1;
+}
+
+.cl-cell {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.cl-hit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 30px;
+  border-radius: 8px;
+  outline: none;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.cl-hit[aria-disabled] {
+  cursor: default;
+}
+.cl-hit:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.cl-box {
+  position: relative;
+  display: block;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border-radius: 5px;
+  border: 1.5px solid var(--line-2);
+  background: var(--surface);
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    transform 0.12s ease;
+}
+.dark .cl-box {
+  border-color: rgb(255 255 255 / 0.22);
+}
+.cl-hit:not([aria-disabled]):hover .cl-box:not([data-on]) {
+  border-color: color-mix(in srgb, var(--cl-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--cl-accent) 8%, var(--surface));
+}
+.cl-hit:not([aria-disabled]):active .cl-box {
+  transform: scale(0.9);
+}
+.cl-box[data-on] {
+  background: var(--cl-accent);
+  border-color: var(--cl-accent);
+}
+.cl-check {
+  position: absolute;
+  inset: -1.5px;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: var(--cl-check);
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.cl-check path {
+  stroke-dasharray: 14;
+  stroke-dashoffset: 0;
+  animation: cl-draw 0.14s ease-out;
+}
+@keyframes cl-draw {
+  from {
+    stroke-dashoffset: 14;
+  }
+}
+
+/* Who picked it: the same size on screen at any zoom, like the board's other tips. */
+.cl-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 2px);
+  transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: calc(11.5px / var(--z, 1));
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 0.35em 0.65em;
+  border-radius: 0.6em;
+  background: #1d1d1f;
+  color: #fff;
+  box-shadow: var(--shadow-2);
+  animation: canvas-pop 0.12s ease-out;
+}
+.dark .cl-tip {
+  background: #f2f2ef;
+  color: #1d1d1f;
+}
+
+.cl-empty {
+  margin: 0;
+  padding: 8px 14px 6px;
+  color: var(--ink-4);
+  font-size: 13px;
+}
+
+/* Add row / column: floats just under the card while it is hovered or selected,
+   so it never takes room inside (the card's height is its rows'). */
+.cl-foot {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.cl-card:hover .cl-foot,
+.cl-selected .cl-foot,
+.cl-foot:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cl-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.cl-add:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.cl-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.cl-icon-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.cl-icon-btn:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+/* Exactly a line of the text it replaces, so opening a field moves nothing. */
+.cl-field {
+  display: block;
+  width: calc(100% + 12px);
+  min-width: 0;
+  height: 1.35em;
+  line-height: 1.35;
+  border: 0;
+  outline: none;
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px var(--accent);
+  padding: 0 6px;
+  margin: 0 -6px;
+}
+.cl-title-field {
+  font-size: 15px;
+  font-weight: 650;
+}
+.cl-label-field {
+  font-size: 14px;
+}
+.cl-col-edit {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  bottom: -2px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+.cl-col-field {
+  width: 112px;
+  height: 1.6em;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: center;
+}

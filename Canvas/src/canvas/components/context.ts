@@ -3,7 +3,7 @@ import type { CanvasStore } from '../doc'
 import type { Me } from '../types'
 
 /** Field of a shape being edited in place. */
-export type EditField = 'text' | 'title' | 'label'
+export type EditField = 'text' | 'title' | 'label' | `part:${string}`
 
 export interface BoardActions {
   store: CanvasStore
@@ -22,6 +22,8 @@ export interface BoardActions {
    * long to show whole opens in its editor, which scrolls. True if it all shows.
    */
   growSticky: (id: string, contentPx: number, opts?: { open?: boolean }) => boolean
+  /** A checklist's editor moves to another of its parts (`cl-title`, `cl-row:<id>`, `cl-col:<i>`); null closes it. */
+  editPart: (id: string, part: string | null) => void
 }
 
 export const BoardContext = createContext<BoardActions | null>(null)

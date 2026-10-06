@@ -14,7 +14,7 @@ import { MAX_ZOOM, MIN_ZOOM, type Box, type Point, type Segment, type View } fro
 import { parseMarkdownLite, type Inline } from './markdown-lite'
 import type { Shape } from './types'
 
-export type SearchKind = 'frame' | 'sticky' | 'text' | 'arrow' | 'link'
+export type SearchKind = 'frame' | 'sticky' | 'text' | 'arrow' | 'link' | 'checklist'
 
 /** One searchable thing on the board. */
 export interface SearchItem {
@@ -323,6 +323,7 @@ const KIND_ORDER: Record<SearchKind, number> = {
   frame: 0,
   link: 1,
   sticky: 2,
+  checklist: 2,
   text: 3,
   arrow: 4,
 }
@@ -401,7 +402,8 @@ export const searchItems = (items: readonly SearchItem[], query: string) =>
 
 /**
  * The board's searchable things: stickies, text and frames with text, links,
- * and arrows with a label whose two ends are still on the board.
+ * checklists (title and row labels), and arrows with a label whose two ends
+ * are still on the board.
  */
 export function boardSearchItems(shapes: Iterable<Shape>): SearchItem[] {
   const all = [...shapes]
@@ -412,6 +414,8 @@ export function boardSearchItems(shapes: Iterable<Shape>): SearchItem[] {
     if (s.type === 'sticky' || s.type === 'text') text = s.text
     else if (s.type === 'frame' || s.type === 'link') text = s.title
     else if (s.type === 'arrow') text = s.label ?? ''
+    // A checklist answers to its title and every row's label.
+    else if (s.type === 'checklist') text = [s.title, ...(s.rows ?? []).map(r => r.label)].filter(t => t.trim()).join('\n')
     if (s.type === 'image') continue
     if (!text.trim() && !(s.type === 'link' && s.url)) continue
     if (s.type === 'arrow' && !arrowPath(s, id => boxes.get(id) ?? null)) continue

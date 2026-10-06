@@ -218,8 +218,11 @@ another account starts it over.
 **Model keys.** A cloud may also hand every signed-in Copper the Jev and
 gateway keys (`GET /v1/intelligence`); they are kept in
 `cloud-intelligence.json` (0600), never in `intelligence.json`, never shown
-unmasked, never in any status, and deleted on sign-out or disconnect. A key
-typed on the Mac always wins. See [intelligence.md](intelligence.md#keys-from-copper-cloud).
+unmasked, never in any status, and deleted on sign-out or disconnect. While
+the cloud provides a gateway key, every model call uses it — the gateway lane
+with the cloud's key and address, even with a Claude account signed in; the
+lane chosen on the Mac is kept and back in force after sign-out. A Jev key
+typed on the Mac wins. See [intelligence.md](intelligence.md#keys-from-copper-cloud).
 
 `cloud.json` holds: the device id (minted once per data folder, so each probe
 world is its own device) and name, the link (address, key, fingerprint), the

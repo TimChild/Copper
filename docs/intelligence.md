@@ -44,17 +44,23 @@ Any part may be `null` or missing. A 404 (a cloud from before this route), 401 o
 
 What the cloud provides is kept in memory and in `cloud-intelligence.json` (mode 0600, beside `cloud.json`) so an offline launch still works, and is **never written into `intelligence.json`**. Signing out of the cloud, disconnecting it, or signing in as someone else deletes it.
 
-This Mac's settings win, field by field:
+**While the cloud provides a gateway key, every model call uses it.** The lane in force is the API-key lane with the cloud's key and address — for the agent pane, Jev's text and extract helper, Settings' Check and every agent tab — even with a Claude account signed in, the Claude account lane chosen, or a gateway key typed on this Mac. Nothing of yours is changed: the lane you chose stays in `intelligence.json` (and the Claude account stays signed in), so signing out of the cloud, disconnecting it, or the cloud no longer providing a key puts your own lane and keys back in force.
+
+Field by field:
 
 | Field | Used |
 |---|---|
-| Jev key, API key | a non-empty key typed on this Mac; else the cloud's |
+| Lane | the API-key lane while the cloud provides a gateway key; else the one chosen on this Mac |
+| API key | the cloud's, whenever it provides one; else a non-empty key typed on this Mac |
+| Gateway address | the cloud's while the cloud's key is the one in use; else an address other than the default typed on this Mac; else the default (a key typed here is never sent to an address the cloud chose) |
+| Model names (Haiku / Sonnet / Opus) | this Mac's names for the lane in force — the gateway's (`haiku`, `sonnet`, `opus`) on the cloud's key; `/v1/intelligence` ships none |
+| Jev key | a non-empty key typed on this Mac; else the cloud's |
 | Jev model | a name other than the default `jev-latest` typed on this Mac; else the cloud's; else the default |
-| Jev endpoint, Gateway address | an address other than the default typed on this Mac; else the cloud's **when the cloud's key is the one in use** (a key typed here is never sent to an address the cloud chose); else the default |
+| Jev endpoint | an address other than the default typed on this Mac; else the cloud's when the cloud's Jev key is in use; else the default |
 
-So a cloud user with nothing typed has a working agent pane and Jev with no setup. Settings › Intelligence (and Settings › Agents › Jev key) say *Provided by Copper Cloud (host)* for each key the cloud supplies, with the key masked (`sk-…1a2b`) in the field's placeholder; typing a key there overrides it, and clearing the field goes back to the cloud's. The agent pane's model menu reads *Copper Cloud · host* while the cloud's API key is in use.
+So a cloud user with nothing typed has a working agent pane and Jev with no setup. Settings › Intelligence (and Settings › Agents › Jev key) say *Provided by Copper Cloud (host)* for each key the cloud supplies, with the key masked (`sk-…1a2b`) in the field's placeholder. A Jev key typed there overrides the cloud's, and clearing the field goes back to the cloud's. While the cloud's gateway key is in force the Model access card shows the API-key lane as active with *Copper Cloud provides the model key — your Claude account isn't used while you're signed in to it.*, and the lane picker, API key and gateway address are greyed out. The agent pane's model menu reads *Copper Cloud · host* while the cloud's API key is in use.
 
-`copper intelligence sources` lists where each one comes from — `local`, `cloud` or `none` for the keys, `local`, `cloud` or `default` for the addresses and the Jev model — and never a key. `copper intelligence refresh` asks the cloud again now; `copper intelligence status` carries the same `sources` and a `cloud` block (host, what it provides, `updatedAt`, `fetchedAt`).
+`copper intelligence sources` lists where each one comes from — `local`, `cloud` or `none` for the keys, `local`, `cloud` or `default` for the addresses and the Jev model, `local` or `cloud` for the lane — and never a key. `copper intelligence refresh` asks the cloud again now; `copper intelligence status` carries the same `sources`, a `cloud` block (host, what it provides, `updatedAt`, `fetchedAt`), and `lane` (the lane in force), `laneSource` (`cloud` or `local`) and `localLane` (the one chosen on this Mac). `./bench ai` and `./bench agent` report the same `lane` and `laneSource`.
 
 ## The files
 
@@ -90,7 +96,7 @@ copper claude cancel
 
 `copper claude signin` opens claude.ai in the running Copper window. Sign in there and let the callback return to Copper. If the callback cannot return, use `copper claude paste -`; stdin is preferred so the code is not put in the process list. `status` reports the lane, tier, model, readiness and account email, never a token. The commands need the loopback server and bearer token, and return 0 on success, 1 when Copper refuses an operation, and 2 for usage errors or an unreachable browser.
 
-`./bench ai` reports the active lane, tier, model, model readiness, Claude-account readiness, `sources` and `answeredBy`. `./bench ai lane key|claude` and `./bench ai tier haiku|sonnet|opus` change the active choice. `./bench ai sources|refresh` are the CLI's two. `./bench ai selftest` (also part of `./bench agent selftest`) checks the model-name migration, the local-over-cloud merge, the `/v1/intelligence` decoder and the request shapes — probe world only.
+`./bench ai` reports the lane in force (with `laneSource` and `localLane`), tier, model, model readiness, Claude-account readiness, `sources` and `answeredBy`. `./bench ai lane key|claude` and `./bench ai tier haiku|sonnet|opus` change this Mac's choice. `./bench ai sources|refresh` are the CLI's two. `./bench ai selftest` (also part of `./bench agent selftest`) checks the model-name migration, the merge of this Mac's keys with the cloud's (including the cloud's gateway key deciding the lane, and the lane coming back when the cloud goes), the `/v1/intelligence` decoder and the request shapes — probe world only.
 
 ## Troubleshooting
 

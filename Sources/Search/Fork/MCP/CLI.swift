@@ -774,10 +774,13 @@ enum CLI {
     router (a LiteLLM gateway). Output is JSON and never contains a key.
 
       status                     {jevReady, routerReady, routerURL, routerModel, jevModel,
-                                 lane, tier, model, answeredBy, modelReady, claudeReady,
-                                 claudeAccount, sources, cloud} (default)
+                                 lane, laneSource, localLane, tier, model, answeredBy,
+                                 modelReady, claudeReady, claudeAccount, sources, cloud} (default);
+                                 lane is the one in force: key (laneSource cloud) while
+                                 Copper Cloud provides a gateway key, else localLane
       sources                    where each key and address comes from: local | cloud | none
-                                 (keys) or local | cloud | default (addresses, jev model);
+                                 (keys) or local | cloud | default (addresses, jev model),
+                                 and the lane: local | cloud;
                                  Copper Cloud provides keys through GET /v1/intelligence
       refresh                    ask the linked Copper Cloud for its keys again now
       set [--lane key|claude] [--model haiku|sonnet|opus]

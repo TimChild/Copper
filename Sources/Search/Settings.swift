@@ -305,6 +305,7 @@ struct SettingsPanel: View {
                 }
             }
             BitwardenCard(browser: browser)
+            OnePasswordCard(browser: browser) // Fork: 1Password (Fork/OnePasswordSettings.swift)
             AgentAccessCard(browser: browser)
             Card {
                 Line("Bring yours in", "From Dia, Chrome, Arc, Brave or Edge on this Mac — nothing leaves it") {

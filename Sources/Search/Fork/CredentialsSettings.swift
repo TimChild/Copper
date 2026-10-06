@@ -118,13 +118,12 @@ struct BitwardenCard: View {
                 EmptyView()
             }
             Rule()
-            Line("Save new passwords to Bitwarden", "New save offers use Bitwarden; fills still include both sources") {
-                Switch(on: Binding(
-                    get: { browser.prefs.passwordsBackend == .bitwarden },
-                    set: { browser.prefs.passwordsBackend = $0 ? .bitwarden : .keychain }
-                ))
+            // One chooser for every backend; it lives on the 1Password card
+            // while 1Password is open, so it is never on the page twice.
+            if !OnePassword.shared.isUnlocked {
+                SaveTargetLine(browser: browser)
+                Rule()
             }
-            Rule()
             Line("Stay unlocked between launches", "The session is kept beside Bitwarden's own data on this Mac, readable by this user only — off asks for the master password once per launch") {
                 Switch(on: Binding(
                     get: { bitwarden.stayUnlocked },
@@ -451,6 +450,7 @@ struct BitwardenCard: View {
 struct AgentAccessCard: View {
     @ObservedObject var browser: Browser
     @ObservedObject private var bitwarden = Bitwarden.shared
+    @ObservedObject private var onePassword = OnePassword.shared
 
     @FocusState private var huntFocused: Bool
     @State private var hunt = ""
@@ -509,7 +509,7 @@ struct AgentAccessCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 Hunt(text: $hunt, prompt: "Search saved accounts", focus: $huntFocused)
                 if filtered.isEmpty {
-                    Nothing("Nothing kept yet — sign in somewhere or connect Bitwarden.")
+                    Nothing("Nothing kept yet — sign in somewhere or connect Bitwarden or 1Password.")
                 } else {
                     ScrollView(showsIndicators: false) {
                         VStack(spacing: 0) {
@@ -533,7 +533,7 @@ struct AgentAccessCard: View {
                 Rule(inset: 0)
                 Caption("Identities")
                 if filteredIdentities.isEmpty {
-                    Nothing("No Bitwarden identities kept yet.")
+                    Nothing("No identities kept yet.")
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(filteredIdentities.enumerated()), id: \.element.id) { index, identity in
@@ -541,11 +541,11 @@ struct AgentAccessCard: View {
                             AgentIdentityRow(
                                 identity: identity,
                                 shareAll: shareAll,
-                                allowed: AgentAccess.shareAll || AgentAccess.allowed.contains("bw:\(identity.id)"),
+                                allowed: AgentAccess.shareAll || AgentAccess.allowed.contains(Autofill.stableID(identity.id)),
                                 setAllowed: { value in
                                     var allowed = AgentAccess.allowed
-                                    if value { allowed.insert("bw:\(identity.id)") }
-                                    else { allowed.remove("bw:\(identity.id)") }
+                                    if value { allowed.insert(Autofill.stableID(identity.id)) }
+                                    else { allowed.remove(Autofill.stableID(identity.id)) }
                                     AgentAccess.allowed = allowed
                                     policyRevision += 1
                                 }
@@ -557,7 +557,7 @@ struct AgentAccessCard: View {
                 Rule(inset: 0)
                 Caption("Cards")
                 if filteredCards.isEmpty {
-                    Nothing("No Bitwarden cards kept yet.")
+                    Nothing("No cards kept yet.")
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(filteredCards.enumerated()), id: \.element.id) { index, card in
@@ -565,11 +565,11 @@ struct AgentAccessCard: View {
                             AgentCardRow(
                                 card: card,
                                 shareAll: shareAll,
-                                allowed: AgentAccess.shareAll || AgentAccess.allowed.contains("bw:\(card.id)"),
+                                allowed: AgentAccess.shareAll || AgentAccess.allowed.contains(Autofill.stableID(card.id)),
                                 setAllowed: { value in
                                     var allowed = AgentAccess.allowed
-                                    if value { allowed.insert("bw:\(card.id)") }
-                                    else { allowed.remove("bw:\(card.id)") }
+                                    if value { allowed.insert(Autofill.stableID(card.id)) }
+                                    else { allowed.remove(Autofill.stableID(card.id)) }
                                     AgentAccess.allowed = allowed
                                     policyRevision += 1
                                 }
@@ -588,6 +588,7 @@ struct AgentAccessCard: View {
         // Bitwarden publishes lock/unlock/cache changes; keeping this observed
         // makes the union list redraw without a manual refresh button.
         .onChange(of: bitwarden.state) { _, _ in policyRevision += 1 }
+        .onChange(of: onePassword.cacheVersion) { _, _ in policyRevision += 1 }
     }
 
     private struct AgentIdentityRow: View {
@@ -663,7 +664,13 @@ struct AgentAccessCard: View {
         let setAllowed: (Bool) -> Void
 
         private var denied: Bool { credential.agentHint == .deny }
-        private var sourceSymbol: String { credential.source == .bitwarden ? "shield" : "key" }
+        private var sourceSymbol: String { credential.source.symbol }
+
+        /// Why the vault itself shares this one.
+        private var allowReason: String {
+            guard credential.source == .onePassword else { return "Agents folder" }
+            return credential.folder?.lowercased() == "agents" ? "Agents vault" : "copper-agent tag"
+        }
 
         var body: some View {
             HStack(spacing: 10) {
@@ -683,8 +690,8 @@ struct AgentAccessCard: View {
                             .foregroundStyle(Palette.muted)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if credential.agentHint == .allow { badge("Agents folder") }
-                        if denied { badge("denied in Bitwarden", tint: .red.opacity(0.72)) }
+                        if credential.agentHint == .allow { badge(allowReason) }
+                        if denied { badge("denied in \(credential.source.title)", tint: .red.opacity(0.72)) }
                     }
                 }
                 Spacer(minLength: 8)

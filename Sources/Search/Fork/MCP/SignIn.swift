@@ -40,6 +40,9 @@ enum SignIn {
             if case .locked = Bitwarden.shared.state {
                 throw Failure(message: "bitwarden is locked — unlock it in Settings › Passwords")
             }
+            if OnePassword.shared.isLocked {
+                throw Failure(message: "1password is locked — unlock it in Settings › Passwords")
+            }
             throw Failure(message: "no saved credential for \(host)")
         }
 
@@ -78,6 +81,9 @@ enum SignIn {
                 if credential.source == .bitwarden, case .locked = Bitwarden.shared.state {
                     throw Failure(message: "bitwarden is locked — unlock it in Settings › Passwords")
                 }
+                if credential.source == .onePassword, !OnePassword.shared.isUnlocked {
+                    throw Failure(message: "1password is locked — unlock it in Settings › Passwords")
+                }
                 throw error
             }
             let filled = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -95,7 +101,12 @@ enum SignIn {
                 submitted = false
             }
             Credentials.touch(credential)
-            let sourceName: String = credential.source == .bitwarden ? "bitwarden" : "keychain"
+            let sourceName: String
+            switch credential.source {
+            case .bitwarden: sourceName = "bitwarden"
+            case .onePassword: sourceName = "onepassword"
+            case .keychain: sourceName = "keychain"
+            }
             return ["filled": true, "account": credential.user, "host": host,
                     "submitted": submitted, "source": sourceName]
 
@@ -108,6 +119,9 @@ enum SignIn {
             } catch {
                 if credential.source == .bitwarden, case .locked = Bitwarden.shared.state {
                     throw Failure(message: "bitwarden is locked — unlock it in Settings › Passwords")
+                }
+                if credential.source == .onePassword, !OnePassword.shared.isUnlocked {
+                    throw Failure(message: "1password is locked — unlock it in Settings › Passwords")
                 }
                 throw error
             }

@@ -370,8 +370,8 @@ final class Browser: NSObject, ObservableObject {
         offering = nil
         let login = offer.login
         // Preserve the old synchronous keychain path exactly when Bitwarden
-        // is not the active destination.
-        guard offer.target == .bitwarden else {
+        // (or 1Password — Fork) is not the active destination.
+        guard offer.target != .keychain else {
             guard Vault.save(host: login.host, user: login.user, password: login.password, used: Date()) else {
                 announce("The keychain refused it")
                 return
@@ -384,7 +384,7 @@ final class Browser: NSObject, ObservableObject {
             do {
                 try await Credentials.save(host: login.host, user: login.user, password: login.password)
                 self?.relist()
-                self?.announce(offer.changed ? "Password updated in Bitwarden for \(login.host)" : "Password saved to Bitwarden")
+                self?.announce(offer.changed ? "Password updated in \(offer.target.title) for \(login.host)" : "Password saved to \(offer.target.title)") // Fork: 1Password
             } catch {
                 self?.announce(error.localizedDescription)
             }
@@ -1046,8 +1046,8 @@ final class Browser: NSObject, ObservableObject {
     /// The vault's index arriving a moment after unlock: an account list
     /// that is already open redraws with what came. (Fork: windows — every window)
     private func watchVault() {
-        Bitwarden.shared.$cacheVersion
-            .dropFirst()
+        Bitwarden.shared.$cacheVersion.dropFirst()
+            .merge(with: OnePassword.shared.$cacheVersion.dropFirst()) // Fork: 1Password
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self, let open = suggesting, let tab = tabs.first(where: { $0.id == open.tab }),
@@ -1058,7 +1058,7 @@ final class Browser: NSObject, ObservableObject {
                     return credential
                 }
                 let isLogin = (tab.fieldFocus?.group ?? .login) == .login
-                let pending = isLogin && (Self.bitwardenLocked || Bitwarden.shared.isLoadingCache)
+                let pending = isLogin && Self.vaultPending // Fork: Bitwarden or 1Password locked/loading
                 suggesting = rows.isEmpty && !pending
                     ? nil
                     : Suggesting(tab: tab.id, spot: open.spot, credentials: credentials, rows: rows)
@@ -1742,7 +1742,7 @@ final class Browser: NSObject, ObservableObject {
             let isLogin = (tab.fieldFocus?.group ?? .login) == .login
             // Only a login box stays visible while Bitwarden is locked or
             // loading, so it can offer the unlock control or say so.
-            let pending = isLogin && (Self.bitwardenLocked || Bitwarden.shared.isLoadingCache)
+            let pending = isLogin && Self.vaultPending // Fork: Bitwarden or 1Password locked/loading
             suggesting = (rows.isEmpty && !pending)
                 ? nil
                 : Suggesting(tab: tab.id, spot: spot, credentials: credentials, rows: rows)
@@ -1774,9 +1774,9 @@ final class Browser: NSObject, ObservableObject {
             // existing username, fetch that one secret asynchronously so an
             // unchanged sign-in is merely touched while a changed one reads
             // as an Update offer. New usernames can show the offer at once.
-            if target == .bitwarden,
+            if target != .keychain, // Fork: Bitwarden or 1Password
                let same = Credentials.candidates(for: host).first(where: {
-                   $0.source == .bitwarden && $0.user == user
+                   $0.source == target.source && $0.user == user
                }) {
                 Task { [weak self] in
                     do {

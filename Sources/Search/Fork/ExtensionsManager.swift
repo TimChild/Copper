@@ -215,8 +215,11 @@ struct ExtensionsSettings: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             tools
+                .settingsAnchor("extensions.tools") // Fork (settings-revamp): search anchors
             list
+                .settingsAnchor("extensions.list")
             adder
+                .settingsAnchor("extensions.adder", card: true)
         }
         .onAppear { facts.warm(extensions) }
     }

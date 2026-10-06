@@ -80,23 +80,25 @@ extension Plate where Foot == EmptyView {
 /// A group of lines in one hairline box.
 struct Card<Content: View>: View {
     @ViewBuilder let content: () -> Content
+    @Environment(\.settingsLook) private var settings // Fork (settings-revamp)
 
     var body: some View {
         VStack(spacing: 0) { content() }
-            .background(Palette.ground)
+            .background(SettingsMetrics.cardFill(settings)) // Fork (settings-revamp)
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(Palette.hairline, lineWidth: 1)
+                    .strokeBorder(SettingsMetrics.cardEdge(settings), lineWidth: 1) // Fork (settings-revamp)
             )
     }
 }
 
 /// The hairline between two lines of a card, inset like the text.
 struct Rule: View {
-    var inset: CGFloat = 14
+    var inset: CGFloat? = nil // Fork (settings-revamp): nil = the line's own inset (14, or Settings' 16)
+    @Environment(\.settingsLook) private var settings // Fork (settings-revamp)
     var body: some View {
-        Rectangle().fill(Palette.hairline).frame(height: 1).padding(.leading, inset)
+        Rectangle().fill(SettingsMetrics.cardEdge(settings)).frame(height: 1).padding(.leading, inset ?? SettingsMetrics.lineInset(settings))
     }
 }
 
@@ -105,6 +107,7 @@ struct Line<Control: View>: View {
     let title: String
     let detail: String?
     @ViewBuilder let control: () -> Control
+    @Environment(\.settingsLook) private var settings // Fork (settings-revamp)
 
     init(_ title: String, _ detail: String? = nil, @ViewBuilder control: @escaping () -> Control) {
         self.title = title
@@ -120,8 +123,8 @@ struct Line<Control: View>: View {
                     .foregroundStyle(Palette.ink)
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Palette.muted)
+                        .font(.system(size: SettingsMetrics.detailSize(settings))) // Fork (settings-revamp)
+                        .foregroundStyle(SettingsMetrics.detailInk(settings)) // Fork (settings-revamp)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -129,20 +132,21 @@ struct Line<Control: View>: View {
             Spacer(minLength: 8)
             control()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.horizontal, SettingsMetrics.lineInset(settings)) // Fork (settings-revamp)
+        .padding(.vertical, SettingsMetrics.lineHeight(settings)) // Fork (settings-revamp)
     }
 }
 
 /// A small heading over a card, for when a panel has more than one.
 struct Caption: View {
     let text: String
+    @Environment(\.settingsLook) private var settings // Fork (settings-revamp)
     init(_ text: String) { self.text = text }
     var body: some View {
         Text(text)
-            .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(Palette.muted)
-            .padding(.leading, 2)
+            .font(SettingsMetrics.captionFont(settings)) // Fork (settings-revamp)
+            .foregroundStyle(SettingsMetrics.captionInk(settings)) // Fork (settings-revamp)
+            .padding(.leading, settings ? 16 : 2) // Fork (settings-revamp): over the row text
     }
 }
 

@@ -236,6 +236,9 @@ final class Bench {
         case "spaces", "bar", "split", "summon", "window", "groups", "sections", "passkeys", "agent", "ai", "swipe", "mouse", "heat", "downloads", "updates", "bw", "flow", "history", "drive", "render", "ext-manager", "storage", "windows", "flight", "trails":
             answer(Fork.bench(verb, request, in: browser))
 
+        case "settings": // Fork (settings-revamp): open/search/pick/index check — Fork/SettingsBench.swift
+            SettingsBench.handle(request, in: browser, answer: answer)
+
         case "hardreload":
             let tab = (request["id"] as? String).flatMap { find(["id": $0], in: browser) } ?? browser.active
             guard let tab else { answer(["error": "no active tab"]); return }

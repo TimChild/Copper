@@ -89,6 +89,14 @@ struct BitwardenCard: View {
                 }
             }
         case .unauthenticated:
+            // Fork (settings-revamp): the card says whose it is first, as the
+            // other states do, now that it shares a section with other managers.
+            Line("Bitwarden", "Not connected — sign in to fill and save from an existing vault") {
+                Text("Not connected")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+            }
+            Rule()
             signInLines
         case .locked(let account):
             Line("Bitwarden", account.map { "Locked · \($0)" } ?? "Locked") {
@@ -124,6 +132,7 @@ struct BitwardenCard: View {
                     set: { browser.prefs.passwordsBackend = $0 ? .bitwarden : .keychain }
                 ))
             }
+            .settingsAnchor("bitwarden.backend")
             Rule()
             Line("Stay unlocked between launches", "The session is kept beside Bitwarden's own data on this Mac, readable by this user only — off asks for the master password once per launch") {
                 Switch(on: Binding(
@@ -131,6 +140,7 @@ struct BitwardenCard: View {
                     set: { bitwarden.stayUnlocked = $0 }
                 ))
             }
+            .settingsAnchor("bitwarden.stay")
             Rule()
             Line("Auto-lock", "Lock the local Bitwarden session after inactivity") {
                 Picker("Auto-lock", selection: Binding(
@@ -149,6 +159,7 @@ struct BitwardenCard: View {
                 .pickerStyle(.menu)
                 .frame(width: 110)
             }
+            .settingsAnchor("bitwarden.autolock")
         }
     }
 
@@ -170,6 +181,7 @@ struct BitwardenCard: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 260)
             }
+            .settingsAnchor("bitwarden.server") // Fork (settings-revamp): search anchors
             Rule()
             Line("Email") {
                 TextField("Email", text: $email)
@@ -583,7 +595,8 @@ struct AgentAccessCard: View {
         }
         .onAppear {
             shareAll = AgentAccess.shareAll
-            huntFocused = true
+            // Fork (settings-revamp): no longer takes the keyboard on appear —
+            // Settings' own search field has it, and typing goes there.
         }
         // Bitwarden publishes lock/unlock/cache changes; keeping this observed
         // makes the union list redraw without a manual refresh button.

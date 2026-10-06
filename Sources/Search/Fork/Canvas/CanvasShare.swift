@@ -139,6 +139,11 @@ enum CanvasJoinFlow {
             let member = (preview["member"] as? Bool) ?? false
             let row: [String: Any]
             if member, let id = Canvases.string(preview["canvas_id"]), let existing = Canvases.shared.entry(id) {
+                // A member already: an invite to it still on screen is stale.
+                if Canvases.shared.invites.contains(where: { $0.canvasId == id }) || Canvases.shared.newInvite?.canvasId == id {
+                    Canvases.shared.drop(canvas: id)
+                    Canvases.shared.refreshSoon()
+                }
                 CanvasHost.show(existing.id, in: browser, foreground: true)
                 return nil
             }
@@ -147,6 +152,9 @@ enum CanvasJoinFlow {
             guard let entry = Canvases.shared.upsert(remote: row, account: Canvases.account ?? "") else {
                 throw Cloud.Failure(status: 0, code: "shape", message: "The invite did not contain a canvas")
             }
+            // The join closed any email invite to this canvas (copper-cloud
+            // marks it accepted): its pill and row go now, not on the next read.
+            Canvases.shared.drop(canvas: entry.id)
             await Canvases.shared.refresh()
             CanvasHost.show(entry.id, in: browser, foreground: true)
             pending = nil

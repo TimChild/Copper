@@ -575,9 +575,12 @@ private struct CanvasInviteRow: View {
         failure = nil
         Task {
             do {
-                try await Canvases.shared.answer(invite, accept: accept)
-                ui.note = accept ? "Joined “\(invite.canvasName)”" : "Declined “\(invite.canvasName)”"
-                if accept, let entry = Canvases.shared.entry(invite.canvasId) {
+                // An invite that had gone (404) has left the list by now:
+                // a quiet line, never an error in a row that is no more.
+                let outcome = try await Canvases.shared.answer(invite, accept: accept)
+                ui.note = outcome == .closed ? Canvases.closedInvite
+                    : accept ? "Joined “\(invite.canvasName)”" : "Declined “\(invite.canvasName)”"
+                if accept, outcome != .closed, let entry = Canvases.shared.entry(invite.canvasId) {
                     ui.popoverOpen = false
                     CanvasHost.show(entry.id, in: browser, foreground: true)
                 }

@@ -542,6 +542,14 @@ reading `Canvases.invites` (`GET /v1/invites`, read again on every `canvas` even
 - **⌘K**: *Join Canvas · \<name>* for each invite waiting (type *join* or the canvas's name) —
   the way in when the sidebar is off.
 
+An invite can stop being open while it is on screen — joined through the canvas's share link
+(copper-cloud marks it accepted), answered on another Mac, withdrawn — and Join or Decline on it
+then gets `404` from `POST /v1/invites/:id/accept|decline`. `Canvases.answer` takes that as "no
+longer pending", not as an error: the invite leaves the pill, the list and ⌘K, the lists are read
+again, and a Join opens the canvas when this account is a member of it already; otherwise the
+window says *That invite is no longer open*. Joining through a share link also takes any invite
+to that canvas off this Copper at once (`Canvases.drop(canvas:)`), before the lists are read again.
+
 ## Testing it
 
 Only in a probe world — never the windowed Copper on 4123:
@@ -562,6 +570,7 @@ $C shot /tmp/canvas.png
 ./bench --world canvasE canvas list | open ID | read [ID] | apply JSON | create NAME
 ./bench --world canvasE canvas invites | accept INVITE | decline INVITE      # INVITE: id or canvas name; invites also says the pill's
 ./bench --world canvasE canvas pill [dismiss|open]                          # the invite pill: what it shows; its × (Not now) and Open
+./bench --world canvasE canvas stale accept|decline INVITE_ID CANVAS_ID      # test worlds: answer an invite by id the pill's way, even one no longer listed
 ./bench --world canvasE canvas pending ID                                   # the invites waiting on canvas ID, as its members see them
 ./bench --world canvasE canvas remind ID EMAIL | withdraw ID EMAIL          # invite again (a reminder on 0.5.0) / take an invite back
 ./bench --world canvasE canvas ui share resend EMAIL | withdraw EMAIL       # the Share sheet's Resend and × (after ui mode share ID)

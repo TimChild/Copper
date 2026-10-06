@@ -664,13 +664,50 @@ final class Canvases: ObservableObject {
         }
     }
 
-    func answer(_ invite: Invite, accept: Bool) async throws {
+    /// What answering an invite came to.
+    enum Answer: String {
+        /// The server took the Join or the Decline.
+        case answered
+        /// The invite was no longer open, but this account is a member of
+        /// its canvas already (joined through a share link, or on another
+        /// Mac): a Join is as good as done — open the canvas.
+        case member
+        /// The invite was no longer open — withdrawn, declined elsewhere —
+        /// and the canvas isn't ours: say `Canvases.closedInvite`, quietly.
+        case closed
+    }
+
+    /// The quiet line for an invite that went while it was on screen.
+    static let closedInvite = "That invite is no longer open"
+
+    /// Join or Decline (`POST /v1/invites/:id/accept|decline`). The invite
+    /// leaves this Copper either way. A 404 is copper-cloud saying it is no
+    /// longer pending — accepted on another Mac, joined through a share link,
+    /// withdrawn — so it is dropped, the lists are read again, and no error
+    /// is thrown: a stale pill or row is never stuck on screen.
+    @discardableResult
+    func answer(_ invite: Invite, accept: Bool) async throws -> Answer {
         guard cloudReady else { throw Canvases.offline }
-        _ = try await Cloud.shared.request("POST", "/v1/invites/\(invite.id)/\(accept ? "accept" : "decline")")
-        invites.removeAll { $0.id == invite.id }
-        nudges[invite.id] = nil
-        if newInvite?.id == invite.id { newInvite = nil }
+        var outcome = Answer.answered
+        do {
+            _ = try await Cloud.shared.request("POST", "/v1/invites/\(invite.id)/\(accept ? "accept" : "decline")")
+        } catch let failure as Cloud.Failure where failure.status == 404 {
+            outcome = .closed
+        }
+        drop(invite: invite.id)
         await refresh()
+        if outcome == .closed, accept, entry(invite.canvasId) != nil { outcome = .member }
+        return outcome
+    }
+
+    /// Takes invites off this Copper's pill, list and ⌘K at once — by id,
+    /// or every one for a canvas (`canvas:`), as after a share-link join.
+    func drop(invite id: String? = nil, canvas: String? = nil) {
+        let gone = invites.filter { $0.id == id || (canvas != nil && $0.canvasId == canvas) }.map(\.id)
+        let ids = Set(gone + (id.map { [$0] } ?? []))
+        invites.removeAll { ids.contains($0.id) }
+        for each in ids { nudges[each] = nil }
+        if let shown = newInvite, ids.contains(shown.id) || (canvas != nil && shown.canvasId == canvas) { newInvite = nil }
     }
 
     /// Called by CanvasHost when the page reports the people in its room.

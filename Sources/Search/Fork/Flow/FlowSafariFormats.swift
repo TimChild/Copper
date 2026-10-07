@@ -512,159 +512,10 @@ enum SafariTabsDB {
 
 // MARK: - Passwords.csv
 
-/// A passwords export under any of the common headers. Never logs or keeps
-/// a value; `canonical` hands the rows to Copper's existing CSV import
-/// (`Vault.take(csv:)`) under the header it understands.
-///
-/// TODO(PasswordCSV): this is the one place Move in maps password-CSV
-/// headers. Once Settings' `PasswordCSV` (the one CSV module: checks,
-/// encodings, sentences, and these same header spellings) is on `fork`,
-/// make `columns`, `summary`, `canonical` and `parse` forward to it and
-/// delete the copies below; `Columns` and `Summary` already match its types
-/// field for field.
-enum SafariPasswordsCSV {
-    struct Columns: Equatable {
-        var url: Int
-        var user: Int
-        var password: Int
-        var otp: Int?
-        var notes: Int?
-    }
-
-    struct Summary: Equatable {
-        /// Rows with a site and a password: what will be kept.
-        var logins = 0
-        /// Rows without a site or a password.
-        var skipped = 0
-        /// Rows with a one-time-code secret, which Copper's keychain doesn't keep.
-        var withCodes = 0
-        /// Rows with notes, which don't move either.
-        var withNotes = 0
-        /// Whether the header was understood at all.
-        var understood = false
-    }
-
-    /// Header spellings, lowercased: Safari's and the Passwords app's
-    /// `Title,URL,Username,Password,Notes,OTPAuth`, Chrome's
-    /// `name,url,username,password,note`, and the password managers'
-    /// `login_uri,login_username,login_password,login_totp` and their
-    /// `Web Site`, `User Name`, `Email`, `TOTP` and `Extra` variants.
-    static let urlNames: Set<String> = ["url", "website", "web site", "login_uri", "site", "address", "login url", "web address"]
-    static let userNames: Set<String> = ["username", "user name", "login_username", "user", "email", "email address", "login", "account"]
-    static let passwordNames: Set<String> = ["password", "login_password"]
-    static let otpNames: Set<String> = ["otpauth", "otp", "totp", "login_totp", "otpsecret", "one-time code", "verification code"]
-    static let notesNames: Set<String> = ["notes", "note", "comments", "extra"]
-
-    /// Where a header's site, username and password are — nil when one of
-    /// the three is missing.
-    static func columns(_ header: [String]) -> Columns? {
-        let names = header.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-        func find(_ set: Set<String>) -> Int? { names.firstIndex { set.contains($0) } }
-        guard let url = find(urlNames), let user = find(userNames), let password = find(passwordNames) else { return nil }
-        return Columns(url: url, user: user, password: password, otp: find(otpNames), notes: find(notesNames))
-    }
-
-    /// Counts only; no value is kept or logged.
-    static func summary(_ text: String) -> Summary {
-        var rows = parse(text)
-        var out = Summary()
-        guard !rows.isEmpty, let columns = columns(rows.removeFirst()) else { return out }
-        out.understood = true
-        for row in rows {
-            guard let login = login(row, columns) else { out.skipped += 1; continue }
-            out.logins += 1
-            if login.code { out.withCodes += 1 }
-            if login.notes { out.withNotes += 1 }
-        }
-        return out
-    }
-
-    /// The same rows under `url,username,password` — the header
-    /// `Vault.take(csv:)` reads — with the rows it would skip left out. Nil
-    /// when the header isn't a passwords export's.
-    static func canonical(_ text: String) -> String? {
-        var rows = parse(text)
-        guard !rows.isEmpty, let columns = columns(rows.removeFirst()) else { return nil }
-        var out = "url,username,password\n"
-        for row in rows where login(row, columns) != nil {
-            out += [row[columns.url], row[columns.user], row[columns.password]].map(quote).joined(separator: ",") + "\n"
-        }
-        return out
-    }
-
-    /// `host` + U+0001 + `user` for each login — no password.
-    static func accounts(_ text: String) -> [String] {
-        var rows = parse(text)
-        guard !rows.isEmpty, let columns = columns(rows.removeFirst()) else { return [] }
-        return rows.compactMap { row in
-            guard login(row, columns) != nil else { return nil }
-            return Vault.host(of: row[columns.url]) + "\u{1}" + row[columns.user]
-        }
-    }
-
-    private static func login(_ row: [String], _ columns: Columns) -> (code: Bool, notes: Bool)? {
-        guard row.count > max(columns.url, max(columns.user, columns.password)) else { return nil }
-        guard !Vault.host(of: row[columns.url]).isEmpty, !row[columns.password].isEmpty else { return nil }
-        func filled(_ at: Int?) -> Bool {
-            guard let at, at < row.count else { return false }
-            return !row[at].trimmingCharacters(in: .whitespaces).isEmpty
-        }
-        return (filled(columns.otp), filled(columns.notes))
-    }
-
-    private static func quote(_ field: String) -> String {
-        guard field.contains(",") || field.contains("\"") || field.contains("\n") || field.contains("\r") else { return field }
-        return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-    }
-
-    /// Quoted fields, doubled quotes, newlines inside quotes, CR, LF or CRLF
-    /// between records, blank lines dropped, a leading byte-order mark.
-    static func parse(_ text: String) -> [[String]] {
-        var rows: [[String]] = []
-        var row: [String] = []
-        var field: [UInt8] = []
-        var quoted = false
-        var bytes = Array(text.utf8)
-        if bytes.count >= 3, bytes[0] == 0xEF, bytes[1] == 0xBB, bytes[2] == 0xBF { bytes.removeFirst(3) }
-        var at = 0
-        func endRow() {
-            row.append(String(decoding: field, as: UTF8.self))
-            field = []
-            if row.contains(where: { !$0.isEmpty }) { rows.append(row) }
-            row = []
-        }
-        while at < bytes.count {
-            let byte = bytes[at]
-            if quoted {
-                if byte == 34 {
-                    if at + 1 < bytes.count, bytes[at + 1] == 34 {
-                        field.append(34)
-                        at += 1
-                    } else {
-                        quoted = false
-                    }
-                } else {
-                    field.append(byte)
-                }
-            } else if byte == 34 {
-                quoted = true
-            } else if byte == 44 {
-                row.append(String(decoding: field, as: UTF8.self))
-                field = []
-            } else if byte == 13 {
-                if at + 1 < bytes.count, bytes[at + 1] == 10 { at += 1 }
-                endRow()
-            } else if byte == 10 {
-                endRow()
-            } else {
-                field.append(byte)
-            }
-            at += 1
-        }
-        if !field.isEmpty || !row.isEmpty { endRow() }
-        return rows
-    }
-}
+// Passwords: the export's CSV is read by the one CSV module,
+// `PasswordCSV` (Fork/Credentials/PasswordCSV.swift) — its header spellings
+// (Safari's `Title,URL,Username,Password,Notes,OTPAuth` among them), counts
+// and canonical form. Nothing here reads a password CSV of its own.
 
 // MARK: - the export, zipped or not
 
@@ -728,7 +579,7 @@ struct SafariExport {
         let trimmed = text.drop { $0 == "\u{FEFF}" || $0.isWhitespace }
         if trimmed.first == "{" { return .json }
         if FlowBookmarksHTML.isBookmarkFile(text) { return .bookmarks }
-        if let header = SafariPasswordsCSV.parse(String(trimmed)).first, SafariPasswordsCSV.columns(header) != nil {
+        if let header = PasswordCSV.firstRecord(String(trimmed)), PasswordCSV.columns(header) != nil {
             return .passwords
         }
         return nil

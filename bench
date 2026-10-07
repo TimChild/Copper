@@ -229,6 +229,24 @@
     ./bench flow done | undo           the done screen's Done (lands on the first imported
                                        space) / Undo the tabs
     ./bench flow registry --source Arc which Copper space each of a source's spaces became
+    ./bench flow limit --only Chrome,Safari,Arc
+                                       test run: list only these sources (Safari is listed in a
+                                       probe only when named, and never read from this Mac)
+    ./bench flow root --source Safari --path DIR|none
+                                       test run: read a copy of Safari's files (Safari/ +
+                                       Container/) as if Copper had Full Disk Access
+    ./bench flow access --source Safari [locked|clear]
+                                       the copy's access, or say Safari is locked / clear it
+    ./bench flow scan|move --source Safari [--zip ZIP] [--only tabs,bookmarks,history,passwords]
+                                       test run: take Safari's export (a .zip, its folder, a
+                                       bookmarks .html or a passwords .csv) first, then count/move
+    ./bench flow file --source Safari --path ZIP
+                                       Safari's export dropped on its export pane (async;
+                                       ask `flow file-status`)
+    ./bench flow export --source Safari [--clear]
+                                       Safari's export pane / let go of the export
+    ./bench flow allow --source Safari the card's Allow Full Disk Access… (names the page; the
+                                       card then says what else it takes)
     ./bench flow spaces                every space's loose tabs, as JSON
     ./bench flow slow --seconds S      test run: pause S seconds after each step of a move
     ./bench flow choose --only tabs,history
@@ -564,7 +582,7 @@ def main(argv):
                 else: sys.exit(usage)
                 rest = rest[2:]
     elif verb == "flow":
-        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open|close|state|events|key|shot|activate|limit|choose|access|allow|passphrase|secrets|export|back|file|guide|done|undo|registry|spaces|slow")
+        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open|close|state|events|key|shot|activate|limit|choose|access|allow|passphrase|secrets|export|back|file|file-status|guide|done|undo|registry|spaces|slow")
         request["op"] = args[0]
         rest = args[1:]
         if args[0] == "key" and rest and not rest[0].startswith("--"):
@@ -593,6 +611,8 @@ def main(argv):
                 request["id"] = rest[i + 1]; i += 2
             elif rest[i] == "--root" and i + 1 < len(rest):
                 request["root"] = os.path.abspath(rest[i + 1]); i += 2
+            elif rest[i] == "--zip" and i + 1 < len(rest):
+                request["zip"] = os.path.abspath(rest[i + 1]); i += 2
             elif rest[i] == "--real":
                 request["real"] = True; i += 1
             elif rest[i] == "--again":

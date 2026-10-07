@@ -1160,7 +1160,7 @@ struct FlowSettingsLine: View {
     @ObservedObject var browser: Browser
 
     var body: some View {
-        Line("Move in from another browser", "Open tabs, spaces, bookmarks and signed-in state from Chrome or Arc") {
+        Line("Move in from another browser", "Tabs, spaces, bookmarks, history and passwords from Chrome, Safari or Arc") {
             Pill("Move in…", filled: true) { Flow.presentFromSettings(browser) }
         }
     }

@@ -1,13 +1,13 @@
 # Move in (Flow)
 
 Move in is Copper's one sheet for bringing your tabs, bookmarks, history,
-passwords and sign-ins over from Chrome or Arc. It reads the other browser's
-files on this Mac and never changes them.
+passwords and sign-ins over from Chrome, Safari or Arc. It reads the other
+browser's files on this Mac (or a file it exported) and never changes them.
 
 ## Opening it
 
 Every door goes through `Flow.present(from:via:)`: ⌘K "Flow: move in from
-Chrome or Arc", Settings › General › Move in from another browser (**Move
+Chrome, Safari or Arc", Settings › General › Move in from another browser (**Move
 in…**), View › Move in from Another Browser… (⌥⇧⌘I), and `bench flow open`.
 From Settings, Settings closes first with nothing animating and the sheet
 comes up on the next turn, so its text never morphs out of Settings' closing
@@ -38,10 +38,10 @@ still appears. Each card is one of:
 
 | Card | Shows |
 |---|---|
-| Readable | the browser and its profile count; picking it reads its counts |
-| Locked | "macOS needs your OK before Copper can read Chrome." with **Allow in System Settings…** and **Use an export instead…** |
+| Readable | the browser and its profile count (Safari: what Copper reads — its files, its export, or both); picking it reads its counts |
+| Locked | "macOS needs your OK before Copper can read Chrome." with **Allow in System Settings…** and **Use an export instead…**; Safari's says the same with **Allow Full Disk Access…** |
 | Installed, never opened | dimmed: "Open Chrome once, then come back." |
-| Not installed | not listed |
+| Not installed | not listed (Safari comes with macOS, so it is always listed) |
 
 When exactly one source can be read it is picked for you; otherwise you pick.
 A selection is never switched under you, and only the newest read for the
@@ -75,9 +75,45 @@ recording denied"), which is also what lists Copper in System Settings.
   rather than doubles. Passwords go through Copper's CSV import into the
   keychain. Each file gets one sentence back: what arrived, or why nothing did.
 
-Copper releases are signed ad hoc today, so macOS ties a grant to one build:
-after an update the Files & Folders switch (and Full Disk Access, and a
-keychain "Always Allow") has to be turned on again.
+Releases are signed with Copper's own certificate (since 1.0.20261007.42), so
+macOS keeps a grant across updates: the Files & Folders switch, Full Disk
+Access and a keychain "Always Allow" are given once. Builds signed ad hoc
+before that release were tied to one build each, so they have to be given
+once more after updating to it.
+
+### Safari
+
+Safari's files (`~/Library/Safari`, and its container for open tabs) are
+behind Full Disk Access, so Safari has two ways in, and either or both may be
+there:
+
+- **Its own files**, with Full Disk Access: open windows, tab groups and
+  pinned tabs (`SafariTabs.db`), bookmarks and the Reading List
+  (`Bookmarks.plist`) and history (`History.db`, every profile's). Finding
+  out lists `~/Library/Safari` once and opens its two stores, only when the
+  sheet opens and when Copper comes back to the front while Safari is locked;
+  Full Disk Access answers that and never shows a prompt. The container is
+  opened only after those opened, so without Full Disk Access it is never
+  touched.
+- **Its export**: in Safari, File › Export Browsing Data to File… saves a zip
+  with bookmarks and the Reading List, history (one file per profile),
+  passwords, payment cards and extensions. Drop it on the sheet (anywhere on
+  the list, or on the export pane) or choose it there; the folder it unzips
+  to, or one bookmarks `.html` or passwords `.csv` on its own, works too.
+  Files are told apart by what is in them, never by their (localized) names.
+  The export is kept for this session only.
+
+The locked card is one sentence — "macOS needs your OK before Copper can read
+Safari." — with **Allow Full Disk Access…** (Privacy & Security › Full Disk
+Access; Copper looks again by itself when it is back in front) and **Use an
+export instead…**. Back from System Settings and still locked, it says so:
+"Still locked. If you just turned on Full Disk Access for Copper, quit and
+reopen Copper." Once an export is in, Safari's card reads "The export from
+Oct 7" (or "Its files and the export …") and is picked for you.
+
+Passwords come only from the export: Safari's own are in the keychain, and
+Copper never reads them. The export's CSV goes through Copper's one CSV
+module (`PasswordCSV`), so macOS asks nothing.
 
 ## What moves
 
@@ -91,6 +127,18 @@ keychain "Always Allow") has to be turned on again.
 | Sign-ins | cookies, so you stay signed in (needs the key) | — |
 | Site data | what sites keep in the page: settings, drafts, workspaces | — |
 | Extensions | Chrome Web Store extensions Copper can install, on or off as they were | "8 extensions" |
+
+Safari's rows are only what Safari has:
+
+| Row | What comes over | Its hint |
+|---|---|---|
+| Tabs and tab groups | each window and named tab group as a space, pinned tabs as pins (its own files only; private windows never) | "7 tabs in 3 spaces · 2 pinned", or "not in Safari's export" with **Allow Full Disk Access…** |
+| Bookmarks and Reading List | Favorites at the top level, then a Bookmarks Menu folder, the other items and a Reading List folder | "4 bookmarks · 3 in Reading List" |
+| History | every web page with a visit, every profile, the files' and the export's merged | "553 places" |
+| Passwords | the export's passwords CSV | "2 passwords", "none in this export", or "only in Safari's export" with **Add the export…** |
+
+Under them one line names what can't come: "Stays in Safari: 2 payment cards
+and 1 Safari extension."
 
 Hints are counts only, "counting…" while the source is read, "none found"
 when there are none. When Passwords, Passkeys or Sign-ins is on, one line
@@ -154,12 +202,14 @@ adds only what is new:
   space an earlier move made is filled with the pages it doesn't have; one you
   deleted is made again; a space with nothing to open is never made. A page
   that was brought once — even if it redirected, or you closed it — isn't
-  brought again. Arc, Chrome and every later source use the same rule.
+  brought again. Arc, Chrome and Safari (`flow.spaces.safari`) use the same
+  rule.
 - **Names.** A space whose name you already use gets the source's name:
   "Work (Arc)", "Work (Chrome)", then "Work (Chrome) 2".
 - **Everything else** is idempotent: bookmarks replace the last import's,
   history and passwords merge, passkeys already kept are skipped, cookies are
-  set again.
+  set again. A Safari export with no bookmark file in it (passwords only)
+  leaves the last Safari move's bookmarks alone.
 
 ## While it moves
 
@@ -180,10 +230,16 @@ check with what arrived, or a dash with why nothing did.
 - "Tabs: 228 tabs (5 pinned) in 4 spaces — 3 empty spaces left out"
 - "Tabs: Chrome's last window had only new-tab pages"
 - "Bookmarks: Chrome has none"
+- "Bookmarks: 7 bookmarks (3 from the Reading List)"
 - "History: nothing new — 44 places already here"
 - "Passwords: macOS didn't hand over Chrome's key"
 - "Sign-ins: 2 sites (3 cookies)"
 - "Extensions: none from the Chrome Web Store"
+
+Under the lines, a Safari move says what stayed and why, a sentence each:
+open tabs when only the export was read, passwords when there was no export
+(or notes and one-time codes, which don't move), payment cards and Safari
+extensions.
 
 The title is "Moved in from Chrome", "Nothing new from Chrome" or "Nothing
 came over from Chrome". The summary stays up until **Done**, which closes the
@@ -200,7 +256,9 @@ template again.
 
 ## What doesn't move
 
-Apple Passwords, iCloud tabs, and a password manager's own vault. Chrome
+Apple Passwords (except what Safari's export carries), iCloud tabs, and a
+password manager's own vault. From Safari: payment cards (Copper doesn't keep
+card numbers), Safari extensions, password notes and one-time codes. Chrome
 passkeys saved to iCloud Keychain rather than Chrome's password manager can be
 read only by Apple's own stack. Arc's per-space profiles and passwords depend
 on Arc's keychain key; without it the spaces still arrive, signed out.
@@ -214,7 +272,11 @@ on; the ones marked *test run* do nothing anywhere else.
 |---|---|
 | `flow sources`, `flow probe` | the sources and what was found where |
 | `flow root --source Chrome --path DIR` | *test run*: read a copy instead of the browser's folder |
-| `flow limit --only Chrome,Arc` | *test run*: list only these sources |
+| `flow root --source Safari --path DIR\|none` | *test run*: a copy of Safari's files (`Safari/` + `Container/`), read as if Copper had Full Disk Access |
+| `flow limit --only Chrome,Safari,Arc` | *test run*: list only these sources |
+| `flow scan\|move --source Safari --zip ZIP` | *test run*: take Safari's export first (as the pane does), then count or move |
+| `flow file --source Safari --path ZIP`, `flow export --source Safari [--clear]` | Safari's export dropped on its pane / the pane, or let go of the export |
+| `flow allow --source Safari` | the card's Allow Full Disk Access… (a test run names the page; the card then says what else it takes) |
 | `flow access --source Chrome [locked\|clear]` | what macOS says about every file a move reads; *test run*: say it is locked (no folder touched), or clear that |
 | `flow allow` | the locked card's Allow in System Settings… (a test run opens nothing and names the page) |
 | `flow activate` | what coming back to Copper does |
@@ -230,9 +292,13 @@ on; the ones marked *test run* do nothing anywhere else.
 | `flow slow --seconds S` | *test run*: pause after each step, to watch the moving view |
 
 Probe seams (all only in a test run): a test passphrase replaces the
-keychain read, and what it unlocks goes to an in-memory stand-in
-(`FlowProbeSink`), never the keychain — without one, a test run reads no
-secrets and says so; `flow.installed` (a comma-separated list in the world's
+keychain read, and what it unlocks — and Safari's or a file's passwords — goes
+to the probe's stand-in (`FlowProbeSink`), never the keychain: the world's
+file keychain (`ProbeKeychain`, `probe.keychain file`) when it has one, so
+`bench passwords list` sees them and a second move knows them, else memory —
+without a passphrase, a test run reads no Chrome secrets and says so; a
+headless probe never looks at this Mac's own Safari (it is listed only when a
+script names it, and is locked unless given a copy); `flow.installed` (a comma-separated list in the world's
 defaults) stands in for "is the app installed"; `flow access … locked` stands
 in for macOS's refusal.
 
@@ -251,6 +317,12 @@ LaunchServices, after `./build.sh`:
   sign-ins; `--make DIR` writes the fixture only.
 - `docs/fixtures/flow-sheet-shots.sh OUTDIR` — every state, light and dark, and
   the sheet's frame through a move.
+- `docs/fixtures/flow-safari-e2e.sh [--data DIR] [--shots DIR]` — Safari
+  locked with no copy, then its export (a synthetic zip from
+  `flow-safari-fixture.py`): counts, move, twice; a passwords-only export
+  leaves bookmarks alone; then a direct copy, twice; a read-only real-scale
+  copy if given (`--data`, counts only); and Chrome, Safari and Arc in one
+  world, one space each, no duplicates.
 - `docs/fixtures/flow-bookmarks-e2e.sh`, `flow-canvas-e2e.sh`,
   `flow-extensions-e2e.sh` — bookmark merge and ownership, the Chrome guide
   through its button, extensions kept on or off.

@@ -59,7 +59,7 @@ struct FlowSheet: View {
                 .help("Close")
                 .accessibilityLabel("Close")
             }
-            Text("Bring your tabs, bookmarks, history, passwords and sign-ins over from Chrome or Arc. Nothing in the other browser changes.")
+            Text("Bring your tabs, bookmarks, history, passwords and sign-ins over from Chrome, Safari or Arc. Nothing in the other browser changes.")
                 .font(.system(size: 13.5))
                 .foregroundStyle(Palette.muted)
                 .lineSpacing(2)
@@ -96,15 +96,40 @@ struct FlowSheet: View {
         } else {
             VStack(alignment: .leading, spacing: 16) {
                 sourceCards
-                checklist
+                if let source = flow.selected, source.isSafari {
+                    safariChecklist(source)
+                } else if flow.selected == nil, flow.sources.allSatisfy(\.isSafari) {
+                    // Only Safari, still locked: its own four rows, dimmed —
+                    // never sign-ins or extensions it can't bring.
+                    safariRows
+                } else {
+                    checklist
+                }
                 // Under the switches it is about, in the part that scrolls,
-                // so a short window keeps its room for the list.
+                // so a short window keeps its room for the list. Safari's
+                // passwords come from its export: macOS asks nothing.
                 if flow.choice.passwords || flow.choice.passkeys || flow.choice.cookies,
-                   let source = flow.selected {
+                   let source = flow.selected, !source.isSafari {
                     Text("macOS will ask once to let Copper use \(source.name)'s saved passwords and sign-ins. Say Allow; the window keeps working while it asks.")
                         .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            // Safari's export (a .zip, or the folder it unzips to) can be
+            // dropped anywhere on the list; one file goes on the export pane,
+            // where whose file it is is clear.
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                guard !flow.fileBusy, !flow.moving, flow.source(named: FlowSafari.name) != nil,
+                      let provider = providers.first else { return false }
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    var folder: ObjCBool = false
+                    let isExport = url.pathExtension.lowercased() == "zip"
+                        || (FileManager.default.fileExists(atPath: url.path, isDirectory: &folder) && folder.boolValue)
+                    guard isExport else { return }
+                    DispatchQueue.main.async { flow.takeSafariExport(url) }
+                }
+                return true
             }
         }
     }
@@ -124,9 +149,9 @@ struct FlowSheet: View {
 
     @ViewBuilder
     private func card(_ source: FlowSource) -> some View {
-        if source.locked {
+        if source.showsLocked {
             lockedCard(source)
-        } else if source.empty {
+        } else if !source.readable {
             emptyCard(source)
         } else {
             Button { flow.scan(source) } label: {
@@ -139,7 +164,14 @@ struct FlowSheet: View {
     }
 
     private func profileLine(_ source: FlowSource) -> String {
-        "\(source.profileCount) profile\(source.profileCount == 1 ? "" : "s")"
+        guard source.isSafari else { return "\(source.profileCount) profile\(source.profileCount == 1 ? "" : "s")" }
+        // Safari: what Copper reads — its own files, its export, or both.
+        let date = flow.safariExportDate.map { " from " + $0.formatted(date: .abbreviated, time: .omitted) } ?? ""
+        switch (source.safariDirect != nil, source.export != nil) {
+        case (true, true): return "Its files and the export\(date)"
+        case (false, true): return "The export\(date)"
+        default: return "Open tabs, bookmarks and history"
+        }
     }
 
     private func cardHead(_ source: FlowSource, _ line: String) -> some View {
@@ -172,7 +204,7 @@ struct FlowSheet: View {
     /// front, so there is nothing to reopen.
     private func lockedCard(_ source: FlowSource) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            cardHead(source, "macOS needs your OK before Copper can read \(source.name).")
+            cardHead(source, lockedLine(source))
             // Side by side when the card is wide; one above the other in
             // half a sheet, never a pill broken over two lines.
             ViewThatFits(in: .horizontal) {
@@ -187,9 +219,20 @@ struct FlowSheet: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// One sentence. Safari's files open with Full Disk Access, which a
+    /// running Copper may only see after it is reopened: once the person has
+    /// been to System Settings and it is still locked, the card says so.
+    private func lockedLine(_ source: FlowSource) -> String {
+        guard source.isSafari else { return "macOS needs your OK before Copper can read \(source.name)." }
+        if flow.askedAccess.contains(source.id) {
+            return "Still locked. If you just turned on Full Disk Access for Copper, quit and reopen Copper."
+        }
+        return "macOS needs your OK before Copper can read Safari."
+    }
+
     @ViewBuilder
     private func lockedButtons(_ source: FlowSource) -> some View {
-        Button("Allow in System Settings…") { flow.allow(source) }
+        Button(source.isSafari ? "Allow Full Disk Access…" : "Allow in System Settings…") { flow.allow(source) }
             .buttonStyle(.plain)
             .font(.system(size: 12, weight: .medium))
             .lineLimit(1)
@@ -197,7 +240,7 @@ struct FlowSheet: View {
             .foregroundStyle(Palette.ground)
             .padding(.horizontal, 11).padding(.vertical, 6)
             .background(Palette.ink, in: Capsule())
-            .accessibilityHint("Opens Privacy & Security, Files & Folders")
+            .accessibilityHint(source.isSafari ? "Opens Privacy & Security, Full Disk Access" : "Opens Privacy & Security, Files & Folders")
         Button("Use an export instead…") { flow.showExport(for: source) }
             .buttonStyle(.plain)
             .font(.system(size: 12))
@@ -224,22 +267,24 @@ struct FlowSheet: View {
     private func export(_ source: FlowSource) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Bring in a file \(source.name) exported")
+                Text(source.isSafari ? "Bring in Safari's export" : "Bring in a file \(source.name) exported")
                     .font(.system(size: 17, weight: .medium)).foregroundStyle(Palette.ink)
-                Text("A file brings only bookmarks or passwords — no open tabs, history or sign-ins.")
+                Text(source.isSafari
+                     ? "Safari's export brings bookmarks, the Reading List, history and passwords — not open tabs."
+                     : "A file brings only bookmarks or passwords — no open tabs, history or sign-ins.")
                     .font(.system(size: 12.5)).foregroundStyle(Palette.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(spacing: 6) {
                 if flow.fileBusy {
                     ProgressView().controlSize(.small)
-                    Text("Reading the file…")
+                    Text(source.isSafari ? "Reading the export…" : "Reading the file…")
                         .font(.system(size: 12.5)).foregroundStyle(Palette.muted)
                 } else {
                     Image(systemName: "arrow.down.doc")
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(Palette.muted)
-                    Text("Drop the file here")
+                    Text(source.isSafari ? "Drop the .zip here" : "Drop the file here")
                         .font(.system(size: 12.5)).foregroundStyle(Palette.muted)
                 }
             }
@@ -256,9 +301,12 @@ struct FlowSheet: View {
                 }
                 return true
             }
-            .accessibilityLabel("Drop a bookmarks or passwords file here")
+            .accessibilityLabel(source.isSafari ? "Drop Safari's export here" : "Drop a bookmarks or passwords file here")
             VStack(alignment: .leading, spacing: 8) {
-                if source.name == "Chrome" {
+                if source.isSafari {
+                    howTo("The export", "in Safari, File › Export Browsing Data to File…, then drop the .zip it saves")
+                    howTo("Or one file", "a bookmarks .html or a passwords .csv works too")
+                } else if source.name == "Chrome" {
                     howTo("Bookmarks", "in Chrome, ⋮ › Bookmarks and lists › Bookmark manager, then ⋮ › Export bookmarks")
                     howTo("Passwords", "in Chrome, ⋮ › Passwords and autofill › Password Manager › Settings › Export passwords")
                 } else {
@@ -311,25 +359,104 @@ struct FlowSheet: View {
         .opacity(flow.selected == nil ? 0.5 : 1)
     }
 
-    private func row(_ title: String, hint: String, binding: Binding<Bool>) -> some View {
+    private var safariRows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            row("Tabs and tab groups", hint: "", binding: binding(\.tabs))
+            Rule()
+            row("Bookmarks and Reading List", hint: "", binding: binding(\.bookmarks))
+            Rule()
+            row("History", hint: "", binding: binding(\.history))
+            Rule()
+            row("Passwords", hint: "", binding: binding(\.passwords))
+        }
+        .padding(.horizontal, 13)
+        .background(Palette.wash.opacity(0.38), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
+        .disabled(true)
+        .opacity(0.5)
+    }
+
+    /// One category. A row the source can't bring is drawn off and still,
+    /// with what to do about it beside the hint (`link`).
+    private func row(_ title: String, hint: String, binding: Binding<Bool>, enabled: Bool = true,
+                     link: (title: String, action: () -> Void)? = nil) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13)).foregroundStyle(Palette.ink)
-                if !hint.isEmpty {
-                    Text(hint).font(.system(size: 11)).foregroundStyle(Palette.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+                Text(title).font(.system(size: 13)).foregroundStyle(enabled ? Palette.ink : Palette.muted)
+                if !hint.isEmpty || link != nil {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        if !hint.isEmpty {
+                            Text(hint).font(.system(size: 11)).foregroundStyle(Palette.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let link {
+                            Button(link.title, action: link.action)
+                                .buttonStyle(.plain)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Palette.ink)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
                 }
             }
             Spacer()
-            Switch(on: binding)
-                // The switch is drawn, not a control: say what it is.
-                .accessibilityElement()
-                .accessibilityLabel(title)
-                .accessibilityValue(binding.wrappedValue ? "On" : "Off")
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction { binding.wrappedValue.toggle() }
+            // The shared switch says its own name, value and action.
+            Switch(on: enabled ? binding : .constant(false), label: title)
+                .disabled(!enabled)
         }
         .padding(.vertical, 9)
+    }
+
+    /// Safari's rows: only what Safari has. Open tabs need its own files;
+    /// passwords need its export. Each row that can't come says why and
+    /// offers the one way to change that.
+    private func safariChecklist(_ source: FlowSource) -> some View {
+        let direct = source.safariDirect != nil
+        let look: FlowSafari.Look? = { if case .preview(let haul) = flow.phase { return haul.safari } else { return nil } }()
+        let hasPasswords = look?.hasPasswords ?? false
+        return VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
+                row("Tabs and tab groups", hint: direct ? count { _ in Self.safariTabs(look) } : "not in Safari's export",
+                    binding: binding(\.tabs), enabled: direct,
+                    link: direct ? nil : ("Allow Full Disk Access…", { flow.allow(source) }))
+                Rule()
+                row("Bookmarks and Reading List", hint: count { _ in Self.safariBookmarks(look) }, binding: binding(\.bookmarks))
+                Rule()
+                row("History", hint: count { $0.placeCount == 0 ? "none found" : FlowSummary.plural($0.placeCount, "place") }, binding: binding(\.history))
+                Rule()
+                row("Passwords",
+                    hint: source.export == nil ? "only in Safari's export" : count { _ in hasPasswords ? FlowSummary.plural(look?.passwords ?? 0, "password") : "none in this export" },
+                    binding: binding(\.passwords), enabled: hasPasswords,
+                    link: source.export == nil ? ("Add the export…", { flow.showExport(for: source) }) : nil)
+            }
+            .padding(.horizontal, 13)
+            .background(Palette.wash.opacity(0.38), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
+            if let look, let line = FlowSafari.staysLine(look) {
+                Text(line)
+                    .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private static func safariTabs(_ look: FlowSafari.Look?) -> String {
+        guard let look else { return "" }
+        guard look.tabs > 0 else { return "none open" }
+        var text = "\(FlowSummary.plural(look.tabs, "tab")) in \(FlowSummary.plural(look.spaces, "space"))"
+        if look.pins > 0 { text += " · \(look.pins.formatted()) pinned" }
+        return text
+    }
+
+    private static func safariBookmarks(_ look: FlowSafari.Look?) -> String {
+        guard let look else { return "" }
+        guard look.hasBookmarks else { return look.direct ? "none found" : "not in this export" }
+        guard look.bookmarks + look.readingList > 0 else { return "none found" }
+        var parts: [String] = []
+        if look.bookmarks > 0 { parts.append(FlowSummary.plural(look.bookmarks, "bookmark")) }
+        if look.readingList > 0 { parts.append("\(look.readingList.formatted()) in Reading List") }
+        return parts.joined(separator: " · ")
     }
 
     /// Hints are counts; before there are any, "counting…" or nothing.
@@ -411,6 +538,11 @@ struct FlowSheet: View {
                     stepRow(line.category, line.ok ? .arrived : .missed, line.detail)
                 }
             }
+            ForEach(report.stayed, id: \.self) { line in
+                Text(line)
+                    .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if report.undone {
                 Text("Took back the tabs and spaces this move added.")
                     .font(.system(size: 12)).foregroundStyle(Palette.muted)
@@ -456,7 +588,7 @@ struct FlowSheet: View {
                     Button("Back") { flow.exporting = nil; flow.fileResult = nil }
                         .buttonStyle(.plain).font(.system(size: 12.5)).foregroundStyle(Palette.ink)
                     Spacer()
-                    primary("Choose a file…", disabled: flow.fileBusy) { flow.chooseFile(from: source.name, into: browser) }
+                    primary(source.isSafari ? "Choose the export…" : "Choose a file…", disabled: flow.fileBusy) { flow.chooseFile(from: source.name, into: browser) }
                 }
             } else {
                 pickerFooter

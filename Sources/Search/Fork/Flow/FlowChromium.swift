@@ -124,6 +124,20 @@ extension Browser {
     /// itself and how many of its sites are new here, so the summary can
     /// tell "none" from "couldn't read the file" from "already here".
     @MainActor
+    /// A read already in hand (Safari's), merged as a direct read is:
+    /// re-imports replace only the roots the person left alone. Returns how
+    /// many of its sites weren't here before.
+    func takeBookmarks(_ found: FlowBookmarks.Read, from name: String) async -> Int {
+        let before = bookmarks.roots
+        let new = await Task.detached(priority: .userInitiated) {
+            FlowBookmarks.addresses(found.nodes).subtracting(FlowBookmarks.addresses(before)).count
+        }.value
+        await FlowBookmarks.takeInBackground(found, from: name, into: bookmarks)
+        let count = FlowBookmarks.count(found.nodes)
+        announce(count == 0 ? "No bookmarks in \(name)" : "\(count) bookmarks from \(name)")
+        return new
+    }
+
     func bringBookmarks(from source: FlowSource) async -> (read: FlowBookmarks.Read, new: Int) {
         let before = bookmarks.roots
         let (found, new) = await Task.detached(priority: .userInitiated) { () -> (FlowBookmarks.Read, Int) in

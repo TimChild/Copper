@@ -4,8 +4,11 @@ import Foundation
 import SwiftUI
 import WebKit
 
-/// A detected Chromium profile root shown in the Flow picker.
+/// A detected source shown in the Flow picker: a Chromium profile root
+/// (Chrome, Arc, …) or Safari.
 struct FlowSource: Identifiable, Hashable {
+    enum Kind: Hashable { case chromium, safari }
+
     let source: Chromium.Source
     let profiles: [String]
     let isArc: Bool
@@ -14,15 +17,36 @@ struct FlowSource: Identifiable, Hashable {
     let rootOverride: URL?
     /// Installed but never opened: no profile to read yet.
     var empty = false
+    var kind: Kind = .chromium
+    /// Safari's export, picked or dropped this session: readable even while
+    /// macOS keeps Safari's own files locked.
+    var export: URL? = nil
 
     var id: String { source.name }
     var name: String { source.name }
-    var glyph: String { isArc ? "a.circle" : "globe" }
+    var isSafari: Bool { kind == .safari }
+    var glyph: String { isSafari ? "safari" : isArc ? "a.circle" : "globe" }
     var profileCount: Int { profiles.count }
-    var root: URL { rootOverride ?? source.root }
+    var root: URL { isSafari ? safariRoots.library : rootOverride ?? source.root }
     /// All the pure rules in FlowState need of it.
-    var candidate: FlowCandidate { FlowCandidate(id: id, readable: readable) }
-    var readable: Bool { !locked && !empty }
+    var candidate: FlowCandidate { FlowCandidate(id: id, readable: readable, locked: locked) }
+    /// Something to read: its own files, or (Safari) an export.
+    var readable: Bool { export != nil || (!locked && !empty) }
+    /// The locked card: nothing to read, and macOS is the reason.
+    var showsLocked: Bool { locked && export == nil }
+
+    /// Safari's folders: a test world's copy, else this Mac's.
+    var safariRoots: FlowSafari.Roots { rootOverride.map(FlowSafari.Roots.copy(at:)) ?? .system }
+    /// Safari's own files, when Copper may read them.
+    var safariDirect: FlowSafari.Roots? { isSafari && !locked && !empty ? safariRoots : nil }
+
+    /// Safari as a source. Its `Chromium.Source` is a name only; nothing
+    /// Chromium reads ever runs for it.
+    static func safari(locked: Bool, empty: Bool, rootOverride: URL?, export: URL?) -> FlowSource {
+        FlowSource(source: Chromium.Source(name: FlowSafari.name, folder: "", service: "", account: ""),
+                   profiles: [], isArc: false, locked: locked, rootOverride: rootOverride, empty: empty,
+                   kind: .safari, export: export)
+    }
 
     /// Chromium's readers already accept a Source. Point that Source at a
     /// selected folder without changing the upstream importer or the browser's
@@ -64,6 +88,9 @@ final class Flow: ObservableObject {
     /// pause after each step, so its moving view can be pictured and its
     /// frame watched; zero otherwise.
     @MainActor static var slow: Double = 0
+    /// Safari's export, picked or dropped this session. Never remembered
+    /// past it: it holds passwords until the move is done with it.
+    @MainActor static var safariExport: URL?
 
     private func pause() async {
         guard Store.testing, Self.slow > 0 else { return }
@@ -96,6 +123,10 @@ final class Flow: ObservableObject {
         var extensions = 0
         /// The local guide opened after a Chrome move, if its tab came up.
         var canvasId: String?
+        /// What stayed in the other browser and why, a sentence each
+        /// (Safari: its tabs when only the export was read, payment cards,
+        /// its extensions).
+        var stayed: [String] = []
         /// Sites whose localStorage came over, and how many keys in all.
         var storageSites = 0
         var storageKeys = 0
@@ -260,6 +291,10 @@ final class Flow: ObservableObject {
     /// Only the newest look for sources may land.
     private var detection = 0
     private var activation: NSObjectProtocol?
+    /// Select this source when a refresh finds it readable (`apply`).
+    private var preferNext: String?
+    /// When Safari wrote the export it was given, for its card.
+    @Published private(set) var safariExportDate: Date?
 
     private init() {
         // Nothing is read here. Listing another browser's folder is a request
@@ -301,6 +336,8 @@ final class Flow: ObservableObject {
             exporting = nil
             fileResult = nil
             guide = .idle
+            preferNext = nil
+            askedAccess = []
         }
         open = true
         refresh("open")
@@ -346,9 +383,10 @@ final class Flow: ObservableObject {
         let roots = Self.roots
         let only = Self.only
         let forced = Self.forced
+        let export = Self.safariExport
         log("refresh", reason)
         Task.detached(priority: .userInitiated) {
-            let found = Flow.detect(roots: roots, only: only, forced: forced)
+            let found = Flow.detect(roots: roots, only: only, forced: forced, safariExport: export)
             await MainActor.run { [weak self] in
                 guard let self, generation == self.detection else { return }
                 self.apply(found, autoScan: true)
@@ -360,16 +398,16 @@ final class Flow: ObservableObject {
     /// once and are not the sheet.
     func refreshSources(autoScan: Bool = false) {
         detection += 1
-        apply(Self.detect(roots: Self.roots, only: Self.only, forced: Self.forced), autoScan: autoScan)
+        apply(Self.detect(roots: Self.roots, only: Self.only, forced: Self.forced, safariExport: Self.safariExport), autoScan: autoScan)
     }
 
     /// Makes one real directory-list attempt before declaring a source
     /// locked (`FlowAccess.state`). A browser that is installed but has no
     /// profile yet is listed, disabled; one that isn't installed is not.
     nonisolated static func detect(roots: [String: URL], only: Set<String>? = nil,
-                                   forced: [String: FlowAccess.State] = [:]) -> [FlowSource] {
+                                   forced: [String: FlowAccess.State] = [:], safariExport: URL? = nil) -> [FlowSource] {
         let fm = FileManager.default
-        return Chromium.known.compactMap { source in
+        let chromium: [FlowSource] = Chromium.known.compactMap { source in
             if let only, !only.contains(source.name) { return nil }
             let isArc = source.name == "Arc"
             let override = roots[source.name].flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
@@ -399,7 +437,38 @@ final class Flow: ObservableObject {
             guard hasPreferences else { return empty() }
             return FlowSource(source: source, profiles: profiles, isArc: isArc, locked: false, rootOverride: override)
         }
+        guard let safari = safari(roots: roots, only: only, forced: forced, export: safariExport) else { return chromium }
+        return chromium + [safari]
     }
+
+    /// Safari's card. Safari comes with macOS, so it is always listed:
+    /// readable with Full Disk Access, locked without, never opened when its
+    /// folder isn't there. A headless probe (`SEARCH_PROBE`) never looks at
+    /// this Mac's own Safari: there Safari is listed only when the script
+    /// names it (`flow limit … Safari`, `flow root`, `flow access`), and with
+    /// no copy handed over it is what a Mac without Full Disk Access sees.
+    nonisolated static func safari(roots: [String: URL], only: Set<String>?, forced: [String: FlowAccess.State],
+                                   export: URL?, probe: Bool = Flow.probe) -> FlowSource? {
+        let name = FlowSafari.name
+        let override = roots[name].flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        if let only, !only.contains(name) { return nil }
+        if probe, only == nil, override == nil, forced[name] == nil { return nil }
+        let state: FlowAccess.State
+        if let pinned = forced[name] {
+            state = pinned
+        } else if let override {
+            state = FlowSafari.probeAccess(.copy(at: override)).state
+        } else if probe {
+            state = .locked
+        } else {
+            state = FlowSafari.probeAccess(.system).state
+        }
+        return .safari(locked: state == .locked, empty: state == .missing, rootOverride: override, export: export)
+    }
+
+    /// A headless probe world, started by a script: it never reads this
+    /// Mac's own Safari.
+    nonisolated static let probe = ProcessInfo.processInfo.environment["SEARCH_PROBE"] != nil
 
     /// Publishes a new source list only when it differs, and selects and
     /// reads by `FlowMachine.reconcile`: a selection is kept, the only
@@ -407,8 +476,22 @@ final class Flow: ObservableObject {
     private func apply(_ found: [FlowSource], autoScan: Bool) {
         if sources != found { sources = found }
         if !sourcesKnown { sourcesKnown = true }
+        var keep = selected?.id
+        // The source the person just acted on (Safari's export taken, Full
+        // Disk Access asked for) is the one to show once it can be read.
+        if !moving, let wanted = preferNext, found.contains(where: { $0.id == wanted && $0.readable }) {
+            keep = wanted
+            preferNext = nil
+        }
+        // The source on screen changed under its counts — its export came,
+        // or macOS let Copper in — so what it holds is read again.
+        if !moving, let shown = previewed, let old = selected, old.id == shown,
+           let fresh = found.first(where: { $0.id == shown }), fresh != old, fresh.readable {
+            previewed = nil
+            log("changed", shown)
+        }
         let decision = FlowMachine.reconcile(
-            sources: found.map(\.candidate), selected: selected?.id, previewed: previewed, busy: moving
+            sources: found.map(\.candidate), selected: keep, previewed: previewed, busy: moving
         )
         guard !moving else { return }
         if decision.resetPreview {
@@ -471,6 +554,9 @@ final class Flow: ObservableObject {
     }
 
     private nonisolated static func read(_ source: FlowSource) -> FlowModel.Haul {
+        if source.isSafari {
+            return FlowSafari.haul(FlowSafari.collect(direct: source.safariDirect, export: source.export))
+        }
         var haul = FlowModel.Haul()
         do {
             if source.isArc {
@@ -500,8 +586,13 @@ final class Flow: ObservableObject {
 
     /// The big button can run: a readable source chosen, its counts in.
     var canMove: Bool {
-        guard let selected, !selected.locked, !moving else { return false }
+        guard let selected, selected.readable, !moving else { return false }
         if case .scanning = phase { return false }
+        if selected.isSafari {
+            // Something Safari can actually bring is switched on.
+            guard case .preview(let haul) = phase else { return false }
+            return FlowSafari.anything(FlowSafari.usable(choice, direct: selected.safariDirect != nil, look: haul.safari))
+        }
         return true
     }
 
@@ -521,15 +612,28 @@ final class Flow: ObservableObject {
         let movedAt = Date()
         var report = Report()
         report.facts = FlowSummary.Facts(source: source.name)
-        let choice = self.choice
+        // Safari: what is there to read is read again now (its files and its
+        // export), and only what Safari can bring is moved.
+        let safari: FlowSafari.Collected? = source.isSafari
+            ? await Task.detached(priority: .userInitiated) {
+                FlowSafari.collect(direct: source.safariDirect, export: source.export)
+            }.value
+            : nil
+        let look = safari.map(FlowSafari.look)
+        let choice = safari == nil ? self.choice : FlowSafari.usable(self.choice, direct: source.safariDirect != nil, look: look)
         var steps = FlowStep.steps(for: choice)
         phase = .moving(steps)
         await pause()
         // The counts on screen are this source's own read; anything else is
         // read again rather than moved from a stale preview.
-        let haul = previewed == source.id && lastHaulSource == source.id
-            ? lastHaul
-            : await Task.detached(priority: .userInitiated) { Flow.read(source) }.value
+        let haul: FlowModel.Haul
+        if let safari {
+            haul = FlowSafari.haul(safari)
+        } else if previewed == source.id && lastHaulSource == source.id {
+            haul = lastHaul
+        } else {
+            haul = await Task.detached(priority: .userInitiated) { Flow.read(source) }.value
+        }
         let reader = source.readerSource
         NSLog("Copper: Flow moving from %@ — %d spaces, %d tabs read; notes: %@",
               source.name, haul.spaces.count, haul.tabCount, haul.notes.joined(separator: "; "))
@@ -575,12 +679,26 @@ final class Flow: ObservableObject {
 
         if choice.bookmarks {
             mark(.bookmarks, .working, "reading…", &steps)
-            let (read, new) = await browser.bringBookmarks(from: source)
             report.facts.bookmarksChosen = true
-            report.facts.bookmarksRead = FlowBookmarks.count(read.nodes)
-            report.facts.bookmarksNew = new
-            if !read.complete, read.nodes.isEmpty {
-                report.facts.bookmarksWhy = "couldn't read \(source.name)'s bookmarks file"
+            if let safari {
+                // No bookmark file at all (a passwords-only export) is no
+                // take: an empty read would remove the last move's.
+                if let read = safari.bookmarkRead {
+                    let new = await browser.takeBookmarks(read, from: source.name)
+                    report.facts.bookmarksRead = FlowBookmarks.count(read.nodes)
+                    report.facts.readingListRead = safari.bookmarks.readingListCount
+                    report.facts.bookmarksNew = new
+                    if !read.complete { report.facts.bookmarksWhy = "couldn't read Safari's bookmarks file" }
+                } else {
+                    report.facts.bookmarksWhy = "this export has no bookmarks file"
+                }
+            } else {
+                let (read, new) = await browser.bringBookmarks(from: source)
+                report.facts.bookmarksRead = FlowBookmarks.count(read.nodes)
+                report.facts.bookmarksNew = new
+                if !read.complete, read.nodes.isEmpty {
+                    report.facts.bookmarksWhy = "couldn't read \(source.name)'s bookmarks file"
+                }
             }
             report.bookmarks = report.facts.bookmarksRead
             finish(.bookmarks, report.facts, &steps)
@@ -590,7 +708,7 @@ final class Flow: ObservableObject {
         if choice.history {
             mark(.history, .working, "reading…", &steps)
             let before = browser.history.visitCount
-            let places = await Task.detached(priority: .userInitiated) { FlowChromium.places(in: source) }.value
+            let places = await Task.detached(priority: .userInitiated) { safari?.places ?? FlowChromium.places(in: source) }.value
             await Self.take(places, into: browser.history) { [weak self] done in
                 self?.progress(.history, "\(done.formatted()) of \(places.count.formatted()) places…")
             }
@@ -602,7 +720,9 @@ final class Flow: ObservableObject {
             await pause()
         }
 
-        if choice.passwords || choice.cookies || choice.passkeys {
+        if let safari, choice.passwords, let csv = safari.passwordsCSV {
+            await movePasswordsCSV(csv, source: source.name, report: &report, steps: &steps)
+        } else if safari == nil, choice.passwords || choice.cookies || choice.passkeys {
             await moveSecrets(source, reader: reader, choice: choice, report: &report, steps: &steps)
         }
 
@@ -636,6 +756,7 @@ final class Flow: ObservableObject {
         }
 
         report.notes.append(contentsOf: haul.notes.filter { !$0.contains("bookmarks") && !$0.contains("places") })
+        if let look { report.stayed = FlowSafari.stayed(look) }
         browser.objectWillChange.send()
         Session.write(now: true, Spaces.shared.shape(visible: browser.tabs, active: browser.activeID))
         noteMoved(source.name, at: Date())
@@ -776,6 +897,42 @@ final class Flow: ObservableObject {
 
     private func browser(for report: Report) -> Browser? { browserForUndo }
 
+    /// Safari's passwords, from its export's CSV, through the one CSV module
+    /// (`PasswordCSV`) into where a move's passwords go (`FlowSecrets.sink`):
+    /// Copper's keychain, or in a test run the probe's stand-in. No macOS
+    /// prompt: nothing of Safari's keychain is read.
+    private func movePasswordsCSV(_ csv: String, source: String, report: inout Report, steps: inout [FlowStep]) async {
+        report.facts.passwordsChosen = true
+        mark(.passwords, .working, "saving…", &steps)
+        let seams = FlowSecrets.seams
+        let sink = FlowSecrets.sink
+        let result = await Task.detached(priority: .userInitiated) { () -> (found: Int, kept: Int, new: Int?) in
+            let found = PasswordCSV.summary(csv).logins
+            guard let plain = PasswordCSV.canonical(csv) else { return (found, 0, 0) }
+            if !seams {
+                // What is already here, by site and account — no secret read.
+                let have = Set(Vault.all().map { $0.host + "\u{1}" + $0.user })
+                let new = Set(PasswordCSV.accounts(csv)).subtracting(have).count
+                return (found, Vault.take(csv: plain).kept, new)
+            }
+            var new = 0
+            var known = true
+            let taken = Vault.take(csv: plain) { host, user, password in
+                let saved = sink.savePassword(host: host, user: user, password: password, used: nil)
+                if let isNew = saved.new { if isNew && saved.kept { new += 1 } } else { known = false }
+                return saved.kept
+            }
+            return (found, taken.kept, known ? new : nil)
+        }.value
+        report.facts.passwordsFound = result.found
+        report.facts.passwordsKept = result.kept
+        report.facts.passwordsNew = result.new
+        report.passwords = result.kept
+        if !seams { browser(for: report)?.relist() }
+        finish(.passwords, report.facts, &steps)
+        log("passwords", "\(source) \(result.kept) kept")
+    }
+
     /// What the key unlocked, each read on its own.
     private struct SecretLegs {
         var logins: Result<Chromium.Found, Error>?
@@ -906,6 +1063,57 @@ final class Flow: ObservableObject {
         }
     }
 
+    // MARK: - Safari's export
+
+    /// A Safari export (the zip, its folder, or one bookmarks .html or
+    /// passwords .csv) dropped on the export pane or picked there. It is read
+    /// once to check it, off the main actor; if it is one, Safari's card
+    /// takes it for this session and its counts come up on the checklist.
+    func takeSafariExport(_ url: URL) {
+        guard !fileBusy, !moving else { return }
+        fileBusy = true
+        fileResult = nil
+        log("file", "reading Safari's export")
+        let roots = Self.roots
+        let only = Self.only
+        let forced = Self.forced
+        let generation = detection + 1
+        detection = generation
+        Task {
+            let (trouble, date, found) = await Task.detached(priority: .userInitiated) { () -> (String?, Date?, [FlowSource]) in
+                let read: SafariExport
+                do {
+                    read = try SafariExport.read(url)
+                } catch {
+                    let why = (error as? SafariExport.Trouble)?.errorDescription ?? "Couldn't read \(url.lastPathComponent)"
+                    return (why, nil, [])
+                }
+                return (nil, read.exportedAt, Flow.detect(roots: roots, only: only, forced: forced, safariExport: url.standardizedFileURL))
+            }.value
+            fileBusy = false
+            if let trouble {
+                fileResult = FileResult(ok: false, text: "\(trouble) — in Safari, choose File › Export Browsing Data to File…, then drop the .zip here")
+                log("file", "no \(trouble)")
+                return
+            }
+            Self.safariExport = url.standardizedFileURL
+            safariExportDate = date
+            exporting = nil
+            fileResult = nil
+            log("file", "ok Safari's export")
+            preferNext = FlowSafari.name
+            // A look that started meanwhile didn't know of the export: look again.
+            if generation == detection { apply(found, autoScan: true) } else { refresh("export") }
+        }
+    }
+
+    /// Safari's export, let go of (`bench flow export --source Safari --clear`).
+    func forgetSafariExport() {
+        Self.safariExport = nil
+        safariExportDate = nil
+        refreshSources(autoScan: false)
+    }
+
     /// Undo has something to take back.
     var canUndo: Bool {
         guard case .done(let report) = phase, !report.undone, let adoption = lastAdoption else { return false }
@@ -915,9 +1123,18 @@ final class Flow: ObservableObject {
     /// The locked card's "Allow in System Settings…": Privacy & Security ›
     /// Files & Folders. Coming back to Copper re-checks (`becameActive`).
     func allow(_ source: FlowSource) {
-        let page = FlowAccess.openPrivacySettings()
+        // Safari's files open with Full Disk Access; Chrome's with its own
+        // switch in Files & Folders.
+        let page = FlowAccess.openPrivacySettings(fullDisk: source.isSafari)
+        askedAccess.insert(source.id)
+        preferNext = source.id
         log("allow", "\(source.name) \(page)")
     }
+
+    /// Sources whose card sent the person to System Settings since the
+    /// sheet opened: still locked on coming back, the card says what else
+    /// it takes.
+    @Published private(set) var askedAccess: Set<String> = []
 
     /// Takes back the tabs and spaces this move added, and nothing else:
     /// spaces an earlier move made stay, with the tabs they had.
@@ -1049,6 +1266,20 @@ final class Flow: ObservableObject {
         }
     }
 
+    /// `--zip PATH` on `flow scan` / `flow move` (test runs): Safari's
+    /// export, taken as the export pane takes it but before answering.
+    private func benchZip(_ request: [String: Any]) -> [String: Any]? {
+        guard let path = request["zip"] as? String else { return nil }
+        guard Store.testing else { return ["error": "--zip only works in a test run"] }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        do { safariExportDate = try SafariExport.read(url).exportedAt } catch {
+            return ["error": (error as? SafariExport.Trouble)?.errorDescription ?? "couldn't read the export"]
+        }
+        Self.safariExport = url
+        refreshSources(autoScan: false)
+        return nil
+    }
+
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         let op = request["op"] as? String ?? "sources"
         switch op {
@@ -1060,7 +1291,23 @@ final class Flow: ObservableObject {
             return importHistoryNow(named: source, limit: limit, rootOverride: root, in: browser)
         case "sources":
             refreshSources(autoScan: false)
-            return ["sources": sources.map { ["name": $0.name, "profiles": $0.profiles, "profileCount": $0.profileCount, "isArc": $0.isArc, "glyph": $0.glyph, "locked": $0.locked, "empty": $0.empty, "root": $0.root.path] }]
+            return ["sources": sources.map { ["name": $0.name, "profiles": $0.profiles, "profileCount": $0.profileCount, "isArc": $0.isArc, "glyph": $0.glyph, "locked": $0.locked, "empty": $0.empty, "root": $0.root.path, "kind": $0.isSafari ? "safari" : "chromium", "export": $0.export?.path ?? "", "readable": $0.readable] }]
+        case "root" where (request["source"] as? String)?.caseInsensitiveCompare(FlowSafari.name) == .orderedSame:
+            // A copy of Safari's files, read as if Copper had Full Disk
+            // Access: `Safari/` + `Container/`, or `none` to let go of it.
+            guard Store.testing else { return ["error": "flow root only works in a test run"] }
+            guard let path = request["path"] as? String else { return ["error": "root needs --path DIR|none"] }
+            if path == "none" {
+                Self.roots[FlowSafari.name] = nil
+            } else {
+                let root = URL(fileURLWithPath: path).standardizedFileURL
+                guard FileManager.default.fileExists(atPath: root.path) else { return ["error": "root does not exist"] }
+                Self.roots[FlowSafari.name] = root
+            }
+            refreshSources(autoScan: false)
+            guard let updated = self.source(named: FlowSafari.name) else { return ["source": FlowSafari.name, "listed": false] }
+            return ["source": updated.name, "root": updated.root.path, "container": updated.safariRoots.container.path,
+                    "locked": updated.locked, "empty": updated.empty, "readable": updated.readable]
         case "root":
             guard Store.testing else { return ["error": "flow root only works in a test run"] }
             guard let name = request["source"] as? String,
@@ -1085,10 +1332,19 @@ final class Flow: ObservableObject {
             browser.bookmarks.move(id, into: nil)
             return ["roots": Self.benchBookmarks(browser.bookmarks.roots)]
         case "scan":
+            if let failed = benchZip(request) { return failed }
             guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
-            guard !source.locked else { return ["error": "source is locked"] }
-            guard !source.empty else { return ["error": "source has no profile yet"] }
+            guard source.readable else { return ["error": source.locked ? "source is locked" : "source has no profile yet"] }
             let haul = scanNow(source)
+            if let look = haul.safari {
+                return ["source": source.name, "tabs": look.tabs, "spaces": look.spaces, "pins": look.pins,
+                        "tabGroups": look.tabGroups, "windows": look.windows, "bookmarks": look.bookmarks,
+                        "readingList": look.readingList, "hasBookmarks": look.hasBookmarks, "places": look.places,
+                        "hasPasswords": look.hasPasswords, "passwords": look.passwords, "passwordsSkipped": look.passwordsSkipped,
+                        "passwordCodes": look.passwordCodes, "passwordNotes": look.passwordNotes, "cards": look.cards,
+                        "extensions": look.extensions.count, "direct": look.direct, "fromExport": look.fromExport,
+                        "stays": FlowSafari.staysLine(look) ?? "", "stayed": FlowSafari.stayed(look), "notes": look.notes]
+            }
             return ["source": source.name, "tabs": haul.tabCount, "spaces": haul.spaces.count, "groups": haul.groupCount,
                     "bookmarks": haul.bookmarkCount, "places": haul.placeCount, "passwords": haul.loginCount,
                     "passkeys": haul.passkeyCount, "extensions": haul.extensions.count,
@@ -1104,6 +1360,7 @@ final class Flow: ObservableObject {
             guard Store.testing || (request["real"] as? Bool) == true else {
                 return ["error": "flow move only works in a test run (or with --real)"]
             }
+            if Store.testing, let failed = benchZip(request) { return failed }
             guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
             if let only = request["only"] as? String {
                 choice = FlowBench.choice(only: only)
@@ -1132,7 +1389,8 @@ final class Flow: ObservableObject {
                         "bookmarks": report.bookmarks, "places": report.places, "passwords": report.passwords, "cookies": report.cookies, "passkeys": report.passkeys, "extensions": report.extensions,
                         "localStorageSites": report.storageSites, "localStorageKeys": report.storageKeys, "localStorageKeysSet": report.storageKeysSet,
                         "arcMovedAt": arcMovedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
-                        "canvasId": report.canvasId ?? "", "notes": report.notes]
+                        "canvasId": report.canvasId ?? "", "notes": report.notes, "stayed": report.stayed,
+                        "readingList": report.facts.readingListRead]
             default: return ["running": false, "phase": "\(phase)"]
             }
         case "localstorage":
@@ -1176,6 +1434,9 @@ final class Flow: ObservableObject {
             out["selected"] = selected?.name ?? ""
             out["sourcesKnown"] = sourcesKnown
             out["sources"] = sources.map { ["name": $0.name, "locked": $0.locked, "empty": $0.empty] as [String: Any] }
+            out["readable"] = sources.filter(\.readable).map(\.name)
+            out["exports"] = sources.filter { $0.export != nil }.map(\.name)
+            out["askedAccess"] = askedAccess.sorted()
             out["moveAgain"] = moveAgain
             out["exporting"] = exporting?.name ?? ""
             out["fileResult"] = fileResult?.text ?? ""
@@ -1224,6 +1485,30 @@ final class Flow: ObservableObject {
             // points a source at a copy, so the real folder is never listed.
             Self.only = names.isEmpty ? nil : Set(names)
             return ["only": names]
+        case "access" where (request["source"] as? String)?.caseInsensitiveCompare(FlowSafari.name) == .orderedSame:
+            // Safari: `locked` / `clear` (test runs) as for Chrome; with
+            // neither, what macOS says of its folder — measured on the copy
+            // `flow root` gave, never this Mac's own Safari from a probe.
+            let name = FlowSafari.name
+            switch request["state"] as? String ?? "" {
+            case "locked":
+                guard Store.testing else { return ["error": "flow access locked only works in a test run"] }
+                Self.forced[name] = .locked
+                refreshSources(autoScan: false)
+                return ["source": name, "forced": "locked"]
+            case "clear":
+                guard Store.testing else { return ["error": "flow access clear only works in a test run"] }
+                Self.forced[name] = nil
+                refreshSources(autoScan: false)
+                return ["source": name, "forced": ""]
+            case "":
+                if let forced = Self.forced[name] { return ["source": name, "state": "\(forced)", "forced": true] }
+                if let root = Self.roots[name] { return FlowSafari.report(.copy(at: root)) }
+                if Flow.probe { return ["source": name, "state": "locked", "note": "a probe never looks at this Mac's own Safari"] }
+                return FlowSafari.report(.system)
+            default:
+                return ["error": "access state is locked or clear"]
+            }
         case "access":
             // `flow access --source Chrome` reports what macOS says about
             // every file a move reads; `locked` / `clear` (test runs) make it
@@ -1252,6 +1537,10 @@ final class Flow: ObservableObject {
             }
         case "allow":
             // The locked card's primary button. A test run opens nothing.
+            if let source = source(named: request["source"] as? String ?? "") {
+                allow(source)
+                return ["page": FlowAccess.openPrivacySettings(fullDisk: source.isSafari), "source": source.name]
+            }
             return ["page": FlowAccess.openPrivacySettings()]
         case "passphrase":
             // A test passphrase for a source's encrypted fixture (test runs
@@ -1274,8 +1563,13 @@ final class Flow: ObservableObject {
             if request["clear"] as? Bool == true { FlowProbeSink.shared.clear() }
             return FlowProbeSink.shared.describe()
         case "export":
-            // The locked card's "Use an export instead…".
+            // The locked card's "Use an export instead…"; for Safari,
+            // `--clear` lets go of the export it was given.
             guard let source = source(named: request["source"] as? String ?? "Chrome") else { return ["error": "no source"] }
+            if source.isSafari, request["clear"] as? Bool == true {
+                forgetSafariExport()
+                return ["export": "", "source": source.name]
+            }
             showExport(for: source)
             return ["exporting": source.name]
         case "back":
@@ -1286,14 +1580,14 @@ final class Flow: ObservableObject {
             // A file dropped on the export pane, or picked there.
             guard let path = request["path"] as? String else { return ["error": "file needs --path FILE"] }
             let name = (request["source"] as? String).flatMap { name in
-                Chromium.known.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.name
+                (Chromium.known.map(\.name) + [FlowSafari.name]).first { $0.caseInsensitiveCompare(name) == .orderedSame }
             } ?? exporting?.name ?? "Chrome"
             guard !fileBusy else { return ["error": "a file is already being read"] }
             takeFile(URL(fileURLWithPath: path), from: name, into: browser)
             return ["started": true]
         case "file-status":
             return ["running": fileBusy, "ok": fileResult?.ok ?? false, "text": fileResult?.text ?? "",
-                    "bookmarks": browser.bookmarks.count]
+                    "bookmarks": browser.bookmarks.count, "safariExport": Self.safariExport?.lastPathComponent ?? ""]
         case "guide":
             // The done screen's "Open the Chrome guide", as pressed.
             guard case .done(let report) = phase else { return ["error": "the move isn't done"] }

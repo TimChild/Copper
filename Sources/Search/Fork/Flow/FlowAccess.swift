@@ -75,10 +75,18 @@ enum FlowAccess {
     /// Opens the first page System Settings takes. A test run opens nothing
     /// (it would bring System Settings up in front of whoever is at the Mac)
     /// and answers with the page it would have opened.
+    /// Privacy & Security › Full Disk Access, the one switch that opens
+    /// Safari's files; the older pane's address as the fallback.
+    static let fullDiskPages = [
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles",
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    ]
+
     @discardableResult
-    static func openPrivacySettings() -> String {
-        if Store.testing { return privacyPages[0] }
-        for text in privacyPages {
+    static func openPrivacySettings(fullDisk: Bool = false) -> String {
+        let pages = fullDisk ? fullDiskPages : privacyPages
+        if Store.testing { return pages[0] }
+        for text in pages {
             if let url = URL(string: text), NSWorkspace.shared.open(url) { return text }
         }
         return ""

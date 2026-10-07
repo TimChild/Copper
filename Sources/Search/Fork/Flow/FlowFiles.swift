@@ -12,36 +12,27 @@ import UniformTypeIdentifiers
 ///
 /// Bookmarks go through the same merge as a direct read
 /// (`FlowBookmarks.take(_, from:)`), so taking the same file twice — or the
-/// file after a direct read — replaces rather than doubles. Passwords go
-/// where a move's passwords go (`FlowSecrets.sink`): the keychain, or in a
-/// test run the in-memory stand-in.
+/// file after a direct read — replaces rather than doubles. Passwords are
+/// read by the one CSV module (`PasswordCSV`: its header spellings, checks
+/// and parser) and go where a move's passwords go (`FlowSecrets.sink`): the
+/// keychain, or in a test run the probe's stand-in.
+///
+/// Safari's export pane takes its zip (or one of its files) through
+/// `Flow.takeSafariExport` instead: that file becomes Safari's source for
+/// the session rather than being taken on the spot.
 enum FlowFiles {
     enum Kind: Equatable { case bookmarks, passwords, neither }
 
     /// What a file is, by what is in it rather than its name.
     static func kind(of text: String) -> Kind {
         if FlowBookmarksHTML.isBookmarkFile(text) { return .bookmarks }
-        if passwordColumns(text) != nil { return .passwords }
+        if PasswordCSV.problem(with: text) == nil { return .passwords }
         return .neither
     }
 
     /// Text the way exports come: UTF-8 (with or without a byte-order mark),
     /// UTF-16 with one, or a single-byte file as Latin-1.
     static func text(_ data: Data) -> String? { FlowBookmarksHTML.text(data) }
-
-    /// The header of a passwords CSV: the columns `Vault.take(csv:)` reads
-    /// (a site, a username, a password), or nil when the first line isn't one.
-    // TODO(integrator): use PasswordCSV.problem(with:) (ux/settings-data) here, one CSV module (X-15).
-    static func passwordColumns(_ text: String) -> [String]? {
-        guard let line = text.split(whereSeparator: \.isNewline).first else { return nil }
-        let names = line.split(separator: ",").map {
-            $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{FEFF} ")).lowercased()
-        }
-        let site = names.contains { ["url", "login_uri", "website", "site"].contains($0) }
-        let user = names.contains { ["username", "login_username", "user", "email"].contains($0) }
-        let password = names.contains { ["password", "login_password"].contains($0) }
-        return site && user && password ? names : nil
-    }
 
     /// The sentence a passwords file comes to.
     static func passwordSentence(kept: Int, skipped: Int, new: Int?) -> String {
@@ -81,6 +72,7 @@ extension Flow {
     /// parsed off the main actor, and its bookmarks merged there too (a
     /// large export takes a moment, never the window); one file at a time.
     func takeFile(_ url: URL, from source: String, into browser: Browser) {
+        if source == FlowSafari.name { return takeSafariExport(url) }
         guard !fileBusy else { return }
         fileBusy = true
         fileResult = nil
@@ -128,19 +120,24 @@ extension Flow {
             let sink = FlowSecrets.sink
             // Each row is a keychain write in a real run: off the main actor.
             let result = await Task.detached(priority: .userInitiated) { () -> (kept: Int, skipped: Int, new: Int?) in
+                // Every header the exports use, under the one Vault reads.
+                guard let plain = PasswordCSV.canonical(text) else { return (0, 0, nil) }
+                let skipped = PasswordCSV.summary(text).skipped
                 guard seams else {
-                    // Copper's own CSV import, as Passwords › CSV file… runs it.
-                    let taken = Vault.take(csv: text)
-                    return (taken.kept, taken.skipped, nil)
+                    // What is already here, by site and account — no secret read.
+                    let have = Set(Vault.all().map { $0.host + "\u{1}" + $0.user })
+                    let new = Set(PasswordCSV.accounts(text)).subtracting(have).count
+                    let taken = Vault.take(csv: plain)
+                    return (taken.kept, skipped + taken.skipped, new)
                 }
                 var new = 0
                 var known = true
-                let taken = Vault.take(csv: text) { host, user, password in
+                let taken = Vault.take(csv: plain) { host, user, password in
                     let saved = sink.savePassword(host: host, user: user, password: password, used: nil)
                     if let isNew = saved.new { if isNew && saved.kept { new += 1 } } else { known = false }
                     return saved.kept
                 }
-                return (taken.kept, taken.skipped, known ? new : nil)
+                return (taken.kept, skipped + taken.skipped, known ? new : nil)
             }.value
             if !seams { browser.relist() }
             return FileResult(ok: result.kept > 0,
@@ -155,11 +152,18 @@ extension Flow {
         guard let sheet = FlowPresenter.shared.sheetWindow else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
-        panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.html, .commaSeparatedText, .plainText]
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-        panel.message = "Choose the bookmarks (.html) or passwords (.csv) file \(source) exported."
+        if source == FlowSafari.name {
+            // The zip, the folder it unzips to, or one of its files.
+            panel.canChooseDirectories = true
+            panel.allowedContentTypes = [.zip, .folder, .html, .commaSeparatedText, .plainText, .json]
+            panel.message = "Choose the .zip Safari saved (File › Export Browsing Data to File…), or a bookmarks .html or passwords .csv."
+        } else {
+            panel.canChooseDirectories = false
+            panel.allowedContentTypes = [.html, .commaSeparatedText, .plainText]
+            panel.message = "Choose the bookmarks (.html) or passwords (.csv) file \(source) exported."
+        }
         panel.prompt = "Bring In"
         log("file-panel", source)
         panel.beginSheetModal(for: sheet) { [weak self, weak browser] response in

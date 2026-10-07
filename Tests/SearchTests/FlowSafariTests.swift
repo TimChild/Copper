@@ -409,6 +409,8 @@ enum SafariFixture {
 
 // MARK: - Passwords.csv
 
+/// Safari's passwords CSV through the one CSV module, `PasswordCSV`
+/// (Fork/Credentials/PasswordCSV.swift): Move in reads no CSV of its own.
 @Suite struct SafariPasswordsCSVTests {
     /// Safari's header, with a byte-order mark, CRLF line ends, a quoted
     /// comma, a doubled quote, a newline inside a note, a code, and two rows
@@ -420,17 +422,17 @@ enum SafariFixture {
         + "no site,,dave,secret,,\r\n"
 
     @Test func readsSafarisHeader() {
-        let summary = SafariPasswordsCSV.summary(safari)
+        let summary = PasswordCSV.summary(safari)
         #expect(summary.understood)
         #expect(summary.logins == 2)
         #expect(summary.skipped == 2)
         #expect(summary.withCodes == 1)
         #expect(summary.withNotes == 1)
-        #expect(SafariPasswordsCSV.accounts(safari) == ["example.com\u{1}a@example.com", "example.org\u{1}bob"])
+        #expect(PasswordCSV.accounts(safari) == ["example.com\u{1}a@example.com", "example.org\u{1}bob"])
     }
 
     @Test func parsesQuotesAndNewlines() {
-        let rows = SafariPasswordsCSV.parse(safari)
+        let rows = PasswordCSV.parse(safari)
         #expect(rows.count == 5)
         #expect(rows[0].first == "Title") // the mark is gone
         #expect(rows[1][3] == "p,ss\"word")
@@ -448,23 +450,23 @@ enum SafariFixture {
             ("site,secret", false),
         ]
         for (header, understood) in headers {
-            let columns = SafariPasswordsCSV.columns(SafariPasswordsCSV.parse(header).first ?? [])
+            let columns = PasswordCSV.columns(PasswordCSV.parse(header).first ?? [])
             #expect((columns != nil) == understood, "\(header)")
         }
         let manager = "folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n"
             + ",,login,Example,,,0,https://example.com,alice,pw1,otpauth://totp/a?secret=B\n"
-        let summary = SafariPasswordsCSV.summary(manager)
+        let summary = PasswordCSV.summary(manager)
         #expect(summary.logins == 1)
         #expect(summary.withCodes == 1)
     }
 
     @Test func canonicalFormIsWhatTheVaultImportReads() throws {
-        let canonical = try #require(SafariPasswordsCSV.canonical(safari))
-        let rows = SafariPasswordsCSV.parse(canonical)
+        let canonical = try #require(PasswordCSV.canonical(safari))
+        let rows = PasswordCSV.parse(canonical)
         #expect(rows.first == ["url", "username", "password"])
         #expect(rows.count == 3)
         #expect(rows[1] == ["https://example.com/login", "a@example.com", "p,ss\"word"])
-        #expect(SafariPasswordsCSV.canonical("site,secret\na,b\n") == nil)
+        #expect(PasswordCSV.canonical("site,secret\na,b\n") == nil)
     }
 }
 

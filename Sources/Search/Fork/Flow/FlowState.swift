@@ -17,6 +17,9 @@ import Foundation
 struct FlowCandidate: Equatable {
     var id: String
     var readable: Bool
+    /// macOS keeps its own files closed, even if something else (Safari's
+    /// export) makes it readable: still worth a look on coming back.
+    var locked = false
 }
 
 enum FlowMachine {
@@ -60,7 +63,7 @@ enum FlowMachine {
     /// again — only while the sheet is up and something is locked: the one
     /// thing the person may have just changed in System Settings.
     static func recheckOnActivation(sources: [FlowCandidate], open: Bool) -> Bool {
-        open && sources.contains { !$0.readable }
+        open && sources.contains { !$0.readable || $0.locked }
     }
 }
 
@@ -404,6 +407,8 @@ enum FlowSummary {
         var bookmarksChosen = false
         var bookmarksRead = 0
         var bookmarksNew = 0
+        /// Of `bookmarksRead`, how many came from Safari's Reading List.
+        var readingListRead = 0
         var bookmarksWhy: String?
         // History
         var historyChosen = false
@@ -483,10 +488,11 @@ enum FlowSummary {
                 out.append(Line(category: .bookmarks, ok: false, text: "Bookmarks: \(s) has none"))
             } else if f.bookmarksNew == 0 {
                 out.append(Line(category: .bookmarks, ok: false, text: "Bookmarks: nothing new — \(every(f.bookmarksRead)) from \(s) \(f.bookmarksRead == 1 ? "was" : "were") already here"))
-            } else if f.bookmarksNew < f.bookmarksRead {
-                out.append(Line(category: .bookmarks, ok: true, text: "Bookmarks: \(plural(f.bookmarksRead, "bookmark")), \(f.bookmarksNew.formatted()) new"))
             } else {
-                out.append(Line(category: .bookmarks, ok: true, text: "Bookmarks: \(plural(f.bookmarksRead, "bookmark"))"))
+                var text = "Bookmarks: \(plural(f.bookmarksRead, "bookmark"))"
+                if f.readingListRead > 0 { text += " (\(f.readingListRead.formatted()) from the Reading List)" }
+                if f.bookmarksNew < f.bookmarksRead { text += ", \(f.bookmarksNew.formatted()) new" }
+                out.append(Line(category: .bookmarks, ok: true, text: text))
             }
         }
         if f.historyChosen {

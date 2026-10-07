@@ -65,17 +65,17 @@ Settings › Updates has **Check now** and, if something fails, the reason and
 **Open log**. Plain `brew upgrade` leaves Copper alone because it updates
 itself; `brew upgrade --cask copper` still works if you want it.
 
-## 2. Move in from Arc or Chrome (Flow)
+## 2. Move in from Arc, Chrome or Safari (Flow)
 
 Open Move in any of these ways:
 
 - **View › Move in from Another Browser…** (<kbd>⌥⇧⌘I</kbd>)
 - **Settings › General › Move in from another browser › Move in…** (Settings
   is <kbd>⌘,</kbd>)
-- <kbd>⌘K</kbd>, then *Flow: move in from Chrome or Arc*
+- <kbd>⌘K</kbd>, then *Flow: move in from Chrome, Safari or Arc*
 
-Pick the browser. Chrome and Arc are the main sources; other Chromium-based
-browsers on this Mac appear in the same picker. Copper counts what it found,
+Pick the browser. Chrome, Safari and Arc are the main sources; other
+Chromium-based browsers on this Mac appear in the same picker. Copper counts what it found,
 then shows one switch per kind:
 
 | Switch | What arrives |
@@ -108,6 +108,16 @@ export instead…** and drop the bookmarks file (Chrome: Bookmark manager ›
 Export bookmarks) or passwords file (Chrome: Password Manager › Settings ›
 Export passwords). A file needs no permission but brings no open tabs,
 history or sign-ins. Delete an exported passwords file afterwards.
+
+**Safari shows "macOS needs your OK"?** Safari's files are behind Full Disk
+Access. Press **Allow Full Disk Access…** on Safari's card, turn on Copper in
+Privacy & Security › Full Disk Access and come back (if the card still says
+it is locked, quit and reopen Copper). Or press **Use an export instead…**:
+in Safari, choose **File › Export Browsing Data to File…** and drop the zip on
+the sheet. The export brings bookmarks, the Reading List, history and
+passwords, but not open tabs; Full Disk Access brings open windows and tab
+groups too, but passwords only ever come from the export. Payment cards and
+Safari extensions stay in Safari. Delete the export afterwards.
 
 Move in does not move Apple Passwords, iCloud tabs, passkeys stored in iCloud
 Keychain, or a password manager's vault. For Apple Passwords, export a CSV

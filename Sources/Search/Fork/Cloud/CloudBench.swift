@@ -727,10 +727,15 @@ enum CloudSelfTest {
         // is written, things that only look like it, and others.
         let urls = ["https://x.com/", "https://www.x.com/a", "https://a.b.x.com/c", "https://X.COM/d", "https://notx.com/",
                     "https://x.com.evil.org/", "https://other.org/x.com", "https://x.com/a?utm=1", "not a url"]
-        let rows = (1...1_234).map { i in
-            PretendHistory.Row(seq: Int64(i), device: i % 2 == 0 ? mac : other, at: now.addingTimeInterval(-Double(1_234 - i) * 60), url: urls[i % urls.count])
+        // Spelled out so an older compiler type-checks it in time.
+        var rows: [PretendHistory.Row] = []
+        for i in 1...1_234 {
+            let device: UUID = i % 2 == 0 ? mac : other
+            let at: Date = now.addingTimeInterval(-Double(1_234 - i) * 60)
+            rows.append(PretendHistory.Row(seq: Int64(i), device: device, at: at, url: urls[i % urls.count]))
         }
-        let onX = Set(rows.filter { [0, 1, 2, 3, 7].contains(Int($0.seq) % urls.count) }.map(\.seq))
+        let xSlots: Set<Int> = [0, 1, 2, 3, 7]
+        let onX: Set<Int64> = Set(rows.filter { (row: PretendHistory.Row) -> Bool in xSlots.contains(Int(row.seq) % urls.count) }.map { (row: PretendHistory.Row) -> Int64 in row.seq })
 
         // A site: paged through here, matched here, deleted by seq.
         let cloud = PretendHistory(rows)
@@ -749,9 +754,13 @@ enum CloudSelfTest {
         let windowed = PretendHistory(rows)
         let from = now.addingTimeInterval(-600 * 60), to = now.addingTimeInterval(-100 * 60)
         let page = D.Selector(since: from, until: to, device: mac, pages: ["x.com/a"])
-        let pageRows = Set(rows.filter { $0.device == mac && $0.at >= from && $0.at < to && ["https://www.x.com/a", "https://x.com/a?utm=1"].contains($0.url) }.map(\.seq))
+        let pageURLs: Set<String> = ["https://www.x.com/a", "https://x.com/a?utm=1"]
+        let pageRows: Set<Int64> = Set(rows.filter { (row: PretendHistory.Row) -> Bool in
+            row.device == mac && row.at >= from && row.at < to && pageURLs.contains(row.url)
+        }.map { (row: PretendHistory.Row) -> Int64 in row.seq })
         let byPage = try? await D.run(page) { try await windowed.answer($0) }
-        let pageLeft = Set(await windowed.rows.map(\.seq))
+        let windowedLeft: [PretendHistory.Row] = await windowed.rows
+        let pageLeft: Set<Int64> = Set(windowedLeft.map { (row: PretendHistory.Row) -> Int64 in row.seq })
         check(!pageRows.isEmpty && byPage?.deleted == pageRows.count && pageLeft.isDisjoint(with: pageRows) && pageLeft.count == 1_234 - pageRows.count,
               "delete: one page, inside the window, from one Mac only")
         let forgotten = PretendHistory(rows)

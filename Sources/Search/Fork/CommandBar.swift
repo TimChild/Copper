@@ -56,7 +56,7 @@ enum CommandBar {
             .init(id: "passkeys", name: "Passkeys", glyph: "person.badge.key") { $0.tuning = true },
             .init(id: "settings", name: "Settings", glyph: "gearshape") { $0.tuning = true },
             .init(id: "cloud", name: "Copper Cloud…", glyph: "icloud") { $0.openSettings(.cloud) },
-            .init(id: "flow", name: "Flow: move in from Chrome or Arc", glyph: "arrow.right.doc.on.clipboard") { _ in Flow.shared.open = true },
+            .init(id: "flow", name: "Flow: move in from Chrome or Arc", glyph: "arrow.right.doc.on.clipboard") { Flow.shared.present(from: $0, via: .command) },
             .init(id: "history-import", name: "Bring in Arc History", glyph: "clock.arrow.circlepath") { browser in
                 Store.settings.set(true, forKey: "history.nudged")
                 Flow.shared.importHistory(preferred: "Arc", in: browser)

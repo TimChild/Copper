@@ -197,7 +197,24 @@
                                        waits and prints the report (also `flow status`)
     ./bench flow localstorage --source Arc --path OUT.json [--root DIR]
                                        Copper's own localStorage reader, as `arc-localstorage` JSON
-    ./bench flow open [--again]        open the Move in sheet (--again: past "Moved from Arc on …")
+    ./bench flow open [--again] [--via bench|command|menu|settings] [--window N]
+                                       open the Move in sheet through that door, on window N
+                                       (--again: past "Moved in from … on …"); asynchronous —
+                                       ask `flow state`
+    ./bench flow close                 close it (as the ✕ or Escape would)
+    ./bench flow state                 phase, selection, the sheet's size and the window it hangs
+                                       from, and how many sheets hang off any window
+    ./bench flow events [--clear] [--all]
+                                       what the sheet did: opens, presents, dismisses, refreshes,
+                                       scans (overlapping, scansPerOpen)
+    ./bench flow key escape|return|tab a real key press on the sheet
+    ./bench flow shot --path OUT.png   the sheet as drawn, in the app's appearance (never brought
+                                       to the front)
+    ./bench flow activate              what coming back to Copper does (re-check a locked source)
+    ./bench flow choose --only tabs,history
+                                       test run: set the sheet's switches without moving
+    ./bench flow limit --only Chrome,Arc
+                                       test run: list only these sources (no --only: all)
     ./bench history import arc|chrome [--root PATH] [--limit N]
                                        import all URL history from an isolated copy
     ./bench storage import PATH [--only ORIGIN] [--profile-store NAME]
@@ -527,12 +544,22 @@ def main(argv):
                 else: sys.exit(usage)
                 rest = rest[2:]
     elif verb == "flow":
-        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open")
+        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open|close|state|events|key|shot|activate|limit|choose")
         request["op"] = args[0]
         rest = args[1:]
+        if args[0] == "key" and rest and not rest[0].startswith("--"):
+            request["key"] = rest[0]; rest = rest[1:]
         i = 0
         while i < len(rest):
-            if rest[i] == "--source" and i + 1 < len(rest):
+            if rest[i] == "--via" and i + 1 < len(rest):
+                request["via"] = rest[i + 1]; i += 2
+            elif rest[i] == "--window" and i + 1 < len(rest):
+                request["window"] = int(rest[i + 1]); i += 2
+            elif rest[i] == "--clear":
+                request["clear"] = True; i += 1
+            elif rest[i] == "--all":
+                request["all"] = True; i += 1
+            elif rest[i] == "--source" and i + 1 < len(rest):
                 request["source"] = rest[i + 1]; i += 2
             elif rest[i] == "--path" and i + 1 < len(rest):
                 request["path"] = rest[i + 1]; i += 2

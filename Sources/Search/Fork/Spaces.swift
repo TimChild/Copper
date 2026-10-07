@@ -1057,7 +1057,7 @@ struct ForkCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
-            Button("Move in from Another Browser…") { Flow.shared.open = true }
+            Button("Move in from Another Browser…") { Flow.shared.present(from: Windows.current, via: .menu) }
                 .keyboardShortcut("i", modifiers: [.command, .shift, .option])
             Button(split.on ? "Close Split View" : "Split View") { split.toggle(in: browser) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])

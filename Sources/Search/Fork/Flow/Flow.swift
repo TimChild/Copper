@@ -18,6 +18,8 @@ struct FlowSource: Identifiable, Hashable {
     var glyph: String { isArc ? "a.circle" : "globe" }
     var profileCount: Int { profiles.count }
     var root: URL { rootOverride ?? source.root }
+    /// All the pure rules in FlowState need of it.
+    var candidate: FlowCandidate { FlowCandidate(id: id, readable: !locked) }
 
     /// Chromium's readers already accept a Source. Point that Source at a
     /// selected folder without changing the upstream importer or the browser's
@@ -48,6 +50,9 @@ final class Flow: ObservableObject {
     /// Folder choices are session-only: a panel grant should not become a
     /// hidden new source in the next launch.
     @MainActor static var roots: [String: URL] = [:]
+    /// A test run may list only some sources (`bench flow limit`), so a
+    /// script sees its fixtures and not whatever this Mac has installed.
+    @MainActor static var only: Set<String>?
 
     struct Report: Equatable {
         var tabs = 0
@@ -80,6 +85,17 @@ final class Flow: ObservableObject {
         case preview(FlowModel.Haul)
         case moving([String])
         case done(Report)
+
+        /// For the event log and the bench: which phase, not its contents.
+        var name: String {
+            switch self {
+            case .idle: return "idle"
+            case .scanning: return "scanning"
+            case .preview: return "preview"
+            case .moving: return "moving"
+            case .done: return "done"
+            }
+        }
     }
 
     enum HistoryImportState: Equatable {
@@ -102,11 +118,14 @@ final class Flow: ObservableObject {
     }
 
     /// A source may be read for history without opening the full Flow sheet.
-    /// This is also what the quiet first-launch nudge checks.
+    /// This is also what the quiet nudge under an empty address field checks
+    /// — and it says "Arc", so without a name only Arc's folder is looked
+    /// at. Chrome's is one macOS protects: walking it on every empty field
+    /// would put a refusal on record each time, with nobody having asked.
     static func hasHistorySource(_ name: String? = nil) -> Bool {
-        let wanted = name.map { $0.lowercased() }
+        let wanted = (name ?? "Arc").lowercased()
         return Chromium.known.contains { source in
-            guard wanted == nil || wanted == source.name.lowercased() else { return false }
+            guard wanted == source.name.lowercased() else { return false }
             return historyFiles(in: source.root).isEmpty == false
         }
     }
@@ -124,38 +143,166 @@ final class Flow: ObservableObject {
         return found
     }
 
-    @Published var open = false
+    /// Whether the sheet is up. Only `present(from:via:)` turns it on and
+    /// only `close()` turns it off; `FlowPresenter` follows it, and is the
+    /// one thing that puts a sheet on screen.
+    @Published private(set) var open = false
     @Published private(set) var sources: [FlowSource] = []
+    /// The sources have been looked for since the sheet opened. Until then
+    /// the picker draws nothing rather than "No other browser found".
+    @Published private(set) var sourcesKnown = false
     @Published var choice = FlowModel.Choice()
-    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var phase: Phase = .idle {
+        didSet { if phase.name != oldValue.name { log("phase", phase.name) } }
+    }
     @Published private(set) var selected: FlowSource?
     @Published private(set) var historyImport: HistoryImportState = .idle
-    /// When Arc was last moved in. A move is a one-time thing, so once this is
-    /// set the sheet says so and wants "Move again" before it will run.
-    @Published private(set) var arcMovedAt: Date? = Flow.arcMovedAtSetting
+    /// When each source was last moved in, by name. A move is a one-time
+    /// thing, so once a source has one the sheet says so and wants "Move in
+    /// again" before it will run.
+    @Published private(set) var movedAt: [String: Date] = Flow.movedAtSetting
     @Published var moveAgain = false
 
-    private static let arcMovedKey = "flow.arcMovedAt"
-    private static var arcMovedAtSetting: Date? {
-        let stamp = Store.settings.double(forKey: arcMovedKey)
-        return stamp > 0 ? Date(timeIntervalSince1970: stamp) : nil
+    /// When Arc was last moved in (older scripts read this name).
+    var arcMovedAt: Date? { movedAt["Arc"] }
+
+    private static let movedKey = "flow.movedAt"
+    private static var movedAtSetting: [String: Date] {
+        var out: [String: Date] = [:]
+        for (name, value) in Store.settings.dictionary(forKey: movedKey) ?? [:] {
+            if let stamp = value as? Double, stamp > 0 { out[name] = Date(timeIntervalSince1970: stamp) }
+        }
+        // Before every source had a date, only Arc's was kept.
+        let arc = Store.settings.double(forKey: "flow.arcMovedAt")
+        if out["Arc"] == nil, arc > 0 { out["Arc"] = Date(timeIntervalSince1970: arc) }
+        return out
+    }
+
+    private func noteMoved(_ name: String, at date: Date) {
+        movedAt[name] = date
+        Store.settings.set(movedAt.mapValues { $0.timeIntervalSince1970 }, forKey: Self.movedKey)
+        moveAgain = false
     }
 
     private var lastHaul = FlowModel.Haul()
     private var createdSpaces: [UUID] = []
     private weak var browserForUndo: Browser?
 
+    /// The window that asked for the sheet; the presenter hangs it there.
+    private(set) weak var requester: Browser?
+    /// What the sheet did, for `bench flow events`.
+    private(set) var events = FlowEvents()
+    /// Only the newest scan, for the selected source, may land.
+    private var ticket = FlowScanTicket()
+    /// The source whose counts are on screen or being read.
+    private var previewed: String?
+    /// Only the newest look for sources may land.
+    private var detection = 0
+    private var activation: NSObjectProtocol?
+
     private init() {
-        refreshSources(autoScan: false)
+        // Nothing is read here. Listing another browser's folder is a request
+        // macOS records (and for Chrome's, refuses), so it waits until a
+        // person opens Move in — never at launch, never behind their back.
+        FlowPresenter.shared.start(self)
+        activation = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.becameActive() }
+        }
+    }
+
+    func log(_ kind: String, _ detail: String = "") {
+        events.record(kind, detail, at: ProcessInfo.processInfo.systemUptime)
+    }
+
+    // MARK: - the sheet
+
+    /// Every way in: ⌘K, the Settings row, the menu, the bench.
+    enum Door: String { case command, settings, menu, bench }
+
+    /// The one way to bring the sheet up. Each time it opens it starts
+    /// fresh — a finished move is behind it, the switches are back to all on
+    /// — unless a move is still running, which it shows.
+    func present(from browser: Browser?, via door: Door) {
+        log("open", door.rawValue)
+        requester = browser ?? Windows.current
+        guard !open else { return }
+        if !moving {
+            phase = .idle
+            selected = nil
+            previewed = nil
+            lastHaul = FlowModel.Haul()
+            ticket.cancel()
+            choice = FlowModel.Choice()
+            moveAgain = false
+        }
+        open = true
+        refresh("open")
+    }
+
+    /// Settings closes first, with nothing animating, and the sheet comes up
+    /// on the next turn: opening it inside Settings' closing animation
+    /// animated the sheet's first layout too, and its text morphed.
+    static func presentFromSettings(_ browser: Browser) {
+        var calm = Transaction()
+        calm.disablesAnimations = true
+        withTransaction(calm) { browser.tuning = false }
+        DispatchQueue.main.async { Flow.shared.present(from: browser, via: .settings) }
+    }
+
+    func close() {
+        guard open else { return }
+        log("close")
+        open = false
+        guard !moving else { return }
+        // A read still running belongs to a sheet nobody is looking at.
+        ticket.cancel()
+        if case .scanning = phase {
+            phase = .idle
+            previewed = nil
+        }
+    }
+
+    /// Back from System Settings (or any other app): the one thing worth
+    /// looking at again is a source that was locked. Nothing else is re-read.
+    private func becameActive() {
+        let candidates = sources.map(\.candidate)
+        guard FlowMachine.recheckOnActivation(sources: candidates, open: open) else { return }
+        refresh("activation")
+    }
+
+    // MARK: - sources
+
+    /// Looks for sources off the main actor and lands the newest answer.
+    func refresh(_ reason: String) {
+        detection += 1
+        let generation = detection
+        let roots = Self.roots
+        let only = Self.only
+        log("refresh", reason)
+        Task.detached(priority: .userInitiated) {
+            let found = Flow.detect(roots: roots, only: only)
+            await MainActor.run { [weak self] in
+                guard let self, generation == self.detection else { return }
+                self.apply(found, autoScan: true)
+            }
+        }
+    }
+
+    /// Synchronous form for the bench and the history row, which answer at
+    /// once and are not the sheet.
+    func refreshSources(autoScan: Bool = false) {
+        detection += 1
+        apply(Self.detect(roots: Self.roots, only: Self.only), autoScan: autoScan)
     }
 
     /// Makes one real directory-list attempt before declaring a source locked.
-    /// On a Dock launch this is also the operation that lets macOS show its
-    /// App Data prompt; test worlds receive the denial and keep the card.
-    func refreshSources(autoScan: Bool = true) {
+    nonisolated static func detect(roots: [String: URL], only: Set<String>? = nil) -> [FlowSource] {
         let fm = FileManager.default
-        sources = Chromium.known.compactMap { source in
-            let override = Self.roots[source.name].flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
+        return Chromium.known.compactMap { source in
+            if let only, !only.contains(source.name) { return nil }
+            let override = roots[source.name].flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
             let root = override ?? source.root
             guard fm.fileExists(atPath: root.path) else { return nil }
 
@@ -180,25 +327,53 @@ final class Flow: ObservableObject {
             guard hasPreferences else { return nil }
             return FlowSource(source: source, profiles: profiles, isArc: source.name == "Arc", locked: false, rootOverride: override)
         }
-
-        if let previous = selected {
-            selected = sources.first { $0.id == previous.id }
-        }
-        guard autoScan, selected == nil else { return }
-        let readable = sources.filter { !$0.locked }
-        guard readable.count == 1, let only = readable.first else { return }
-        scan(only)
     }
 
-    /// Reads the cheap, non-secret parts off the main actor.
-    func scan(_ source: FlowSource) {
-        guard !source.locked else { return }
+    /// Publishes a new source list only when it differs, and selects and
+    /// reads by `FlowMachine.reconcile`: a selection is kept, the only
+    /// readable source is picked for you, nothing changes during a move.
+    private func apply(_ found: [FlowSource], autoScan: Bool) {
+        if sources != found { sources = found }
+        if !sourcesKnown { sourcesKnown = true }
+        let decision = FlowMachine.reconcile(
+            sources: found.map(\.candidate), selected: selected?.id, previewed: previewed, busy: moving
+        )
+        guard !moving else { return }
+        if decision.resetPreview {
+            ticket.cancel()
+            previewed = nil
+            lastHaul = FlowModel.Haul()
+            phase = .idle
+        }
+        let next = decision.selected.flatMap { id in found.first { $0.id == id } }
+        if next != selected { selected = next }
+        guard autoScan, let id = decision.scan, let source = found.first(where: { $0.id == id }) else { return }
+        scan(source, reason: "auto")
+    }
+
+    /// Reads the cheap, non-secret parts off the main actor. Picking the
+    /// source already on screen reads nothing again.
+    func scan(_ source: FlowSource, reason: String = "pick") {
+        guard !source.locked, !moving else { return }
+        if selected?.id == source.id, previewed == source.id {
+            switch phase {
+            case .scanning, .preview: return
+            default: break
+            }
+        }
         selected = source
+        previewed = source.id
+        let number = ticket.issue(for: source.id)
         phase = .scanning
+        log("scan", "\(source.id) \(reason)")
         Task.detached(priority: .userInitiated) { [source] in
             let haul = Flow.read(source)
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                guard self.ticket.accepts(number, for: source.id, selected: self.selected?.id) else {
+                    self.log("scan-dropped", source.id)
+                    return
+                }
                 self.lastHaul = haul
                 self.phase = .preview(haul)
             }
@@ -211,6 +386,9 @@ final class Flow: ObservableObject {
     func scanNow(_ source: FlowSource) -> FlowModel.Haul {
         guard !source.locked else { return FlowModel.Haul() }
         selected = source
+        previewed = source.id
+        _ = ticket.issue(for: source.id)
+        log("scan", "\(source.id) bench")
         let haul = Flow.read(source)
         lastHaul = haul
         phase = .preview(haul)
@@ -234,6 +412,13 @@ final class Flow: ObservableObject {
     }
 
     var moving: Bool { if case .moving = phase { return true } else { return false } }
+
+    /// The big button can run: a readable source chosen, its counts in.
+    var canMove: Bool {
+        guard let selected, !selected.locked, !moving else { return false }
+        if case .scanning = phase { return false }
+        return true
+    }
 
     /// Performs each choice independently. A failure is a line in the report,
     /// never a reason to abandon the remaining data.
@@ -381,12 +566,7 @@ final class Flow: ObservableObject {
         if choice.passwords { browser.relist() }
         browser.objectWillChange.send()
         Session.write(now: true, Spaces.shared.shape(visible: browser.tabs, active: browser.activeID))
-        if source.isArc {
-            let now = Date()
-            Store.settings.set(now.timeIntervalSince1970, forKey: Self.arcMovedKey)
-            arcMovedAt = now
-            moveAgain = false
-        }
+        noteMoved(source.name, at: Date())
         // The guide is Chrome-specific (shortcuts and sidebar copy), not a
         // generic Chromium guide. Do this last, after every imported row has
         // landed, so the canvas is the final foreground tab. The move is done
@@ -588,8 +768,6 @@ final class Flow: ObservableObject {
         browser.announce(places.isEmpty ? "No places from \(source)" : "Brought in \(places.count.formatted()) places from \(source)")
     }
 
-    func close() { open = false }
-
     /// Lets a person hand over the one protected folder without changing it.
     @MainActor
     func chooseFolder(for source: FlowSource) {
@@ -700,21 +878,7 @@ final class Flow: ObservableObject {
             }
             guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
             if let only = request["only"] as? String {
-                choice = FlowModel.Choice()
-                choice.tabs = false; choice.bookmarks = false; choice.history = false; choice.passwords = false; choice.cookies = false; choice.localStorage = false; choice.passkeys = false; choice.extensions = false
-                for item in only.split(separator: ",").map({ String($0).lowercased() }) {
-                    switch item {
-                    case "tabs", "spaces": choice.tabs = true
-                    case "bookmarks": choice.bookmarks = true
-                    case "history", "places": choice.history = true
-                    case "passwords": choice.passwords = true
-                    case "cookies": choice.cookies = true
-                    case "localstorage", "storage": choice.localStorage = true
-                    case "passkeys": choice.passkeys = true
-                    case "extensions": choice.extensions = true
-                    default: break
-                    }
-                }
+                choice = FlowBench.choice(only: only)
             }
             guard !moving else { return ["error": "a move is already running"] }
             _ = scanNow(source)
@@ -747,13 +911,74 @@ final class Flow: ObservableObject {
                     "undecoded": found.undecoded, "warnings": found.warnings, "seconds": Date().timeIntervalSince(started),
                     "profiles": found.profiles.map { "\($0.name): \($0.origins.count)" }]
         case "open":
-            // A script's `--only` move leaves its narrowed switches behind;
-            // the sheet opens on the defaults a person would see.
-            choice = FlowModel.Choice()
-            moveAgain = request["again"] as? Bool ?? false
-            open = true
-            refreshSources()
-            return ["open": true, "sources": sources.count, "arcMovedAt": arcMovedAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""]
+            // Through the same door a person would use (`--via settings`
+            // presses the Settings row, Settings first opened behind it);
+            // the sheet opens on the defaults a person would see. Opening
+            // is asynchronous, as it is for a person: ask `flow state`.
+            let windows = Windows.all
+            let at = (request["window"] as? Int).flatMap { windows.indices.contains($0) ? windows[$0] : nil } ?? browser
+            switch request["via"] as? String ?? "bench" {
+            case "settings":
+                at.tuning = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Flow.presentFromSettings(at) }
+            case "command": present(from: at, via: .command)
+            case "menu": present(from: at, via: .menu)
+            default: present(from: at, via: .bench)
+            }
+            if request["again"] as? Bool == true { moveAgain = true }
+            return ["opening": true, "window": windows.firstIndex { $0 === at } ?? 0,
+                    "arcMovedAt": arcMovedAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""]
+        case "close":
+            close()
+            return ["open": open]
+        case "state":
+            // What the sheet shows and where it is: one sheet, one size.
+            var out = FlowPresenter.shared.describe()
+            out["open"] = open
+            out["phase"] = phase.name
+            out["selected"] = selected?.name ?? ""
+            out["sourcesKnown"] = sourcesKnown
+            out["sources"] = sources.map { ["name": $0.name, "locked": $0.locked] as [String: Any] }
+            out["moveAgain"] = moveAgain
+            out["movedAt"] = movedAt.mapValues { ISO8601DateFormatter().string(from: $0) }
+            out["choice"] = FlowBench.choice(choice)
+            if case .moving(let lines) = phase { out["lines"] = lines }
+            return out
+        case "events":
+            // Counts of what the sheet did since the last `--clear`.
+            let log = events
+            if request["clear"] as? Bool == true { events.clear() }
+            var counts: [String: Int] = [:]
+            for entry in log.entries { counts[entry.kind, default: 0] += 1 }
+            return ["counts": counts, "overlapping": log.overlapping, "scansPerOpen": log.scansPerOpen,
+                    "entries": log.entries.suffix(request["all"] as? Bool == true ? FlowEvents.limit : 60).map {
+                        ["at": ($0.at * 1000).rounded() / 1000, "kind": $0.kind, "detail": $0.detail] as [String: Any]
+                    }]
+        case "key":
+            return FlowPresenter.shared.press(request["key"] as? String ?? "")
+        case "shot":
+            guard let path = request["path"] as? String else { return ["error": "shot needs --path OUT.png"] }
+            return FlowPresenter.shared.shot(to: path)
+        case "choose":
+            // The switches, set as a person would before pressing the big
+            // button: `--only tabs,history`, everything else off.
+            guard Store.testing else { return ["error": "flow choose only works in a test run"] }
+            choice = FlowBench.choice(only: request["only"] as? String ?? "")
+            return ["choice": FlowBench.choice(choice)]
+        case "limit":
+            guard Store.testing else { return ["error": "flow limit only works in a test run"] }
+            let names = (request["only"] as? String ?? "").split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            // Nothing is read here: a script may limit the list before it
+            // points a source at a copy, so the real folder is never listed.
+            Self.only = names.isEmpty ? nil : Set(names)
+            return ["only": names]
+        case "activate":
+            // What coming back from System Settings does, without anything
+            // being brought to the front.
+            guard Store.testing else { return ["error": "flow activate only works in a test run"] }
+            becameActive()
+            return ["open": open, "rechecking": FlowMachine.recheckOnActivation(sources: sources.map(\.candidate), open: open)]
         case "probe":
             // Why a source was or wasn't found: the folder, whether the app
             // can list it, and which profile folders carry a Preferences file.

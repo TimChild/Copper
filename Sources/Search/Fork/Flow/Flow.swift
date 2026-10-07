@@ -389,10 +389,16 @@ final class Flow: ObservableObject {
         }
         // The guide is Chrome-specific (shortcuts and sidebar copy), not a
         // generic Chromium guide. Do this last, after every imported row has
-        // landed, so the canvas is the final foreground tab.
-        if source.name == "Chrome" { report.canvasId = await landChromeCanvas(in: browser) }
+        // landed, so the canvas is the final foreground tab. The move is done
+        // first: background extension installs report into a .done phase, and
+        // may land while the canvas loads.
         phase = .done(report)
-        if report.canvasId != nil { open = false }
+        guard source.name == "Chrome", let id = await landChromeCanvas(in: browser) else { return }
+        if case .done(var latest) = phase {
+            latest.canvasId = id
+            phase = .done(latest)
+        }
+        open = false
     }
 
     private static let chromeCanvasKey = "flow.chromeCanvasID"

@@ -15,7 +15,10 @@ cleanup() {
       "$APP/Contents/MacOS/Copper"*) kill "$PID" 2>/dev/null || : ;;
     esac
   fi
-  rm -rf "$TEMP" # only this script's private mktemp folder, never a Copper world
+  rm -rf "$TEMP" # only this script's private mktemp folder
+  # and the world this script made up: a unique name, never the user's own
+  defaults delete "com.officecommun.search.test.$WORLD" >/dev/null 2>&1 || :
+  rm -rf "$HOME/Library/Application Support/Copper ($WORLD)"
 }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; [ ! -f "$TEMP/copper.log" ] || tail -n 12 "$TEMP/copper.log" >&2; exit 1; }

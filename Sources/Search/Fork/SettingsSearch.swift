@@ -117,6 +117,8 @@ enum SettingsMatcher {
         "1pw": ["1password"], "onepassword": ["1password"],
         "mic": ["microphone"], "webcam": ["camera"], "workspace": ["spaces"], "workspaces": ["spaces"],
         "vertical": ["sidebar"], "browser": ["browser", "default"],
+        "dictate": ["dictation", "voice"], "dictation": ["voice"], "speech": ["voice"], "transcribe": ["transcription", "voice"],
+        "stt": ["speech", "voice"], "ptt": ["talk"],
     ]
 
     struct Token {

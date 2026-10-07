@@ -41,7 +41,7 @@ extension SettingsPanel.Page {
     var group: Group {
         switch self {
         case .general, .tabs, .spaces, .downloads, .extensions: return .browsing
-        case .intelligence, .agents: return .copper
+        case .intelligence, .agents, .voice: return .copper
         case .passwords, .privacy, .cloud: return .data
         case .labs, .updates, .about: return .about
         }
@@ -51,7 +51,7 @@ extension SettingsPanel.Page {
     /// (and the stored `settings.page` values); this is only how it is drawn.
     static let railOrder: [SettingsPanel.Page] = [
         .general, .tabs, .spaces, .downloads, .extensions,
-        .intelligence, .agents,
+        .intelligence, .agents, .voice,
         .passwords, .privacy, .cloud,
         .labs, .updates, .about,
     ]
@@ -64,6 +64,7 @@ extension SettingsPanel.Page {
         case .spaces: return "Each space's name, look, icon and profile. Drag the chips to reorder."
         case .intelligence: return "The model behind the agent pane and Ask on page, and Jev's fast lane."
         case .agents: return "Let MCP clients, linked agent apps and terminal agents use this browser."
+        case .voice: return "Dictation in the agent pane: the speech model, and how you talk to it."
         case .cloud: return "Connect, sign in, then choose what follows you between Macs."
         case .updates: return "Which Copper you have, and getting the next one."
         case .extensions: return "Chrome extensions: add, pin, allow on sites, and remove."
@@ -83,6 +84,8 @@ extension SettingsPanel.Page {
         case .spaces: return ["workspaces", "profiles", "space look"]
         case .intelligence: return ["ai", "model", "llm", "claude", "anthropic", "openai", "gpt", "keys"]
         case .agents: return ["mcp", "proxy", "bot", "bots", "automation", "agent"]
+        case .voice: return ["voice", "dictation", "dictate", "speech", "transcription", "push to talk", "hold to talk",
+                             "microphone", "mic", "talk", "conversational", "speech model"]
         case .cloud: return ["sync", "account", "canvas", "devices", "backup"]
         case .updates: return ["update", "upgrade", "version", "release"]
         case .extensions: return ["add-ons", "addons", "plugins", "chrome web store"]
@@ -127,7 +130,7 @@ enum SettingsIndex {
     // A list joined rather than a chain of `+`: long chains are slow for
     // older type checkers (the release runner's).
     static let rows: [SettingsEntry] = [
-        general, tabs, spaces, intelligence, agents, cloud,
+        general, tabs, spaces, intelligence, agents, voice, cloud,
         updates, extensions, passwords, downloads, privacy, labs, about,
     ].flatMap { $0 }
 
@@ -268,6 +271,35 @@ enum SettingsIndex {
           ["install", "brew", "homebrew", "curl"], "agents.install"),
         e(.agents, "The key", "Bearer token", "Every request must carry it. Rotate it and every client's config goes stale",
           ["token", "secret", "rotate", "auth", "authentication", "api key"], "agents.token"),
+    ]
+
+    // MARK: voice
+
+    private static let voiceEnabled: (Browser) -> Binding<Bool> = { _ in
+        Binding(get: { VoicePrefs.shared.enabled }, set: { on in
+            guard VoicePrefs.supported else { return }
+            VoicePrefs.shared.enabled = on
+        })
+    }
+
+    private static let voice: [SettingsEntry] = [
+        e(.voice, "Voice on this Mac", "Voice", "Talk to the agent in the ⌘E pane. Speech is turned into text on this Mac; audio is never saved or sent",
+          ["voice", "dictation", "dictate", "speech", "speech to text", "transcription", "mic", "talk",
+           "push to talk", "hold to talk", "agent pane", "cmd e"], "voice.enabled", toggle: voiceEnabled),
+        // Drawn while voice is on or a model is on disk; until then search
+        // lands on the switch that brings it.
+        e(.voice, "Voice on this Mac", "Speech model", "Phonon-2, a one-time 345 MB download kept on this Mac until you remove it",
+          ["speech model", "phonon", "remove model", "delete model", "free space", "disk space", "model size",
+           "transcription", "on device", "offline"], "voice.model", fallback: "voice.enabled"),
+        e(.voice, "Talking to the agent", "Talk", "Hold to talk, or press to start and stop — ⌃⇧D or the mic button",
+          ["push to talk", "hold to talk", "ptt", "toggle", "press to talk", "shortcut", "control shift d", "mic button",
+           "dictate", "dictation", "talk"], "voice.trigger"),
+        e(.voice, "Talking to the agent", "When you stop", "Insert the words into the message, or send it right away",
+          ["send", "auto send", "send right away", "insert", "conversational", "conversation", "dictation", "review before sending"],
+          "voice.finish"),
+        e(.voice, "Credits", "Speech model credits", "Phonon-2 by Fermion Research, based on NVIDIA Parakeet TDT 0.6B v3 · CC BY 4.0",
+          ["license", "licence", "attribution", "credits", "fermion", "nvidia", "parakeet", "cc by", "phonon", "speech model"],
+          "voice.credits"),
     ]
 
     // MARK: cloud

@@ -16,24 +16,24 @@ enum FlowExtensions {
 
         for profile in selected {
             let folder = source.root.appendingPathComponent(profile, isDirectory: true)
-            // Secure Preferences is the authoritative copy; Preferences fills
-            // in profiles written by older Chrome versions.
-            for filename in ["Secure Preferences", "Preferences"] {
+            // Chrome can split an extension's settings between the two files.
+            // Secure Preferences wins for keys present in both.
+            var entries: [String: [String: Any]] = [:]
+            for filename in ["Preferences", "Secure Preferences"] {
                 guard let root = json(at: folder.appendingPathComponent(filename)),
                       let extensions = root["extensions"] as? [String: Any],
                       let settings = extensions["settings"] as? [String: Any]
                 else { continue }
 
-                for (rawID, value) in settings where found[rawID.lowercased()] == nil {
-                    guard let entry = value as? [String: Any],
-                          let item = makeExtension(
-                            id: rawID,
-                            entry: entry,
-                            profileFolder: folder
-                          )
-                    else { continue }
-                    found[item.id] = item
+                for (rawID, value) in settings {
+                    guard let entry = value as? [String: Any] else { continue }
+                    let id = rawID.lowercased()
+                    entries[id, default: [:]].merge(entry) { _, newer in newer }
                 }
+            }
+            for (id, entry) in entries where found[id] == nil {
+                guard let item = makeExtension(id: id, entry: entry, profileFolder: folder) else { continue }
+                found[item.id] = item
             }
         }
 
@@ -58,7 +58,7 @@ enum FlowExtensions {
         guard !pending.isEmpty else { done?(0); return 0 }
         Task { @MainActor in
             var landed = 0
-            for item in pending where await Extensions.shared.installAgreed(id: item.id) {
+            for item in pending where await Extensions.shared.installAgreed(id: item.id, enabled: item.enabled) {
                 landed += 1
             }
             NSLog("Copper: Flow installed %d of %d extensions", landed, pending.count)
@@ -101,7 +101,7 @@ enum FlowExtensions {
             id: id,
             name: name,
             version: version,
-            enabled: number(entry["state"]) == 1,
+            enabled: FlowExtensionState.enabled(entry),
             fromStore: fromStore
         )
     }

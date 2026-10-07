@@ -18,6 +18,15 @@ let package = Package(
             // main-thread by nature, and Swift 6's strict isolation buys nothing
             // here but ceremony.
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
+        // `swift test`: the pure parts that need no window — so far the
+        // crash-report reader and the breadcrumb trail (Fork/Crashes.swift).
+        .testTarget(
+            name: "SearchTests",
+            dependencies: ["Search"],
+            path: "Tests/SearchTests",
+            resources: [.copy("Fixtures")],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

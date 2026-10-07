@@ -41,6 +41,7 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper bitwarden login -` | Sign in + unlock from ONE JSON object on stdin (`server, email, password, clientId, clientSecret, otp, otpMethod, share, stayUnlocked`); secrets are refused on argv. |
 | `copper bitwarden lock` / `logout` / `sync` | Drop the session / sign out and wipe the CLI state / pull the vault now. |
 | `copper bitwarden policy [--share folder\|all] [--stay-unlocked on\|off]` | What agents may use (the `Agents` folder, or everything) and whether the session survives a restart. |
+| `copper crashes [show N [--symbolicate]] [path]` | Copper's own crash history, newest first / one in full with its breadcrumbs; reads the data folder, so it works with Copper down. |
 | `copper --launch …` | Explicitly opt into launching Copper when it is down (also `COPPER_LAUNCH=1`). |
 
 ## Your own tab

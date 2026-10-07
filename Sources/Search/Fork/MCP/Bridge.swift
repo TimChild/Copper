@@ -18,6 +18,9 @@ enum Bridge {
             // A real app launch: headless (Headless.swift) sets itself up
             // here, before SwiftUI builds a window.
             MainActor.assumeIsolated { Headless.bootIfAsked() }
+            // Its launch line in the trail, and the reports of any crash
+            // since the last one taken in (Crashes.swift), off the main thread.
+            Crashes.launched()
             return
         }
         run()

@@ -87,6 +87,7 @@ forward; the pane opens itself only for work on the page on screen.
 | `browser_resize`, `browser_close` | the window; the tab |
 | `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove` |
 | `browser_perf_probe` | Samples the current tab for rAF loops, DOM churn, animations, filters, canvases, timers, long tasks, and slow resources (`seconds`, `top`, `format`) |
+| `browser_crashes` | Copper's own crash history on this Mac as JSON, newest first; `index: N` for one in full with the breadcrumbs before it ([crashes.md](crashes.md)) |
 
 ### Saved sign-in (no-secret contract)
 

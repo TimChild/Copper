@@ -86,6 +86,11 @@ enum CLI {
         if command == "bitwarden" {
             return runBitwarden(Array(args.dropFirst()), dryRun: dryRun, launchRequested: launchRequested)
         }
+        // Read straight from the data folder: it works with Copper down,
+        // which is when somebody wants to know why it went (CrashesRead.swift).
+        if command == "crashes" {
+            return Crashes.cli(Array(args.dropFirst()), json: json)
+        }
 
         guard var spec = makeRequest(command, Array(args.dropFirst())) else { return 2 }
         if let tabRef, var request = spec.request, var params = request["params"] as? [String: Any],
@@ -1309,6 +1314,9 @@ enum CLI {
       bitwarden [status|login -|cancel|lock|logout|sync|policy]
                                                 the Bitwarden vault; JSON only, login reads stdin
                                                 (copper bitwarden --help)
+      crashes [list|show [N] [--symbolicate]|path]
+                                                Copper's crash history on this Mac; works with Copper down
+                                                (copper crashes help)
       call TOOL [JSON-ARGS]                     call any MCP tool
       help                                      show this help
 

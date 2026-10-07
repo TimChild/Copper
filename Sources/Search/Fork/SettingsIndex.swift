@@ -422,6 +422,13 @@ enum SettingsIndex {
           ["check for updates", "update", "latest version"], "about.version"),
         e(.about, "Version", "Send Feedback", "Opens a draft with the version already in it",
           ["feedback", "bug", "report a problem", "issue", "contact", "support"], "about.feedback"),
+        // Drawn only after a crash; until then search lands on Send Feedback.
+        e(.about, "Diagnostics", "Last crash", "When Copper last quit unexpectedly, and what it was",
+          ["crash", "crashed", "crash report", "quit unexpectedly", "diagnostics", "logs", "breadcrumbs"],
+          "about.crash", fallback: "about.feedback"),
+        e(.about, "Diagnostics", "Copy crash report", "Copies the last crash's summary and breadcrumbs, or shows its report in Finder",
+          ["copy report", "reveal in finder", "ips", "diagnostic report", "crash log", "symbolicate"],
+          "about.crash", fallback: "about.feedback"),
         e(.about, "Keyboard shortcuts", "Keyboard shortcuts", "Every keystroke Copper answers to",
           ["shortcuts", "hotkeys", "keys", "keyboard", "key bindings", "cheat sheet"], "about.shortcuts"),
     ] + SettingsShortcuts.all.map { shortcut in

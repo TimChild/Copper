@@ -1,0 +1,220 @@
+{"app_name":"Copper","timestamp":"2026-10-06 23:13:45.00 -0500","app_version":"1.0.20261007.31","slice_uuid":"d49a7245-c237-36a4-a379-f31aa7241115","build_version":"202610070207","platform":1,"bundleID":"com.collinrijock.copper","share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"macOS 27.0 (26A428)","roots_installed":0,"name":"Copper","incident_id":"00000000-0000-0000-0000-0000000000AA"}
+{
+  "uptime": 41000,
+  "procRole": "Background",
+  "version": 2,
+  "userID": 501,
+  "deployVersion": 210,
+  "modelCode": "Mac17,2",
+  "coalitionID": 26236,
+  "osVersion": {
+    "train": "macOS 27.0",
+    "build": "26A428",
+    "releaseType": "User"
+  },
+  "captureTime": "2026-10-06 23:13:43.8544 -0500",
+  "codeSigningMonitor": 2,
+  "incident": "00000000-0000-0000-0000-0000000000AA",
+  "pid": 5511,
+  "translated": false,
+  "cpuType": "ARM-64",
+  "procLaunch": "2026-10-06 21:35:22.0668 -0500",
+  "procStartAbsTime": 850392017956,
+  "procExitAbsTime": 992031794950,
+  "procName": "Copper",
+  "procPath": "/Applications/Copper.app/Contents/MacOS/Copper",
+  "bundleInfo": {
+    "CFBundleShortVersionString": "1.0.20261007.31",
+    "CFBundleVersion": "202610070207",
+    "CFBundleIdentifier": "com.collinrijock.copper"
+  },
+  "storeInfo": {
+    "deviceIdentifierForVendor": "00000000-0000-0000-0000-0000000000BB",
+    "thirdParty": true
+  },
+  "parentProc": "launchd",
+  "parentPid": 1,
+  "crashReporterKey": "00000000-0000-0000-0000-000000000000",
+  "developerMode": 1,
+  "codeSigningID": "com.collinrijock.copper",
+  "codeSigningTeamID": "",
+  "codeSigningFlags": 570425857,
+  "codeSigningValidationCategory": 10,
+  "codeSigningTrustLevel": 4294967295,
+  "codeSigningAuxiliaryInfo": 0,
+  "bootSessionUUID": "00000000-0000-0000-0000-000000000001",
+  "wakeTime": 9539,
+  "sleepWakeUUID": "00000000-0000-0000-0000-000000000002",
+  "sip": "enabled",
+  "exception": {
+    "codes": "0x0000000000000001, 0x000000019abc6a84",
+    "rawCodes": [
+      1,
+      6891006596
+    ],
+    "type": "EXC_BREAKPOINT",
+    "signal": "SIGTRAP"
+  },
+  "termination": {
+    "flags": 0,
+    "code": 5,
+    "namespace": "SIGNAL",
+    "indicator": "Trace/BPT trap: 5",
+    "byProc": "exc handler",
+    "byPid": 5511
+  },
+  "os_fault": {
+    "process": "Copper"
+  },
+  "extMods": {
+    "caller": {
+      "thread_create": 0,
+      "thread_set_state": 0,
+      "task_for_pid": 0
+    },
+    "system": {
+      "thread_create": 0,
+      "thread_set_state": 0,
+      "task_for_pid": 0
+    },
+    "targeted": {
+      "thread_create": 0,
+      "thread_set_state": 0,
+      "task_for_pid": 0
+    },
+    "warnings": 0
+  },
+  "faultingThread": 1,
+  "threads": [
+    {
+      "id": 3838700,
+      "queue": "com.apple.main-thread",
+      "frames": [
+        {
+          "imageOffset": 123,
+          "imageIndex": 0
+        }
+      ]
+    },
+    {
+      "triggered": true,
+      "id": 3838832,
+      "queue": "com.apple.root.user-initiated-qos.cooperative",
+      "frames": [
+        {
+          "imageOffset": 227972,
+          "symbol": "_dispatch_assert_queue_fail",
+          "symbolLocation": 120,
+          "imageIndex": 2
+        },
+        {
+          "imageOffset": 230672,
+          "symbol": "dispatch_assert_queue$V2.cold.1",
+          "symbolLocation": 116,
+          "imageIndex": 2
+        },
+        {
+          "imageOffset": 20744,
+          "symbol": "dispatch_assert_queue",
+          "symbolLocation": 108,
+          "imageIndex": 2
+        },
+        {
+          "imageOffset": 351688,
+          "symbol": "_swift_task_checkIsolatedSwift",
+          "symbolLocation": 48,
+          "imageIndex": 3
+        },
+        {
+          "imageOffset": 21504,
+          "symbol": "swift_task_isCurrentExecutorWithFlagsImpl(swift::SerialExecutorRef, swift::swift_task_is_current_executor_flag)",
+          "symbolLocation": 356,
+          "imageIndex": 3
+        },
+        {
+          "imageOffset": 20572300,
+          "imageIndex": 1
+        },
+        {
+          "imageOffset": 7565752,
+          "imageIndex": 0
+        },
+        {
+          "imageOffset": 283572,
+          "symbol": "closure #1 in withCheckedContinuation<A>(isolation:function:_:)",
+          "symbolLocation": 100,
+          "imageIndex": 3
+        },
+        {
+          "imageOffset": 283940,
+          "symbol": "withCheckedThrowingContinuation<A>(isolation:function:_:)",
+          "symbolLocation": 152,
+          "imageIndex": 3
+        },
+        {
+          "imageOffset": 7564593,
+          "imageIndex": 0
+        },
+        {
+          "imageOffset": 7572533,
+          "imageIndex": 0
+        },
+        {
+          "imageOffset": 56641,
+          "symbol": "completeTaskWithClosure(swift::AsyncContext*, swift::SwiftError*)",
+          "symbolLocation": 1,
+          "imageIndex": 3
+        }
+      ]
+    }
+  ],
+  "usedImages": [
+    {
+      "source": "P",
+      "arch": "arm64",
+      "base": 4295507968,
+      "CFBundleShortVersionString": "1.0.20261007.31",
+      "CFBundleIdentifier": "com.collinrijock.copper",
+      "size": 12861440,
+      "uuid": "d49a7245-c237-36a4-a379-f31aa7241115",
+      "path": "/Applications/Copper.app/Contents/MacOS/Copper",
+      "name": "Copper",
+      "CFBundleVersion": "202610070207"
+    },
+    {
+      "source": "P",
+      "arch": "arm64e",
+      "base": 7651667968,
+      "CFBundleShortVersionString": "22625",
+      "CFBundleIdentifier": "com.apple.WebKit",
+      "size": 25826444,
+      "uuid": "ac293b1a-9eaf-34d8-86b2-914d2abb84f3",
+      "path": "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
+      "name": "WebKit",
+      "CFBundleVersion": "22625.1.29.11.27"
+    },
+    {
+      "source": "P",
+      "arch": "arm64e",
+      "base": 6890778624,
+      "size": 287136,
+      "uuid": "022bf08f-0b3a-3225-9e65-16d1553ce90d",
+      "path": "/usr/lib/system/libdispatch.dylib",
+      "name": "libdispatch.dylib"
+    },
+    {
+      "source": "P",
+      "arch": "arm64e",
+      "base": 11935158272,
+      "size": 575944,
+      "uuid": "f2f652dd-14b0-35e2-bc9d-47fe153d579e",
+      "path": "/usr/lib/swift/libswift_Concurrency.dylib",
+      "name": "libswift_Concurrency.dylib"
+    }
+  ],
+  "sharedCache": {
+    "base": 0,
+    "size": 0,
+    "uuid": "00000000-0000-0000-0000-000000000003"
+  }
+}

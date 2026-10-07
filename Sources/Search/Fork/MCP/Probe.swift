@@ -544,7 +544,12 @@ extension Tools {
         @MainActor
         private static func call(_ script: String, on web: WKWebView, seconds: Double, top: Int, format: String) async throws -> Any? {
             try await withThrowingTaskGroup(of: Any?.self) { group in
-                group.addTask {
+                // On the main actor, said out loud: a child task doesn't
+                // inherit it, and WebKit's Swift callAsyncJavaScript asserts
+                // the main queue — called from the cooperative pool it traps
+                // (EXC_BREAKPOINT in _dispatch_assert_queue_fail), which is
+                // how browser_perf_probe crashed Copper on Oct 1, 2 and 6.
+                group.addTask { @MainActor in
                     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any?, Error>) in
                         web.callAsyncJavaScript(script,
                                                 arguments: ["probeSeconds": seconds, "probeTop": top, "probeFormat": format],

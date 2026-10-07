@@ -262,7 +262,7 @@ actor VoiceEngine {
         }
     }()
 
-    private static func hypothesis(_ heard: Transcript) -> VoiceHypothesis {
+    private static func hypothesis(_ heard: PhononTranscript) -> VoiceHypothesis {
         VoiceHypothesis(
             text: heard.text.trimmingCharacters(in: .whitespacesAndNewlines),
             words: heard.words.map { VoiceWord(text: $0.text, start: $0.start, end: $0.end) }

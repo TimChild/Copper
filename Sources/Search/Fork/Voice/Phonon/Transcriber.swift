@@ -30,7 +30,7 @@ public struct Manifest: Decodable {
 }
 
 @available(macOS 15, *)
-public struct Transcript {
+public struct PhononTranscript {
     public var text: String
     public var words: [Word]
     public var segments: [Segment]
@@ -273,9 +273,9 @@ public final class Transcriber {
 
     // MARK: pipeline
     /// Mono 16 kHz samples -> transcript with words.
-    public func transcribe(_ wave: [Swift.Float]) throws -> Transcript { try transcribe(source: ArraySource(wave)) }
+    public func transcribe(_ wave: [Swift.Float]) throws -> PhononTranscript { try transcribe(source: ArraySource(wave)) }
     /// A file read window by window (an hour of audio never sits in memory at once).
-    public func transcribe(url: URL) throws -> Transcript { try transcribe(source: FileSource(url: url)) }
+    public func transcribe(url: URL) throws -> PhononTranscript { try transcribe(source: FileSource(url: url)) }
     public func plan(source: AudioSource) throws -> [PhononWindow] {
         let n = source.count
         if n <= Int(singleShotMax * 16000) && longAudioMode != "reference" { return [PhononWindow(start: 0, end: n, overlapFromPrevious: false, splitSample: nil)] }
@@ -283,7 +283,7 @@ public final class Transcriber {
         if longAudioMode == "reference" { return Segmenter.plan(rms: rms, count: n).map { PhononWindow(start: $0.0, end: $0.1, overlapFromPrevious: false, splitSample: nil) } }
         return Windower.plan(rms: rms, count: n, windowS: options.windowSeconds, bandMinS: options.bandMinSeconds, overlapS: options.overlapSeconds, singleShotMaxS: singleShotMax)
     }
-    public func transcribe(source: AudioSource) throws -> Transcript {
+    public func transcribe(source: AudioSource) throws -> PhononTranscript {
         let tStart = Date()
         let windows = try plan(source: source)
         var results = [[TimedToken]?](repeating: nil, count: windows.count)
@@ -336,7 +336,7 @@ public final class Transcriber {
         if let e = firstError { throw e }
         results = local
     }
-    func finishTranscript(windows: [PhononWindow], results: [[TimedToken]?], count n: Int, tStart: Date) -> Transcript {
+    func finishTranscript(windows: [PhononWindow], results: [[TimedToken]?], count n: Int, tStart: Date) -> PhononTranscript {
         var words: [Word] = []; var segments: [Segment] = []; var overlapped = 0
         for (i, w) in windows.enumerated() {
             let offset = Double(w.start) / 16000, limit = Double(w.end - w.start) / 16000
@@ -347,7 +347,7 @@ public final class Transcriber {
         }
         let wall = Date().timeIntervalSince(tStart)
         timingLock.lock(); timing.wallS += wall; timing.audioS += Double(n) / 16000; timing.windows += windows.count; timing.overlapped += overlapped; timingLock.unlock()
-        return Transcript(text: words.map { $0.text }.joined(separator: " "), words: words, segments: segments, audioSeconds: Double(n) / 16000, decodeSeconds: wall, windows: windows.count)
+        return PhononTranscript(text: words.map { $0.text }.joined(separator: " "), words: words, segments: segments, audioSeconds: Double(n) / 16000, decodeSeconds: wall, windows: windows.count)
     }
 
     // MARK: rescue

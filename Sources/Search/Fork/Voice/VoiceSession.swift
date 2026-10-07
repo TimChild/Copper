@@ -22,6 +22,13 @@ import os
 // synchronous hop would deadlock: LiveSession.cancel waits for an emit in
 // flight, and VoiceCapture.stop for its own queue.)
 //
+// The speech model is loaded when the pane opens (`warm`, a third of a
+// second once this Mac has prepared it) and let go after ten idle minutes.
+// The first load after macOS throws its Neural Engine cache away takes about
+// a minute: past a second of loading the mic shows it is preparing and a
+// press says so instead of listening; a dictation already under way keeps
+// listening and says "Finishing… preparing speech model" until it can decode.
+//
 // Audio and words stay in memory; nothing is logged but counts and times.
 
 /// Where a dictation's audio comes from: the microphone, or a file in tests.
@@ -60,7 +67,20 @@ final class Voice: ObservableObject {
         case unavailable(String)
         /// The speech model isn't ready: dimmed, with why; a click opens Settings › Voice.
         case waiting(String)
+        /// The model is installed and loading, and the load has taken over a
+        /// second (the Neural Engine preparing it): dimmed; a press says so.
+        case preparing
         case ready
+    }
+
+    /// The speech model in memory: not loaded, loading, loaded.
+    enum EngineState: String { case cold, warming, warm }
+
+    /// What the line above the composer's buttons says.
+    enum Line: Equatable {
+        case live(String, String)   // "Listening…" / "Finishing…", and the words
+        case plain(String)
+        case denied
     }
 
     @Published private(set) var phase: Phase = .idle
@@ -72,6 +92,12 @@ final class Voice: ObservableObject {
     @Published private(set) var slowStart = false
     /// The bench's frozen model state, for pictures of the mic waiting.
     @Published var seededModel: ModelStore.State?
+    /// The speech model in memory. `warming` while a load Voice started runs.
+    @Published private(set) var engineState: EngineState = .cold
+    /// The load has run past a second: the first one on this Mac, not a reload.
+    @Published private(set) var engineSlow = false
+    /// The bench's frozen slow load, for pictures.
+    @Published var seededWarming = false
 
     /// The window and browser the current dictation belongs to.
     private(set) weak var browser: Browser?
@@ -81,6 +107,12 @@ final class Voice: ObservableObject {
 
     nonisolated static let denied = "Microphone access is off. Open System Settings to allow Copper, then try again."
     nonisolated static let privacyPane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+    nonisolated static let preparingHelp = "Preparing speech model — one time, about a minute"
+    nonisolated static let preparingNote = "Preparing speech model… try again in a moment"
+    nonisolated static let finishingPreparing = "Finishing… preparing speech model"
+    nonisolated static let loadFailed = "Speech model failed to load — try again"
+    /// How long a load runs before the mic says the model is being prepared.
+    nonisolated static let slowLoad: TimeInterval = 1
     static let holdThreshold = 0.25
     static let cap: TimeInterval = 120
     static let idleUnload: TimeInterval = 600
@@ -96,7 +128,13 @@ final class Voice: ObservableObject {
     private var slowTimer: DispatchWorkItem?
     private var noteTimer: DispatchWorkItem?
     private var unloadTimer: DispatchWorkItem?
-    private var warming = false
+    /// The load in flight that `warm` started; a decode waits on it.
+    private var warmTask: Task<Bool, Never>?
+    private var warmTimer: DispatchWorkItem?
+    /// Bumped by every load started and every reset, so a stale one is dropped.
+    private var warmGeneration = 0
+    /// The last load failed (a dictation that then hears nothing says why).
+    private var warmFailed = false
     private var booted = false
     private var bag: Set<AnyCancellable> = []
     private var tokens: [NSObjectProtocol] = []
@@ -115,6 +153,11 @@ final class Voice: ObservableObject {
     var benchAgentReady: Bool?
     /// A shorter cap than 120 s, to see it end a dictation.
     var benchCap: TimeInterval?
+    /// Every load waits this long first: a stand-in for the Neural Engine's
+    /// first-time preparation (`voice warm`, `voice dictate --warm-delay`).
+    var benchWarmDelay: TimeInterval?
+    /// Presses turned away while the model was being prepared.
+    private(set) var refusedPreparing = 0
     /// With a test source: the permission macOS would report, and how a
     /// question would be answered after `seconds` — no prompt is ever shown.
     var benchPermission: (status: AVAuthorizationStatus, grant: Bool, seconds: Double)?
@@ -143,6 +186,7 @@ final class Voice: ObservableObject {
         }
         VoiceChecks.register()
         VoiceKeys.install()
+        ComposerInsert.followUndo()
 
         // The pane closing, voice going off, the model going away: cancel.
         // The pane opening or voice coming on with the model ready: warm up.
@@ -156,8 +200,12 @@ final class Voice: ObservableObject {
         }.store(in: &bag)
         ModelStore.shared.$state.removeDuplicates().sink { [weak self] state in
             guard let self else { return }
-            if state != .ready { self.cancel("model not ready") }
-            else { DispatchQueue.main.async { self.warm() } }
+            if state != .ready {
+                self.cancel("model not ready")
+                self.resetEngine()
+            } else {
+                DispatchQueue.main.async { self.warm() }
+            }
         }.store(in: &bag)
 
         let center = NotificationCenter.default
@@ -183,11 +231,30 @@ final class Voice: ObservableObject {
         guard VoicePrefs.supported, prefs.enabled else { return .hidden }
         guard agentReady else { return .unavailable("Sign in with Claude or add a key to use the agent") }
         switch seededModel ?? ModelStore.shared.state {
-        case .ready: return .ready
+        case .ready: return preparing ? .preparing : .ready
         case .downloading(let fraction): return .waiting("Speech model downloading · \(Int((fraction * 100).rounded(.down)))%")
         case .verifying, .compiling, .preparing: return .waiting("Preparing speech model — one time, about a minute")
         case .failed: return .waiting("Speech model needs attention")
         case .absent: return .waiting("Set up voice in Settings")
+        }
+    }
+
+    /// The model is loading and has been for over a second.
+    var preparing: Bool { seededWarming || (engineState == .warming && engineSlow) }
+
+    /// The line above the composer's buttons, or none.
+    var line: Line? {
+        switch phase {
+        case .arming:
+            return slowStart ? .plain("Starting microphone…") : nil
+        case .dictating:
+            return .live("Listening…", preview)
+        case .finishing:
+            return .live(preparing ? Voice.finishingPreparing : "Finishing…", preview)
+        case .error(let message):
+            return message == Voice.denied ? .denied : .plain(message)
+        case .idle:
+            return note.map(Line.plain)
         }
     }
 
@@ -230,14 +297,23 @@ final class Voice: ObservableObject {
             self.browser = browser
             self.window = window ?? Windows.window(of: browser)
         }
-        switch mic(agentReady: Agent.shared.ready) {
-        case .hidden, .unavailable:
-            return
-        case .waiting(let why):
-            if hand == .button { browser.openSettings(.voice) } else { show(note: why, for: 2.5) }
-            return
-        case .ready:
-            break
+        // Whether one can start; one under way can always be stopped.
+        if !active {
+            switch mic(agentReady: Agent.shared.ready) {
+            case .hidden, .unavailable:
+                return
+            case .waiting(let why):
+                if hand == .button { browser.openSettings(.voice) } else { show(note: why, for: 2.5) }
+                return
+            case .preparing:
+                // No capture: nothing could be heard into words for a while yet.
+                refusedPreparing += 1
+                show(note: Voice.preparingNote, for: 3)
+                announce("Preparing speech model")
+                return
+            case .ready:
+                break
+            }
         }
         switch prefs.trigger {
         case .toggle:
@@ -385,8 +461,13 @@ final class Voice: ObservableObject {
     private func open(_ source: VoiceAudioSource, session id: Int) {
         guard #available(macOS 15, *) else { fail("Voice needs macOS 15 or later."); return }
         guard let dir = ModelStore.shared.modelDir else { fail("Speech model needs attention"); return }
+        // Not loaded (let go after idle minutes, or the load failed): load
+        // now, while the person talks. A decode waits for it; past a second
+        // the line says the model is being prepared.
+        if engineState == .cold { startWarm(dir) }
         let decode: @Sendable ([Swift.Float]) async throws -> String = { samples in
-            // Joins the warm-up in flight, or loads again after an idle unload.
+            await Voice.untilWarm()
+            // A no-op once warm; loads again if something let the model go.
             try await VoiceEngine.shared.prepare(modelDir: dir) { _ in }
             return try await VoiceEngine.shared.transcribe(samples).text
         }
@@ -438,8 +519,15 @@ final class Voice: ObservableObject {
         guard id == session, phase == .finishing else { return }
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let heard = Date()
-        defer { end(nil) }
         mark("decoded", count: words.split(whereSeparator: \.isWhitespace).count)
+        // Nothing heard because the model never loaded: say so, once.
+        if words.isEmpty, warmFailed, engineState == .cold {
+            mark("model failed")
+            end(Voice.loadFailed)
+            announce("Speech model failed to load")
+            return
+        }
+        defer { end(nil) }
         guard !words.isEmpty, let anchor else {
             mark("empty")
             return
@@ -587,32 +675,100 @@ final class Voice: ObservableObject {
     /// The pane is open with voice ready: load the model now (a third of a
     /// second once this Mac has prepared it), so the first dictation doesn't wait.
     func warm() {
-        guard #available(macOS 15, *), !warming, Agent.shared.open, case .ready = mic(agentReady: Agent.shared.ready),
-              seededModel == nil, let dir = ModelStore.shared.modelDir else { return }
-        warming = true
-        Task { @MainActor in
-            let started = Date()
-            do {
-                try await VoiceEngine.shared.prepare(modelDir: dir) { _ in }
-                Voice.log.info("voice warm in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
-            } catch {
-                Voice.log.error("voice warm failed")
+        guard #available(macOS 15, *), VoicePrefs.supported, prefs.enabled, Agent.shared.open, Agent.shared.ready,
+              seededModel == nil, ModelStore.shared.state == .ready, let dir = ModelStore.shared.modelDir else { return }
+        startWarm(dir)
+    }
+
+    /// One load at a time; nothing when loaded. Past `slowLoad` the mic
+    /// shows the model is being prepared.
+    @available(macOS 15, *)
+    private func startWarm(_ dir: URL) {
+        guard engineState == .cold, warmTask == nil else { return }
+        warmGeneration += 1
+        let id = warmGeneration
+        engineState = .warming
+        engineSlow = false
+        warmFailed = false
+        if active { mark("engine loading") }
+        let slow = DispatchWorkItem { [weak self] in
+            guard let self, self.warmGeneration == id, self.engineState == .warming else { return }
+            self.engineSlow = true
+            Voice.log.info("voice: speech model still loading after \(Voice.slowLoad, privacy: .public) s — preparing")
+            if self.active {
+                self.mark("engine preparing")
+                self.announce("Preparing speech model")
             }
-            self.warming = false
-            self.scheduleUnload()
         }
+        warmTimer?.cancel()
+        warmTimer = slow
+        DispatchQueue.main.asyncAfter(deadline: .now() + Voice.slowLoad, execute: slow)
+        let delay = benchWarmDelay
+        warmTask = Task { @MainActor in
+            let started = Date()
+            if let delay { try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000)) }
+            var ok = true
+            do { try await VoiceEngine.shared.prepare(modelDir: dir) { _ in } } catch { ok = false }
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            guard self.warmGeneration == id else { return ok }
+            self.warmTimer?.cancel()
+            self.warmTimer = nil
+            self.warmTask = nil
+            self.engineSlow = false
+            self.engineState = ok ? .warm : .cold
+            self.warmFailed = !ok
+            if ok { Voice.log.info("voice warm in \(ms) ms") } else { Voice.log.error("voice warm failed after \(ms) ms") }
+            if self.active { self.mark(ok ? "engine warm" : "engine failed") }
+            self.scheduleUnload()
+            return ok
+        }
+    }
+
+    /// For a decode: the load in flight, if one is (the first on this Mac
+    /// can take a minute), finished.
+    static func untilWarm() async {
+        if let task = shared.warmTask { _ = await task.value }
+    }
+
+    /// The model went away or changed: whatever was loaded or loading is not
+    /// this one. A load in flight finishes unheard.
+    private func resetEngine() {
+        warmGeneration += 1
+        warmTask = nil
+        warmTimer?.cancel()
+        warmTimer = nil
+        engineSlow = false
+        engineState = .cold
     }
 
     /// Ten minutes without a dictation lets the model go (100–200 MB).
     private func scheduleUnload() {
         unloadTimer?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.active else { return }
+            guard let self, !self.active, self.engineState != .warming else { return }
+            self.resetEngine()
             if #available(macOS 15, *) { Task { await VoiceEngine.shared.unload() } }
             Voice.log.info("voice model unloaded after 10 idle minutes")
         }
         unloadTimer = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Voice.idleUnload, execute: work)
+    }
+
+    /// The bench: the model let go now, as after idle minutes, and every
+    /// load from here on held `delay` seconds first; then warmed as the
+    /// pane opening does (when `start`).
+    func benchCold(delay: TimeInterval?, start: Bool) async {
+        resetEngine()
+        if #available(macOS 15, *) { await VoiceEngine.shared.unload() }
+        benchWarmDelay = delay
+        if start { warm() }
+    }
+
+    /// The bench: loaded through `warm`, as the open pane has it.
+    func benchWarmed() async -> Bool {
+        warm()
+        if let task = warmTask { return await task.value }
+        return engineState == .warm
     }
 
     // MARK: - bench
@@ -623,6 +779,7 @@ final class Voice: ObservableObject {
         stopTimers()
         clearNote()
         seededModel = nil
+        seededWarming = false
         self.browser = browser
         self.window = Windows.window(of: browser)
         let words = "open the Copper agent pane, check the API logs on the staging server and file a bug for the failing Swift build"
@@ -633,12 +790,14 @@ final class Voice: ObservableObject {
         case "finishing": phase = .finishing; preview = words
         case "denied": phase = .error(Voice.denied); preview = ""
         case "preparing": phase = .idle; seededModel = .preparing
+        case "warming": phase = .idle; seededWarming = true; note = Voice.preparingNote
+        case "finishing-warming": phase = .finishing; preview = ""; seededWarming = true
         case "downloading": phase = .idle; seededModel = .downloading(0.42)
         case "failed": phase = .idle; seededModel = .failed("seeded")
         case "hint": phase = .idle; note = "Hold to talk"
         case "inserted": phase = .idle; note = "Inserted — press Return to send"
         case "off": phase = .idle; preview = ""
-        default: return "voice seed idle|dictating|dictating-short|finishing|denied|preparing|downloading|failed|hint|inserted|off"
+        default: return "voice seed idle|dictating|dictating-short|finishing|finishing-warming|denied|preparing|warming|downloading|failed|hint|inserted|off"
         }
         return nil
     }
@@ -650,7 +809,8 @@ final class Voice: ObservableObject {
             "finish": prefs.finish.rawValue, "paneOpen": Agent.shared.open, "draft": Agent.shared.draft,
             "agentReady": Agent.shared.ready, "agentBusy": Agent.shared.busy, "model": ModelStore.shared.stateName,
             "testSource": testSource != nil, "keysConsumed": VoiceKeys.consumed, "keysPassed": VoiceKeys.passed,
-            "announced": announced, "partials": partials,
+            "announced": announced, "partials": partials, "engine": engineState.rawValue, "engineSlow": engineSlow,
+            "refusedPreparing": refusedPreparing, "undoFollowed": ComposerInsert.followed,
             "timeline": timeline.map { row -> [String: Any] in
                 var r: [String: Any] = ["ms": row.ms, "event": row.event]
                 if let n = row.count { r["n"] = n }
@@ -661,7 +821,14 @@ final class Voice: ObservableObject {
         case .hidden: out["mic"] = "hidden"
         case .unavailable(let why): out["mic"] = "unavailable: \(why)"
         case .waiting(let why): out["mic"] = "waiting: \(why)"
+        case .preparing: out["mic"] = "preparing: \(Voice.preparingHelp)"
         case .ready: out["mic"] = "ready"
+        }
+        switch line {
+        case .live(let lead, let words)?: out["line"] = words.isEmpty ? lead : "\(lead) \(words)"
+        case .plain(let text)?: out["line"] = text
+        case .denied?: out["line"] = Voice.denied
+        case nil: out["line"] = NSNull()
         }
         if case .error(let message) = phase { out["message"] = message }
         if let lastInsert { out["inserted"] = lastInsert.piece; out["insertedVia"] = lastInsert.via; out["caret"] = lastInsert.caret }

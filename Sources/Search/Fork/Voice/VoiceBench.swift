@@ -54,13 +54,13 @@ enum VoiceBench {
         case "status":
             Task { @MainActor in answer(await status()) }
         default:
-            // Dictation's verbs (DictationBench.swift): dictate, source, key, seed, render, prefs, model, state.
+            // Dictation's verbs (DictationBench.swift): dictate, source, key, warm, seed, render, prefs, model, state, editor.
             let args = request["args"] as? [String] ?? []
             let handled = DictationBench.handle(op, args, in: Windows.main, answer: answer) { name, work in
                 run(name, answer: answer, work)
             }
             if !handled {
-                answer(["error": "unknown voice operation \(op) — selftest, replay PATH, status, result, dictate PATH, source, key, seed, render, prefs, model, state"])
+                answer(["error": "unknown voice operation \(op) — selftest, replay PATH, status, result, dictate PATH, source, key, warm, seed, render, prefs, model, state, editor"])
             }
         }
     }

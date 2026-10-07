@@ -11,13 +11,21 @@ the model runner, `ModelStore.swift` the download).*
 Voice lives in one place: the **⌘E agent pane**. Its composer gets a mic between the `/jev` button and
 Send, and **⌃⇧D** dictates while the pane is open in the window you are typing in. The words go into the
 agent's message — never into a web page, never into another app, never anywhere while the pane is closed.
+The D in ⌃⇧D is the key that types a d, or the key in D's place on a US keyboard — so the shortcut also
+works on a layout without Latin letters (Russian, Greek, Hebrew…). It needs exactly ⌃ and ⇧: with ⌘ or ⌥
+held too, the keys go on to the page.
 
 While you talk the mic turns solid and one muted line above the composer's buttons says
 *Listening…* with the newest words heard so far (two lines at most; a long dictation shows its end).
 Those words are a guess that keeps changing, so they never go into the message itself. When you stop,
 the line says *Finishing…* for the moment the last decode takes (about 40 ms for 5 s of speech, under
 100 ms for half a minute on an M-series Mac), and the text lands at the caret the composer had when you
-started — with a space before it unless it starts the message or follows a space. ⌘Z takes it back.
+started — with a space before it unless it starts the message or follows a space. A selection is replaced,
+except the **whole message selected**, as it is right after the pane opens: then the words go at the end,
+after what you had, so a dictation started straight after ⌘E never throws a message away (to replace all
+of it, delete it first). The words go in as one edit, like typing: **⌘Z** takes back exactly them in one
+step and **⇧⌘Z** puts them back, and what Return or Send sends is always the text you see — after an undo
+or redo too.
 
 **Escape** (or the line's ✕) cancels: what was heard is thrown away and the message and its selection
 are as they were. Closing the pane, closing or leaving the window, switching to another app, the Mac
@@ -35,6 +43,13 @@ The mic tells you when it can't listen yet: dimmed while the model downloads (*S
 · 42%*) or is prepared (*Preparing speech model — one time, about a minute*), or when it needs attention;
 a click then opens Settings › Voice. It is greyed out while the agent has no model to talk to (*Sign in
 with Claude or add a key to use the agent*).
+
+The model is loaded when the pane opens — a third of a second on a Mac that has prepared it. When macOS
+has thrown that preparation away (after an update, say), the next load prepares it again for about a
+minute. Once a load has taken more than a second the mic dims with *Preparing speech model — one time,
+about a minute*, and ⌃⇧D or the mic says *Preparing speech model… try again in a moment* instead of
+listening. A dictation that was already under way keeps listening; when you stop, the line says
+*Finishing… preparing speech model* until the words can be made out, then they land as usual.
 
 ## The microphone
 
@@ -85,13 +100,25 @@ open -n -g --env SEARCH_PROBE=$W --env SEARCH_HEADLESS=1 \
 ./bench --world $W voice dictate clip.wav --trigger hold --finish insert --draft "Note: " --caret 6
 ./bench --world $W voice dictate clip.wav --trigger toggle --finish send     # sendCalled, sent
 ./bench --world $W voice dictate clip.wav --cancel-at 2                     # draftUnchanged, selection back
+./bench --world $W voice dictate clip.wav --draft "Note:" --type " typed" --undo   # undoOneStep, redoRestores, in sync
+./bench --world $W voice dictate clip.wav --draft "Keep all of this." --reopen     # whole draft selected → appended
+./bench --world $W voice dictate clip.wav --warm-delay 4                    # slow load: whilePreparing, then as usual
+./bench --world $W voice dictate clip.wav --warm-delay 8 --start-cold       # finishingLines: "Finishing… preparing…"
+./bench --world $W voice dictate clip.wav --keys в                          # ⌃⇧ + D's key on a Russian layout
 ./bench --world $W voice source clip.wav && ./bench --world $W voice key down   # ⌃⇧D through the app…
 ./bench --world $W voice key up                                             # …and let go
 ./bench --world $W voice seed dictating && ./bench --world $W voice render /tmp/pane.png 340 dark
 ```
 
+`--undo` presses ⌘Z and then ⇧⌘Z the way the Edit menu sends them, a key press's worth of event loop after
+the words land. In a probe window that isn't key the menu can't reach the composer, so the action goes down
+the composer's own responder chain — where the menu would have sent it. `--warm-delay S` lets the model go
+and holds every load S seconds, standing in for the Neural Engine's first-time preparation (`voice warm cold
+S` does the same on its own).
+
 `voice dictate` answers with the state timeline (milliseconds from the press: partials as word counts,
-release, decode, insert, send), the words inserted, the draft before and after, whether the message was
-sent, and `release_to_insert_ms`. `voice seed idle|dictating|finishing|denied|preparing|downloading`
-freezes the composer for pictures; `voice state` shows the phase, what the mic shows and how many ⌃⇧D
-presses were taken or let through.
+release, decode, insert, send, the model loading), the words inserted, the draft before and after, whether
+the message was sent, and `release_to_insert_ms`. `voice seed
+idle|dictating|finishing|finishing-warming|denied|preparing|warming|downloading` freezes the composer for
+pictures; `voice state` shows the phase, what the mic and the line show, the model in memory
+(`engine`: cold, warming, warm) and how many ⌃⇧D presses were taken or let through.

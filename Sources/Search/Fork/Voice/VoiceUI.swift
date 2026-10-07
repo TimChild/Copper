@@ -8,7 +8,8 @@ import SwiftUI
 
 /// The mic: a 28 pt circle like Send. `mic` at rest, `mic.fill` on ink while
 /// it listens; dimmed while the speech model isn't ready (a click opens
-/// Settings › Voice), greyed while the agent can't take a message.
+/// Settings › Voice) or is being prepared on this Mac (a press says so),
+/// greyed while the agent can't take a message.
 struct MicButton: View {
     let browser: Browser
     /// The agent can take a message (the pane observes what decides it).
@@ -36,7 +37,7 @@ struct MicButton: View {
             .frame(width: 28, height: 28)
             .background(live ? Palette.ink.opacity(voice.phase == .dictating ? 1 : 0.55)
                              : (over && mic == .ready ? Palette.faint.opacity(0.55) : Palette.wash), in: Circle())
-            .opacity(dimming(mic))
+            .opacity(dimming(mic, live: live))
             .contentShape(Circle())
             .onHover { over = $0 }
             .gesture(holdGesture, including: hold ? .all : .none)
@@ -73,21 +74,27 @@ struct MicButton: View {
         mic == .ready ? Palette.ink.opacity(0.75) : Palette.muted
     }
 
-    /// Dimmed while the model isn't ready, fainter still while the agent can't listen.
-    private func dimming(_ mic: Voice.Mic) -> Double {
+    /// Dimmed while the model isn't ready, fainter still while the agent can't
+    /// listen. Never while it listens: a load that turns slow mid-dictation
+    /// shows on the line, not by fading the mic that is on.
+    private func dimming(_ mic: Voice.Mic, live: Bool) -> Double {
+        if live { return 1 }
         switch mic {
         case .ready, .hidden: return 1
-        case .waiting: return 0.5
+        case .waiting, .preparing: return 0.5
         case .unavailable: return 0.35
         }
     }
 
     private func help(_ mic: Voice.Mic, live: Bool) -> String {
+        if live, mic != .hidden {
+            return prefs.trigger == .hold ? "Listening — let go to stop, Esc cancels" : "Listening — ⌃⇧D or click to stop, Esc cancels"
+        }
         switch mic {
         case .waiting(let why), .unavailable(let why): return why
+        case .preparing: return Voice.preparingHelp
         case .hidden: return ""
         case .ready:
-            if live { return prefs.trigger == .hold ? "Listening — let go to stop, Esc cancels" : "Listening — ⌃⇧D or click to stop, Esc cancels" }
             return prefs.trigger == .hold ? "Dictate — hold ⌃⇧D, or press and hold" : "Dictate — ⌃⇧D or click to start and stop"
         }
     }
@@ -95,6 +102,7 @@ struct MicButton: View {
     private func hint(_ mic: Voice.Mic) -> String {
         switch mic {
         case .waiting(let why), .unavailable(let why): return why
+        case .preparing: return Voice.preparingHelp
         case .hidden: return ""
         case .ready:
             let start = prefs.trigger == .hold
@@ -116,7 +124,7 @@ struct DictationPreview: View {
     @State private var width: CGFloat = 300
 
     var body: some View {
-        if prefs.enabled, VoicePrefs.supported, voice.shows(in: browser), let line {
+        if prefs.enabled, VoicePrefs.supported, voice.shows(in: browser), let line = voice.line {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 words(line)
                     .font(.system(size: 12))
@@ -148,27 +156,6 @@ struct DictationPreview: View {
         }
     }
 
-    private enum Line: Equatable {
-        case live(String, String)   // "Listening…" / "Finishing…", and the words
-        case plain(String)
-        case denied
-    }
-
-    private var line: Line? {
-        switch voice.phase {
-        case .arming:
-            return voice.slowStart ? .plain("Starting microphone…") : nil
-        case .dictating:
-            return .live("Listening…", voice.preview)
-        case .finishing:
-            return .live("Finishing…", voice.preview)
-        case .error(let message):
-            return message == Voice.denied ? .denied : .plain(message)
-        case .idle:
-            return voice.note.map(Line.plain)
-        }
-    }
-
     private var closable: Bool {
         if voice.active { return true }
         if case .error = voice.phase { return true }
@@ -176,12 +163,12 @@ struct DictationPreview: View {
     }
 
     @ViewBuilder
-    private func words(_ line: Line) -> some View {
+    private func words(_ line: Voice.Line) -> some View {
         switch line {
         case .live(let lead, let heard):
             // The partial is a guess that changes; VoiceOver hears the state, not it.
             Text(DictationPreview.fitted(lead, heard, width: width))
-                .accessibilityLabel(lead == "Listening…" ? "Listening" : "Finishing")
+                .accessibilityLabel(lead == "Listening…" ? "Listening" : lead == "Finishing…" ? "Finishing" : "Finishing, preparing speech model")
         case .plain(let text):
             Text(text)
         case .denied:

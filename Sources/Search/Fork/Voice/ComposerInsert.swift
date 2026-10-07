@@ -6,6 +6,19 @@ import AppKit
 // the composer's, the words are spliced into `Agent.draft` itself, which is
 // what the composer shows.
 //
+// A selection is replaced — except one that is the whole of a non-empty
+// draft: the field selects everything when the pane opens, so a dictation
+// started right after would otherwise throw the message away. Those words go
+// at the end instead.
+//
+// Through the editor the words are an edit like typing — shouldChangeText,
+// the change, didChangeText — so the field's own undo has them as one step,
+// and the field tells SwiftUI, which sets the draft. AppKit's field editor
+// undoes and redoes without telling its field, typed text and dictated text
+// alike, which left `Agent.draft` (and so Return and Send) on the text from
+// before ⌘Z; `followUndo` has the editor say it changed after each undo and
+// redo, the way a keystroke does.
+//
 // Offsets are UTF-16, the unit NSTextView's ranges count in, so a caret
 // after an emoji or an accented letter means the same place in both.
 
@@ -68,25 +81,79 @@ enum ComposerInsert {
         if current != anchor.draft {
             range = editor.map { $0.selectedRange() } ?? NSRange(location: (current as NSString).length, length: 0)
         }
-        let planned = splice(current, range: range, text: words)
+        let planned = splice(current, range: target(range, in: current), text: words)
         if let editor {
-            // The editor's own insert: one undoable edit, the caret after it,
-            // and the text field tells SwiftUI, which sets the draft.
+            // An edit the way typing makes one: asked for (which is where the
+            // editor keeps what undo needs), made, and announced (which is how
+            // the field hears it and tells SwiftUI). Coalescing broken on both
+            // sides, so ⌘Z takes back these words and nothing typed around them.
             editor.breakUndoCoalescing()
-            editor.insertText(planned.piece, replacementRange: planned.replaced)
-            editor.breakUndoCoalescing()
-            editor.undoManager?.setActionName("Dictation")
-            if agent.draft != editor.string { agent.draft = editor.string }
-            return Landed(piece: planned.piece, draft: agent.draft, caret: editor.selectedRange().location, via: "editor")
+            if editor.shouldChangeText(in: planned.replaced, replacementString: planned.piece) {
+                editor.replaceCharacters(in: planned.replaced, with: planned.piece)
+                editor.setSelectedRange(NSRange(location: planned.caret, length: 0))
+                editor.didChangeText()
+                editor.breakUndoCoalescing()
+                editor.undoManager?.setActionName("Dictation")
+                editor.scrollRangeToVisible(editor.selectedRange())
+                var via = "editor"
+                if agent.draft != editor.string {
+                    // The field didn't pass it on: the draft is set, and SwiftUI writes it back.
+                    agent.draft = editor.string
+                    via = "editor+draft"
+                }
+                return Landed(piece: planned.piece, draft: agent.draft, caret: editor.selectedRange().location, via: via)
+            }
         }
         agent.draft = planned.draft
         if let undo = anchor.window?.undoManager {
-            undo.registerUndo(withTarget: agent) { agent in
-                MainActor.assumeIsolated { if agent.draft == planned.draft { agent.draft = current } }
-            }
-            undo.setActionName("Dictation")
+            swap(undo, agent: agent, from: planned.draft, to: current)
         }
         return Landed(piece: planned.piece, draft: planned.draft, caret: planned.caret, via: "draft")
+    }
+
+    /// ⌘Z for words spliced into the draft itself: back to `to` while the
+    /// draft is still `from` — and, while undoing, the redo the other way.
+    private static func swap(_ undo: UndoManager, agent: Agent, from: String, to: String) {
+        undo.registerUndo(withTarget: agent) { agent in
+            MainActor.assumeIsolated {
+                guard agent.draft == from else { return }
+                agent.draft = to
+                ComposerInsert.swap(undo, agent: agent, from: to, to: from)
+            }
+        }
+        undo.setActionName("Dictation")
+    }
+
+    // MARK: - undo and the draft
+
+    private static var undoTokens: [NSObjectProtocol] = []
+    /// Undos and redos in a composer's editor the draft was brought along by (bench).
+    private(set) static var followed = 0
+
+    /// At launch: after every undo and redo, the composer's editor says it
+    /// changed, so its field tells SwiftUI and `Agent.draft` is the text on
+    /// screen. Setting the draft directly instead makes SwiftUI write it back
+    /// into the field — a fresh edit, which throws the redo away.
+    static func followUndo() {
+        guard undoTokens.isEmpty else { return }
+        for name in [NSNotification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+            undoTokens.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { note in
+                // Field editors live on the main thread; any other undo manager isn't ours.
+                guard Thread.isMainThread, let manager = note.object as? UndoManager else { return }
+                MainActor.assumeIsolated { ComposerInsert.undid(manager) }
+            })
+        }
+    }
+
+    private static func undid(_ manager: UndoManager) {
+        for window in NSApp.windows where Voice.shared.composerFocused(in: window) {
+            guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor, editor.undoManager === manager,
+                  let field = editor.delegate as? NSTextField, field.window === window,
+                  editor.string != Agent.shared.draft
+            else { continue }
+            editor.didChangeText()
+            followed += 1
+        }
     }
 
     /// The selection the dictation started with, back where it was — after
@@ -97,6 +164,16 @@ enum ComposerInsert {
     }
 
     // MARK: - the arithmetic (pure)
+
+    /// Where the words go for a selection: over it, unless it is the whole of
+    /// a non-empty draft — the pane selects everything when it opens — and
+    /// then at the end, after what is there.
+    nonisolated static func target(_ range: NSRange, in draft: String) -> NSRange {
+        let r = clamp(range, in: draft)
+        let length = (draft as NSString).length
+        if length > 0, r.location == 0, r.length == length { return NSRange(location: length, length: 0) }
+        return r
+    }
 
     /// `text` into `draft` over `range` (UTF-16), with one space before it
     /// unless it starts the draft or follows whitespace, and one after it
@@ -174,6 +251,17 @@ enum ComposerInsert {
         expect("accents", "Café", NSRange(location: 4, length: 0), "au lait", "Café au lait", caret: 12)
         // Punctuation after the caret: no space added before it.
         expect("before punctuation", "Hello.", NSRange(location: 5, length: 0), "world", "Hello world.", caret: 11)
+        // Where the words go: the whole draft selected (as opening the pane
+        // leaves it) is the end, not a replacement; anything less is replaced.
+        func lands(_ name: String, _ draft: String, _ range: NSRange, _ wanted: String) {
+            let got = splice(draft, range: target(range, in: draft), text: "Spoken words").draft
+            if got != wanted { failures.append("\(name): got “\(got)”, wanted “\(wanted)”") }
+        }
+        lands("whole draft selected goes at the end", "Keep this.", NSRange(location: 0, length: 10), "Keep this. Spoken words")
+        lands("whole draft past the end", "Keep this", NSRange(location: 0, length: 99), "Keep this Spoken words")
+        lands("whole emoji draft", "👋🏽", NSRange(location: 0, length: 4), "👋🏽 Spoken words")
+        lands("all but one character replaced", "Keep this.", NSRange(location: 0, length: 9), "Spoken words.")
+        lands("empty draft", "", NSRange(location: 0, length: 0), "Spoken words")
         return failures
     }
 }

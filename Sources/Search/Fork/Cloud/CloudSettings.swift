@@ -198,12 +198,13 @@ private struct CloudConnectCard: View {
                                 .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                                 .onSubmit(go)
                             Button {
-                                if let pasted = NSPasteboard.general.string(forType: .string) { code = pasted.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                if let pasted = SettingsActions.pasteboard.string(forType: .string) { code = pasted.trimmingCharacters(in: .whitespacesAndNewlines) }
                             } label: {
                                 Image(systemName: "doc.on.clipboard").font(.system(size: 11)).foregroundStyle(Palette.muted)
                             }
                             .buttonStyle(.plain)
                             .help("Paste")
+                            .accessibilityLabel("Paste link code")
                         }
                         if let parsed { kind(parsed) }
                     }
@@ -664,11 +665,14 @@ private struct CloudDevicesCard: View {
                             Spacer()
                             Image(systemName: open.contains(device.id) ? "chevron.down" : "chevron.right")
                                 .font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.muted)
+                                .accessibilityHidden(true)
                         }
                         .contentShape(Rectangle())
                         .padding(.horizontal, 14).padding(.vertical, 10)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("\(device.name)'s tabs")
+                    .accessibilityValue(open.contains(device.id) ? "Shown" : "Hidden")
                     if open.contains(device.id) {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(device.tabs.prefix(60).enumerated()), id: \.offset) { _, tab in
@@ -1019,11 +1023,14 @@ private struct CloudLogCard: View {
                 HStack(spacing: 4) {
                     Caption("Log")
                     Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .medium)).foregroundStyle(Palette.muted)
+                        .accessibilityHidden(true)
                     Spacer()
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Log")
+            .accessibilityValue(open ? "Shown" : "Hidden")
             if open {
                 Card {
                     VStack(alignment: .leading, spacing: 3) {

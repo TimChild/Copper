@@ -65,6 +65,9 @@ enum Fork {
         case "trails": return Trails.shared.bench(request, in: browser) // Fork/Trails/TrailsBench.swift
         case "storage": return StorageImport.shared.bench(request, in: browser)
         case "passkeys": return PasskeysBench.handle(request)
+        case "passwords": return PasswordsBench.handle(request, in: browser) // Fork/Credentials/PasswordsBench.swift
+        case "privacy": return PrivacyBench.handle(request, in: browser) // Fork/PrivacySettings.swift
+        case "about": return AboutBench.handle(request, in: browser) // Fork/AboutBench.swift
         case "agent":
             // `agent ask TEXT` / `agent chat|open|close|clear` are the pane's; the rest is the server's.
             if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear", "stop", "selftest", "regression", "seed", "expand", "turns"].contains(op) { return Agent.shared.bench(request, in: Windows.current) }

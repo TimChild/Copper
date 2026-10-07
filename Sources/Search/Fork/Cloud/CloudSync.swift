@@ -138,6 +138,14 @@ final class CloudSync: ObservableObject {
     private var waiting: Set<Domain> = []
     private var timer: DispatchWorkItem?
     private var busy = 0
+    /// Sync now passes running. While one is, a piece of work finishing
+    /// settles nothing: the pass settles once, at its end, so a later step
+    /// that had nothing to send can't paint "Up to date" over an earlier
+    /// one the server never answered.
+    private var passes = 0
+    /// At the start of a burst of work: the status before it, and how many
+    /// answers the server had given (see `Cloud.answers`).
+    private var before: (state: State, answers: Int) = (.idle, 0)
     private var running: Set<String> = []
     private var failure: String?
     private var account: UUID?
@@ -368,9 +376,38 @@ final class CloudSync: ObservableObject {
     func syncNow() async {
         guard cloud.isSignedIn else { state = .idle; return }
         guard on else { return }
+        if passes == 0, busy == 0 { begin() }
+        passes += 1
         await pullAll()
         for domain in Domain.allCases where active(domain) && domain != .history { await push(domain) }
         if active(.history) { await pushHistory(force: true) }
+        passes -= 1
+        if passes == 0, busy == 0 { settle() }
+    }
+
+    /// The first piece of work of a burst: what the status was, and how far
+    /// the server's answers had got.
+    private func begin() {
+        before = (state == .syncing ? .idle : state, cloud.answers)
+    }
+
+    /// The burst is over: a failure anywhere in it is what the status says;
+    /// "Up to date" and a new "last synced" only when the server answered
+    /// and nothing failed; with nothing sent, the status is what it was.
+    private func settle() {
+        let outcome = CloudSync.settled(signedIn: cloud.isSignedIn, failure: failure,
+                                        answered: cloud.answers > before.answers, before: before.state)
+        state = outcome.state
+        if outcome.stamp { lastSync = Date() }
+        failure = nil
+    }
+
+    /// `settle`, as a rule.
+    nonisolated static func settled(signedIn: Bool, failure: String?, answered: Bool, before: State) -> (state: State, stamp: Bool) {
+        guard signedIn else { return (.idle, false) }
+        if let failure { return (failure == "offline" ? .offline : .error(failure), false) }
+        if answered { return (.idle, true) }
+        return (before == .syncing ? .idle : before, false)
     }
 
     private func pullAll() async {
@@ -428,16 +465,12 @@ final class CloudSync: ObservableObject {
     /// turned into it.
     @discardableResult
     private func work(_ name: String, _ body: @escaping () async throws -> Void) async -> Bool {
+        if busy == 0, passes == 0 { begin() }
         busy += 1
         state = .syncing
         defer {
             busy -= 1
-            if busy == 0 {
-                if !cloud.isSignedIn { state = .idle }
-                else if let failure { state = failure == "offline" ? .offline : .error(failure) }
-                else { state = .idle; lastSync = Date() }
-                failure = nil
-            }
+            if busy == 0, passes == 0 { settle() }
         }
         do {
             try await body()

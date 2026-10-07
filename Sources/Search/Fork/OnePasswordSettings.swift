@@ -473,8 +473,7 @@ struct OnePasswordCard: View {
     }
 
     private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        SettingsActions.copy(text)
         browser.announce("Install command copied")
     }
 

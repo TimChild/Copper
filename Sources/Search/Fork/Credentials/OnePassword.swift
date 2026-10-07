@@ -628,7 +628,19 @@ final class OnePassword: ObservableObject {
     /// Sync now, from the card or the bench.
     func sync() async throws {
         guard isUnlocked else { throw Failure(.notSignedIn, "1Password is locked") }
-        try await reload(force: true)
+        // A read that times out or fails is said on the card (`problem`):
+        // Sync now used to end its spinner on "synced 1 minute ago" as if
+        // it had worked (UX pass 2026-10-07).
+        do {
+            try await reload(force: true)
+        } catch let failure as Failure {
+            if isUnlocked { problem = failure }
+            throw failure
+        } catch {
+            let failure = Failure(.other, error.localizedDescription)
+            if isUnlocked { problem = failure }
+            throw failure
+        }
     }
 
     /// The list first — vaults, then every login, card and identity's title,
@@ -670,6 +682,14 @@ final class OnePassword: ObservableObject {
         let listData = try await listRead
         let writableIDs = await writableRead
         guard generation == started else { return }
+        // Both are one JSON array. A list cut short or garbled is a failed
+        // read — said on the card, the vault as it was kept — not a
+        // smaller vault (UX pass 2026-10-07: half the items vanished, "ok").
+        guard OnePasswordCLI.isArray(vaultData), OnePasswordCLI.isArray(listData) else {
+            let failure = Failure(.other, "1Password sent a list Copper couldn't read — nothing changed; try Sync now again")
+            problem = failure
+            throw failure
+        }
         let readable = OnePasswordCLI.objects(in: vaultData).compactMap { object -> Vault? in
             guard let id = object["id"] as? String else { return nil }
             return Vault(id: id, name: object["name"] as? String ?? "")
@@ -950,6 +970,8 @@ final class OnePassword: ObservableObject {
     /// Open the 1Password app (for the Developer setting).
     static func openApp() {
         if let url = OnePasswordCLI.appURL {
+            // A test world notes it rather than bringing another app forward.
+            if SettingsActions.probe { SettingsActions.open(url); return }
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         }
     }

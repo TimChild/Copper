@@ -134,8 +134,17 @@ final class Updates: ObservableObject {
     /// The staged bundle is the latest release and is still where it was put.
     /// This is what puts the Update button on screen.
     var ready: Bool {
-        guard available, let latest, let staged, staged.version == latest.version else { return false }
+        guard available, let latest, let staged, Self.stagedMatches(staged, latest) else { return false }
         return Self.bundleVersion(at: URL(fileURLWithPath: staged.path)) == staged.version
+    }
+
+    /// The staged copy is the release the feed names now: the same version
+    /// and, when the feed gives one, the same checksum — a release re-cut
+    /// under the same version is a different download.
+    nonisolated static func stagedMatches(_ staged: Staged, _ latest: Latest) -> Bool {
+        guard staged.version == latest.version else { return false }
+        guard let want = latest.sha256?.lowercased(), want.count == 64 else { return true }
+        return staged.sha256.lowercased() == want
     }
 
     /// A Homebrew install is only a fact worth showing; the update itself no
@@ -143,6 +152,9 @@ final class Updates: ObservableObject {
     /// brew binary is not an install, and an abandoned Caskroom is not one
     /// either.
     var managedByBrew: Bool {
+        // The cask puts Copper in /Applications; a build folder's copy or a
+        // test run on the same Mac is not the cask's install.
+        guard Self.caskPlace(Bundle.main.bundleURL) else { return false }
         let files = FileManager.default
         for prefix in ["/opt/homebrew", "/usr/local"] {
             let brew = URL(fileURLWithPath: prefix).appendingPathComponent("bin/brew")
@@ -150,6 +162,14 @@ final class Updates: ObservableObject {
             if files.isExecutableFile(atPath: brew.path), files.fileExists(atPath: caskroom.path) { return true }
         }
         return false
+    }
+
+    /// Where the cask installs Copper: /Applications/Copper.app, or the
+    /// user's own Applications folder.
+    nonisolated static func caskPlace(_ bundle: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let path = bundle.resolvingSymlinksInPath().standardizedFileURL.path
+        return path == "/Applications/Copper.app"
+            || path == home.appendingPathComponent("Applications/Copper.app").standardizedFileURL.path
     }
 
     /// A test world on the real feed: it never stages those releases (see
@@ -163,8 +183,15 @@ final class Updates: ObservableObject {
 
     /// Where every step is written down, this process's and the bundle swap's.
     /// Settings offers to open it when an update did not finish.
-    nonisolated static let log: URL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/Copper/update.log")
+    /// A test world keeps its own, in its folder: a probe's dry runs are no
+    /// part of the record of anyone's install.
+    nonisolated static let log: URL = logFile(world: Store.world, folder: Store.folder,
+                                              home: FileManager.default.homeDirectoryForCurrentUser)
+
+    nonisolated static func logFile(world: String?, folder: URL, home: URL) -> URL {
+        world != nil ? folder.appendingPathComponent("update.log")
+            : home.appendingPathComponent("Library/Logs/Copper/update.log")
+    }
 
     /// Downloads are unpacked here, one folder per version, and the bundle an
     /// update replaced is kept in `previous` until the next one is staged.
@@ -240,23 +267,24 @@ final class Updates: ObservableObject {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                return .failure("The update feed did not respond successfully.")
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                return .failure("The update feed answered \(code) — try again later")
             }
             let manifest = try JSONDecoder().decode(Manifest.self, from: data)
             guard manifest.schemaVersion == 1, manifest.product.lowercased() == "copper",
                   !manifest.version.isEmpty, !manifest.releaseId.isEmpty
-            else { return .failure("The update feed was not a Copper release.") }
+            else { return .failure("The update feed didn’t name a Copper release — try again later") }
             let notes = manifest.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
             return .success(Latest(version: manifest.version, releaseId: manifest.releaseId,
                                    commit: manifest.commit, publishedAt: manifest.publishedAt,
                                    sha256: manifest.sha256, archiveUrl: manifest.archiveUrl,
                                    notes: notes?.isEmpty == false ? notes : nil))
         } catch is URLError {
-            return .failure("Couldn’t reach the Copper update feed.")
+            return .failure("Couldn’t reach the update feed — check the connection, then Check now")
         } catch is DecodingError {
-            return .failure("The Copper update feed could not be read.")
+            return .failure("The update feed couldn’t be read — try again later")
         } catch {
-            return .failure("Couldn’t check for Copper updates.")
+            return .failure("Couldn’t check for updates — try again")
         }
     }
 
@@ -270,8 +298,10 @@ final class Updates: ObservableObject {
         // real releases it will never install, unless the bench pointed it
         // at a feed of its own.
         if Store.testing, manifestURL == Self.defaultManifestURL, !force { return }
-        if !force, let staged, staged.version == latest.version,
+        if !force, let staged, Self.stagedMatches(staged, latest),
            Self.bundleVersion(at: URL(fileURLWithPath: staged.path)) == staged.version {
+            // Already there and right: an older failure no longer applies.
+            if stageError != nil { stageError = nil }
             return
         }
         downloading = true
@@ -362,16 +392,17 @@ final class Updates: ObservableObject {
             }
             zip = downloaded
         } catch {
-            return .failure("Couldn’t download Copper \(version) from \(url.host ?? "the feed"): \(error.localizedDescription)")
+            note("download of \(version) failed: \(error.localizedDescription)")
+            return .failure("Couldn’t download Copper \(version) from \(url.host ?? "the feed") — check the connection.")
         }
         defer { try? files.removeItem(at: zip) }
 
         // 2. The bytes are the manifest's bytes, or they are nothing.
         guard let have = try? sha256(of: zip) else {
-            return .failure("The download of Copper \(version) could not be read back.")
+            return .failure("The download of Copper \(version) couldn’t be read back.")
         }
         guard have == want else {
-            return .failure("The download of Copper \(version) did not match the feed's checksum.")
+            return .failure("The download of Copper \(version) didn’t match the feed’s checksum.")
         }
 
         // 3. Unpack into a folder of its own; older staged versions go.

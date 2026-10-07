@@ -17,7 +17,6 @@ struct SettingsPanel: View {
     let browser: Browser
     @ObservedObject var prefs: Preferences
 
-    @ObservedObject private var updater = Updater.shared
     @ObservedObject private var shield = Shield.shared
     @State private var isDefault = SettingsDefaultBrowser.isDefault // Fork (settings-perf): one LaunchServices ask per opening, not per redraw
     /// Fork (settings-revamp): the panel's own width, for the rail's.
@@ -272,7 +271,9 @@ struct SettingsPanel: View {
             SettingsSection("Copper on this Mac") {
                 Line(
                     "Open links from other apps",
-                    isDefault ? "Copper is the default browser on this Mac" : "Mail, Slack and the rest still send links elsewhere"
+                    isDefault ? "Copper is the default browser on this Mac"
+                        : Links.refusesDefault ? "Not in a test run — links stay with the browser you use" // Fork (default-guard)
+                        : "Mail, Slack and the rest still send links elsewhere"
                 ) {
                     if isDefault {
                         Image(systemName: "checkmark")
@@ -286,6 +287,7 @@ struct SettingsPanel: View {
                                 browser.announce(worked && isDefault ? "Links now open here" : "macOS didn't change it")
                             }
                         }
+                        .disabled(Links.refusesDefault) // Fork (default-guard): Links.becomeDefault refuses too
                     }
                 }
                 .settingsAnchor("general.default")
@@ -405,16 +407,7 @@ struct SettingsPanel: View {
                     Switch(on: $prefs.passkeys)
                 }
                 .settingsAnchor("passwords.passkeys")
-                if !Vault.never.isEmpty {
-                    Rule()
-                    Line("Sites never asked", "\(Vault.never.count) sites told to stop offering") {
-                        Pill("Forget") {
-                            Vault.never = []
-                            browser.announce("Every site can ask again")
-                        }
-                    }
-                    .settingsAnchor("passwords.never")
-                }
+                NeverAskedLines(browser: browser) // Fork (never-asked): one row per site, each with Forget — Fork/Credentials/NeverAsked.swift
             }
             // Fork (settings-revamp): one card per password manager, one
             // under the other — Bitwarden's here, 1Password's beside it.
@@ -432,7 +425,7 @@ struct SettingsPanel: View {
                 AgentAccessCard(browser: browser)
                     .settingsAnchor("passwords.agents", card: true)
             }
-            SettingsSection("Import") {
+            SettingsSection("Import and export") { // Fork (password-csv): CSV in and out — Fork/Credentials/PasswordCSV.swift
                 Line("Bring yours in", "From Dia, Chrome, Arc, Brave or Edge on this Mac — nothing leaves it") {
                     Pill("Import…") {
                         browser.tuning = false
@@ -440,6 +433,7 @@ struct SettingsPanel: View {
                     }
                 }
                 .settingsAnchor("passwords.import")
+                PasswordCSVLines(browser: browser)
             }
             SettingsSection("Passkeys", carded: false) {
                 PasskeysSettings()
@@ -500,20 +494,7 @@ struct SettingsPanel: View {
                 .settingsAnchor("privacy.capture")
             }
             SettingsSection("Clear browsing data") {
-                Line("History", "Every address you have been to") {
-                    Pill("Clear") { browser.clearHistory() }
-                }
-                .settingsAnchor("privacy.history")
-                Rule()
-                Line("Cookies and sign-ins", "Signs you out of every site") {
-                    Pill("Sign out of everything") { browser.clearSites() }
-                }
-                .settingsAnchor("privacy.cookies")
-                Rule()
-                Line("Cache", "Only what was fetched to draw pages") {
-                    Pill("Clear") { browser.clearCache() }
-                }
-                .settingsAnchor("privacy.cache")
+                ClearBrowsingDataLines(browser: browser) // Fork (privacy-clear): asks first, every jar — Fork/PrivacySettings.swift
             }
         }
     }
@@ -544,10 +525,10 @@ struct SettingsPanel: View {
             .settingsAnchor("about.identity", card: true)
 
             SettingsSection("Version") {
-                Line(versionTitle, versionDetail) { versionControl }
+                AboutUpdatesLine(browser: browser) // Fork (about-updates): Copper's updater, not upstream's — Fork/SettingsFork.swift
                     .settingsAnchor("about.version")
                 Rule()
-                Line("Found something wrong?", "Opens a draft with the version already in it") {
+                Line("Found something wrong?", "Opens a new issue on Copper’s page, with the version already in it") { // Fork (feedback)
                     Pill("Send Feedback") { Links.writeFeedback() }
                 }
                 .settingsAnchor("about.feedback")
@@ -563,53 +544,6 @@ struct SettingsPanel: View {
                     }
                 }
                 .settingsAnchor("about.shortcuts", card: true)
-            }
-        }
-    }
-
-    /// The version line follows the newer build from found to fetched to
-    /// in place; with none, it is simply this one.
-    private var versionTitle: String {
-        switch updater.stage {
-        case .none: return "Updates"
-        case .fetching(let next): return "Copper \(next.version) is downloading…"
-        case .ready(let next): return "Copper \(next.version) is ready"
-        case .offered(let next): return "Copper \(next.version) is out"
-        }
-    }
-
-    private var versionDetail: String {
-        switch updater.stage {
-        case .none:
-            return updater.lastChecked.map { "Checked \($0.formatted(.relative(presentation: .named))) — once a day on its own" }
-                ?? "Checked once a day on its own"
-        case .fetching(let next):
-            return next.notes ?? "Quietly, in the background — nothing you have set is touched"
-        case .ready(let next):
-            return next.notes ?? "It's there the next time you open Copper"
-        case .offered(let next):
-            return next.notes ?? "Open the disk image, the same as the first time"
-        }
-    }
-
-    @ViewBuilder
-    private var versionControl: some View {
-        switch updater.stage {
-        case .none:
-            Pill(updater.checking ? "Checking…" : "Check now") {
-                updater.check { found in
-                    if found == nil { browser.announce("This is the latest one") }
-                }
-            }
-            .disabled(updater.checking)
-        case .fetching:
-            Ring(size: 12)
-        case .ready:
-            Pill("Relaunch now", filled: true) { updater.relaunch() }
-        case .offered(let next):
-            Pill("Download", filled: true) {
-                browser.tuning = false
-                browser.open(next.dmg, foreground: true)
             }
         }
     }

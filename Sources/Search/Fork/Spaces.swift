@@ -858,9 +858,13 @@ final class Spaces: ObservableObject {
     /// A profile's jar by name, whether or not a space wears it yet (the
     /// storage import fills one ahead of time).
     nonisolated static func store(forProfile name: String) -> WKWebsiteDataStore {
-        // A fixed id per name, so the jar is the same one next launch.
+        // A fixed id per name, so the jar is the same one next launch. A
+        // test world salts it with its own name: a probe shares this app's
+        // WebKit container, and must never read or wipe the jar of the
+        // browser somebody uses (the same rule as `Store.probeStore`).
         var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in name.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
+        let salted = Store.world.map { "\($0)\u{1}\(name)" } ?? name
+        for byte in salted.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
         let text = String(format: "C0FFEE00-%04X-4000-8000-%012llX", UInt16(truncatingIfNeeded: hash >> 48), hash & 0xFFFF_FFFF_FFFF)
         return WKWebsiteDataStore(forIdentifier: UUID(uuidString: text)!)
     }

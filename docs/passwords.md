@@ -88,6 +88,11 @@ in-memory metadata. It is expected that an external `bw status` can report
 Copper session key. With Stay unlocked off, relaunching Copper starts locked;
 unlock it from Settings with the master password.
 
+**Sign out** (on the card's Locked line, and on the Account line while
+unlocked) locks, forgets the account and its cached data on this Mac, and
+brings the sign-in form back — for another account or another server. Nothing
+in the vault changes.
+
 The auto-lock picker is **5 minutes**, **15 minutes**, **60 minutes**, or
 **Never**. The default is **Never**. A background metadata refresh runs every
 five minutes while unlocked; a cold `bw` start is about 2.5 seconds, so the
@@ -332,11 +337,71 @@ does not have. Import a copy instead:
 
 1. Open the **Passwords** app.
 2. Choose **File › Export All Passwords** and save Apple's CSV export.
-3. In Copper, open **Settings › Passwords › Import…** and choose that CSV.
+3. In Copper, open **Settings › Passwords › Import and export › From a CSV
+   file**, press **Choose File…** and pick that CSV.
 
 The import goes into Copper's keychain backend. It is a one-time import, not a
 live Apple Passwords connection; handle the exported CSV as sensitive data and
 delete it when it is no longer needed.
+
+## CSV in and out
+
+**From a CSV file** takes the export of Chrome, Safari, Apple Passwords or a
+password manager — any file whose first line names a website column (`url`,
+`website`, `web site`, `web address`, `login_uri`, `site`, `address`, `login url`),
+a username column (`username`, `user name`, `login_username`, `user`, `email`,
+`email address`, `login`, `account`) and a password column (`password`, `login_password`), in any case and
+order. Safari's and Apple Passwords' `Title,URL,Username,Password,Notes,OTPAuth`
+and Chrome's `name,url,username,password,note` both qualify. UTF-8 with or
+without a byte-order mark, UTF-16 and Latin-1 are read. The header is checked
+before anything is saved, and the file is read off the main thread. One
+sentence says what happened: "12 passwords imported", "12 passwords imported, 2
+skipped (no site or no password)", "3 passwords imported — one-time codes aren't
+kept", "That CSV has no password column — export it again as a passwords CSV",
+"That file is empty", "Couldn't read that file as text — choose the .csv the
+export made". Notes and one-time-code secrets in the file are not brought over.
+
+The same module (`Fork/Credentials/PasswordCSV.swift`: `parse`, `columns`,
+`summary`, `accounts`, `canonical`, `take(text:)`) reads the passwords file in Move in's Chrome and
+Safari export paths, so every CSV says the same sentences.
+
+**Export to a CSV file** asks for Touch ID (or the Mac's password), then where
+to save, and writes every password Copper keeps in Chrome's columns (`name,
+url, username, password, note`) — a file Copper and the other managers take
+back. The file is created readable by this user only; the save panel says that
+anyone who opens it can read every password in it. The Passwords panel
+(Settings › Passwords › Open…) has the same **Export…** beside its imports.
+
+Items in a connected password manager are not exported — they already live
+there.
+
+## Testing Copper's own passwords with `./bench passwords`
+
+The keychain is never touched by automated tests. A named probe world can
+instead keep Copper's own passwords and passkeys in a 0600 JSON file in its
+folder (`probe-keychain.json`), set before launch:
+
+```sh
+defaults write com.officecommun.search.test.$W probe.keychain -string file
+```
+
+Only a named world with `bench` on honours it; Touch ID is answered by the
+bench (`passwords prove yes|no`) instead of a sheet. Then:
+
+```text
+./bench passwords status | list | wipe
+./bench passwords add HOST USER PW…          # as the save offer's Keep does
+./bench passwords forget HOST [USER]
+./bench passwords check HOST USER PW…        # {"matches": true|false}, never the secret
+./bench passwords import CSV                 # the Choose File… path; status has the sentence
+./bench passwords export CSV                 # {"written", "mode": "600", "sentence"}
+./bench passwords csvcheck CSV               # the header check alone
+./bench passwords prove yes|no               # Touch ID's answer
+./bench passwords never [offer|add HOST…|forget HOST…|clear]   # offer = the save offer's Never here
+```
+
+Settings › Passwords › **Sites never asked** lists each site with its own
+**Forget**; **Forget all** appears from four sites on.
 
 ## Testing with `./bench bw`
 

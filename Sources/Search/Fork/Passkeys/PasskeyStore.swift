@@ -55,6 +55,12 @@ enum PasskeyStore {
         // macOS rejects a generic-password query that asks for both data and
         // attributes with MatchLimitAll. List the accounts first, then fetch
         // each item's bytes with a MatchLimitOne query.
+        if ProbeKeychain.active {
+            // A probe world's file stand-in (Fork/Credentials/ProbeKeychain.swift).
+            return ProbeKeychain.passkeyAccounts()
+                .compactMap { ProbeKeychain.passkey($0).flatMap { try? JSONDecoder().decode(Wire.self, from: $0).credential } }
+                .sorted { $0.created > $1.created }
+        }
         var out: CFTypeRef?
         let status = SecItemCopyMatching([
             kSecClass as String: kSecClassGenericPassword,
@@ -92,6 +98,7 @@ enum PasskeyStore {
     @discardableResult
     static func save(_ credential: Credential) -> Bool {
         guard let data = try? JSONEncoder().encode(Wire(credential)) else { return false }
+        if ProbeKeychain.active { return ProbeKeychain.savePasskey(credential.idText, data) }
         let identity: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -118,6 +125,7 @@ enum PasskeyStore {
     }
 
     static func forget(id: Data) {
+        if ProbeKeychain.active { return ProbeKeychain.forgetPasskey(id.base64URL) }
         SecItemDelete([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

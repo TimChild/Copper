@@ -251,6 +251,16 @@
                                        test world: the Listen transcript agents read (voice_transcript,
                                        `copper transcript`), driven with no audio; share = Settings › Voice's switch
     ./bench mcp transcript check       test world: a linked bot's tools/list has no voice tools and its calls are refused
+    ./bench passwords status|list|add HOST USER PW|forget HOST [USER]|check HOST USER PW
+                     |import CSV|export CSV|csvcheck CSV|prove yes|no|wipe
+                     |never [offer|add HOST…|forget HOST…|clear]
+                                       Copper's own passwords in a probe world whose keychain is a file
+                                       (defaults write …test.WORLD probe.keychain -string file, before launch)
+    ./bench privacy status|ask history|cookies|none|clear history|cookies|cache
+                                       Settings › Privacy's questions (for a picture) and its clears, every jar
+    ./bench about status|feedback|default|copy pairing|clipboard
+                                       Send Feedback's prefilled page, Make default (refused in a test run),
+                                       and where Settings' Copy and Open went in a test world
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
     ./bench mouse back|forward|middle [X Y] [--shift] [--window N]
                                        a click of that mouse button at window point X Y (top-left
@@ -422,6 +432,15 @@ def main(argv):
             request["arg"] = args[1]
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
+    elif verb in ("privacy", "about"):
+        request["op"] = args[0] if args else "status"
+        request["arg"] = " ".join(args[1:])
+    elif verb == "passwords":
+        # Copper's own passwords in a probe world with the file keychain; paths made absolute.
+        request["op"] = args[0] if args else "status"
+        rest = args[1:]
+        if request["op"] in ("import", "export", "csvcheck") and rest: rest = [os.path.abspath(rest[0])] + rest[1:]
+        request["arg"] = " ".join(rest)
     elif verb == "render":
         if len(args) < 2: sys.exit("usage: bench render bitwarden|onepassword[-app|-password|-service|-dark]|managers[-dark]|picker|agent|agent-dark|drive|hands|hands-dark|pill|pill-dark PATH [HOST]")
         request["op"] = args[0]

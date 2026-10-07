@@ -301,12 +301,19 @@ struct UpdatesPage: View {
         "You have \(Updater.version) (build \(Updater.build))" + (isDevBuild ? " · dev build" : "")
     }
 
+    /// What the feed said, in the words of the one next step. Before the
+    /// first answer it says so, not "Couldn't check".
     private var latestLine: String {
-        if let error = updates.error { return "Couldn't check: \(error)" }
-        guard let latest = updates.latest else { return "Couldn't check: Not checked yet." }
-        guard updates.available else { return "Up to date" }
-        let date = Self.publishedDate(latest.publishedAt)
-        return "Latest Copper \(latest.version) · \(date)"
+        if updates.checking { return "Checking…" }
+        // A newer Copper already known stays the headline when a re-check
+        // fails: the install row under this one is still right.
+        if updates.available, let latest = updates.latest {
+            let line = "Latest Copper \(latest.version) · \(Self.publishedDate(latest.publishedAt))"
+            return updates.error == nil ? line : line + " · couldn’t check again just now"
+        }
+        if let error = updates.error { return error }
+        guard updates.latest != nil else { return "Not checked yet — Copper looks every six hours on its own" }
+        return "Up to date"
     }
 
     private var installLine: String {
@@ -327,11 +334,10 @@ struct UpdatesPage: View {
         VStack(alignment: .leading, spacing: 10) {
             SettingsSection("This Copper") {
                 Line(currentLine, latestLine) {
-                    if updates.checking {
-                        Ring(size: 12)
-                    } else {
-                        Pill("Check now") { updates.check(force: true) }
-                    }
+                    // One pill in both states: the row neither jumps nor
+                    // loses its button while the feed is read.
+                    Pill(updates.checking ? "Checking…" : "Check now") { updates.check(force: true) }
+                        .disabled(updates.checking)
                 }
                 .settingsAnchor("updates.check")
                 if updates.available, let version = updates.latest?.version {
@@ -358,11 +364,18 @@ struct UpdatesPage: View {
                     }
                     }
                     .settingsAnchor("updates.install")
+                    // What the release says it brings, before anyone presses
+                    // Update — the same paragraph as the pill's What's New.
+                    if let notes = updates.latest?.notes {
+                        Rule()
+                        Line("What’s new in \(version)", notes) { EmptyView() }
+                            .settingsAnchor("updates.notes")
+                    }
                 }
                 if let outcome = outcomeLine, updates.outcome?.ok == false {
                     Rule()
                     Line(outcome.title, outcome.detail) {
-                        Pill("Open log") { NSWorkspace.shared.open(Updates.log) }
+                        Pill("Open log") { SettingsActions.open(Updates.log) }
                     }
                 }
             }
@@ -385,10 +398,50 @@ struct UpdatesPage: View {
         }
     }
 
-    private static func publishedDate(_ raw: String) -> String {
+    static func publishedDate(_ raw: String) -> String {
         let formatter = ISO8601DateFormatter()
         guard let date = formatter.date(from: raw) else { return raw }
         return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+}
+
+/// Settings › About › Updates: Copper's own updater (`Updates`), the same
+/// one Settings › Updates and the sidebar pill read. It used to read
+/// upstream's `Updater`, which Copper never runs — a different feed, a
+/// "checked once a day" that never happened, and "This is the latest one"
+/// beside an Updates page offering a newer Copper.
+struct AboutUpdatesLine: View {
+    let browser: Browser
+    @ObservedObject private var updates = Updates.shared
+
+    private var title: String {
+        guard updates.available, let version = updates.latest?.version else { return "Updates" }
+        return updates.ready ? "Copper \(version) is ready to install" : "Copper \(version) is out"
+    }
+
+    /// A newer Copper already known outranks a failed re-check: the title
+    /// says it is out, so the line under it says where it is, not that the
+    /// feed couldn't be reached.
+    private var detail: String {
+        if updates.checking { return "Checking…" }
+        if updates.available { return "Settings › Updates has what’s new and the Update button" }
+        if let error = updates.error { return error }
+        guard updates.latest != nil, let checked = updates.checkedAt else {
+            return "Copper looks for a newer version every six hours on its own"
+        }
+        return "Up to date · checked \(checked.formatted(.relative(presentation: .named)))"
+    }
+
+    var body: some View {
+        Line(title, detail) {
+            if updates.available {
+                Pill("Show", filled: true) { browser.openSettings(.updates) }
+                    .accessibilityLabel("Show the update")
+            } else {
+                Pill(updates.checking ? "Checking…" : "Check now") { updates.check(force: true) }
+                    .disabled(updates.checking)
+            }
+        }
     }
 }
 

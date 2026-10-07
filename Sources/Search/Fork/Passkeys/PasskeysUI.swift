@@ -6,46 +6,26 @@ struct PasskeysSettings: View {
     @State private var rows: [PasskeyStore.Credential] = []
 
     var body: some View {
+        // Settings' own lines (UX pass 2026-10-07): the empty state spans the
+        // card like every other row, and Forget is a pill like every other
+        // action, not a grey word.
         Card {
             if rows.isEmpty {
-                Text("No Copper passkeys yet")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.muted)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                Line("No passkeys yet", "When a site offers to make one, Copper keeps it here and Touch ID signs you in with it") {
+                    EmptyView()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 ForEach(rows) { credential in
-                    row(credential)
+                    Line(credential.rpId, "\(credential.label) · \(detail(credential))") {
+                        Pill("Forget") { forget(credential) }
+                            .accessibilityLabel("Forget the passkey for \(credential.rpId)")
+                    }
                     if credential.id != rows.last?.id { Rule() }
                 }
             }
         }
         .onAppear { reload() }
-    }
-
-    @ViewBuilder private func row(_ credential: PasskeyStore.Credential) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(credential.rpId)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(Palette.ink)
-                    Text(credential.label)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Palette.muted)
-                }
-                Spacer()
-                Button("Forget") { forget(credential) }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Palette.muted)
-            }
-            Text(detail(credential))
-                .font(.system(size: 10.5))
-                .foregroundStyle(Palette.faint)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
     }
 
     private func detail(_ credential: PasskeyStore.Credential) -> String {

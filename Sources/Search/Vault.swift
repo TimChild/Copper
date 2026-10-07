@@ -61,6 +61,7 @@ enum Vault {
 
     /// The items' attributes — no secrets — narrowed by whatever is given.
     private static func rows(where extra: [String: Any]) -> [[String: Any]] {
+        if ProbeKeychain.active { return ProbeKeychain.rows(server: extra[kSecAttrServer as String] as? String) } // Fork (probe-keychain)
         var query: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrLabel as String: label,
@@ -85,6 +86,7 @@ enum Vault {
     /// and "Always Allow" is remembered. So it is made only for the one
     /// account you actually picked — never to draw a list.
     static func secret(host: String, user: String) -> String? {
+        if ProbeKeychain.active { return ProbeKeychain.secret(host: host, user: user) } // Fork (probe-keychain)
         var out: CFTypeRef?
         let status = SecItemCopyMatching([
             kSecClass as String: kSecClassInternetPassword,
@@ -132,6 +134,7 @@ enum Vault {
         guard !host.isEmpty, !password.isEmpty,
               let data = password.data(using: .utf8)
         else { return false }
+        if ProbeKeychain.active { return ProbeKeychain.save(host: host, user: user, password: password, used: used) } // Fork (probe-keychain)
 
         let identity: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
@@ -156,6 +159,7 @@ enum Vault {
     /// It was just used to sign in. Lists put it first from now on. Only the
     /// comment moves; the secret is neither read nor rewritten.
     static func touch(_ login: Login) {
+        if ProbeKeychain.active { return ProbeKeychain.touch(host: login.host, user: login.user) } // Fork (probe-keychain)
         SecItemUpdate([
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrServer as String: login.host,
@@ -166,6 +170,7 @@ enum Vault {
     }
 
     static func forget(host: String, user: String) {
+        if ProbeKeychain.active { return ProbeKeychain.forget(host: host, user: user) } // Fork (probe-keychain)
         SecItemDelete([
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrServer as String: host,
@@ -190,6 +195,7 @@ enum Vault {
     /// A password is shown only to the person the Mac belongs to. Touch ID,
     /// the watch, or the account password — whatever the Mac itself takes.
     static func prove(_ reason: String, _ done: @escaping (Bool) -> Void) {
+        if ProbeKeychain.active { return done(ProbeKeychain.proves) } // Fork (probe-keychain): no Touch ID sheet in a probe
         let context = LAContext()
         var trouble: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &trouble) else {

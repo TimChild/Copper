@@ -43,8 +43,8 @@ struct BitwardenCard: View {
             stateContent
             if let error {
                 Rule()
-                Line("Bitwarden error", firstLine(error)) {
-                    Pill("Retry") { retry() }
+                Line("Bitwarden couldn't do that", firstLine(error)) {
+                    Pill("Dismiss") { retry() }
                 }
                 .foregroundStyle(.red.opacity(0.78))
             }
@@ -101,9 +101,9 @@ struct BitwardenCard: View {
             signInLines
         case .locked(let account):
             Line("Bitwarden", account.map { "Locked · \($0)" } ?? "Locked") {
-                Text("Locked")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(Palette.muted)
+                // The way to another account or server, as 1Password's card has.
+                Pill("Sign out") { signOut() }
+                    .disabled(busy)
             }
             Rule()
             Line("Master password") {
@@ -115,12 +115,18 @@ struct BitwardenCard: View {
                     actionPill("Unlock") { unlock() }
                 }
             }
-        case .unlocked(_, let lastSync):
+        case .unlocked(let account, let lastSync):
             Line("Bitwarden", "Unlocked · synced \(relative(lastSync))") {
                 HStack(spacing: 8) {
-                    actionPill("Sync now") { sync() }
+                    // Outline, as 1Password's: filled is for Sign in and Unlock.
+                    actionPill("Sync now", filled: false) { sync() }
                     Pill("Lock") { lock() }
                 }
+            }
+            Rule()
+            Line("Account", account ?? "Signed in") {
+                Pill("Sign out") { signOut() }
+                    .disabled(busy)
             }
             Rule()
             Line("Vault", countsSummary) {
@@ -269,10 +275,10 @@ struct BitwardenCard: View {
     }
 
     @ViewBuilder
-    private func actionPill(_ title: String, action: @escaping () -> Void) -> some View {
+    private func actionPill(_ title: String, filled: Bool = true, action: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
             if busy { Ring(size: 10) }
-            Pill(busy ? "Working…" : title, filled: !busy, action: action)
+            Pill(busy ? "Working…" : title, filled: filled && !busy, action: action)
                 .disabled(busy)
         }
         .fixedSize()
@@ -404,6 +410,21 @@ struct BitwardenCard: View {
         }
     }
 
+    /// Lock, forget the account and its cache on this Mac — the sign-in
+    /// form comes back, for another account or another server.
+    private func signOut() {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        Task { @MainActor in
+            await bitwarden.logout()
+            busy = false
+            password = ""
+            otp = ""
+            step = .credentials
+        }
+    }
+
     private func sync() {
         guard !busy else { return }
         busy = true
@@ -429,8 +450,7 @@ struct BitwardenCard: View {
     }
 
     private func copyInstallCommand() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("brew install bitwarden-cli", forType: .string)
+        SettingsActions.copy("brew install bitwarden-cli")
         browser.announce("Install command copied")
     }
 
@@ -688,14 +708,21 @@ struct AgentAccessCard: View {
             return credential.folder?.lowercased() == "agents" ? "Agents vault" : "copper-agent tag"
         }
 
+        /// The site, after the item's own name when it has one — a keychain
+        /// login is named by its username, which the line under it says.
+        private var title: String {
+            AgentAccessTitle.text(name: credential.name, user: credential.user, host: credential.host)
+        }
+
         var body: some View {
             HStack(spacing: 10) {
                 Image(systemName: sourceSymbol)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Palette.muted)
                     .frame(width: 20)
+                    .accessibilityLabel(credential.source.title)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(credential.name.isEmpty ? credential.host : credential.name) · \(credential.host)")
+                    Text(title)
                         .font(.system(size: 12.5))
                         .foregroundStyle(Palette.ink)
                         .lineLimit(1)
@@ -719,7 +746,7 @@ struct AgentAccessCard: View {
                 // switch that ignores clicks. `.disabled` also gives it the
                 // same muted treatment as other unavailable controls.
                 .disabled(shareAll || denied)
-                .accessibilityLabel("Share \(credential.name) account \(credential.user) with agents")
+                .accessibilityLabel("Share \(title), \(credential.user.isEmpty ? "no username" : credential.user), with agents")
             }
             .padding(.horizontal, 2)
             .padding(.vertical, 8)
@@ -763,5 +790,18 @@ final class AgentAccessList {
         }
         last = (needle, rows)
         return rows
+    }
+}
+
+/// An Agent access row's title: the site, with the item's own name first
+/// when it says something the site doesn't — not "Localhost · localhost",
+/// and not a keychain login's username twice.
+enum AgentAccessTitle {
+    static func text(name: String, user: String, host: String) -> String {
+        let plain = name.trimmingCharacters(in: .whitespaces)
+        func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
+        let bare = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        if plain.isEmpty || same(plain, user) || same(plain, host) || same(plain, bare) { return host }
+        return "\(plain) · \(host)"
     }
 }

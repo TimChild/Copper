@@ -150,19 +150,13 @@ final class Links: NSObject, NSApplicationDelegate {
         _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
     }
 
-    /// ⌘⇧F, the Help menu, and the About page all come here: a draft, in
-    /// Mail, that already knows what build this is. The person still reads
-    /// it and presses send themselves — nothing here sends anything.
+    /// The Help menu and the About page both come here.
+    /// Fork (feedback): a prefilled new issue on Copper's own repository, in a
+    /// Copper tab — Fork/Feedback.swift. Nothing is sent until the person
+    /// files it.
+    @MainActor
     static func writeFeedback() {
-        var text = URLComponents()
-        text.scheme = "mailto"
-        text.path = "hello@officecommun.com"
-        text.queryItems = [
-            URLQueryItem(name: "subject", value: "\(Fork.name) feedback — \(Updater.version) (\(Updater.build))"),
-            URLQueryItem(name: "body", value: "\n\n—\n\(Fork.name) \(Updater.version), build \(Updater.build), macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"),
-        ]
-        guard let url = text.url else { return }
-        NSWorkspace.shared.open(url)
+        Feedback.open()
     }
 
     // MARK: - being the browser
@@ -175,9 +169,18 @@ final class Links: NSObject, NSApplicationDelegate {
         return handler.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
     }
 
+    /// Fork (default-guard): a test run never takes http and https from the
+    /// browser somebody uses — Settings shows the row disabled, and asking
+    /// anyway is refused here.
+    static var refusesDefault: Bool { Store.testing }
+
     /// Asks macOS to send http and https here. The system puts up its own
     /// confirmation; the answer arrives through `done`, on the main thread.
     static func becomeDefault(_ done: @escaping (Bool) -> Void) {
+        if refusesDefault { // Fork (default-guard)
+            DispatchQueue.main.async { done(false) }
+            return
+        }
         let app = Bundle.main.bundleURL
         let group = DispatchGroup()
         var worked = true

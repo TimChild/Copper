@@ -184,20 +184,36 @@ enum FlowBookmarksHTML {
         return result
     }
 
+    /// Indexed by name and by address + title, so a level of thousands of
+    /// loose bookmarks folds in one pass.
     private static func fold(_ incoming: [Bookmark], into result: inout [Bookmark]) {
+        var folders: [String: Int] = [:]
+        var sites = Set<String>()
+        for (index, node) in result.enumerated() {
+            if node.isFolder {
+                if folders[node.title] == nil { folders[node.title] = index }
+            } else {
+                sites.insert(siteKey(node))
+            }
+        }
         for node in incoming {
             if node.isFolder {
-                if let index = result.firstIndex(where: { $0.isFolder && $0.title == node.title }) {
+                if let index = folders[node.title] {
                     var children = result[index].children ?? []
                     fold(node.children ?? [], into: &children)
                     result[index].children = children
                 } else {
+                    folders[node.title] = result.count
                     result.append(node)
                 }
-            } else if !result.contains(where: { !$0.isFolder && $0.url == node.url && $0.title == node.title }) {
+            } else if sites.insert(siteKey(node)).inserted {
                 result.append(node)
             }
         }
+    }
+
+    private static func siteKey(_ node: Bookmark) -> String {
+        (node.url ?? "") + "\u{1}" + node.title
     }
 
     // MARK: parsing

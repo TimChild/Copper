@@ -333,6 +333,24 @@ private let safariHTML = """
         #expect(titles(safari) == ["Same", "Same, retitled", "Trips", "Loose"])
     }
 
+    @Test func aLongFlatLevelFoldsInOnePass() {
+        // Thousands of loose bookmarks (Chrome's "Other bookmarks" is often
+        // like this), every one twice, plus one folder name repeated.
+        var html = "<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<DL><p>\n"
+        for round in 0..<2 {
+            for site in 0..<3000 {
+                html += "<DT><A HREF=\"https://loose\(site).example.com/\">Loose \(site)</A>\n"
+            }
+            html += "<DT><H3>Again</H3>\n<DL><p>\n<DT><A HREF=\"https://again\(round).example.com/\">Again \(round)</A>\n</DL><p>\n"
+        }
+        html += "</DL><p>\n"
+        let other = FlowBookmarksHTML.sections(html, layout: .chromium).tree(.chromium).first?.children ?? []
+        #expect(other.count == 3001)
+        #expect(other.filter(\.isFolder).map(\.title) == ["Again"])
+        #expect(other.first { $0.isFolder }?.children?.map(\.title) == ["Again 0", "Again 1"])
+        #expect(FlowBookmarks.count(other) == 3002)
+    }
+
     @Test func toleratesLooseMarkup() {
         // Lowercase tags, single and bare attribute values, an unclosed <A>,
         // an unclosed <H3>, a > inside a quoted value, a folder with no list,

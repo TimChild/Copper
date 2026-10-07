@@ -476,16 +476,28 @@ final class MCP: ObservableObject {
                 "protocolVersion": version,
                 "capabilities": ["tools": ["listChanged": false], "resources": [:], "prompts": [:]],
                 "serverInfo": ["name": "copper", "version": Fork.version],
-                "instructions": Tools.instructions(jev: config.jev),
+                "instructions": Tools.instructions(jev: config.jev, voice: driver == nil),
             ])
         case "notifications/initialized", "notifications/cancelled", "notifications/roots/list_changed":
             return nil
         case "ping":
             return reply([:])
         case "tools/list":
-            // cloud_history_delete only for loopback clients (no `driver`):
-            // never offered through an agent link (CloudHistoryTool).
-            return reply(["tools": Tools.catalogue(jev: config.jev) + (driver == nil ? [CloudHistoryTool.schema] : [])])
+            // cloud_history_delete and the Listen transcript's tools only for
+            // loopback clients (no `driver`): never offered through an agent
+            // link (CloudHistoryTool, VoiceTools).
+            return reply(["tools": Tools.catalogue(jev: config.jev) + (driver == nil ? [CloudHistoryTool.schema] + VoiceTools.catalogue : [])])
+        case "tools/call" where VoiceTools.names.contains(params["name"] as? String ?? ""):
+            // Fork (voice): reading the Listen transcript drives nothing — no
+            // announcement, Drive ticket, staged tab or breadcrumb, and a
+            // long-poll only suspends (VoiceTools.swift). A linked bot is
+            // refused whatever the person's choice.
+            let name = params["name"] as? String ?? ""
+            if let refused = VoiceTools.refusal(loopback: driver == nil) {
+                return reply(["content": [["type": "text", "text": refused]], "isError": true])
+            }
+            let answer = await VoiceTools.call(name, params["arguments"] as? [String: Any] ?? [:])
+            return reply(["content": [["type": "text", "text": answer.text]], "isError": answer.isError])
         case "tools/call":
             guard let browser = browser ?? (running ? Windows.main : nil) else { return fail(-32000, "Copper has no window") }
             let name = params["name"] as? String ?? ""
@@ -568,6 +580,7 @@ final class MCP: ObservableObject {
         case "rotate": rotateToken()
         case "jev": config.jev = (request["arg"] as? String ?? "on") != "off"
         case "link": return AgentLinks.shared.bench(request["arg"] as? String ?? "")
+        case "transcript": return VoiceTools.bench(request["arg"] as? String ?? "") // Fork (voice): test world only
         case "setup-phi":
             do { return try Setup(endpoint: endpoint, token: config.token).phi().dictionary } catch let error { return ["error": (error as? Tools.Failure)?.text ?? error.localizedDescription] }
         case "setup-claude":

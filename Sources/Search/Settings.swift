@@ -260,8 +260,8 @@ struct SettingsPanel: View {
                 try? await Task.sleep(nanoseconds: 140_000_000)
                 let anchor = finder.resolve(target, on: page)
                 let spot = target.flash ? UnitPoint(x: 0.5, y: 0.22) : UnitPoint.top
-                withAnimation(still ? nil : Motion.glide) {
-                    if let anchor { proxy.scrollTo(anchor, anchor: spot) }
+                withAnimation(still || !SettingsAnchor.glides ? nil : Motion.glide) { // Fork (settings-a11y): no glide where no one sees it
+                    if let anchor { SettingsAnchor.land(proxy, on: anchor, spot: spot) } // Fork (settings-a11y): a card lands by its top edge
                     // A card another build marks with a plain `.id` still
                     // scrolls into view, even though the index check can't see it.
                     if anchor != target.anchor { proxy.scrollTo(target.anchor, anchor: spot) }

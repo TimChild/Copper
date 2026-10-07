@@ -79,7 +79,9 @@ enum DownloadAsk {
 ///   ask [PATH|cancel|folder|reset]  how the save panel is answered; the names asked about
 ///   prefs            the Browsing pages' values as Settings shows them
 ///   glyph letters|icons  Tabs show, as its choice sets it
-///   picture spaces|extensions PATH [WIDTH] [light|dark]  the whole page at a column width
+///   picture PAGE PATH [WIDTH] [light|dark]  the whole page at a column width
+///     (spaces, extensions, voice, cloud, updates, intelligence, agents, labs)
+///   scroll [top|bottom|next|PX]  the open page's scroll, and whether it is wider than its column
 @MainActor
 enum SettingsBrowseBench {
     static func handle(_ arg: String, in browser: Browser) -> [String: Any] {
@@ -110,7 +112,7 @@ enum SettingsBrowseBench {
             var rest = words.count == 2 ? words[1].split(separator: " ").map(String.init) : []
             let look = ["light", "dark"].contains(rest.last ?? "") ? rest.removeLast() : nil
             let width = rest.count >= 3 ? Double(rest.removeLast()) : nil
-            guard rest.count == 2 else { return ["error": "settings browse picture spaces|extensions PATH [WIDTH] [light|dark]"] }
+            guard rest.count == 2 else { return ["error": "settings browse picture PAGE PATH [WIDTH] [light|dark]"] }
             let dark = look.map { $0 == "dark" } ?? (NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
             let column = CGFloat(width ?? Double(SpacePage.width))
             let png: NSBitmapImageRep?
@@ -119,15 +121,68 @@ enum SettingsBrowseBench {
             case "extensions":
                 guard #available(macOS 15.4, *) else { return ["error": "extensions need macOS 15.4"] }
                 png = picture(ExtensionsSettings(browser: browser, extensions: .shared), width: column, dark: dark)
-            default: return ["error": "picture spaces|extensions"]
+            // The other pages that are views of their own, at the same widths.
+            case "voice": png = picture(VoicePage(browser: browser), width: column, dark: dark)
+            case "cloud": png = picture(CloudPage(browser: browser), width: column, dark: dark)
+            case "updates": png = picture(UpdatesPage(browser: browser), width: column, dark: dark)
+            case "intelligence": png = picture(IntelligencePage(browser: browser), width: column, dark: dark)
+            case "agents": png = picture(AgentsPage(browser: browser), width: column, dark: dark)
+            case "labs": png = picture(LabsPage(browser: browser), width: column, dark: dark)
+            default: return ["error": "picture spaces|extensions|voice|cloud|updates|intelligence|agents|labs"]
             }
             guard let data = png?.representation(using: .png, properties: [:]) else { return ["error": "no picture"] }
             let path = (rest[1] as NSString).expandingTildeInPath
             do { try data.write(to: URL(fileURLWithPath: path)) } catch { return ["error": "\(error)"] }
             return ["path": path, "width": column, "height": png?.size.height ?? 0]
-        default: return ["error": "settings browse folder PATH|ask [PATH|cancel|folder|reset]|prefs|picture …"]
+        case "scroll":
+            // scroll [top|bottom|next|PX]: move the open page's scroll, the
+            // way the wheel would, and say where it is and whether anything
+            // on the page is wider than its column.
+            return scroll(words.count == 2 ? words[1] : "")
+        default: return ["error": "settings browse folder PATH|ask [PATH|cancel|folder|reset]|prefs|picture …|scroll [top|bottom|next|PX]"]
         }
         return values(browser)
+    }
+
+    /// The open Settings page's scroll view: the widest one in the window
+    /// (the rail's is a third as wide).
+    private static func pageScroll(_ window: NSWindow?) -> NSScrollView? {
+        guard let root = window?.contentView else { return nil }
+        var best: NSScrollView?
+        func walk(_ view: NSView) {
+            if let scroll = view as? NSScrollView, scroll.documentView != nil, !scroll.isHidden,
+               scroll.frame.width > (best?.frame.width ?? 300) {
+                best = scroll
+            }
+            for sub in view.subviews { walk(sub) }
+        }
+        walk(root)
+        return best
+    }
+
+    private static func scroll(_ what: String) -> [String: Any] {
+        guard let scroller = pageScroll(Links.window), let document = scroller.documentView else { return ["error": "no page scroll"] }
+        let clip = scroller.contentView
+        let most = max(0, document.frame.height - clip.bounds.height)
+        var y = clip.bounds.origin.y
+        switch what {
+        case "", "state": break
+        case "top": y = 0
+        case "bottom": y = most
+        case "next": y = min(most, y + max(40, clip.bounds.height - 60))
+        default:
+            guard let px = Double(what) else { return ["error": "settings browse scroll [top|bottom|next|PX]"] }
+            y = min(most, max(0, CGFloat(px)))
+        }
+        if y != clip.bounds.origin.y {
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+            scroller.reflectScrolledClipView(clip)
+        }
+        let sideways = document.frame.width > clip.bounds.width + 0.5
+        return ["y": Double(y.rounded()), "most": Double(most.rounded()), "atEnd": y >= most - 0.5,
+                "documentHeight": Double(document.frame.height.rounded()), "viewport": Double(clip.bounds.height.rounded()),
+                "documentWidth": Double(document.frame.width.rounded()), "columnWidth": Double(clip.bounds.width.rounded()),
+                "sideways": sideways, "horizontalScroller": scroller.hasHorizontalScroller && !(scroller.horizontalScroller?.isHidden ?? true)]
     }
 
     /// A page drawn off screen at a given column width, the way it lays out

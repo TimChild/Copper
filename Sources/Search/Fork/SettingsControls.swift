@@ -384,6 +384,9 @@ enum SettingsAccessibility {
         let wasOpen = browser.tuning
         _ = SettingsFinder.of(browser).clear()
         browser.tuning = true
+        // A page that is already showing doesn't draw again when it is
+        // asked for, so its controls would go unnoted: start one page over.
+        if before == pages.first, let other = pages.last { browser.settingsPage = other }
         var report: [String: Any] = [:]
         var unnamed: [String] = []
         var unreachable: [String] = []

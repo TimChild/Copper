@@ -208,6 +208,14 @@
     ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
                                        the MCP server agents drive the window through; setup bridges terminal agents
     ./bench ai [lane key|claude|tier haiku|sonnet|opus]   which model lane is active and ready
+    ./bench ai picture intelligence|agents|labs PATH [dark] [WIDTH]   the whole page drawn off screen
+    ./bench ai check [status]          Settings › Intelligence › Check: run it, or its last verdict (fresh, refused)
+    ./bench ai cloud fake JSON|clear   stand in Copper Cloud's /v1/intelligence answer (test world)
+    ./bench ai clipboard               what the AI pages copied/opened in this test world
+    ./bench ai click X Y | ai key tab|shift-tab|return|escape|space|TEXT   input at window points (test run)
+    ./bench ai views                   the window's AppKit views by class, and tracking areas
+    ./bench ai churn mcp|brain|agent|links|servers|check|account [N]   one redraw of the open page per change
+    ./bench ai ax [WORDS]              accessibility walk (needs a windowed probe)
     ./bench voice selftest             the speech engine: pure checks, then — when the run has
                                        SEARCH_VOICE_MODEL_DIR — three clips spoken in-process,
                                        transcribed and scored ("skipped" without it); exits 1 on a failure
@@ -307,7 +315,10 @@
                                        Downloads' Change… as a pick of PATH; how "Ask where to save" is
                                        answered in a test run, and the names it was asked about; the
                                        Browsing pages' values (test runs only)
-    ./bench settings browse picture spaces|extensions PATH [WIDTH] [light|dark]
+    ./bench settings browse scroll [top|bottom|next|PX]
+                                       move the open page's scroll as the wheel would; where it is,
+                                       and whether anything on it is wider than the column (test runs only)
+    ./bench settings browse picture spaces|extensions|voice|cloud|updates|intelligence|agents|labs PATH [WIDTH] [light|dark]
                                        the whole page as a PNG, laid out at a page-column WIDTH
                                        (345 is Settings' narrowest), not scrolled
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,

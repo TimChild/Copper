@@ -117,7 +117,8 @@ enum CLI {
             return 2
         }
         let name = ((request["params"] as? [String: Any])?["name"] as? String) ?? ""
-        let timeout: TimeInterval = name == "jev_run" ? 240 : 60
+        // A delete by site pages through the whole cloud history.
+        let timeout: TimeInterval = name == "jev_run" ? 240 : (name == "cloud_history_delete" ? 600 : 60)
         guard let response = post(request, config: config, timeout: timeout) else { return 2 }
         return render(response, spec: spec, json: json)
     }
@@ -337,6 +338,30 @@ enum CLI {
             }
             let imagePath = (name == "browser_take_screenshot" ? arguments["filename"] as? String : nil)
             return call(name, arguments, imagePath: imagePath)
+        case "cloud-history":
+            // `cloud-history delete …` → cloud_history_delete. The app checks
+            // the values; nothing chosen is refused here, before it gets there.
+            let usage = "cloud-history delete [--since 1h|24h|7d|TIME] [--until TIME] [--host SITE]... [--page URL]... [--device ID|this] | --all"
+            guard args.first == "delete" else { return bad(usage) }
+            var arguments: [String: Any] = [:]
+            var hosts: [String] = [], pages: [String] = []
+            var rest = Array(args.dropFirst())
+            while !rest.isEmpty {
+                let flag = rest.removeFirst()
+                if flag == "--all" { arguments["all"] = true; continue }
+                guard ["--since", "--until", "--host", "--page", "--device"].contains(flag) else { return bad("unknown option \(flag) — \(usage)") }
+                guard let value = rest.first, !value.hasPrefix("--") else { return bad("\(flag) needs a value") }
+                rest.removeFirst()
+                switch flag {
+                case "--host": hosts.append(value)
+                case "--page": pages.append(value)
+                default: arguments[String(flag.dropFirst(2))] = value
+                }
+            }
+            if !hosts.isEmpty { arguments["host"] = hosts }
+            if !pages.isEmpty { arguments["page"] = pages }
+            guard !arguments.isEmpty else { return bad("say what to delete (--since, --until, --host, --page, --device), or --all for everything") }
+            return call("cloud_history_delete", arguments)
         // EXTENSION POINT: the ship agent will add `copper setup …` here.
         default:
             return bad("unknown command: \(command)")
@@ -1309,6 +1334,9 @@ enum CLI {
       bitwarden [status|login -|cancel|lock|logout|sync|policy]
                                                 the Bitwarden vault; JSON only, login reads stdin
                                                 (copper bitwarden --help)
+      cloud-history delete [--since 1h|24h|7d|TIME] [--until TIME] [--host SITE]... [--page URL]... [--device ID|this] [--all]
+                                                delete your history on Copper Cloud (every Mac's); this Mac's
+                                                stays. A site matches its subdomains; nothing chosen needs --all
       call TOOL [JSON-ARGS]                     call any MCP tool
       help                                      show this help
 

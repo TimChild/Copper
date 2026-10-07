@@ -143,6 +143,7 @@ final class History: ObservableObject {
     func forget() {
         visits = [:]
         save()
+        CloudSync.shared.historyCleared() // Fork (cloud-history-delete): and on Copper Cloud, while history syncs
     }
 
     /// Everywhere you have been, newest first, for the window that shows it.

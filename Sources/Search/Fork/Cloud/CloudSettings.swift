@@ -40,6 +40,8 @@ struct CloudPage: View {
                     CloudDevicesCard(sync: sync)
                         .settingsAnchor("cloud.devices", card: true)
                 }
+                CloudHistoryDeleteCard(cloud: cloud)
+                    .settingsAnchor("cloud.history", card: true)
                 CloudAccountCard(cloud: cloud)
                     .settingsAnchor("cloud.account", card: true)
                 CloudPairCard(pairing: CloudPairing.shared)

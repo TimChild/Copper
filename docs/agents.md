@@ -87,6 +87,7 @@ forward; the pane opens itself only for work on the page on screen.
 | `browser_resize`, `browser_close` | the window; the tab |
 | `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove` |
 | `browser_perf_probe` | Samples the current tab for rAF loops, DOM churn, animations, filters, canvases, timers, long tasks, and slow resources (`seconds`, `top`, `format`) |
+| `cloud_history_delete` | Deletes the user's history on Copper Cloud (`since`, `until`, `host[]`, `page[]`, `device`, or `all: true`); history on the Mac stays. Loopback clients only — not listed through an agent link, refused to the agent pane. Sites and pages are matched on the Mac, never by the server (docs/cloud.md) |
 
 ### Saved sign-in (no-secret contract)
 

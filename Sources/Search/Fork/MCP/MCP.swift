@@ -483,7 +483,9 @@ final class MCP: ObservableObject {
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": Tools.catalogue(jev: config.jev)])
+            // cloud_history_delete only for loopback clients (no `driver`):
+            // never offered through an agent link (CloudHistoryTool).
+            return reply(["tools": Tools.catalogue(jev: config.jev) + (driver == nil ? [CloudHistoryTool.schema] : [])])
         case "tools/call":
             guard let browser = browser ?? (running ? Windows.main : nil) else { return fail(-32000, "Copper has no window") }
             let name = params["name"] as? String ?? ""

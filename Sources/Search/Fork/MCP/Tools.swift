@@ -210,7 +210,7 @@ enum Tools {
 
     @MainActor
     private static func dispatch(_ name: String, _ args: [String: Any], in browser: Browser) async throws -> [Content] {
-        if !["browser_tabs", "browser_close", "browser_resize", "browser_groups"].contains(name), !CanvasTools.names.contains(name),
+        if !["browser_tabs", "browser_close", "browser_resize", "browser_groups", CloudHistoryTool.name].contains(name), !CanvasTools.names.contains(name),
            !(name == "jev_run" && (args["newTab"] as? Bool) == true) {
             await AgentTabs.ready(in: browser)
         }
@@ -230,6 +230,7 @@ enum Tools {
         case "browser_groups": return groups(args, in: browser)
         case "jev_run", "jev_step", "jev_observe", "jev_extract": return try await Ultrafast.call(name, args, in: browser)
         case _ where CanvasTools.names.contains(name): return try await CanvasTools.call(name, args, in: browser)
+        case CloudHistoryTool.name: return try await CloudHistoryTool.call(args)
         default: break
         }
 

@@ -111,6 +111,15 @@ final class Updates: ObservableObject {
     /// Everything up to the swap: verify, back up, then stop and log what
     /// would have happened instead of replacing the bundle and quitting.
     var dryRun = false
+    /// Bench, test worlds only: hold staged bundles to this requirement
+    /// instead of `Signing.requirement(forBundleID:)`, so a test copy can be
+    /// made to expect a certificate (`updates requirement TEXT|off`).
+    var requirementOverride: String?
+    /// What a staged bundle must satisfy to replace this one (Fork/Signing.swift).
+    var requirement: String {
+        if Store.testing, let requirementOverride { return requirementOverride }
+        return Signing.requirement(forBundleID: Bundle.main.bundleIdentifier ?? Fork.bundle)
+    }
 
     private weak var browser: Browser?
     private var timer: Timer?
@@ -270,9 +279,10 @@ final class Updates: ObservableObject {
         stageError = nil
         let want = latest
         let folder = Self.updatesFolder
+        let requirement = self.requirement
         Self.note("staging \(want.version) from \(want.archiveUrl ?? "no archive URL")")
         Task { [weak self] in
-            let result = await Self.fetchAndStage(want, into: folder) { fraction in
+            let result = await Self.fetchAndStage(want, into: folder, requirement: requirement) { fraction in
                 Task { @MainActor in Updates.shared.downloaded(fraction) }
             }
             guard let self else { return }
@@ -290,7 +300,7 @@ final class Updates: ObservableObject {
                     persist()
                     browser?.announce("Copper \(done.version) is ready — ⌘K “Update Copper” or Settings › Updates")
                 }
-            case .failure(let why):
+            case .failure(let why), .unsigned(let why):
                 stageError = why
                 Self.note("staging \(want.version) failed: \(why)")
                 // Once per version: the feed answered a moment ago, so this is
@@ -298,7 +308,11 @@ final class Updates: ObservableObject {
                 if saved.troubleAnnounced != want.version {
                     saved.troubleAnnounced = want.version
                     persist()
-                    browser?.announce("Couldn’t download Copper \(want.version) — see Settings › Updates")
+                    if case .unsigned = result {
+                        browser?.announce("Copper \(want.version) isn’t signed as a Copper release — see Settings › Updates")
+                    } else {
+                        browser?.announce("Couldn’t download Copper \(want.version) — see Settings › Updates")
+                    }
                 }
             }
         }
@@ -307,6 +321,8 @@ final class Updates: ObservableObject {
     private enum StageResult {
         case success(Staged)
         case failure(String)
+        /// Downloaded and intact, but refused for its signature.
+        case unsigned(String)
     }
 
     /// A late report from a download that already finished must not put a
@@ -319,7 +335,7 @@ final class Updates: ObservableObject {
     /// Off the main actor: the download, the hash, ditto, codesign. Nothing
     /// here touches the running bundle; a failure leaves at most a folder
     /// under `updates/` that the next attempt clears.
-    private nonisolated static func fetchAndStage(_ latest: Latest, into folder: URL,
+    private nonisolated static func fetchAndStage(_ latest: Latest, into folder: URL, requirement: String,
                                                   progress: @escaping @Sendable (Double) -> Void) async -> StageResult {
         let files = FileManager.default
         let version = latest.version
@@ -396,6 +412,15 @@ final class Updates: ObservableObject {
         let signature = run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
         guard signature.status == 0 else {
             return .failure("The signature of Copper \(version) did not verify: \(signature.output)")
+        }
+        // Signed by Copper's own certificate, so macOS keeps this app's
+        // permissions across the swap (Fork/Signing.swift). Anything else is
+        // not a Copper release, however well it verifies on its own.
+        if let why = Signing.unsatisfied(app, requirement: requirement) {
+            note("Copper \(version) does not satisfy \(requirement): \(why)")
+            return .unsigned(requirement.contains("certificate leaf")
+                ? "Copper \(version) isn’t signed with Copper’s release certificate, so it won’t replace this one. Download it from github.com/copper-browser/Copper/releases instead."
+                : "Copper \(version) isn’t signed as this app (\(requirement)), so it won’t replace this one.")
         }
         // Ad-hoc builds may carry a quarantine flag from the download; the
         // launch after the swap must not be Gatekeeper's to refuse.
@@ -481,7 +506,7 @@ final class Updates: ObservableObject {
         do {
             guard let staged, staged.version == latest.version else { throw Refused.notStaged }
             let bundle = URL(fileURLWithPath: staged.path)
-            try Self.reverify(bundle, version: staged.version)
+            try Self.reverify(bundle, version: staged.version, requirement: requirement)
             try backUpSession()
             let target = Bundle.main.bundleURL
             Self.note("update \(current) -> \(staged.version): swapping \(bundle.path) into \(target.path)\(dryRun ? " (dry run: stopping here)" : "")")
@@ -516,12 +541,16 @@ final class Updates: ObservableObject {
     }
 
     /// The same checks as staging did, on what is on disk now.
-    private nonisolated static func reverify(_ app: URL, version: String) throws {
+    private nonisolated static func reverify(_ app: URL, version: String, requirement: String) throws {
         guard FileManager.default.fileExists(atPath: app.path) else { throw Refused.gone(app.path) }
         let have = bundleVersion(at: app) ?? ""
         guard have == version else { throw Refused.wrongVersion(have.isEmpty ? "unreadable" : have, version) }
         let signature = run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
         guard signature.status == 0 else { throw Refused.signature(signature.output) }
+        if let why = Signing.unsatisfied(app, requirement: requirement) {
+            note("\(app.path) does not satisfy \(requirement): \(why)")
+            throw Refused.signature("it isn’t signed with Copper’s release certificate.")
+        }
     }
 
     /// A copy of session.json beside it, because tabs are the thing an update
@@ -904,6 +933,7 @@ final class Updates: ObservableObject {
             "state": state == .upgrading ? "upgrading" : "idle",
             "outcome": outcome.map { ["ok": $0.ok, "detail": $0.detail, "at": ISO8601DateFormatter().string(from: $0.at)] } ?? [:],
             "log": Self.log.path,
+            "requirement": requirement,
         ]
     }
 }

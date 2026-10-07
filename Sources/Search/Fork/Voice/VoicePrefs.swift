@@ -58,6 +58,17 @@ final class VoicePrefs: ObservableObject {
         didSet { Store.settings.set(finish.rawValue, forKey: VoicePrefs.finishKey) }
     }
 
+    /// Agents on this Mac (the MCP server's `voice_transcript`, `copper
+    /// transcript`) may read the Listen transcript. Off until the person turns
+    /// it on; it never lets an agent start Listen or hear audio, and a linked
+    /// bot never reads it either way (Fork/MCP/VoiceTools.swift).
+    @Published var shareTranscript: Bool {
+        didSet {
+            guard shareTranscript != oldValue else { return }
+            Store.settings.set(shareTranscript, forKey: VoicePrefs.shareTranscriptKey)
+        }
+    }
+
     /// The Core ML model is multifunction (one encoder per window length),
     /// which only macOS 15 can load. On 14 voice stays off and says why.
     static var supported: Bool {
@@ -68,11 +79,13 @@ final class VoicePrefs: ObservableObject {
     static let enabledKey = "voice.enabled"
     static let triggerKey = "voice.trigger"
     static let finishKey = "voice.finish"
+    static let shareTranscriptKey = "voice.shareTranscript"
 
     private init() {
         let store = Store.settings
         enabled = VoicePrefs.supported && store.bool(forKey: VoicePrefs.enabledKey)
         trigger = store.string(forKey: VoicePrefs.triggerKey).flatMap(VoiceTrigger.init(rawValue:)) ?? .hold
         finish = store.string(forKey: VoicePrefs.finishKey).flatMap(VoiceFinish.init(rawValue:)) ?? .insert
+        shareTranscript = store.bool(forKey: VoicePrefs.shareTranscriptKey)
     }
 }

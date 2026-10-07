@@ -56,6 +56,16 @@ struct VoicePage: View {
                 .settingsAnchor("voice.finish")
             }
 
+            SettingsSection("Listen") {
+                Line("Let agents on this Mac read the Listen transcript", shareDetail) {
+                    Switch(on: $prefs.shareTranscript)
+                        .accessibilityLabel("Let agents on this Mac read the Listen transcript")
+                        .accessibilityValue(prefs.shareTranscript ? "On" : "Off")
+                }
+                .modifier(VoiceDimmed(on: live))
+                .settingsAnchor("voice.shareTranscript")
+            }
+
             credits
                 .settingsAnchor("voice.credits")
         }
@@ -71,6 +81,10 @@ struct VoicePage: View {
         case .hold: return "Hold ⌃⇧D, or the mic button, while you speak."
         case .toggle: return "Press ⌃⇧D, or the mic button, to start — and again to stop."
         }
+    }
+
+    private var shareDetail: String {
+        "phi, Claude Code and other agents connected to Copper can read what Listen writes down while this is on. They can't start Listen or hear audio."
     }
 
     private var finishDetail: String {

@@ -241,6 +241,10 @@
                                        mint a one-time code for another Mac, list or revoke them
     ./bench passkeys list|count|forget --id ID|answer yes|no|ask
                                        Copper's own test-world passkeys (no private keys in list)
+    ./bench mcp transcript begin|append TEXT|live on|off|forget|share on|off|state
+                                       test world: the Listen transcript agents read (voice_transcript,
+                                       `copper transcript`), driven with no audio; share = Settings › Voice's switch
+    ./bench mcp transcript check       test world: a linked bot's tools/list has no voice tools and its calls are refused
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
     ./bench mouse back|forward|middle [X Y] [--shift] [--window N]
                                        a click of that mouse button at window point X Y (top-left
@@ -539,6 +543,11 @@ def main(argv):
         request["id"], request["text"] = args
         if via_app: request["via"] = "app"
         if hold: request["hold"] = True
+    elif verb == "mcp":
+        # `mcp transcript …` (Fork/MCP/VoiceTools.swift) rides the agent server's own bench verb.
+        if len(args) < 2 or args[0] != "transcript":
+            sys.exit("usage: bench mcp transcript begin|append TEXT|live on|off|forget|share on|off|state|check")
+        request = {"do": "agent", "op": "transcript", "arg": " ".join(args[1:])}
     elif verb == "resize":
         if len(args) not in (2, 3): sys.exit("usage: bench resize WIDTH HEIGHT [STEPS]")
         request["width"], request["height"] = float(args[0]), float(args[1])
@@ -574,6 +583,16 @@ def main(argv):
             if not answer.get("running"): break
             print("\r" + " · ".join(answer.get("lines", []))[-120:], end="", file=sys.stderr, flush=True)
         print(file=sys.stderr)
+    if verb == "mcp" and answer.get("running"):
+        # `mcp transcript check` runs in the app; ask for its answer.
+        import time
+        for _ in range(50):
+            time.sleep(0.2)
+            answer = ask(os.path.join(folder(world), "bench.sock"), {"do": "agent", "op": "transcript", "arg": "check-result"})
+            if not answer.get("running"): break
+        if answer.get("error"): sys.exit("error: " + str(answer["error"]))
+        print(json.dumps(answer, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if answer.get("ok") else 1
     if verb == "voice" and answer.get("running"):
         # The first load on a Mac prepares the Neural Engine for a minute or
         # more, past the bench's 25 s: ask for the job's answer until it's in.

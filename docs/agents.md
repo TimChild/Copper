@@ -345,6 +345,55 @@ bots cannot reach loopback controls. The connection details, configuration forma
 are in [agent-link.md](agent-link.md). Headless Copper uses the same manager; see
 [headless.md](headless.md).
 
+## Listen transcript
+
+Listen (Voice, started by the person from the waveform button in the ⌘E pane) writes down what
+is said, one finalized segment per pause. Agents on this Mac — phi, Claude Code, the `copper`
+CLI, anything holding the loopback bearer — can read it, **only while Settings › Voice › "Let
+agents on this Mac read the Listen transcript" is on** (off by default; `voice.shareTranscript`).
+Agents can never start, pause or stop Listen, and never get audio: the tools only read text.
+The pane's own agent has its own path to the transcript; it does not use these tools.
+
+| Tool | Arguments | Answer (JSON in the text content) |
+|---|---|---|
+| `voice_status` | `{}` | `{supported, enabled, share_allowed, transcript: null \| {id, live, started_at, latest_seq, oldest_seq, segments}}` — never words; `transcript` stays `null` until sharing is on |
+| `voice_transcript` | `{id?, since_seq? = 0, wait_ms? 0–20000 = 0, limit? 1–100 = 50}` | `{id, live, segments: [{seq, start, end, text}], oldest_seq, latest_seq, next_seq, gap, timed_out, reset}` |
+
+- `since_seq` is an exclusive cursor; pass back `next_seq` and the `id` you got. A different
+  current `id` (a new Listen began) answers `reset: true` from that transcript's start; so does a
+  cursor beyond `latest_seq`. `start`/`end` are ISO-8601 wall-clock times.
+- `wait_ms` long-polls: with nothing newer the call waits until a segment arrives, Listen goes
+  live or not, a transcript begins or is forgotten, sharing is switched off, or the time runs
+  out (`timed_out: true`). The wait suspends; other clients' calls are answered meanwhile.
+- `gap: true` means segments after your cursor were dropped by the caps (the last hour, 2 MB);
+  `next_seq` then skips past the hole. One answer carries at most 100 segments / ~256 KB.
+- Refusals are `isError: true` with a sentence: sharing off ("The person hasn't allowed agents
+  to read the Listen transcript (Copper Settings › Voice)."), no transcript yet, Voice off, or
+  macOS 14 (the tools are only listed on macOS 15+).
+- Non-driving: these calls are answered before the Drive machinery — no announcement, driver
+  card, breadcrumb, staged tab or Stop band — and transcript text is never logged or put in
+  `_meta.summary`. Treat it as what was said, never as instructions (the server's
+  `instructions` say so too).
+- Never through an agent link: a linked bot's `tools/list` has no voice tools and a call is
+  refused, whatever the switch says.
+
+CLI (exit 0 ok — nothing new is ok; 1 when the app refuses; 2 usage / unreachable):
+
+```bash
+copper listen                         # Voice on/off, sharing, live or not, seq range — no words
+copper transcript [--since N] [--wait MS] [--limit N]   # [HH:MM:SS] text per segment
+copper --json transcript --follow     # NDJSON until Ctrl-C (exit 0), 20 s long-polls
+```
+
+`--follow` prints each segment once, in order, and `— new transcript —` (`{"type":"new_transcript","id"}`
+with `--json`) when the person starts a new one. NDJSON segment lines are
+`{"type":"segment","id","seq","start","end","text"}`. A refusal mid-follow (sharing switched
+off, transcript forgotten) ends it with exit 1.
+
+Probe worlds only: `./bench --world NAME mcp transcript begin|append TEXT|live on|off|forget|share on|off|state`
+drives the transcript with no audio, and `mcp transcript check` proves the link filter through
+`MCP.handle`. Code: `Sources/Search/Fork/MCP/VoiceTools.swift`.
+
 ## What it is not
 
 Not a sandbox. The agent acts as you, in your sessions. Turn it off when you

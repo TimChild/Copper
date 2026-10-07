@@ -285,6 +285,8 @@ enum SettingsIndex {
           ["canvas", "whiteboard", "board"], "cloud.sync", fallback: "cloud.steps"),
         e(.cloud, "Devices", "On your other devices", "The tabs open on your other Macs",
           ["other macs", "devices", "remote tabs", "handoff"], "cloud.devices", fallback: "cloud.steps"),
+        e(.cloud, "Delete history on cloud", "Delete history on cloud", "The last hour, day or week, or all of it — or only one site. History on this Mac stays",
+          ["delete cloud history", "erase history", "remove history", "clear synced history", "forget site", "privacy", "last hour", "all time"], "cloud.history", fallback: "cloud.steps"),
         e(.cloud, "Account", "Account", "Who you're signed in as, and this Mac's name",
           ["this mac", "device name", "sign out", "display name"], "cloud.account", fallback: "cloud.steps"),
         e(.cloud, "Pair another Mac", "One-time code", "Signs another Mac in as you with one paste",

@@ -60,7 +60,7 @@ final class CloudSync: ObservableObject {
             case .settings: return "How Copper looks and behaves: appearance, sidebar, tab switching and sleep, swipes, blocking, autocorrect, archiving. Never passwords, paths or keys."
             case .bookmarks: return "The whole bookmarks tree, folders and all."
             case .tabs: return "Let your other Macs see the tabs open here, and open them from there. Nothing opens by itself."
-            case .history: return "Places you visit, so the address field knows them everywhere. Added to, never removed — clearing history here doesn't clear it there."
+            case .history: return "Places you visit, so the address field knows them everywhere. Clearing history here, or forgetting a page, deletes it on the cloud too, on a cloud that can."
             case .canvas: return "Your Personal canvas follows you between Macs. Shared canvases always live on the cloud — that is what sharing means."
             }
         }
@@ -352,6 +352,11 @@ final class CloudSync: ObservableObject {
             }
         case "history":
             if active(.history) { Task { await pullHistory() } }
+        case "history_deleted":
+            // Rows deleted on the cloud, from here or another Mac. Nothing to
+            // do: a delete there never reaches into History here, and what
+            // was deleted can't be pulled again.
+            break
         default:
             break
         }
@@ -539,10 +544,19 @@ final class CloudSync: ObservableObject {
     /// One at a time per domain: a pull waits for a push in flight (and the
     /// other way round), then runs against what that one left.
     private func serialized(_ name: String, _ body: @escaping () async -> Void) async {
-        while running.contains(name) { try? await Task.sleep(nanoseconds: 100_000_000) }
+        while running.contains(name) { await CloudSync.pause() }
         running.insert(name)
         defer { running.remove(name) }
         await body()
+    }
+
+    /// A tenth of a second, stopped or not: a stopped history delete still
+    /// waits its turn, and Task.sleep, throwing at once, would spin the main
+    /// thread until the lane is free.
+    private static func pause() async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { done.resume() }
+        }
     }
 
     /// A document as it reads back from JSON: what is compared against the
@@ -791,9 +805,7 @@ final class CloudSync: ObservableObject {
         // A cursor in the future (an older Copper sent a visit stamped there)
         // would pass over everything visited until then.
         let through = min(cloud.sync.pushedThrough ?? 0, now)
-        let visits = CloudApply.visits().map {
-            CloudHistory.Visit(key: $0.key, url: $0.url, title: $0.title, at: $0.last.timeIntervalSince1970)
-        }
+        let visits = CloudHistoryDelete.unforgotten(CloudSync.localVisits(), forgotten)
         let plan = CloudHistory.plan(visits, after: through, known: remote, now: now, limits: limits)
         guard !plan.isEmpty else { return }
         let upload = CloudHistory.Upload(plan, limits: limits, from: through, now: now)
@@ -899,6 +911,117 @@ final class CloudSync: ObservableObject {
                 if merged > 0 { self.note("Pulled \(merged) visit\(merged == 1 ? "" : "s") from other devices") }
             }
         }
+    }
+
+    // MARK: - deleting history on the cloud
+
+    /// Pages forgotten in the History window this run, and when — see
+    /// `CloudHistoryDelete.unforgotten`. Never written down: they were
+    /// asked to be forgotten.
+    private var forgotten: [String: Double] = [:]
+
+    private static func localVisits() -> [CloudHistory.Visit] {
+        CloudApply.visits().map { CloudHistory.Visit(key: $0.key, url: $0.url, title: $0.title, at: $0.last.timeIntervalSince1970) }
+    }
+
+    /// Deletes visits on the cloud — every Mac's rows, as `selector` says,
+    /// found on this Mac (CloudHistoryDelete) — and leaves History here as
+    /// it is. For Settings, `copper cloud-history delete` and agents.
+    ///
+    /// What it deletes doesn't come back:
+    ///   - it runs in the history lane, after any push or pull in flight and
+    ///     before the next, so neither crosses it;
+    ///   - visits a push sent before it are deleted by it: they are rows on
+    ///     the server by then;
+    ///   - a push sends only visits newer than `pushedThrough`, which only
+    ///     ever moved past visits that went up (or were left out), and a
+    ///     delete never moves it back: what this Mac sent is never offered
+    ///     again. Covered visits here that haven't gone up yet are put in
+    ///     `remote` — "on the server already" — so the next push passes over
+    ///     them too, and the cursor with them (`CloudHistoryDelete.push`);
+    ///   - a pull asks only for seqs after `pulledSeq`, which a delete leaves
+    ///     alone, and deleted rows are gone from the server. Rows pulled
+    ///     before stay in History here, behind the push cursor or in
+    ///     `remote`, so they aren't pushed back either.
+    func deleteHistory(_ selector: CloudHistoryDelete.Selector) async throws -> CloudHistoryDelete.Outcome {
+        try await erase(selector, why: CloudHistoryDelete.words(selector), here: .kept)
+    }
+
+    /// History.forget(): everything cleared here, so everything on the cloud
+    /// too while history syncs. Fire and forget; the log says how it went.
+    func historyCleared() {
+        guard active(.history) else { return }
+        Task { _ = try? await erase(CloudHistoryDelete.cleared, why: "cleared here", here: .cleared) }
+    }
+
+    /// A page forgotten in the History window: its rows on the cloud too,
+    /// whichever Mac sent them, found by key on this Mac.
+    func historyForgot(_ key: String) {
+        guard active(.history), !key.isEmpty else { return }
+        forgotten[key] = Date().timeIntervalSince1970
+        let site = key.prefix { $0 != "/" }
+        Task { _ = try? await erase(CloudHistoryDelete.forgot(key), why: "a page on \(site), forgotten here", here: .forgot) }
+    }
+
+    private func erase(_ selector: CloudHistoryDelete.Selector, why: String, here: CloudHistoryDelete.Here) async throws -> CloudHistoryDelete.Outcome {
+        func failed(_ error: Error) -> Error {
+            if !(error is CancellationError) {
+                note("History: nothing deleted from the cloud (\(why)) — \((error as? Cloud.Failure)?.message ?? error.localizedDescription)")
+            }
+            return error
+        }
+        guard cloud.isSignedIn else { throw failed(Cloud.Failure(status: 0, code: "not_signed_in", message: "Sign in to Copper Cloud first")) }
+        if cloud.deletesHistory == nil { await cloud.loadInfo() }
+        guard let can = cloud.deletesHistory else {
+            throw failed(Cloud.Failure(status: 0, code: "network", message: "Couldn't ask the cloud whether it can delete history — try again when it's reachable"))
+        }
+        guard can else { throw failed(Cloud.Failure(status: 0, code: "unsupported", message: CloudHistoryDelete.unsupported)) }
+        var result: Result<CloudHistoryDelete.Outcome, Error> = .failure(CancellationError())
+        await serialized("history-push") {
+            await self.serialized("history-pull") {
+                // History cleared here: nothing is to go up again, whether or
+                // not the cloud answers.
+                if here == .cleared { self.settlePush(after: selector, here: here) }
+                do {
+                    result = .success(try await CloudHistoryDelete.run(selector) { try await self.askHistory($0) })
+                    if here == .kept { self.settlePush(after: selector, here: here) }
+                } catch {
+                    // Some deleted, then a failure: settled as if all were.
+                    // Nothing deleted (or stopped): the push goes on as before.
+                    if here == .kept, (error as? Cloud.Failure)?.code == "partial" { self.settlePush(after: selector, here: here) }
+                    result = .failure(error)
+                }
+            }
+        }
+        switch result {
+        case .success(let outcome):
+            let visits = "\(outcome.deleted) visit\(outcome.deleted == 1 ? "" : "s")"
+            let cut = outcome.cut ? " (looked through the first \(CloudHistoryDelete.pageLimit * CloudHistoryDelete.pageSize) only)" : ""
+            note("History: deleted \(visits) from the cloud — \(why)\(cut)")
+            return outcome
+        case .failure(let error):
+            throw failed(error)
+        }
+    }
+
+    /// The push cursor and `remote` as CloudHistoryDelete.push says, kept.
+    private func settlePush(after selector: CloudHistoryDelete.Selector, here: CloudHistoryDelete.Here) {
+        let now = Date().timeIntervalSince1970
+        let visits = here == .kept ? CloudSync.localVisits() : []
+        let settled = CloudHistoryDelete.push(after: selector, here: here, visits: visits, through: cloud.sync.pushedThrough,
+                                              remote: remote, device: cloud.account?.deviceId, now: now)
+        guard settled.through != cloud.sync.pushedThrough || settled.remote != remote else { return }
+        var prefs = cloud.sync
+        prefs.pushedThrough = settled.through
+        cloud.sync = prefs
+        remote = settled.remote
+        saveState()
+    }
+
+    /// One request of a delete: the answer's bytes, on the main actor only
+    /// for as long as it takes to ask.
+    private func askHistory(_ ask: CloudHistoryDelete.Ask) async throws -> Data {
+        try await cloud.request(ask.method, "/v1/sync/history", body: ask.body, query: ask.query).0
     }
 
     // MARK: - what is kept between runs

@@ -238,5 +238,7 @@ enum CloudApply {
         return (try? JSONDecoder().decode([Visit].self, from: data)) ?? []
     }
 
-    static func historyKey(_ url: URL) -> String { Address.pretty(url).lowercased() }
+    /// Nonisolated: a delete matches cloud rows against it off the main
+    /// thread (CloudHistoryDelete).
+    nonisolated static func historyKey(_ url: URL) -> String { Address.pretty(url).lowercased() }
 }

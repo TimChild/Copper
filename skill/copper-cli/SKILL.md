@@ -42,6 +42,7 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper bitwarden lock` / `logout` / `sync` | Drop the session / sign out and wipe the CLI state / pull the vault now. |
 | `copper bitwarden policy [--share folder\|all] [--stay-unlocked on\|off]` | What agents may use (the `Agents` folder, or everything) and whether the session survives a restart. |
 | `copper crashes [show N [--symbolicate]] [path]` | Copper's own crash history, newest first / one in full with its breadcrumbs; reads the data folder, so it works with Copper down. |
+| `copper cloud-history delete [--since 1h\|24h\|7d\|TIME] [--until TIME] [--host SITE]… [--page URL]… [--device ID\|this]` / `--all` | Delete the user's history on Copper Cloud (every Mac's rows; this Mac's history stays) — only when the user asks. A site matches its subdomains and is found on the Mac, never by the server. Prints the counts. |
 | `copper --launch …` | Explicitly opt into launching Copper when it is down (also `COPPER_LAUNCH=1`). |
 
 ## Your own tab

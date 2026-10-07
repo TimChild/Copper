@@ -131,6 +131,9 @@ final class Cloud: ObservableObject {
     /// What `/v1/info` says a history push may weigh (`limits`), read with
     /// the version; smaller if a refusal has said so since. Nil until known.
     var historyLimits: CloudHistory.Limits?
+    /// `/v1/info`'s `features`, read with the version: what this instance can
+    /// do that its version alone doesn't say. Nil until it has answered.
+    @Published private(set) var features: Set<String>?
 
     /// Things a copper-cloud has from some version on.
     enum Feature: String {
@@ -579,7 +582,10 @@ final class Cloud: ObservableObject {
         let object = (try? JSONSerialization.jsonObject(with: answer.0)) as? [String: Any]
         let version = (object?["version"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         infoFor = link.url
-        if let object { historyLimits = CloudHistory.Limits(info: object) }
+        if let object {
+            historyLimits = CloudHistory.Limits(info: object)
+            features = Cloud.features(in: object)
+        }
         if let version, !version.isEmpty, version != serverVersion {
             serverVersion = version
             // A version is the better witness: what a 404 suggested goes.
@@ -611,9 +617,19 @@ final class Cloud: ObservableObject {
         return historyLimits ?? .standard
     }
 
+    /// Whether history can be deleted on the cloud (`DELETE
+    /// /v1/sync/history`, CloudHistoryDelete); nil until `/v1/info` answers.
+    var deletesHistory: Bool? { features.map { $0.contains(CloudHistoryDelete.feature) } }
+
+    /// `features` in a `/v1/info` answer; none listed is none at all.
+    nonisolated static func features(in info: [String: Any]) -> Set<String> {
+        Set((info["features"] as? [Any] ?? []).compactMap { $0 as? String })
+    }
+
     private func forgetInfo() {
         infoFor = nil
         historyLimits = nil
+        features = nil
         if serverVersion != nil { serverVersion = nil }
         if !lacking.isEmpty { lacking = [] }
     }

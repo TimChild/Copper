@@ -147,17 +147,10 @@ final class Bookmarks: ObservableObject {
         node.id == id || (node.children ?? []).contains { holds(id, $0) }
     }
 
-    /// Another browser's, kept apart in a folder of that browser's name
-    /// unless there was nothing here yet.
+    /// Another browser's, with the bar at the top level and source-owned
+    /// roots replaced on repeat imports, without touching personal bookmarks.
     func take(_ nodes: [Bookmark], from name: String) {
-        guard !nodes.isEmpty else { return }
-        if roots.isEmpty {
-            roots = nodes
-        } else {
-            roots.removeAll { $0.isFolder && $0.title == name }
-            roots.append(.folder(name, nodes))
-        }
-        save()
+        FlowBookmarks.take(nodes, from: name, into: self)
     }
 
     /// Fork (cloud): the whole tree at once, ids kept — Copper Cloud's merged

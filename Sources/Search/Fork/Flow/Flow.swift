@@ -224,7 +224,7 @@ final class Flow: ObservableObject {
         }
         haul.extensions = FlowExtensions.read(source.readerSource, profiles: source.profiles)
         haul.passkeyCount = FlowPasskeys.count(source.readerSource, profiles: source.profiles)
-        haul.bookmarkCount = FlowChromium.bookmarks(in: source).count
+        haul.bookmarkCount = FlowBookmarks.count(FlowChromium.bookmarks(in: source))
         haul.placeCount = FlowChromium.places(in: source).count
         haul.notes.append("\(haul.bookmarkCount) bookmarks")
         haul.notes.append("\(haul.placeCount) places")
@@ -577,6 +577,13 @@ final class Flow: ObservableObject {
         sources.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
+    private static func benchBookmarks(_ nodes: [Bookmark]) -> [[String: Any]] {
+        nodes.map { node in
+            if node.isFolder { return ["title": node.title, "children": benchBookmarks(node.children ?? [])] }
+            return ["title": node.title, "url": node.url ?? ""]
+        }
+    }
+
     func bench(_ request: [String: Any], in browser: Browser) -> [String: Any] {
         let op = request["op"] as? String ?? "sources"
         switch op {
@@ -601,6 +608,11 @@ final class Flow: ObservableObject {
             refreshSources(autoScan: false)
             guard let updated = self.source(named: source.name) else { return ["error": "root is not a readable source"] }
             return ["source": updated.name, "root": updated.root.path, "locked": updated.locked, "profiles": updated.profiles]
+        case "bookmarks":
+            // In a probe world, inspect the tree that actually landed, not
+            // just the source preview (including root order and nesting).
+            guard Store.testing else { return ["error": "bookmark tree only works in a test run"] }
+            return ["count": browser.bookmarks.count, "roots": Self.benchBookmarks(browser.bookmarks.roots)]
         case "scan":
             guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
             guard !source.locked else { return ["error": "source is locked"] }

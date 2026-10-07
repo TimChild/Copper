@@ -9,6 +9,24 @@ browser's files locally and never changes them.
 - pinned tabs and tab groups
 - bookmarks and history
 
+Chrome stores signed-in synced bookmarks in `AccountBookmarks` and local-only
+bookmarks in `Bookmarks`. Flow reads both for every profile found by
+`Preferences` (no `Login Data` needed), in profile order (`Default`, then named
+profiles); within a profile, account bookmarks come first, then local. The
+Chrome bookmark bar is Copper's top-level bookmark list, followed by an
+`Other` folder and a `Mobile` folder for Chrome's other/synced roots. Matching
+folder names merge recursively, preserving child order; an identical URL and
+title at the same level is kept only once. Only HTTP(S) sites move. Copper's
+existing top-level bookmarks stay in place: imported bar items follow them,
+not a `Chrome` folder. If an imported root folder's name collides with one of
+yours, the imported folder is named `Other (Chrome)` (or similarly). A repeat
+Flow import replaces *untouched top-level items from the previous import*;
+anything you edited, moved, or saved yourself is left alone. The source-owned
+root IDs are recorded in `flow-bookmarks-chrome.json` in Copper's own data
+folder. On a first import into an older Copper tree without that record,
+previously filed `Chrome` folders are left alone rather than guessed at or
+deleted.
+
 History import reads every visible URL with a visit from the selected Chromium
 profile; it is not capped at the old 3,000-row preview limit. Copper keeps up to
 20,000 distinct places locally and merges a repeated import idempotently (the
@@ -71,11 +89,21 @@ The `bench flow` commands are available in an isolated `SEARCH_PROBE` world:
 
 ```sh
 ./bench --world flowqa flow sources
-./bench --world flowqa flow scan --source Chrome
 ./bench --world flowqa flow root --source Chrome --path /tmp/chrome-copy
-./bench --world flowqa flow move --source Arc --only tabs,bookmarks,history,extensions
+./bench --world flowqa flow scan --source Chrome
+./bench --world flowqa flow move --source Chrome --only bookmarks
+./bench --world flowqa flow bookmarks  # imported tree, sites and folder order
 ./bench --world flowqa flow open
 ```
+
+`docs/fixtures/flow-bookmarks-e2e.sh` copies the small fake Chrome root,
+starts a fresh headless `SEARCH_PROBE` world, asserts the scan count and the
+actual moved tree (including re-import and preservation of an existing Copper
+bookmark), then removes only that world. Build the app with `./build.sh` first.
+The fixture commits only bookmark files for Profile 1 and Profile 2; the
+script writes the two empty `Preferences` markers into its *copy* because
+Flow uses them to discover profiles. The shared fixture root may also hold
+other workers' Default profile metadata.
 
 `./arc-import` remains for older installations and one-off recovery, but is
 superseded by Flow.

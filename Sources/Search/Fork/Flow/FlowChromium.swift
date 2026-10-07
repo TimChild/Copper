@@ -7,26 +7,8 @@ import SQLite3
 /// session, history and bookmark files, so those paths are walked directly.
 enum FlowChromium {
     static func bookmarks(in source: FlowSource) -> [Bookmark] {
-        guard source.rootOverride != nil else { return Chromium.bookmarks(in: source.readerSource) }
-        var out: [Bookmark] = []
-        for profile in source.profiles {
-            let file = source.root.appendingPathComponent(profile, isDirectory: true)
-                .appendingPathComponent("Bookmarks")
-            guard let data = try? Data(contentsOf: file),
-                  let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let roots = top["roots"] as? [String: Any]
-            else { continue }
-            if let bar = roots["bookmark_bar"] as? [String: Any] {
-                out += nodes(in: bar["children"] as? [[String: Any]] ?? [])
-            }
-            for key in ["other", "synced"] {
-                if let more = roots[key] as? [String: Any] {
-                    let kids = nodes(in: more["children"] as? [[String: Any]] ?? [])
-                    if !kids.isEmpty { out.append(.folder(key == "other" ? "Other" : "Mobile", kids)) }
-                }
-            }
-        }
-        return out
+        let profiles = source.profiles.map { source.root.appendingPathComponent($0, isDirectory: true) }
+        return FlowBookmarks.bookmarks(in: profiles)
     }
 
     static func places(in source: FlowSource, limit: Int = Int.max) -> [Chromium.Place] {
@@ -41,23 +23,6 @@ enum FlowChromium {
             out += rows
         }
         return Array(out.sorted { $0.last > $1.last }.prefix(limit))
-    }
-
-    private static func nodes(in raw: [[String: Any]]) -> [Bookmark] {
-        raw.compactMap { entry in
-            let name = entry["name"] as? String ?? ""
-            switch entry["type"] as? String {
-            case "folder":
-                return .folder(name, nodes(in: entry["children"] as? [[String: Any]] ?? []))
-            case "url":
-                guard let text = entry["url"] as? String, let url = URL(string: text),
-                      url.scheme == "http" || url.scheme == "https"
-                else { return nil }
-                return .site(name, url)
-            default:
-                return nil
-            }
-        }
     }
 
     private static func placeRows(in file: URL, limit: Int) throws -> [Chromium.Place] {

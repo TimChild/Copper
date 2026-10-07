@@ -113,12 +113,15 @@ enum ComposerInsert {
 
     /// ⌘Z for words spliced into the draft itself: back to `to` while the
     /// draft is still `from` — and, while undoing, the redo the other way.
+    /// The undo manager is the action's target, so the handler is handed it
+    /// rather than capturing it (an UndoManager isn't Sendable; the handler
+    /// is); the agent is main-actor bound, so it may be captured.
     private static func swap(_ undo: UndoManager, agent: Agent, from: String, to: String) {
-        undo.registerUndo(withTarget: agent) { agent in
+        undo.registerUndo(withTarget: undo) { manager in
             MainActor.assumeIsolated {
                 guard agent.draft == from else { return }
                 agent.draft = to
-                ComposerInsert.swap(undo, agent: agent, from: to, to: from)
+                ComposerInsert.swap(manager, agent: agent, from: to, to: from)
             }
         }
         undo.setActionName("Dictation")

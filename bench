@@ -232,6 +232,12 @@
     ./bench voice prefs on|off|hold|toggle|insert|send · voice model status|install|cancel|remove · voice state
                                        prefs and model install/cancel/remove: test world only
     ./bench voice editor state|type TEXT|event|boundary|undo|redo|resync   test world: the composer's field editor against the draft
+    ./bench voice listen start [--source PATH] [--fast|--speed X] [--wait]   test world: Listen in the agent pane, the file
+                                       standing in for the mic (--fast: as fast as it decodes; --wait: answer once heard out)
+    ./bench voice listen pause|resume|stop|forget|close-pane|open-pane|sleep|lock|device-lost   test world: Listen's controls,
+                                       and what pauses it
+    ./bench voice listen state [--settle] [--last N]   phase, reason, segment count, the last N segments, live, partial
+    ./bench voice seed listening|listen-expanded|listen-paused|listen-stopped   test world: Listen's card, for pictures
     ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
     ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
     ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark] [CODE]|bookmark URL [TITLE]|pin URL|open URL
@@ -424,14 +430,17 @@ def main(argv):
         if request["op"] == "replay":
             if len(args) != 2: sys.exit("usage: bench voice replay PATH")
             request["path"] = os.path.abspath(args[1])
-        elif request["op"] in ("dictate", "source", "key", "seed", "render", "prefs", "model", "state", "editor", "warm"):
+        elif request["op"] in ("dictate", "source", "key", "seed", "render", "prefs", "model", "state", "editor", "warm", "listen"):
             # Dictation (Fork/Voice/DictationBench.swift): the words after the op, a file path made absolute.
             rest = args[1:]
             if request["op"] in ("dictate", "source", "render") and rest and rest[0] != "off" and not rest[0].startswith("--"):
                 rest[0] = os.path.abspath(rest[0])
+            # Listen (Fork/Voice/ListenBench.swift): --source PATH made absolute.
+            if request["op"] == "listen" and "--source" in rest and rest.index("--source") + 1 < len(rest):
+                rest[rest.index("--source") + 1] = os.path.abspath(rest[rest.index("--source") + 1])
             request["args"] = rest
         elif len(args) > 1 or request["op"] not in ("selftest", "status", "result"):
-            sys.exit("usage: bench voice selftest|replay PATH|status|result|dictate PATH …|source PATH|off|key …|warm …|seed …|render PATH [W] [dark]|prefs …|model …|state|editor …")
+            sys.exit("usage: bench voice selftest|replay PATH|status|result|dictate PATH …|source PATH|off|key …|warm …|seed …|render PATH [W] [dark]|prefs …|model …|state|editor …|listen …")
     elif verb == "settings":
         words = [a for a in args if a != "--table"]
         request["op"] = words[0] if words else "state"

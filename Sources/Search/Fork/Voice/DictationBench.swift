@@ -26,6 +26,8 @@ import SwiftUI
 //   voice model status|install|cancel|remove
 //   voice state                             phase, mic, line, engine, counts, the last timeline
 //   voice editor state|type TEXT|event|boundary|undo|redo|resync   the composer's field editor against the draft
+//   voice listen start [--source PATH] [--fast] [--wait] | pause | resume | stop | forget | state   Listen (ListenBench.swift)
+//   voice seed listening|listen-expanded|listen-paused|listen-stopped   Listen's card, for pictures
 
 @MainActor
 enum DictationBench {
@@ -47,6 +49,9 @@ enum DictationBench {
         case "warm": return "voice warm only works in a test world"
         case "editor": return "voice editor only works in a test world"
         case "dictate": return "voice dictate only runs in a test world"
+        case "listen":
+            let sub = args.first ?? "state"
+            return sub.isEmpty || sub == "state" ? nil : "voice listen \(sub) only works in a test world — it uses the agent pane's Listen"
         default: return nil
         }
     }
@@ -79,8 +84,16 @@ enum DictationBench {
         case "seed":
             guard let browser else { answer(["error": "no browser"]); return true }
             Agent.shared.open = true
+            // Listen's card (Fork/Voice/Listen.swift): listening|listen-expanded|listen-paused|listen-stopped.
+            if let scenario = args.first, scenario == "listening" || scenario.hasPrefix("listen-") {
+                if let error = Listen.shared.seed(scenario, in: browser) { answer(["error": error]); return true }
+                answer(Listen.shared.benchState())
+                return true
+            }
             if let error = voice.seed(args.first ?? "dictating", in: browser) { answer(["error": error]); return true }
             answer(voice.benchState())
+        case "listen":
+            ListenBench.handle(args, in: browser, answer: answer, job: job)
         case "render":
             guard let browser else { answer(["error": "no browser"]); return true }
             answer(render(args, in: browser))
@@ -625,13 +638,15 @@ enum VoiceChecks {
             ("seed", ["dictating"]), ("seed", []), ("render", ["/tmp/pane.png", "340"]), ("model", ["install"]),
             ("model", ["cancel"]), ("model", ["remove"]), ("model", ["bogus"]), ("prefs", ["on"]), ("source", ["clip.wav"]),
             ("source", ["off"]), ("key", ["down"]), ("warm", ["now"]), ("editor", ["state"]), ("dictate", ["clip.wav"]),
+            ("seed", ["listening"]), ("listen", ["start", "--source", "clip.wav"]), ("listen", ["pause"]), ("listen", ["resume"]),
+            ("listen", ["stop"]), ("listen", ["forget"]), ("listen", ["close-pane"]),
         ]
         for (op, args) in changing {
             let call = (["voice", op] + args).joined(separator: " ")
             if DictationBench.refusal(op, args, testing: false) == nil { failures.append("\(call) runs outside a test world") }
             if let refused = DictationBench.refusal(op, args, testing: true) { failures.append("\(call) refused in a test world: \(refused)") }
         }
-        for (op, args) in [("state", [String]()), ("model", []), ("model", ["status"]), ("model", [""])] {
+        for (op, args) in [("state", [String]()), ("model", []), ("model", ["status"]), ("model", [""]), ("listen", ["state"]), ("listen", [])] {
             if let refused = DictationBench.refusal(op, args, testing: false) {
                 failures.append("\((["voice", op] + args).joined(separator: " ")) refused outside a test world: \(refused)")
             }

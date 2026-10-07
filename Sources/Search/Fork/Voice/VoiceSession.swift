@@ -196,6 +196,7 @@ final class Voice: ObservableObject {
         VoiceChecks.register()
         VoiceKeys.install()
         ComposerInsert.followUndo()
+        Listen.shared.boot()
 
         // The pane closing, voice going off, the model going away: cancel.
         // The pane opening or voice coming on with the model ready: warm up.
@@ -237,8 +238,19 @@ final class Voice: ObservableObject {
     // MARK: - what the pane shows
 
     func mic(agentReady: Bool) -> Mic {
-        guard VoicePrefs.supported, prefs.enabled else { return .hidden }
+        let model = speechModel()
+        guard model != .hidden else { return .hidden }
+        // One capture at a time: Listen live or paused has the microphone.
+        if Listen.shared.holdsMic { return .unavailable(Listen.blocksDictation) }
         guard agentReady else { return .unavailable("Sign in with Claude or add a key to use the agent") }
+        return model
+    }
+
+    /// The speech model alone, whoever wants it: `hidden` with voice off,
+    /// `waiting`/`preparing` until it can hear, else `ready`. The Listen door
+    /// reads this; the mic adds the agent and Listen to it.
+    func speechModel() -> Mic {
+        guard VoicePrefs.supported, prefs.enabled else { return .hidden }
         switch seededModel ?? ModelStore.shared.state {
         case .ready: return preparing ? .preparing : .ready
         case .downloading(let fraction): return .waiting("Speech model downloading · \(Int((fraction * 100).rounded(.down)))%")
@@ -309,6 +321,9 @@ final class Voice: ObservableObject {
         // Whether one can start; one under way can always be stopped.
         if !active {
             switch mic(agentReady: Agent.shared.ready) {
+            case .unavailable(let why) where why == Listen.blocksDictation:
+                if hand == .key { show(note: why, for: 2.5) }
+                return
             case .hidden, .unavailable:
                 return
             case .waiting(let why):
@@ -707,6 +722,14 @@ final class Voice: ObservableObject {
         startWarm(dir)
     }
 
+    /// Listen is starting: the model loaded (or loading) whether or not the
+    /// pane's agent is set up — its decodes wait for the load.
+    func ensureWarm() {
+        guard #available(macOS 15, *), engineState == .cold, let dir = ModelStore.shared.modelDir else { return }
+        unloadTimer?.cancel()
+        startWarm(dir)
+    }
+
     /// One load at a time; nothing when loaded. Past `slowLoad` the mic
     /// shows the model is being prepared.
     @available(macOS 15, *)
@@ -768,11 +791,12 @@ final class Voice: ObservableObject {
         engineState = .cold
     }
 
-    /// Ten minutes without a dictation lets the model go (100–200 MB).
-    private func scheduleUnload() {
+    /// Ten minutes without a dictation lets the model go (100–200 MB) —
+    /// never while Listen is capturing (it calls this when it stops).
+    func scheduleUnload() {
         unloadTimer?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.active, self.engineState != .warming else { return }
+            guard let self, !self.active, !Listen.shared.capturing, self.engineState != .warming else { return }
             self.resetEngine()
             if #available(macOS 15, *) { Task { await VoiceEngine.shared.unload() } }
             Voice.log.info("voice model unloaded after 10 idle minutes")
@@ -838,6 +862,7 @@ final class Voice: ObservableObject {
             "testSource": testSource != nil, "keysConsumed": VoiceKeys.consumed, "keysPassed": VoiceKeys.passed,
             "announced": announced, "partials": partials, "engine": engineState.rawValue, "engineSlow": engineSlow,
             "refusedPreparing": refusedPreparing, "undoFollowed": ComposerInsert.followed,
+            "listen": Listen.name(Listen.shared.phase),
             "timeline": timeline.map { row -> [String: Any] in
                 var r: [String: Any] = ["ms": row.ms, "event": row.event]
                 if let n = row.count { r["n"] = n }

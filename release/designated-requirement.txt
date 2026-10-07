@@ -1,0 +1,1 @@
+identifier "com.collinrijock.copper" and certificate leaf = H"76264b1f74fbc16100eb71c855edd6d4165c4fbe"

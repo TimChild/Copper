@@ -52,7 +52,7 @@
                                        allow or take back one site it asked for (kept across launches)
     ./bench ext-manager remove ID | answer remove|cancel
                                        the Remove sheet, and its buttons
-    ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade
+    ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade|requirement [TEXT|off]
     ./bench updates pill [available|downloading [F]|ready|installing|failed [swap] [WHY]|off] [v=VERSION]
                                        the sidebar's update pill forced into a state (its clicks are
                                        rehearsed, never real); pill click|later|unsnooze|notes [TEXT]|replay
@@ -283,6 +283,8 @@ Needs Settings › General › "Let a script drive Copper" switched on in the
 running app. IDs are the first characters of a tab's id, as `tabs` prints
 them. With --test, talks to a SEARCH_PROBE run instead of the real one;
 with --world NAME, to a SEARCH_PROBE=NAME run, the world "Copper (NAME)".
+A development build opened without SEARCH_PROBE is the world "dev": drive it
+with --world dev; plain ./bench talks to the installed Copper.
 """
 
 import json

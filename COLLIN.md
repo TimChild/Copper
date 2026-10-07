@@ -13,6 +13,16 @@ Copper is Collin's fork of [Search](https://github.com/driceroland/Search), the 
 - `PATCHES.md`: manifest of every patch that touches an upstream file (what, why, upstream status, when to drop).
 - `FORK-PLAN.md`: the plan. Copied verbatim at the bottom of this file.
 
+## Releases, signing and the dev app
+
+Full story: `docs/releasing.md`.
+
+- **Releases are signed with Copper's own certificate** (self-signed, `CN=Copper Release Signing`, public half and SHA-1 in `release/`; the `.p12` is the repo secrets `COPPER_SIGNING_P12_BASE64` + `COPPER_SIGNING_P12_PASSWORD`) and the explicit designated requirement in `release/designated-requirement.txt`. Not a Developer ID, not notarized.
+- **Why it matters:** macOS files Full Disk Access, Files & Folders, Automation and keychain "Always Allow" under the app's designated requirement. Ad-hoc releases had a different one every build, so every update silently dropped them (Move in couldn't read Chrome after an update). Now every release has the same one, and the updater refuses any download that doesn't satisfy it.
+- **Cut a release:** `gh workflow run release.yml -R copper-browser/Copper -f ref=fork`. **Dry run:** `--ref <branch> -f publish=false` builds, signs, checks and launches it, and keeps the zip as the run's artifact; nothing is published.
+- **Rotate the certificate** (expires 2036-10-04, or if the key leaks): `docs/releasing.md` › Rotating. It needs a bridge release that accepts both certificates, and costs one re-grant.
+- **`./build.sh` builds the dev app, `com.collinrijock.copper.dev`**: own permissions, settings, cookies and keychain identity, always a test world (`Copper (dev)` when no `SEARCH_PROBE`), no `copper://` scheme. It can't touch the Copper you use. `COPPER_RELEASE=1 ./build.sh release app` builds Copper itself, which only the release workflow needs.
+
 ## Status
 
 | Item | Tier | Status |

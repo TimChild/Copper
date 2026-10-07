@@ -21,7 +21,7 @@ import SwiftUI
 //   voice warm cold [DELAY] | now           the model let go (and every load held DELAY s), then loaded as
 //                                           the pane opening does; now = loaded and waited for
 //   voice seed idle|dictating|finishing|finishing-warming|denied|preparing|warming|downloading|…
-//   voice render PATH [WIDTH] [dark] [settings]   the pane (or Settings › Voice), drawn off screen at WIDTH
+//   voice render PATH [WIDTH [HEIGHT]] [dark] [settings]   the pane (or Settings › Voice), drawn off screen at WIDTH
 //   voice prefs on|off|hold|toggle|insert|send
 //   voice model status|install|cancel|remove
 //   voice state                             phase, mic, line, engine, counts, the last timeline
@@ -552,11 +552,13 @@ enum DictationBench {
     /// content column (409–699 pt: the panel's 600–920 less its rail), with
     /// the column's own 32 pt margins and Settings' look.
     static func render(_ args: [String], in browser: Browser) -> [String: Any] {
-        guard let path = args.first else { return ["error": "voice render PATH [WIDTH] [dark] [settings]"] }
+        guard let path = args.first else { return ["error": "voice render PATH [WIDTH [HEIGHT]] [dark] [settings]"] }
         let settings = args.contains("settings")
-        let width = CGFloat(args.dropFirst().compactMap { Double($0) }.first ?? (settings ? 409 : Double(AgentPane.width)))
+        let numbers = args.dropFirst().compactMap { Double($0) }
+        let width = CGFloat(numbers.first ?? (settings ? 409 : Double(AgentPane.width)))
         let dark = args.contains("dark")
-        let height: CGFloat = settings ? 600 : 520
+        // A taller pane for Listen's open transcript (it and the empty chat need the room).
+        let height = CGFloat(numbers.dropFirst().first.map { min(max($0, 300), 1400) } ?? (settings ? 600 : 520))
         let view: AnyView
         if settings {
             view = AnyView(VoicePage(browser: browser)

@@ -334,9 +334,7 @@ final class Agent: ObservableObject {
         }
         // The Listen transcript, when its chip is on: in this question only,
         // as it stands now, and kept as sent through every tool round.
-        if transcriptContext, let block = Agent.transcriptBlock(Transcript.shared) {
-            user["content"] = ((user["content"] as? String) ?? text) + "\n\n" + block
-        }
+        user["content"] = Agent.question((user["content"] as? String) ?? text, chip: transcriptContext, transcript: Transcript.shared)
         guard live() else { return }
         let asked = messages.count
         messages.append(user)

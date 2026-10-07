@@ -171,7 +171,7 @@ final class Listen: ObservableObject {
     enum Door: Equatable {
         /// Voice is off (or can't be on this Mac).
         case hidden
-        /// Listen has the microphone: a click does nothing; the card has the controls.
+        /// Listen is capturing: a click does nothing; the card has the controls.
         case on(String)
         /// A dictation has the microphone: disabled.
         case busy(String)
@@ -186,11 +186,9 @@ final class Listen: ObservableObject {
         case .hidden: return .hidden
         default: break
         }
-        switch phase {
-        case .arming, .live: return .on("Listening — Pause or Stop in the card below")
-        case .paused: return .on("Listen is paused — Resume or Stop in the card below")
-        case .off, .stopped: break
-        }
+        // Live: the card has the controls. Paused or stopped, a click listens
+        // on into the same transcript, as the card's Resume and Listen again do.
+        if capturing { return .on("Listening — Pause or Stop in the card below") }
         if voice.active { return .busy("Finish dictating to Listen") }
         switch voice.speechModel() {
         case .waiting(let why), .unavailable(let why): return .waiting(why)
@@ -200,8 +198,8 @@ final class Listen: ObservableObject {
         }
     }
 
-    /// The door clicked: Listen starts (or, stopped, listens again into the
-    /// same transcript); the speech model not ready opens Settings › Voice.
+    /// The door clicked: Listen starts (or, paused or stopped, listens on into
+    /// the same transcript); the speech model not ready opens Settings › Voice.
     func doorPressed(in browser: Browser) {
         switch door {
         case .hidden, .on, .busy: return
@@ -294,7 +292,10 @@ final class Listen: ObservableObject {
             halt(id, Listen.reason(for: error))
             return
         }
-        starts[id] = began
+        // Times only go forward in one transcript: a capture heard faster than
+        // real time (a file, in the bench) can end "later" than now, and the
+        // next one resumes from there. With the microphone this is `began`.
+        starts[id] = max(began, Transcript.shared.segments.last?.end ?? began)
         self.source = source
         live = session
         liveSince = Date()

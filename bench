@@ -227,8 +227,8 @@
                                        Neural Engine preparation), then loaded as the pane opening does
     ./bench voice seed idle|dictating|finishing|finishing-warming|denied|preparing|warming|downloading|failed|hint|inserted|off
                                        test world: the composer frozen in a dictation state, for pictures
-    ./bench voice render PATH [WIDTH] [dark] [settings]   test world: the agent pane drawn off screen at WIDTH (340–620),
-                                       or Settings › Voice at the panel's column width (409–699)
+    ./bench voice render PATH [WIDTH [HEIGHT]] [dark] [settings]   test world: the agent pane drawn off screen at WIDTH
+                                       (340–620; HEIGHT default 520), or Settings › Voice at the panel's column width (409–699)
     ./bench voice prefs on|off|hold|toggle|insert|send · voice model status|install|cancel|remove · voice state
                                        prefs and model install/cancel/remove: test world only
     ./bench voice editor state|type TEXT|event|boundary|undo|redo|resync   test world: the composer's field editor against the draft

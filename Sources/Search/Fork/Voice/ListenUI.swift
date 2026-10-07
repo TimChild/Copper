@@ -22,7 +22,11 @@ struct ListenDoor: View {
         case .hidden:
             EmptyView()
         case .ready:
-            door(help: "Listen", on: true, tint: Palette.muted)
+            switch listen.phase {
+            case .paused: door(help: "Resume Listen", on: true, tint: Palette.muted)
+            case .stopped: door(help: "Listen again", on: true, tint: Palette.muted)
+            default: door(help: "Listen", on: true, tint: Palette.muted)
+            }
         case .waiting(let why):
             door(help: why, on: true, tint: Palette.muted.opacity(0.45))
         case .busy(let why):
@@ -35,7 +39,8 @@ struct ListenDoor: View {
     private func door(help: String, on: Bool, tint: Color) -> some View {
         PaneDoor(icon: "waveform", help: help, on: on, tint: tint) { listen.doorPressed(in: browser) }
             .accessibilityLabel("Listen")
-            .accessibilityHint(help == "Listen" ? "Starts a live transcript of the microphone" : help)
+            .accessibilityHint(help == "Listen" ? "Starts a live transcript of the microphone"
+                               : help == "Resume Listen" || help == "Listen again" ? "Listens on into the same transcript" : help)
     }
 }
 
@@ -47,7 +52,6 @@ struct ListenCard: View {
     @Environment(\.accessibilityReduceMotion) private var still
     /// The list is scrolled to its end; new lines follow only then.
     @State private var atBottom = true
-    @State private var listHeight: CGFloat = 0
 
     /// The open list's ceiling.
     static let listMax: CGFloat = 220
@@ -175,63 +179,66 @@ struct ListenCard: View {
         return format
     }()
 
+    /// As tall as its lines up to `listMax`, then a scroller of that height:
+    /// the first of the two that fits, so no measuring feeds back into layout.
     private var list: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    if transcript.segments.isEmpty && listen.partial.isEmpty {
-                        Text(listen.capturing ? "Nothing said yet" : "Nothing was said")
-                            .font(.system(size: 12)).foregroundStyle(Palette.faint)
+        ViewThatFits(in: .vertical) {
+            rows
+            ScrollViewReader { proxy in
+                ScrollView { rows }
+                    .frame(height: ListenCard.listMax)
+                    .defaultScrollAnchor(.bottom)
+                    .listenFollows($atBottom)
+                    .overlay(alignment: .bottomTrailing) {
+                        if !atBottom { jump(proxy) }
                     }
-                    ForEach(transcript.segments, id: \.seq) { segment in
-                        row(ListenCard.time.string(from: segment.start), segment.text, partial: false)
-                    }
-                    if !listen.partial.isEmpty {
-                        row(ListenCard.time.string(from: Date()), listen.partial, partial: true)
-                    }
-                    Color.clear.frame(height: 1).id("listen.bottom")
-                        .background(GeometryReader { g in
-                            Color.clear.preference(key: ListenBottomKey.self, value: g.frame(in: .named("listen.list")).maxY)
-                        })
-                }
-                .padding(.leading, 15)
-                .padding(.trailing, 8)
-                .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: ListenHeightKey.self, value: g.size.height)
-                })
+                    .onAppear { follow(proxy, animated: false) }
+                    .onChange(of: transcript.segments.count) { _, _ in if atBottom { follow(proxy, animated: true) } }
+                    .onChange(of: listen.partial) { _, _ in if atBottom { follow(proxy, animated: false) } }
             }
-            .coordinateSpace(name: "listen.list")
-            .frame(height: min(max(listHeight, 24), ListenCard.listMax))
-            .onPreferenceChange(ListenHeightKey.self) { listHeight = $0 }
-            .onPreferenceChange(ListenBottomKey.self) { y in
-                // Slack, so a line landing doesn't count as scrolling up.
-                atBottom = y <= min(max(listHeight, 24), ListenCard.listMax) + 30
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if !atBottom {
-                    Button { follow(proxy, animated: true) } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.down").font(.system(size: 8.5, weight: .semibold))
-                            Text("Jump to latest").font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundStyle(Palette.ink)
-                        .padding(.horizontal, 8).frame(height: 20)
-                        .background(Palette.ground, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 6).padding(.bottom, 4)
-                    .help("Scroll to the newest line")
-                }
-            }
-            .onAppear { follow(proxy, animated: false) }
-            .onChange(of: transcript.segments.count) { _, _ in if atBottom { follow(proxy, animated: true) } }
-            .onChange(of: listen.partial) { _, _ in if atBottom { follow(proxy, animated: false) } }
         }
+        .frame(maxHeight: ListenCard.listMax)
         .padding(.top, 2)
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if transcript.segments.isEmpty && listen.partial.isEmpty {
+                Text(listen.capturing ? "Nothing said yet" : "Nothing was said")
+                    .font(.system(size: 12)).foregroundStyle(Palette.faint)
+            }
+            ForEach(transcript.segments, id: \.seq) { segment in
+                row(ListenCard.time.string(from: segment.start), segment.text, partial: false)
+            }
+            if !listen.partial.isEmpty {
+                row(ListenCard.time.string(from: Date()), listen.partial, partial: true)
+            }
+            Color.clear.frame(height: 1).id("listen.bottom")
+        }
+        .padding(.leading, 15)
+        .padding(.trailing, 8)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Shown only while the list is scrolled up from its end.
+    private func jump(_ proxy: ScrollViewProxy) -> some View {
+        Button { follow(proxy, animated: true) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down").font(.system(size: 8.5, weight: .semibold)).accessibilityHidden(true)
+                Text("Jump to latest").font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(Palette.ink)
+            .padding(.horizontal, 8).frame(height: 20)
+            .background(Palette.ground, in: Capsule())
+            .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+            .contentShape(Capsule())
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 6).padding(.bottom, 4)
+        .help("Scroll to the newest line")
+        .accessibilityLabel("Jump to latest")
     }
 
     private func follow(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -259,14 +266,22 @@ struct ListenCard: View {
     }
 }
 
-private struct ListenBottomKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
-private struct ListenHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+private extension View {
+    /// Whether the scroller is at (or within a line of) its end, from the
+    /// scroll view itself. Listen needs macOS 15, so before it there is no list.
+    @ViewBuilder
+    func listenFollows(_ atBottom: Binding<Bool>) -> some View {
+        if #available(macOS 15, *) {
+            onScrollGeometryChange(for: Bool.self) { geometry in
+                // Slack, so a line landing doesn't count as scrolling up.
+                geometry.visibleRect.maxY >= geometry.contentSize.height - 30
+            } action: { _, now in
+                atBottom.wrappedValue = now
+            }
+        } else {
+            self
+        }
+    }
 }
 
 /// The card's small capsule buttons, like the live bands' Stop.

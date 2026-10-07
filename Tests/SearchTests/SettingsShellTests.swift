@@ -133,6 +133,13 @@ struct SettingsMatcherSlipTests {
         #expect(lands("privcy", "privacy"))
     }
 
+    @Test func wordsRunTogetherLandWholeNotPickedApart() throws {
+        let joined = SettingsMatcher.field("Page in front of every question")
+        #expect(SettingsMatcher.best(Array("font"), in: joined) == nil)
+        let dark = try #require(SettingsMatcher.best(Array("darkmode"), in: SettingsMatcher.field("Dark mode")))
+        #expect(dark.score >= 0.9)
+    }
+
     @Test func prefixesAndShorthandStillLand() {
         #expect(lands("down", "downloads"))
         #expect(lands("pswd", "password"))

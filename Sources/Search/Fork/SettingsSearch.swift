@@ -245,7 +245,10 @@ enum SettingsMatcher {
         }
         if q.count >= 4 {
             for pair in field.pairs {
-                if let m = match(q, pair.chars), m.score > (top?.score ?? 0) {
+                // Two words run together ("darkmode", "signin") — whole, from
+                // the start, or with one slip. Not letters picked out of
+                // the pair: "font" isn't "front of". (settings-browse)
+                if let m = match(q, pair.chars), m.score >= 0.62, m.score > (top?.score ?? 0) {
                     // A pair's letters span a gap; light the words, not the gap.
                     top = (m.score * 0.95, Array(pair.start..<(pair.start + pair.span)))
                 }

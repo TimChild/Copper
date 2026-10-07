@@ -654,6 +654,8 @@ enum Jev {
 enum Router {
     struct Failure: LocalizedError {
         let detail: String
+        /// The gateway's HTTP status, when it answered with one.
+        var status: Int? = nil
         var errorDescription: String? { detail }
     }
 
@@ -709,7 +711,7 @@ enum Router {
         let latency = Date().timeIntervalSince(started) * 1000
         guard let http = response as? HTTPURLResponse else { throw Failure(detail: "no HTTP response") }
         guard http.statusCode == 200 else {
-            throw Failure(detail: "router \(http.statusCode): \(String(decoding: data.prefix(300), as: UTF8.self))")
+            throw Failure(detail: "router \(http.statusCode): \(String(decoding: data.prefix(300), as: UTF8.self))", status: http.statusCode)
         }
         guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = payload["choices"] as? [[String: Any]],

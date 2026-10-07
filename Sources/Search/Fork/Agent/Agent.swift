@@ -166,8 +166,9 @@ final class Agent: ObservableObject {
 
     /// What the pane says when the budget is spent, and where to change it.
     static func stopNote(turns: Int, cloud: Bool) -> String {
-        cloud ? "Stopped after \(turns) rounds of tool calls — ask again to continue. The limit is set by your Copper Cloud."
-              : "Stopped after \(turns) rounds of tool calls — ask again to continue, or raise the limit in Settings › Agents."
+        let rounds = turns == 1 ? "1 round" : "\(turns) rounds"
+        return cloud ? "Stopped after \(rounds) of tool calls — ask again to continue. The limit is set by your Copper Cloud."
+                     : "Stopped after \(rounds) of tool calls — ask again to continue, or raise the limit in Settings › Agents."
     }
 
     var modelName: String { Intelligence.shared.modelName }

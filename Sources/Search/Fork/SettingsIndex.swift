@@ -92,7 +92,7 @@ extension SettingsPanel.Page {
         case .passwords: return ["pw", "pwd", "logins", "keychain", "autofill", "credentials", "password manager"]
         case .downloads: return ["files", "download folder"]
         case .privacy: return ["security", "tracking", "data", "clear"]
-        case .labs: return ["experiments", "flights", "beta", "preview"]
+        case .labs: return ["experiments", "experimental", "flights", "beta", "beta features", "preview", "previews", "labs"]
         case .about: return ["version", "credits", "help", "shortcuts"]
         }
     }
@@ -196,21 +196,22 @@ enum SettingsIndex {
     // MARK: intelligence
 
     private static let intelligence: [SettingsEntry] = [
-        e(.intelligence, "Model access", "Use", "Your Claude account, or a key for an OpenAI-compatible gateway such as LiteLLM",
-          ["claude account", "api key", "gateway", "litellm", "provider", "openai", "lane"], "intelligence.lane"),
+        e(.intelligence, "Model access", "Use", "Your Claude account, or an API key for a model gateway",
+          ["claude account", "api key", "gateway", "litellm", "provider", "openai", "lane", "model provider", "where the model comes from", "change provider"], "intelligence.lane"),
         e(.intelligence, "Model access", "Claude account", "Sign in with Claude Pro, Max, Team or Enterprise",
-          ["sign in", "anthropic", "pro", "max", "subscription", "claude.ai", "login"], "intelligence.account", fallback: "intelligence.lane"),
-        e(.intelligence, "Model access", "API key", "For an OpenAI-compatible gateway — LiteLLM, or anything that speaks /v1/chat/completions",
-          ["gateway key", "sk", "token", "openai compatible", "router key"], "intelligence.key", fallback: "intelligence.lane"),
+          ["sign in", "sign out", "anthropic", "pro", "max", "subscription", "claude.ai", "login", "logout", "oauth", "claude sign in"], "intelligence.account", fallback: "intelligence.lane"),
+        e(.intelligence, "Model access", "API key", "From your gateway — anything that speaks /v1/chat/completions",
+          ["gateway key", "sk", "token", "openai compatible", "router key", "paste key", "model key"], "intelligence.key", fallback: "intelligence.lane"),
         e(.intelligence, "Model access", "Gateway address", "Where the gateway lives",
           ["url", "base url", "endpoint", "litellm", "router url", "server"], "intelligence.gateway", fallback: "intelligence.lane"),
         e(.intelligence, "Model access", "Model", "Haiku, Sonnet or Opus — fast, balanced or most capable",
-          ["haiku", "sonnet", "opus", "model size", "tier", "which model"], "intelligence.tier"),
-        e(.intelligence, "Model access", "Model names", "What Haiku, Sonnet and Opus are called at Anthropic or on your gateway",
-          ["model id", "alias", "model mapping", "custom model"], "intelligence.names"),
-        e(.intelligence, "Model access", "Check", "One question each way, so you know before a tab does",
-          ["test", "test connection", "ping", "verify", "diagnose"], "intelligence.check"),
-        e(.intelligence, "Jev — the fast lane", "Jev", "TypeSafe's System One: typed questions answered in a fifth of a second",
+          ["haiku", "sonnet", "opus", "model size", "tier", "which model", "change model", "switch model", "smarter model", "smarter",
+           "faster model", "faster", "cheaper model", "cheaper", "better model"], "intelligence.tier"),
+        e(.intelligence, "Model access", "Model names", "What Haiku, Sonnet and Opus are called for your Claude account or on your gateway",
+          ["model id", "alias", "model mapping", "custom model", "rename model"], "intelligence.names"),
+        e(.intelligence, "Model access", "Check", "Asks Jev and the model one small question each, so you know they answer",
+          ["test", "test key", "test connection", "ping", "verify", "diagnose", "is my key working", "key not working", "check key"], "intelligence.check"),
+        e(.intelligence, "Jev — the fast lane", "Jev", "Picks between choices in about a fifth of a second, for agents' quick decisions",
           ["jev key", "typesafe", "ts key", "system one", "fast lane"], "intelligence.jev"),
     ]
 
@@ -230,21 +231,22 @@ enum SettingsIndex {
     }
 
     private static let agents: [SettingsEntry] = [
-        e(.agents, "MCP server", "Let agents drive this window", "An MCP server on this Mac only — Claude Code, phi, Cursor and the rest act in your tabs",
-          ["mcp", "mcp server", "automation", "playwright", "claude code", "cursor", "phi", "proxy", "bot", "remote control"], "agents.server",
+        e(.agents, "MCP server", "Let agents drive this window", "An MCP server on this Mac only — agents in your terminal or editor act in your tabs",
+          ["mcp", "mcp server", "automation", "playwright", "claude code", "cursor", "phi", "proxy", "bot", "remote control", "enable", "disable", "agent access",
+           "mcp off", "mcp on", "turn off mcp", "turn off agents", "stop agents", "agents off"], "agents.server",
           toggle: mcpEnabled),
         e(.agents, "MCP server", "Status", "Whether the server is listening, and where",
           ["listening", "running", "endpoint", "localhost", "127.0.0.1"], "agents.status"),
         e(.agents, "MCP server", "Say what the agent does", "Each tool call, in the line at the bottom of the window",
           ["announce", "narrate", "status line", "notifications"], "agents.announce", toggle: mcpAnnounces),
-        e(.agents, "MCP server", "Port", "Change it if something else has the port",
+        e(.agents, "MCP server", "Port", "Change it if another app already uses the port",
           ["port number", "4123", "listen port"], "agents.port"),
-        e(.agents, "Jev mode", "Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract — browser-use's ultrafast loop",
+        e(.agents, "Jev mode", "Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract: Jev drives this window towards a goal",
           ["jev", "ultrafast", "jev_run", "browser-use", "goal", "fast mode"], "agents.jev", toggle: mcpJev),
-        e(.agents, "Jev mode", "Jev key", "A TypeSafe key, shared with Settings › Intelligence",
+        e(.agents, "Jev mode", "Jev key", "A Jev key, shared with Settings › Intelligence",
           ["typesafe", "ts key"], "agents.jevkey", fallback: "agents.jev"),
         e(.agents, "Jev mode", "Text model", "Writes what gets typed and answers jev_extract",
-          ["type text", "extract model", "small model"], "agents.textmodel", fallback: "agents.jev"),
+          ["type text", "extract model", "small model", "typing model"], "agents.textmodel", fallback: "agents.jev"),
         e(.agents, "Your agents", "Connect an agents app", "Linked agent apps get these tools for the bots you grant",
           ["agent link", "linked app", "bots", "grant", "personal token", "remote", "agents app"], "agents.links"),
         e(.agents, "Your agents", "Add an agents app", "Paste its address and a personal token",
@@ -252,25 +254,25 @@ enum SettingsIndex {
         e(.agents, "The agent in the window", "Page in front of every question", "The current tab's address, title and text go with each question in the agent pane (⌘E)",
           ["context", "ask on page", "agent pane", "cmd e", "page text"], "agents.context", toggle: pageContext),
         e(.agents, "The agent in the window", "Tool-call rounds per question", "How many times the agent may use its tools before it stops and asks",
-          ["max turns", "turns", "rounds", "tool calls", "limit", "budget", "stopped after", "steps"], "agents.turns"),
+          ["max turns", "turns", "rounds", "tool calls", "limit", "budget", "stopped after", "steps", "max steps", "iterations"], "agents.turns"),
         e(.agents, "The agent in the window", "Your other MCP servers", "mcp.json servers — http with headers, or a command to run",
           ["mcp.json", "servers", "tools", "stdio", "mcp client"], "agents.servers"),
-        e(.agents, "Terminal agents", "phi", "User-scoped ~/.pi/agent/mcp.json and /jev prompt",
-          ["pi", "set up phi", "terminal", "setup"], "agents.phi"),
-        e(.agents, "Terminal agents", "Claude Code", "User-scoped ~/.claude.json and /jev command",
-          ["claude code", "set up claude", "terminal", "cli"], "agents.claude"),
-        e(.agents, "Terminal agents", "copper CLI", "The bundled copper command in your PATH",
+        e(.agents, "Terminal agents", "phi", "Adds Copper to phi (~/.pi/agent/mcp.json) and a /jev prompt",
+          ["pi", "set up phi", "terminal", "setup", "connect phi"], "agents.phi"),
+        e(.agents, "Terminal agents", "Claude Code", "Adds Copper to Claude Code for your user (~/.claude.json) and a /jev command",
+          ["claude code", "set up claude", "terminal", "cli", "connect claude code"], "agents.claude"),
+        e(.agents, "Terminal agents", "copper CLI", "Puts the copper command in your PATH",
           ["command line", "install cli", "shell", "path", "terminal"], "agents.cli"),
         e(.agents, "Terminal agents", "Copy /jev", "A goal-first command for the agent in your terminal",
           ["slash command", "jev command"], "agents.copyjev"),
-        e(.agents, "Terminal agents", "Copy prompt", "Instructions for this mode, for any agent",
+        e(.agents, "Terminal agents", "Copy prompt", "How to use Copper, for any agent — with the address and token",
           ["system prompt", "instructions", "agent prompt"], "agents.prompt"),
-        e(.agents, "Terminal agents", "Copy config", "The current HTTP config for a client that is not set up yet",
+        e(.agents, "Terminal agents", "Copy config", "The MCP server's JSON, for a client set up by hand",
           ["json config", "client config", "http config"], "agents.config"),
-        e(.agents, "Terminal agents", "Copy install command", "The one-liner for the Copper CLI",
+        e(.agents, "Terminal agents", "Copy install command", "The one line that installs the copper CLI on another Mac",
           ["install", "brew", "homebrew", "curl"], "agents.install"),
-        e(.agents, "The key", "Bearer token", "Every request must carry it. Rotate it and every client's config goes stale",
-          ["token", "secret", "rotate", "auth", "authentication", "api key"], "agents.token"),
+        e(.agents, "The key", "Bearer token", "Every request must carry it. A new token stops every client that has the old one",
+          ["token", "secret", "rotate", "rotate token", "new token", "reset token", "auth", "authentication", "api key", "mcp token"], "agents.token"),
     ]
 
     // MARK: voice
@@ -451,11 +453,16 @@ enum SettingsIndex {
     // MARK: labs
 
     private static let labs: [SettingsEntry] = [
-        e(.labs, "Flights", "Trails", "Organise tabs by what you were doing — a search or an address, and every page opened from it",
-          ["trails", "flights", "experiments", "preview", "beta", "organise tabs", "organize tabs", "intent", "grouping"], "labs.trails",
-          toggle: { _ in Binding(get: { Flights.shared.trails }, set: { Flights.shared.trails = $0 }) }),
-        e(.labs, "Flights", "Tide", "Trails left alone this long drift under Earlier, quieter",
-          ["drift", "earlier", "fade", "age", "timeout"], "labs.tide"),
+        e(.labs, "Previews", "Trails", "Tabs by what you were doing, shown in the sidebar — a search or an address, and every page opened from it",
+          ["trails", "flights", "experiments", "preview", "beta", "organise tabs", "organize tabs", "intent", "grouping",
+           "trails off", "trails on", "turn off trails", "sidebar trails"], "labs.trails",
+          // Trails are drawn only in the sidebar: from search, as on the
+          // page, they can be turned off anywhere but on only there.
+          toggle: { browser in Binding(get: { Flights.shared.trails }, set: { on in
+              if !on || browser.prefs.sidebar { Flights.shared.trails = on }
+          }) }),
+        e(.labs, "Previews", "Tide", "Trails left alone this long drift under Earlier, quieter",
+          ["drift", "earlier", "fade", "age", "timeout", "how long", "trails fade", "how long until trails fade", "older trails"], "labs.tide"),
     ]
 
     // MARK: about

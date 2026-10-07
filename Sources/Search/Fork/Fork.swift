@@ -79,6 +79,8 @@ enum Fork {
             // `ai router URL KEY MODEL` configures a probe-world router.
             let arg = request["arg"] as? String ?? ""
             let op = request["op"] as? String ?? ""
+            // `ai picture|ax|click|key|cloud|clipboard|check|views|churn`: Settings' AI pages (SettingsAIBench.swift).
+            if let answer = SettingsAIBench.handle(op, arg, in: Windows.current) { return answer }
             if op == "lane", let lane = Intelligence.Lane(rawValue: arg.lowercased()) {
                 Intelligence.shared.keys.lane = lane
             } else if op == "router" {

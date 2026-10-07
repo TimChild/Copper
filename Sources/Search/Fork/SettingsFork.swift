@@ -8,12 +8,13 @@ import SwiftUI
 // MARK: - Intelligence
 
 struct IntelligencePage: View {
-    @ObservedObject var browser: Browser
+    /// Not observed: only Sign in needs the window, and the browser says it
+    /// changed on every page load behind the panel.
+    let browser: Browser
     @ObservedObject var brain = Intelligence.shared
     @ObservedObject var account = ClaudeAccount.shared
+    @ObservedObject var check = IntelligenceCheck.shared
 
-    @State private var testing = false
-    @State private var verdict: String?
     @State private var pasted = ""
 
     var body: some View {
@@ -37,36 +38,55 @@ struct IntelligencePage: View {
                 }
                 .settingsAnchor("intelligence.tier")
                 Rule()
-                Line("Model names", brain.lane == .claude ? "What Haiku, Sonnet and Opus are called at Anthropic" : "What Haiku, Sonnet and Opus are called on your gateway") {
+                Line("Model names", brain.lane == .claude
+                     ? "What Haiku, Sonnet and Opus are called for your Claude account. Leave one empty for Copper's own."
+                     : "What Haiku, Sonnet and Opus are called on your gateway. Leave one empty for the plain name.") {
                     modelNames
                 }
                 .settingsAnchor("intelligence.names")
                 Rule()
-                Line("Check", verdict ?? "One question each way, so you know before a tab does") {
-                    if testing { Ring(size: 12) } else { Pill("Test") { test() } }
+                Line("Check", check.line ?? "Asks Jev and the model one small question each, so you know they answer.") {
+                    if check.running {
+                        HStack(spacing: 6) {
+                            Ring(size: 12)
+                            Text("Asking…").font(.system(size: 11.5)).foregroundStyle(Palette.muted)
+                        }
+                        .accessibilityElement(children: .combine)
+                    } else {
+                        Pill(check.line == nil ? "Test" : "Test again") { check.run() }
+                    }
                 }
                 .settingsAnchor("intelligence.check")
             }
 
-            SettingsSection("Jev — the fast lane", note: brain.cloud == nil
-                 ? "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone."
-                 : "Keys and the Claude sign-in are kept in intelligence.json and claude.json beside your session, readable by you alone. Keys from Copper Cloud stay in cloud-intelligence.json and go when you sign out of the cloud; its gateway key is the one used while it provides one, and a Jev key typed here wins.") {
-                Line("Jev", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? "TypeSafe's System One: answers a typed question — which of these, how likely — in a fifth of a second, with a confidence. The fast lane.") {
-                    KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"), ready: brain.jevReady)
+            SettingsSection("Jev — the fast lane", note: footnote) {
+                Line("Jev", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? jevDetail) {
+                    KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"),
+                             ready: brain.jevReady, refused: check.refused("jev"), label: "Jev key")
                 }
                 .settingsAnchor("intelligence.jev")
             }
         }
     }
 
+    private var jevDetail: String {
+        "Picks between choices and says how sure it is, in about a fifth of a second. Agents use it for quick decisions."
+    }
+
+    private var footnote: String {
+        let local = "Keys and the Claude sign-in stay on this Mac, in files only you can read."
+        guard brain.cloud != nil else { return local }
+        return local + " Keys from Copper Cloud go when you sign out of it. While it provides a gateway key, that key is used; a Jev key typed here still wins over the cloud's."
+    }
+
     private var useDetail: String {
         guard brain.cloudLane else {
-            return "Sign in with your Claude account (Pro, Max, Team or Enterprise), or paste a key for an OpenAI-compatible gateway such as LiteLLM."
+            return "Sign in with your Claude account (Pro, Max, Team or Enterprise), or use an API key for a model gateway."
         }
         if brain.keys.lane == .claude || account.signedIn {
-            return "Copper Cloud provides the model key — your Claude account isn't used while you're signed in to it."
+            return "Set by Copper Cloud, which provides the model key. Your Claude account is back when you sign out of it."
         }
-        return "Copper Cloud provides the model key while you're signed in to Copper Cloud."
+        return "Set by Copper Cloud, which provides the model key while you're signed in to it."
     }
 
     @ViewBuilder
@@ -77,15 +97,15 @@ struct IntelligencePage: View {
             }
             .settingsAnchor("intelligence.account")
         } else {
-            Line("API key", brain.cloudLine("routerKey", brain.cloud?.router?.key) ?? "For an OpenAI-compatible gateway — LiteLLM, or anything that speaks /v1/chat/completions") {
-                KeyField(text: brain.cloudLane ? .constant("") : $brain.keys.routerKey, placeholder: brain.cloudPlaceholder("routerKey", brain.cloud?.router?.key, otherwise: "sk-…"), ready: brain.routerReady)
+            Line("API key", brain.cloudLine("routerKey", brain.cloud?.router?.key) ?? "From your gateway — anything that speaks /\u{2060}v1/\u{2060}chat/\u{2060}completions.") {
+                KeyField(text: brain.cloudLane ? .constant("") : $brain.keys.routerKey,
+                         placeholder: brain.cloudPlaceholder("routerKey", brain.cloud?.router?.key, otherwise: "sk-…"),
+                         ready: brain.routerReady, refused: check.refused("router"), label: "Gateway API key")
                     .disabled(brain.cloudLane)
             }
             .settingsAnchor("intelligence.key")
             Rule()
-            Line("Gateway address", brain.sources["routerURL"] == "cloud"
-                 ? "Provided by Copper Cloud (\(brain.cloud?.host ?? "your cloud"))"
-                 : "Where the gateway lives") {
+            Line("Gateway address", gatewayDetail) {
                 TextField(brain.sources["routerURL"] == "cloud" || brain.cloudLane ? brain.effective.routerURL : "https://…",
                           text: brain.cloudLane ? .constant("") : routerURLBinding)
                     .disabled(brain.cloudLane)
@@ -93,10 +113,24 @@ struct IntelligencePage: View {
                     .font(.system(size: 12, design: .monospaced))
                     .frame(width: 220)
                     .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .settingsField()
+                    .accessibilityLabel("Gateway address")
             }
             .settingsAnchor("intelligence.gateway")
         }
+    }
+
+    /// Where the gateway is — and, when what was typed can't be one, what
+    /// it should look like, before a check has to fail to say so.
+    private var gatewayDetail: String {
+        if brain.sources["routerURL"] == "cloud" { return "Provided by Copper Cloud (\(brain.cloud?.host ?? "your cloud"))" }
+        if !Self.isWebAddress(brain.effective.routerURL) { return "That isn't a web address — it should start with https://" }
+        return "Where the gateway lives"
+    }
+
+    static func isWebAddress(_ raw: String) -> Bool {
+        guard let url = URL(string: raw.trimmingCharacters(in: .whitespaces)), let scheme = url.scheme?.lowercased() else { return false }
+        return (scheme == "https" || scheme == "http") && !(url.host ?? "").isEmpty
     }
 
     /// The address field. While Copper Cloud supplies the address it reads
@@ -117,9 +151,9 @@ struct IntelligencePage: View {
 
     /// The tier, the name sent for it, and the model the last answer named.
     private var modelDetail: String {
-        let line = "\(brain.tier.title) — \(brain.tier.blurb). Sends \(brain.modelName)"
-        if let answered = brain.answeredModel, answered != brain.modelName { return line + "; answered by \(answered)." }
-        return line + ". Also in the agent pane's header."
+        let line = "\(brain.tier.title) — \(brain.tier.blurb.prefix(1).lowercased() + brain.tier.blurb.dropFirst()). Asks for “\(brain.modelName)”"
+        if let answered = brain.answeredModel, answered != brain.modelName { return line + "; the last answer came from \(answered)." }
+        return line + ". You can also change it from the agent pane."
     }
 
     private var accountDetail: String {
@@ -132,9 +166,9 @@ struct IntelligencePage: View {
         }
         switch account.phase {
         case .idle:
-            return "One click. Copper opens claude.ai in a tab; sign in there and come back."
+            return "Copper opens claude.ai in a tab; sign in there and you're back here."
         case .waiting:
-            return "Finish in the tab that opened. If it did not come back on its own, paste what claude.ai shows here."
+            return "Finish in the tab that opened. If it doesn't come back on its own, paste the code claude.ai shows."
         case .exchanging:
             return "Finishing…"
         case .failed(let text):
@@ -153,13 +187,14 @@ struct IntelligencePage: View {
             case .waiting:
                 HStack(spacing: 6) {
                     Ring(size: 12)
-                    TextField("code or the address it sent you to", text: $pasted)
+                    TextField("Paste the code", text: $pasted)
                         .textFieldStyle(.plain)
                         .font(.system(size: 11.5, design: .monospaced))
-                        .frame(width: 190)
+                        .frame(width: 150)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .settingsField()
                         .onSubmit(completePasted)
+                        .accessibilityLabel("Claude sign-in code")
                     Pill("Cancel") { account.cancel() }
                 }
             case .exchanging:
@@ -177,14 +212,16 @@ struct IntelligencePage: View {
         VStack(alignment: .trailing, spacing: 4) {
             ForEach(Intelligence.Tier.allCases) { tier in
                 HStack(spacing: 6) {
-                    Text(tier.title).font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    Text(tier.title).font(.system(size: 11)).foregroundStyle(SettingsInk.detail)
                         .lineLimit(1).fixedSize()
+                        .accessibilityHidden(true)
                     TextField(defaultModel(for: tier), text: modelBinding(tier))
                         .textFieldStyle(.plain)
                         .font(.system(size: 11.5, design: .monospaced))
                         .frame(width: 150)
                         .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .settingsField()
+                        .accessibilityLabel("\(tier.title) model name")
                 }
             }
         }
@@ -217,46 +254,37 @@ struct IntelligencePage: View {
         pasted = ""
         account.complete(pasted: value)
     }
-
-    private func test() {
-        testing = true
-        verdict = nil
-        let keys = brain.effective
-        Task { @MainActor in
-            var lines: [String] = []
-            if brain.jevReady {
-                do {
-                    let a = try await Jev.ask(state: ["word": "apple"], questions: ["kind": Jev.choice("What is `word`?", ["fruit": "a fruit", "tool": "a tool"])], keys: keys)
-                    lines.append(String(format: "Jev ✓ %.0f ms", a.latencyMs))
-                } catch { lines.append("Jev ✗ \(error.localizedDescription)") }
-            } else { lines.append("Jev — no key") }
-            let lane = keys.lane
-            let label = lane == .claude ? "Claude" : "Gateway"
-            if brain.modelReady {
-                do {
-                    let r = try await Router.ask(system: "Reply with JSON only.", user: "{\"ping\": true} → reply {\"pong\": true}", keys: keys, timeout: 15, maxTokens: 20)
-                    lines.append(String(format: "%@ ✓ %@ %.0f ms", label, r.model, r.latencyMs))
-                } catch { lines.append("\(label) ✗ \(error.localizedDescription)") }
-            } else {
-                lines.append(lane == .claude ? "Claude — not signed in" : "Gateway — no key")
-            }
-            verdict = lines.joined(separator: " · ")
-            testing = false
-        }
-    }
 }
 
 /// A secret, shown as dots until you want to see it, with a paste button so
-/// setting a key is one click.
+/// setting a key is one click. The dot says whether there is a key — and,
+/// once a check has turned this one away, that it was refused.
 struct KeyField: View {
     @Binding var text: String
     let placeholder: String
     let ready: Bool
+    /// The last check turned this key away, and it hasn't changed since.
+    var refused = false
+    /// What VoiceOver calls the field ("Jev key").
+    var label = "Key"
     @State private var shown = false
+    @FocusState private var focused: Bool
+
+    private var dot: Color {
+        if refused { return Color.orange.opacity(0.85) }
+        return ready ? Color.green.opacity(0.8) : Palette.faint
+    }
+
+    private var state: String {
+        if refused { return "Turned away by the last check" }
+        return ready ? "Set" : "Not set"
+    }
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle().fill(ready ? Color.green.opacity(0.8) : Palette.faint).frame(width: 6, height: 6)
+            Circle().fill(dot).frame(width: 6, height: 6)
+                .help(state)
+                .accessibilityHidden(true)
             Group {
                 if shown {
                     TextField(placeholder, text: $text)
@@ -267,23 +295,42 @@ struct KeyField: View {
             .textFieldStyle(.plain)
             .font(.system(size: 12, design: .monospaced))
             .frame(width: 200)
+            .focused($focused)
+            .accessibilityLabel(label)
+            .accessibilityValue(state)
             Button { shown.toggle() } label: {
                 Image(systemName: shown ? "eye.slash" : "eye").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(shown ? "Hide" : "Show")
+            .help(shown ? "Hide the key" : "Show the key")
+            .accessibilityLabel(shown ? "Hide \(label.lowercased())" : "Show \(label.lowercased())")
             Button {
-                if let pasted = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), !pasted.isEmpty {
+                if let pasted = SettingsActions.pasteboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), !pasted.isEmpty {
                     text = pasted
                 }
             } label: {
                 Image(systemName: "doc.on.clipboard").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Paste")
+            .help("Paste from the clipboard")
+            .accessibilityLabel("Paste \(label.lowercased())")
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        // The field's own ring, around the whole of it (eye and paste too):
+        // plain fields draw none, and Tab has to land somewhere visible.
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Palette.ink.opacity(0.35), lineWidth: 1.5)
+                .opacity(focused ? 1 : 0)
+                .animation(Motion.quick, value: focused)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -448,23 +495,192 @@ struct AboutUpdatesLine: View {
 // MARK: - Agents
 
 struct AgentsPage: View {
-    @ObservedObject var browser: Browser
+    /// Not observed: nothing here reads the window, and the browser says it
+    /// changed on every page load behind the panel.
+    let browser: Browser
+
+    // Each section watches only the objects it reads, so an agent's tool
+    // call (MCP), a reply streaming in the pane (Agent) or a link's status
+    // redraws its own section rather than the whole page.
+    var body: some View {
+        let _ = SettingsPerf.tick("agentsPage") // Fork (settings-perf)
+        VStack(alignment: .leading, spacing: 26) {
+            AgentsServerSection()
+            AgentsJevSection()
+            AgentsLinksSection()
+            AgentsPaneSection()
+            AgentsTerminalSection()
+            AgentsKeySection()
+        }
+    }
+}
+
+/// MCP server: on or off, whether it listens, announcing, the port.
+private struct AgentsServerSection: View {
     @ObservedObject var mcp = MCP.shared
+
+    var body: some View {
+        SettingsSection("MCP server") {
+            Line("Let agents drive this window", "An MCP server on this Mac only (127.0.0.1). Agents in your terminal or editor see your open tabs and act in them, in the browser you're already signed in to.") {
+                Switch(on: $mcp.config.enabled)
+            }
+            .settingsAnchor("agents.server")
+            Rule()
+            Line("Status", status) {
+                Circle().fill(mcp.running ? Color.green.opacity(0.8) : (mcp.trouble == nil ? Palette.faint : Color.orange.opacity(0.85)))
+                    .frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
+            }
+            .settingsAnchor("agents.status")
+            Rule()
+            Line("Say what the agent does", "Each tool call, in the line at the bottom of the window") {
+                Switch(on: $mcp.config.announces)
+            }
+            .settingsAnchor("agents.announce")
+            Rule()
+            portRow
+                .settingsAnchor("agents.port")
+        }
+    }
+
+    private var status: String {
+        if let trouble = mcp.trouble {
+            return MCP.portOverride == nil ? trouble + " — choose another port below." : trouble
+        }
+        if mcp.running { return "Listening at \(mcp.endpoint)" }
+        return mcp.config.enabled ? "Starting…" : "Off — no agent can reach this browser."
+    }
+
+    /// The port the server listens on. A run that sets SEARCH_MCP_PORT
+    /// listens there whatever this says, so the field says so instead.
+    private var portRow: some View {
+        let pinned = MCP.portOverride
+        let port = Binding<Int>(get: { Int(mcp.config.port) }, set: { value in
+            // 0 would mean "any port", which no client could be told.
+            if let valid = UInt16(exactly: value), valid > 0 { mcp.config.port = valid }
+        })
+        return Line("Port", pinned.map { "This run listens on \($0), set by SEARCH_MCP_PORT." }
+                    ?? "Change it if another app already uses \(mcp.config.port).") {
+            TextField("4123", value: port, format: .number.grouping(.never))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(width: 60)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .settingsField()
+                .accessibilityLabel("Port")
+                .disabled(pinned != nil)
+                .opacity(pinned != nil ? 0.55 : 1)
+        }
+    }
+}
+
+/// Jev mode: the switch, and — while it is on — the key and the text model.
+private struct AgentsJevSection: View {
+    @ObservedObject var mcp = MCP.shared
+    @ObservedObject var brain = Intelligence.shared
+    @ObservedObject var check = IntelligenceCheck.shared
+
+    var body: some View {
+        SettingsSection("Jev mode — ultrafast") {
+            Line("Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract. Jev picks the next click or key about every 200 ms and Copper does it in this window, until the goal is done — seconds, not a round trip per step.") {
+                Switch(on: $mcp.config.jev)
+            }
+            .settingsAnchor("agents.jev")
+            if mcp.config.jev {
+                Rule()
+                Line("Jev key", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? (brain.jevReady ? "The same Jev key as Settings › Intelligence." : "Jev mode needs a Jev key (ts-…), the same one Settings › Intelligence uses.")) {
+                    KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"),
+                             ready: brain.jevReady, refused: check.refused("jev"), label: "Jev key")
+                }
+                .settingsAnchor("agents.jevkey")
+                Rule()
+                Line("Text model", brain.modelReady ? "Writes what Jev types and answers jev_extract. Small and fast is the point; empty uses \(brain.modelName)." : "Typing text and jev_extract need a model — set one up in Settings › Intelligence.") {
+                    HStack(spacing: 8) {
+                        Circle().fill(brain.modelReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8)).frame(width: 8, height: 8)
+                            .help(brain.modelReady ? "A model is set up" : "No model is set up")
+                            .accessibilityHidden(true)
+                        TextField(brain.modelName, text: $brain.keys.textModel)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12, design: .monospaced))
+                            .frame(width: 120)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .settingsField()
+                            .accessibilityLabel("Text model")
+                    }
+                }
+                .settingsAnchor("agents.textmodel")
+                if !mcp.jevNote.isEmpty {
+                    Rule()
+                    Line("Last run", mcp.jevNote) { EmptyView() }
+                }
+            }
+        }
+    }
+}
+
+/// Linked agent apps: one card each, and the card that adds one.
+private struct AgentsLinksSection: View {
+    @ObservedObject var links = AgentLinks.shared
+
+    var body: some View {
+        SettingsSection("Your agents — let them use this browser", carded: false) {
+            ForEach(links.all) { link in
+                LinkCard(link: link)
+            }
+            Card {
+                Line("Add an agents app", "Paste its address and a personal token") {
+                    Pill("Add…", filled: links.all.isEmpty) { links.addEmpty() }
+                }
+                .settingsAnchor("agents.add")
+            }
+        }
+        .settingsAnchor("agents.links", card: true)
+    }
+}
+
+/// The agent in the window (⌘E): page context, its tool-call budget, and
+/// the user's own MCP servers.
+private struct AgentsPaneSection: View {
     @ObservedObject var brain = Intelligence.shared
     @ObservedObject var chat = Agent.shared
     @ObservedObject var servers = Servers.shared
-    @ObservedObject var links = AgentLinks.shared
-    @State private var copied: String?
-    @State private var setupStatus = Setup.Status()
-    @State private var setupResult: [String: String] = [:]
+
+    var body: some View {
+        SettingsSection("The agent in the window — ⌘E") {
+            Line("Page in front of every question", "The current tab's address, title and the first 3000 characters of its text. Off, it still has the tools to look.") {
+                Switch(on: $chat.config.pageContext)
+            }
+            .settingsAnchor("agents.context")
+            Rule()
+            turnsRow
+                .settingsAnchor("agents.turns")
+            Rule()
+            Line("Your other MCP servers", serversLine) {
+                HStack(spacing: 8) {
+                    Pill("Open mcp.json") {
+                        if !FileManager.default.fileExists(atPath: Servers.file.path) {
+                            try? Servers.example.data(using: .utf8)?.write(to: Servers.file, options: .atomic)
+                        }
+                        SettingsActions.open(Servers.file)
+                    }
+                    Pill("Reload") { Task { await servers.reload() } }
+                }
+            }
+            .settingsAnchor("agents.servers")
+            ForEach(servers.all) { server in
+                Rule()
+                ServerRow(server: server)
+            }
+        }
+    }
 
     /// Tool-call rounds per question. While Copper Cloud sets the org's
     /// number it is shown, not editable; this Mac's own comes back after.
     private var turnsRow: some View {
         let cloud = brain.cloudMaxTurns
         let turns = Binding(get: { cloud ?? chat.config.maxTurns }, set: { chat.config.maxTurns = $0 })
-        return Line("Tool-call rounds per question", cloud.map { "Set by Copper Cloud: \($0)" }
-                    ?? "How many times the agent may use its tools before it stops and asks you to continue. Default \(Agent.Config.defaultMaxTurns).") {
+        return Line("Tool-call rounds per question", cloud.map { "Set by your Copper Cloud to \($0). Yours (\(chat.config.maxTurns)) is back when you sign out of it." }
+                    ?? "How many times the agent may use its tools on one question before it stops and asks you to continue. Default \(Agent.Config.defaultMaxTurns).") {
             HStack(spacing: 6) {
                 TextField("\(Agent.Config.defaultMaxTurns)", value: turns, format: .number.grouping(.never))
                     .textFieldStyle(.plain)
@@ -472,7 +688,8 @@ struct AgentsPage: View {
                     .multilineTextAlignment(.trailing)
                     .frame(width: 44)
                     .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .settingsField()
+                    .accessibilityLabel("Tool-call rounds per question")
                 Stepper("Tool-call rounds per question", value: turns, in: Agent.Config.maxTurnsRange)
                     .labelsHidden()
                     .controlSize(.small)
@@ -483,183 +700,83 @@ struct AgentsPage: View {
     }
 
     private var serversLine: String {
-        if let trouble = servers.trouble { return trouble }
-        if servers.all.isEmpty { return "The mcp.json shape Claude Code and phi use — http servers with headers, or a command to run. ${VAR} is filled from the environment." }
+        if let trouble = servers.trouble { return trouble + " — fix it in Open mcp.json, then Reload." }
+        if servers.all.isEmpty { return "Servers in mcp.json give the agent in the window their tools too: http servers with headers, or a command to run." }
         return "\(servers.all.filter(\.ready).count) of \(servers.all.count) connected · \(servers.readyTools) tools"
+    }
+}
+
+/// Terminal agents: set up phi, Claude Code and the copper CLI, and the
+/// copies for anything set up by hand.
+private struct AgentsTerminalSection: View {
+    @ObservedObject var mcp = MCP.shared
+    @State private var copied: String?
+    @State private var setupStatus = Setup.Status()
+    @State private var setupResult: [String: SetupResult] = [:]
+    @State private var settingUp: String?
+
+    /// What the last Set up / Install wrote, or why it couldn't.
+    struct SetupResult: Equatable {
+        let ok: Bool
+        let text: String
     }
 
     var body: some View {
-        let _ = SettingsPerf.tick("agentsPage") // Fork (settings-perf)
-        VStack(alignment: .leading, spacing: 26) {
-            SettingsSection("MCP server") {
-                Line("Let agents drive this window", "An MCP server on this Mac only (127.0.0.1). Claude Code, phi, Cursor and the rest see your open tabs and act in them — the same tools as Playwright MCP, on the browser you're already signed into.") {
-                    Switch(on: $mcp.config.enabled)
-                }
-                .settingsAnchor("agents.server")
-                Rule()
-                Line("Status", status) {
-                    Circle().fill(mcp.running ? Color.green.opacity(0.8) : Palette.faint).frame(width: 8, height: 8)
-                }
-                .settingsAnchor("agents.status")
-                Rule()
-                Line("Say what the agent does", "Each tool call, in the line at the bottom of the window") {
-                    Switch(on: $mcp.config.announces)
-                }
-                .settingsAnchor("agents.announce")
-                Rule()
-                Line("Port", "Change it if something else has \(mcp.config.port)") {
-                    TextField("4123", value: $mcp.config.port, format: .number.grouping(.never))
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
-                        .frame(width: 60)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                }
-                .settingsAnchor("agents.port")
+        SettingsSection("Terminal agents") {
+            terminalRow(.phi)
+                .settingsAnchor("agents.phi")
+            Rule()
+            terminalRow(.claude)
+                .settingsAnchor("agents.claude")
+            Rule()
+            terminalRow(.cli)
+                .settingsAnchor("agents.cli")
+            Rule()
+            Line("Copy /jev", "A goal-first command for the agent in your terminal") {
+                Pill(copied == "jev" ? "Copied" : "Copy /jev") { copy(MCP.jevCommand(goal: nil), "jev") }
             }
-
-            SettingsSection("Jev mode — ultrafast") {
-                Line("Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract — browser-use's jev-ultrafast loop, run in this window. Jev picks an operation and an element every ~200 ms; Copper does it with real clicks and keys until the goal is done. Seconds, not a round trip per step.") {
-                    Switch(on: $mcp.config.jev)
-                }
-                .settingsAnchor("agents.jev")
-                if mcp.config.jev {
-                    Rule()
-                    Line("Jev key", brain.cloudLine("jevKey", brain.cloud?.jev?.key) ?? (brain.jevReady ? "TypeSafe System One — the same key as Intelligence" : "Needed. A TypeSafe key (ts-…) — typesafe.ai. Shared with Settings › Intelligence.")) {
-                        KeyField(text: $brain.keys.jevKey, placeholder: brain.cloudPlaceholder("jevKey", brain.cloud?.jev?.key, otherwise: "ts-…"), ready: brain.jevReady)
-                    }
-                    .settingsAnchor("agents.jevkey")
-                    Rule()
-                    Line("Text model", brain.modelReady ? "Writes what gets typed and answers jev_extract. Small and fast is the point — empty means the model you picked (\(brain.modelName))." : "TYPE_TEXT and jev_extract need a model — Settings › Intelligence › Model access") {
-                        HStack(spacing: 8) {
-                            Circle().fill(brain.modelReady ? Color.green.opacity(0.8) : Color.orange.opacity(0.8)).frame(width: 8, height: 8)
-                            TextField(brain.modelName, text: $brain.keys.textModel)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 12, design: .monospaced))
-                                .frame(width: 120)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                        }
-                    }
-                    .settingsAnchor("agents.textmodel")
-                    if !mcp.jevNote.isEmpty {
-                        Rule()
-                        Line("Last run", mcp.jevNote) { EmptyView() }
-                    }
+            .settingsAnchor("agents.copyjev")
+            Rule()
+            Line("Copy prompt", mcp.config.jev ? "How to use Copper with Jev, for any agent — with the address and token" : "How to use Copper, for any agent — with the address and token") {
+                Pill(copied == "prompt" ? "Copied" : "Copy prompt") {
+                    copy(mcp.config.jev ? mcp.jevPrompt : mcp.agentPrompt, "prompt")
                 }
             }
-
-            SettingsSection("Your agents — let them use this browser", carded: false) {
-                ForEach(links.all) { link in
-                    LinkCard(link: link)
-                }
-                Card {
-                    Line("Add an agents app", "Paste its address and a personal token") {
-                        Pill("Add…", filled: true) { links.addEmpty() }
-                    }
-                    .settingsAnchor("agents.add")
-                }
+            .settingsAnchor("agents.prompt")
+            Rule()
+            Line("Copy config", "The MCP server's JSON, for a client set up by hand") {
+                Pill(copied == "http" ? "Copied" : "Copy config") { copy(mcp.clientConfig, "http") }
             }
-            .settingsAnchor("agents.links", card: true)
-
-            SettingsSection("The agent in the window — ⌘E") {
-                Line("Page in front of every question", "The current tab's address, title and the first 3000 characters of its text. Off, it still has the tools to look.") {
-                    Switch(on: $chat.config.pageContext)
+            .settingsAnchor("agents.config")
+            Rule()
+            VStack(alignment: .leading, spacing: 0) {
+                Line("Copy install command", "The one line that installs the copper CLI on another Mac") {
+                    Pill(copied == "install" ? "Copied" : "Copy install") { copy(Setup.installCommand, "install") }
                 }
-                .settingsAnchor("agents.context")
-                Rule()
-                turnsRow
-                    .settingsAnchor("agents.turns")
-                Rule()
-                Line("Your other MCP servers", serversLine) {
-                    HStack(spacing: 8) {
-                        Pill("Open mcp.json") {
-                            if !FileManager.default.fileExists(atPath: Servers.file.path) {
-                                try? Servers.example.data(using: .utf8)?.write(to: Servers.file, options: .atomic)
-                            }
-                            NSWorkspace.shared.open(Servers.file)
-                        }
-                        Pill("Reload", filled: true) { Task { await servers.reload() } }
-                    }
-                }
-                .settingsAnchor("agents.servers")
-                ForEach(servers.all) { server in
-                    Rule()
-                    ServerRow(server: server)
-                }
-            }
-
-            SettingsSection("Terminal agents") {
-                terminalRow(.phi)
-                    .settingsAnchor("agents.phi")
-                Rule()
-                terminalRow(.claude)
-                    .settingsAnchor("agents.claude")
-                Rule()
-                terminalRow(.cli)
-                    .settingsAnchor("agents.cli")
-                Rule()
-                Line("Copy /jev", "A goal-first command for the agent in your terminal") {
-                    Pill(copied == "jev" ? "Copied" : "Copy /jev", filled: true) { copy(MCP.jevCommand(goal: nil), "jev") }
-                }
-                .settingsAnchor("agents.copyjev")
-                Rule()
-                Line("Copy prompt", mcp.config.jev ? "Jev-first instructions for this mode" : "Snapshot-first instructions for this mode") {
-                    Pill(copied == "prompt" ? "Copied" : "Copy prompt", filled: true) {
-                        copy(mcp.config.jev ? mcp.jevPrompt : mcp.agentPrompt, "prompt")
-                    }
-                }
-                .settingsAnchor("agents.prompt")
-                Rule()
-                Line("Copy config", "The current HTTP config for a client that is not set up yet") {
-                    Pill(copied == "http" ? "Copied" : "Copy config") { copy(mcp.clientConfig, "http") }
-                }
-                .settingsAnchor("agents.config")
-                Rule()
                 VStack(alignment: .leading, spacing: 4) {
-                    Line("Copy install command", "The one-liner for the Copper CLI") {
-                        Pill(copied == "install" ? "Copied" : "Copy install") { copy(Setup.installCommand, "install") }
-                    }
                     Text(Setup.installCommand)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(SettingsInk.detail)
-                        .textSelection(.enabled)
-                        .lineLimit(2)
-                        .padding(.horizontal, 16)
-                    Text("Alternative: \(Setup.brewCommand)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsInk.detail)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 10)
+                    Text("Or with Homebrew: \(Setup.brewCommand)")
                 }
-                .settingsAnchor("agents.install")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(SettingsInk.detail)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top, -4)
+                .padding(.bottom, 12)
             }
-
-            VStack(alignment: .leading, spacing: 10) {
-            SettingsSection("The key") {
-                Line("Bearer token", "Every request must carry it. Kept in agent.json, readable by you alone. Rotate it and every client's config goes stale — on purpose.") {
-                    HStack(spacing: 8) {
-                        Text(String(mcp.config.token.prefix(8)) + "…")
-                            .font(.system(size: 12, design: .monospaced)).foregroundStyle(Palette.muted)
-                        Pill(copied == "token" ? "Copied" : "Copy") { copy(mcp.config.token, "token") }
-                        Pill("Rotate") { mcp.rotateToken() }
-                    }
-                }
-                .settingsAnchor("agents.token")
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                if mcp.calls > 0 {
-                    SettingsNote("\(mcp.calls) tool call\(mcp.calls == 1 ? "" : "s") this session — last: \(mcp.lastTool)")
-                }
-                SettingsNote("Agents act as you: whatever you are signed into, they are too. Turn this off when you don't need it.")
-            }
-            }
+            .settingsAnchor("agents.install")
         }
-        .onAppear { setupStatus = Setup(endpoint: mcp.endpoint, token: mcp.config.token).status() }
+        .task(id: "\(mcp.endpoint) \(mcp.config.token)") { await refreshSetup() }
     }
 
     private enum TerminalAgent: String {
         case phi, claude, cli
+
+        /// " /jev" that never breaks, at the space before it or after the
+        /// slash: at the narrowest the line broke inside the command.
+        static let slashJev = "\u{00A0}/\u{2060}jev"
 
         var title: String {
             switch self {
@@ -671,33 +788,42 @@ struct AgentsPage: View {
 
         var detail: String {
             switch self {
-            case .phi: return "User-scoped ~/.pi/agent/mcp.json and /jev prompt"
-            case .claude: return "User-scoped ~/.claude.json and /jev command"
-            case .cli: return "The bundled copper command in your PATH"
+            case .phi: return "Adds Copper to phi (~/.pi/agent/mcp.json) and a" + Self.slashJev + " prompt"
+            case .claude: return "Adds Copper to Claude Code for your user (~/.claude.json) and a" + Self.slashJev + " command"
+            case .cli: return "Puts the copper command in your PATH"
             }
         }
     }
 
     @ViewBuilder
     private func terminalRow(_ agent: TerminalAgent) -> some View {
+        let result = setupResult[agent.rawValue]
         VStack(alignment: .leading, spacing: 0) {
-            Line(agent.title, setupResult[agent.rawValue] ?? agent.detail) {
+            Line(agent.title, agent.detail) {
                 HStack(spacing: 8) {
-                    Text(stateTitle(state(for: agent)))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Palette.muted)
+                    if settingUp == agent.rawValue {
+                        Ring(size: 12)
+                    } else {
+                        Text(stateTitle(state(for: agent)))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(SettingsInk.detail)
+                    }
                     Pill(actionTitle(for: agent), filled: state(for: agent) != .ready) {
                         runSetup(agent)
                     }
+                    .disabled(settingUp != nil)
                 }
             }
-            if let result = setupResult[agent.rawValue] {
-                Text(result)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(result.hasPrefix("Error") ? Color.orange.opacity(0.9) : Palette.muted)
+            if let result {
+                Text(result.text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(result.ok ? SettingsInk.detail : Color.orange)
+                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 10)
+                    .padding(.top, -4)
+                    .padding(.bottom, 12)
             }
         }
     }
@@ -713,46 +839,95 @@ struct AgentsPage: View {
     private func stateTitle(_ state: Setup.State) -> String {
         switch state {
         case .missing: return "Not set up"
-        case .stale: return "Update"
+        case .stale: return "Out of date"
         case .ready: return "Ready"
         }
     }
 
     private func actionTitle(for agent: TerminalAgent) -> String {
+        let state = state(for: agent)
         switch agent {
-        case .phi, .claude: return state(for: agent) == .missing ? "Set up" : "Update"
-        case .cli: return "Install"
+        case .phi, .claude: return state == .missing ? "Set up" : "Update"
+        case .cli: return state == .missing ? "Install" : "Reinstall"
         }
     }
 
+    /// Writes the agent's files off the main thread: they can be large
+    /// (~/.claude.json), and the CLI asks the login shell for its PATH.
     private func runSetup(_ agent: TerminalAgent) {
-        do {
-            let report: Setup.Report
-            let setup = Setup(endpoint: mcp.endpoint, token: mcp.config.token)
-            switch agent {
-            case .phi: report = try setup.phi()
-            case .claude: report = try setup.claude()
-            case .cli: report = try setup.cli()
-            }
-            setupResult[agent.rawValue] = (report.paths + report.notes).joined(separator: "\\n")
-        } catch {
-            let text = (error as? Tools.Failure)?.text ?? error.localizedDescription
-            setupResult[agent.rawValue] = "Error: \(text)"
+        let setup = Setup(endpoint: mcp.endpoint, token: mcp.config.token)
+        settingUp = agent.rawValue
+        Task {
+            let outcome: SetupResult = await Task.detached {
+                do {
+                    let report: Setup.Report
+                    switch agent {
+                    case .phi: report = try setup.phi()
+                    case .claude: report = try setup.claude()
+                    case .cli: report = try setup.cli()
+                    }
+                    let wrote = report.paths.map { ($0 as NSString).abbreviatingWithTildeInPath }
+                    return SetupResult(ok: true, text: (report.notes + ["Wrote " + wrote.joined(separator: " and ") + "."]).joined(separator: " "))
+                } catch {
+                    return SetupResult(ok: false, text: (error as? Tools.Failure)?.text ?? error.localizedDescription)
+                }
+            }.value
+            setupResult[agent.rawValue] = outcome
+            settingUp = nil
+            await refreshSetup()
         }
-        setupStatus = Setup(endpoint: mcp.endpoint, token: mcp.config.token).status()
     }
 
-    private var status: String {
-        if let trouble = mcp.trouble { return trouble }
-        if mcp.running { return "Listening at \(mcp.endpoint)" }
-        return mcp.config.enabled ? "Starting…" : "Off"
+    private func refreshSetup() async {
+        let setup = Setup(endpoint: mcp.endpoint, token: mcp.config.token)
+        setupStatus = await Task.detached { setup.status() }.value
     }
 
     private func copy(_ text: String, _ tag: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        SettingsActions.copy(text)
         copied = tag
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { if copied == tag { copied = nil } }
+    }
+}
+
+/// The key: the bearer token, copying it, making a new one; and what the
+/// server has done this session.
+private struct AgentsKeySection: View {
+    @ObservedObject var mcp = MCP.shared
+    @State private var copied = false
+    @State private var confirmRotate = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SettingsSection("The key") {
+                Line("Bearer token", "Every request must carry it. Kept in agent.json, readable by you alone. A new token stops every client that has the old one until it's set up again.") {
+                    HStack(spacing: 8) {
+                        Text(String(mcp.config.token.prefix(8)) + "…")
+                            .font(.system(size: 12, design: .monospaced)).foregroundStyle(SettingsInk.detail)
+                            .accessibilityLabel("Token starting \(String(mcp.config.token.prefix(8)))")
+                        Pill(copied ? "Copied" : "Copy") {
+                            SettingsActions.copy(mcp.config.token)
+                            copied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
+                        }
+                        Pill("New token…") { confirmRotate = true }
+                    }
+                }
+                .settingsAnchor("agents.token")
+                .confirmationDialog("Make a new token?", isPresented: $confirmRotate) {
+                    Button("Make a new token", role: .destructive) { mcp.rotateToken() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Every client set up with the current token stops working until it is set up again: phi and Claude Code with Update, under Terminal agents.")
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                if mcp.calls > 0 {
+                    SettingsNote("\(mcp.calls) tool call\(mcp.calls == 1 ? "" : "s") this session — last: \(mcp.lastTool)")
+                }
+                SettingsNote("Agents act as you: whatever you are signed in to, they are too. Turn the server off when you don't need it.")
+            }
+        }
     }
 }
 
@@ -805,7 +980,8 @@ struct LinkCard: View {
                     .font(.system(size: 12, design: .monospaced))
                     .frame(width: 220)
                     .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .settingsField()
+                    .accessibilityLabel("App address")
             }
             Rule()
             Line("App name", "Optional nickname used in announcements") {
@@ -814,7 +990,8 @@ struct LinkCard: View {
                     .font(.system(size: 12))
                     .frame(width: 140)
                     .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .settingsField()
+                    .accessibilityLabel("App name")
             }
             Rule()
             Line("Link name", link.config.name) { EmptyView() }
@@ -829,16 +1006,17 @@ struct LinkCard: View {
                         .foregroundStyle(Color.orange.opacity(0.9))
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14).padding(.bottom, 10)
+                        .padding(.horizontal, 16).padding(.bottom, 10)
                 }
             }
             Rule()
             Line("Personal token", "Mint one at Agents › Connect; it stays in a file only you can read") {
-                KeyField(text: $link.config.token, placeholder: "fxb_…", ready: link.tokenReady)
+                KeyField(text: $link.config.token, placeholder: "fxb_…", ready: link.tokenReady, label: "Personal token")
             }
             Rule()
             Line("Status", link.status.text) {
                 Circle().fill(dot).frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
             }
             if linked {
                 Rule()
@@ -881,7 +1059,7 @@ struct LinkCard: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14).padding(.vertical, 11)
+                    .padding(.horizontal, 16).padding(.vertical, 11)
                 }
                 Rule()
                 Line("Revoke link", "Every bot loses these tools now; Copper disconnects.") {
@@ -943,8 +1121,9 @@ private struct GrantRow: View {
             }
             .buttonStyle(.plain)
             .help("Take away @\(grant.handle)'s access")
+            .accessibilityLabel("Take away @\(grant.handle)'s access")
         }
-        .padding(.horizontal, 14).padding(.vertical, 9)
+        .padding(.horizontal, 16).padding(.vertical, 9)
     }
 }
 
@@ -964,7 +1143,7 @@ struct ServerRow: View {
                 .font(.system(size: 11)).foregroundStyle(server.state.hasPrefix("failed") ? Color.orange : Palette.muted)
                 .lineLimit(2).frame(maxWidth: 220, alignment: .trailing)
         }
-        .padding(.horizontal, 14).padding(.vertical, 9)
+        .padding(.horizontal, 16).padding(.vertical, 9)
     }
 
     private var colour: Color {

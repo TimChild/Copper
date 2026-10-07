@@ -42,6 +42,13 @@ presence of `Login Data`, so a browser with no saved passwords still appears.
 Each imported space is new. A name collision gets ` (Chrome)` or ` (Arc)`.
 Imported pages do not load until their space is visited.
 
+After a Chrome move finishes, Copper opens **Switching from Chrome** in front: a
+local canvas explaining where Chrome windows, tabs, bookmarks and more landed,
+plus the sidebar and the keys to start with. It stays on this Mac, even when
+Copper Cloud is signed in. A later move reopens the same canvas (including any
+edits you made), without adding its template shapes again. Arc and other
+Chromium sources do not open this Chrome-specific guide.
+
 The new spaces are written to `session.json` the moment they are adopted,
 before the keychain prompt, cookie decryption, and extension downloads that
 follow. Quitting (or force-quitting) Copper during those later steps keeps the
@@ -106,6 +113,11 @@ The fixture commits only bookmark files for Profile 1 and Profile 2; the
 script writes the two empty `Preferences` markers into its *copy* because
 Flow uses them to discover profiles. The shared fixture root may also hold
 other workers' Default profile metadata.
+
+The finished `flow move`/`flow status` JSON has a `canvasId` for Chrome. For an
+isolated headless run using a generated fake Chrome profile, run
+`docs/fixtures/flow-canvas-e2e.sh [build/Copper.app]` (no real Chrome data or
+Copper world is opened).
 
 `./arc-import` remains for older installations and one-off recovery, but is
 superseded by Flow.

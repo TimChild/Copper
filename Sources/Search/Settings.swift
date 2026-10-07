@@ -42,7 +42,7 @@ struct SettingsPanel: View {
     }
 
     enum Page: String, CaseIterable, Identifiable {
-        case general, tabs, spaces, intelligence, agents, cloud, updates, extensions, passwords, downloads, privacy, labs, about // Fork: spaces, intelligence, agents, cloud, updates, labs
+        case general, tabs, spaces, intelligence, agents, voice, cloud, updates, extensions, passwords, downloads, privacy, labs, about // Fork: spaces, intelligence, agents, voice, cloud, updates, labs
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -51,6 +51,7 @@ struct SettingsPanel: View {
             case .spaces: return "Spaces" // Fork
             case .intelligence: return "Intelligence" // Fork
             case .agents: return "Agents" // Fork
+            case .voice: return "Voice" // Fork (voice)
             case .cloud: return "Cloud" // Fork
             case .updates: return "Updates" // Fork
             case .extensions: return "Extensions"
@@ -68,6 +69,7 @@ struct SettingsPanel: View {
             case .spaces: return "square.stack" // Fork
             case .intelligence: return "sparkles" // Fork
             case .agents: return "cpu" // Fork
+            case .voice: return "waveform" // Fork (voice)
             case .cloud: return "icloud" // Fork
             case .updates: return "arrow.triangle.2.circlepath" // Fork
             case .extensions: return "puzzlepiece.extension"
@@ -225,6 +227,7 @@ struct SettingsPanel: View {
                         case .spaces: SpacesSettingsPage(browser: browser) // Fork
                         case .intelligence: IntelligencePage(browser: browser) // Fork
                         case .agents: AgentsPage(browser: browser) // Fork
+                        case .voice: VoicePage(browser: browser) // Fork (voice): Fork/Voice/VoiceSettings.swift
                         case .cloud: CloudPage(browser: browser) // Fork
                         case .updates: UpdatesPage(browser: browser) // Fork
                         case .extensions: ExtensionsPage(browser: browser)

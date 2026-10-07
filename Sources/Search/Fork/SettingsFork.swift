@@ -405,6 +405,30 @@ struct AgentsPage: View {
     @State private var setupStatus = Setup.Status()
     @State private var setupResult: [String: String] = [:]
 
+    /// Tool-call rounds per question. While Copper Cloud sets the org's
+    /// number it is shown, not editable; this Mac's own comes back after.
+    private var turnsRow: some View {
+        let cloud = brain.cloudMaxTurns
+        let turns = Binding(get: { cloud ?? chat.config.maxTurns }, set: { chat.config.maxTurns = $0 })
+        return Line("Tool-call rounds per question", cloud.map { "Set by Copper Cloud: \($0)" }
+                    ?? "How many times the agent may use its tools before it stops and asks you to continue. Default \(Agent.Config.defaultMaxTurns).") {
+            HStack(spacing: 6) {
+                TextField("\(Agent.Config.defaultMaxTurns)", value: turns, format: .number.grouping(.never))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 44)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                Stepper("Tool-call rounds per question", value: turns, in: Agent.Config.maxTurnsRange)
+                    .labelsHidden()
+                    .controlSize(.small)
+            }
+            .disabled(cloud != nil)
+            .opacity(cloud != nil ? 0.55 : 1)
+        }
+    }
+
     private var serversLine: String {
         if let trouble = servers.trouble { return trouble }
         if servers.all.isEmpty { return "The mcp.json shape Claude Code and phi use — http servers with headers, or a command to run. ${VAR} is filled from the environment." }
@@ -490,6 +514,9 @@ struct AgentsPage: View {
                     Switch(on: $chat.config.pageContext)
                 }
                 .settingsAnchor("agents.context")
+                Rule()
+                turnsRow
+                    .settingsAnchor("agents.turns")
                 Rule()
                 Line("Your other MCP servers", serversLine) {
                     HStack(spacing: 8) {

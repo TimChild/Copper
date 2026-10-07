@@ -52,10 +52,11 @@ A Copper signed in to a [Copper Cloud](cloud.md) asks it for model keys — `GET
 ```json
 {"jev": {"key": "…", "endpoint": "https://api.typesafe.ai/v1/systemone", "model": "jev-latest"},
  "router": {"key": "…", "url": "https://llm.dev.exowatt.com"},
- "updated_at": "2026-10-05T12:00:00Z"}
+ "updated_at": "2026-10-05T12:00:00Z",
+ "agent": {"max_turns": 100}}
 ```
 
-Any part may be `null` or missing. A 404 (a cloud from before this route), 401 or 403 means the cloud provides nothing; no error is shown. Copper asks after a cloud sign-in, at launch when linked and signed in, when Settings opens (at most once a minute) and every 30 minutes. A network failure keeps what was known.
+Any part may be `null` or missing. `agent` is not a key and comes whether or not the cloud shares keys: `max_turns` (a whole number, 1–500; anything else is ignored) is the org's tool-call rounds per question for the agent pane and wins over Settings › Agents while provided (docs/agents.md); it is cached and cleared with the keys. A 404 (a cloud from before this route), 401 or 403 means the cloud provides nothing; no error is shown. Copper asks after a cloud sign-in, at launch when linked and signed in, when Settings opens (at most once a minute) and every 30 minutes. A network failure keeps what was known.
 
 What the cloud provides is kept in memory and in `cloud-intelligence.json` (mode 0600, beside `cloud.json`) so an offline launch still works, and is **never written into `intelligence.json`**. Signing out of the cloud, disconnecting it, or signing in as someone else deletes it.
 
@@ -111,7 +112,7 @@ copper claude cancel
 
 `copper claude signin` opens claude.ai in the running Copper window. Sign in there and let the callback return to Copper. If the callback cannot return, use `copper claude paste -`; stdin is preferred so the code is not put in the process list. `status` reports the lane, tier, model, readiness and account email, never a token. The commands need the loopback server and bearer token, and return 0 on success, 1 when Copper refuses an operation, and 2 for usage errors or an unreachable browser.
 
-`./bench ai` reports the lane in force (with `laneSource` and `localLane`), tier, model, model readiness, Claude-account readiness, `sources` and `answeredBy`. `./bench ai lane key|claude` and `./bench ai tier haiku|sonnet|opus` change this Mac's choice. `./bench ai sources|refresh` are the CLI's two. `./bench ai selftest` (also part of `./bench agent selftest`) checks the model-name migration, the merge of this Mac's keys with the cloud's (including the cloud's gateway key deciding the lane, and the lane coming back when the cloud goes), the `/v1/intelligence` decoder and the request shapes, and both lanes' prompt-cache marks over a four-turn conversation — where they sit, never more than four, and each turn's body beginning with the bytes of the one before — probe world only.
+`./bench ai` reports the lane in force (with `laneSource` and `localLane`), tier, model, model readiness, Claude-account readiness, `sources` and `answeredBy`. `./bench ai lane key|claude` and `./bench ai tier haiku|sonnet|opus` change this Mac's choice. `./bench ai sources|refresh` are the CLI's two. `./bench ai selftest` (also part of `./bench agent selftest`) checks the model-name migration, the merge of this Mac's keys with the cloud's (including the cloud's gateway key deciding the lane, and the lane coming back when the cloud goes), the `/v1/intelligence` decoder (including `agent.max_turns`: range, wrong types, the cache) and the request shapes, and both lanes' prompt-cache marks over a four-turn conversation — where they sit, never more than four, and each turn's body beginning with the bytes of the one before — probe world only.
 
 ## Troubleshooting
 

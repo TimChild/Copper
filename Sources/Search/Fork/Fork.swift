@@ -62,7 +62,7 @@ enum Fork {
         case "passkeys": return PasskeysBench.handle(request)
         case "agent":
             // `agent ask TEXT` / `agent chat|open|close|clear` are the pane's; the rest is the server's.
-            if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear", "stop", "selftest", "regression", "seed", "expand"].contains(op) { return Agent.shared.bench(request, in: Windows.current) }
+            if let op = request["op"] as? String, ["ask", "chat", "open", "close", "clear", "stop", "selftest", "regression", "seed", "expand", "turns"].contains(op) { return Agent.shared.bench(request, in: Windows.current) }
             if request["op"] as? String == "servers" { Task { await Servers.shared.reload() }; return ["reloading": true] }
             return MCP.shared.bench(request)
         case "windows": return Windows.bench(request)

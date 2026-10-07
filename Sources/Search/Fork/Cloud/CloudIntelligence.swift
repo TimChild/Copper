@@ -8,7 +8,9 @@ import Foundation
 // intelligence.json. Its gateway key, while provided, is the one every model
 // call uses (gateway lane, its address), whatever this Mac chose; a Jev key
 // typed on this Mac wins (`Intelligence.merge`). Signed out or unlinked,
-// both go, and this Mac's own choice is back.
+// both go, and this Mac's own choice is back. The same answer may carry the
+// org's agent turn budget (`"agent": {"max_turns": N}`), which wins over
+// Settings › Agents while provided and goes with the keys.
 //
 // Asked after a sign-in, at launch when linked and signed in, when Settings
 // opens, and every 30 minutes. A 404 (a cloud from before this route), 401
@@ -26,8 +28,16 @@ struct CloudProvided: Codable, Equatable {
         var key: String?
         var url: String?
     }
+    /// The org's agent settings — not a key, and sent whether or not the
+    /// cloud shares keys. `maxTurns`: tool-call rounds per question for the
+    /// agent pane, 1…500; it wins over this Mac's own setting (Agent.turnBudget).
+    struct AgentPart: Codable, Equatable {
+        var maxTurns: Int?
+        enum CodingKeys: String, CodingKey { case maxTurns = "max_turns" }
+    }
     var jev: JevPart?
     var router: RouterPart?
+    var agent: AgentPart?
     /// The server's own `updated_at` (RFC 3339), as sent.
     var updatedAt: String?
     /// The cloud it came from, as people read it (`host:port`).
@@ -37,7 +47,16 @@ struct CloudProvided: Codable, Equatable {
     var fetchedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case jev, router, updatedAt = "updated_at", host, owner, fetchedAt = "fetched_at"
+        case jev, router, agent, updatedAt = "updated_at", host, owner, fetchedAt = "fetched_at"
+    }
+
+    /// The range the cloud may set; anything else is not provided.
+    static let maxTurnsRange = 1...500
+
+    /// The org's tool-call rounds per question, when it sets a usable one.
+    var agentMaxTurns: Int? {
+        guard let n = agent?.maxTurns, CloudProvided.maxTurnsRange.contains(n) else { return nil }
+        return n
     }
 
     /// The parts that carry a key: `jev`, `router`. Never the key itself.
@@ -50,6 +69,7 @@ struct CloudProvided: Codable, Equatable {
 
     var isEmpty: Bool {
         provides.isEmpty && (jev?.endpoint ?? "").isEmpty && (jev?.model ?? "").isEmpty && (router?.url ?? "").isEmpty
+            && agentMaxTurns == nil
     }
 
     /// The server's body, read leniently: any field may be null, absent or
@@ -70,6 +90,14 @@ struct CloudProvided: Codable, Equatable {
         if let router = object["router"] as? [String: Any] {
             let part = RouterPart(key: text(router["key"]), url: text(router["url"]))
             if part.key != nil || part.url != nil { out.router = part }
+        }
+        // `"agent": {"max_turns": N}` — absent or null on older servers or
+        // when the org leaves it to each Mac. A whole number in 1…500 only:
+        // not a fraction, not a boolean, not a string.
+        if let agent = object["agent"] as? [String: Any], let number = agent["max_turns"] as? NSNumber,
+           CFGetTypeID(number) != CFBooleanGetTypeID(), let n = Int(exactly: number.doubleValue),
+           maxTurnsRange.contains(n) {
+            out.agent = AgentPart(maxTurns: n)
         }
         out.updatedAt = text(object["updated_at"])
         return out
@@ -191,6 +219,10 @@ final class CloudIntelligence {
                 if before?.provides != provided.provides {
                     CloudLog.note(provided.provides.isEmpty ? "Copper Cloud provides no model keys"
                                   : "Copper Cloud provides model keys: \(provided.provides.joined(separator: ", "))")
+                }
+                if before?.agentMaxTurns != provided.agentMaxTurns {
+                    CloudLog.note(provided.agentMaxTurns.map { "Copper Cloud sets the agent's tool-call rounds per question: \($0)" }
+                                  ?? "Copper Cloud leaves the agent's tool-call rounds to this Mac")
                 }
             }
         } catch let failure as Cloud.Failure {

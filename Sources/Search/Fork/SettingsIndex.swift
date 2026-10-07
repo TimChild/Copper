@@ -248,6 +248,8 @@ enum SettingsIndex {
           ["new link", "add app", "connect app"], "agents.add"),
         e(.agents, "The agent in the window", "Page in front of every question", "The current tab's address, title and text go with each question in the agent pane (⌘E)",
           ["context", "ask on page", "agent pane", "cmd e", "page text"], "agents.context", toggle: pageContext),
+        e(.agents, "The agent in the window", "Tool-call rounds per question", "How many times the agent may use its tools before it stops and asks",
+          ["max turns", "turns", "rounds", "tool calls", "limit", "budget", "stopped after", "steps"], "agents.turns"),
         e(.agents, "The agent in the window", "Your other MCP servers", "mcp.json servers — http with headers, or a command to run",
           ["mcp.json", "servers", "tools", "stdio", "mcp client"], "agents.servers"),
         e(.agents, "Terminal agents", "phi", "User-scoped ~/.pi/agent/mcp.json and /jev prompt",

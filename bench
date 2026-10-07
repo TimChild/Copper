@@ -175,7 +175,7 @@
     ./bench groups [toggle NAME|inside PARENT NAME|plan [today]]
                                        folders: fold or open one (by its whole "A › B" name or
                                        its last part), or make one inside another
-    ./bench sections [save ID|unsave ID|archive [HOURS]|window 12h|24h|48h|never]
+    ./bench sections [save ID|unsave ID|archive [HOURS]|window 12h|24h|48h|never|age ID HOURS]
                                        the sidebar's Saved and Today blocks: counts per space,
                                        move a tab across the seam, run the archive sweep now
                                        (with HOURS, against that age instead of the setting)
@@ -294,6 +294,22 @@
     ./bench settings perf scroll|layers|[reset]|stop
                                        a scripted scroll of the open page; the window's view/layer count;
                                        the meters since reset
+    ./bench settings ax [focus|controls|raw|sweep]
+                                       what VoiceOver finds in the window: named elements; who has the
+                                       keyboard; only the controls (named? focusable?); every node; or
+                                       `controls` on every page in turn with the unnamed ones listed
+    ./bench settings confirm [answer CHOICE|selftest]
+                                       the question a Settings page is asking (delete a space, remove an
+                                       extension, a dialog) — held for the bench in a headless test run;
+                                       answer it by button number, title, or the start of its title;
+                                       selftest puts up a SwiftUI dialog and answers it end to end
+    ./bench settings browse folder PATH|ask [PATH|cancel|folder|reset]|prefs|glyph letters|icons
+                                       Downloads' Change… as a pick of PATH; how "Ask where to save" is
+                                       answered in a test run, and the names it was asked about; the
+                                       Browsing pages' values (test runs only)
+    ./bench settings browse picture spaces|extensions PATH [WIDTH] [light|dark]
+                                       the whole page as a PNG, laid out at a page-column WIDTH
+                                       (345 is Settings' narrowest), not scrolled
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, folded on|off, peek on|off,
                                        tabswitch row|recent, page general|tabs (which Settings page), focus none (the keyboard to the window itself), width N (the sidebar),

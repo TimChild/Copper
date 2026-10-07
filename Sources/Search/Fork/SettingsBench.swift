@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Keys while Settings is open, seen by the app's key monitor before the
 /// page or a field (App.swift `take()` asks first):
-/// ⌘F puts the keyboard in the search field; Esc clears the query, and only
+/// ⌘F puts the keyboard in the search field; ⌘W closes the panel; Esc clears the query, and only
 /// on an empty one closes the panel; ↑ ↓ ↩ walk and pick results; and a
 /// letter typed while no field has the keyboard starts a search.
 @MainActor
@@ -19,6 +19,12 @@ enum SettingsKeys {
 
         if command, key == "f", flags.isDisjoint(with: [.shift, .option, .control]) {
             finder.focus()
+            return true
+        }
+        // ⌘W puts Settings away, as it closes any settings window on the
+        // Mac — rather than closing the tab hidden behind the panel.
+        if SettingsControlRules.closes(key: key, flags: flags) {
+            browser.tuning = false
             return true
         }
         if event.keyCode == 53 {
@@ -159,6 +165,32 @@ enum SettingsBench {
         case "index":
             guard arg.isEmpty || arg == "check" else { answer(["error": "settings index check"]); return }
             check(in: browser, answer: answer)
+
+        case "ax":
+            // ax [focus|controls|raw|sweep]: what VoiceOver finds, and who has
+            // the keyboard (Fork/SettingsControls.swift).
+            if arg == "sweep" {
+                SettingsAccessibility.sweep(in: browser, answer: answer)
+            } else {
+                answer(SettingsAccessibility.dump(in: browser, mode: arg))
+            }
+
+        case "confirm":
+            // confirm [answer CHOICE]: the question a Settings page is asking,
+            // held for the bench in a test run (X-13, Fork/SettingsControls.swift).
+            guard Store.testing else { answer(["error": "only in a test run"]); return }
+            let words = arg.split(separator: " ", maxSplits: 1).map(String.init)
+            if words.first == "answer" {
+                answer(TestConfirm.answer(words.count > 1 ? words[1] : ""))
+            } else if words.first == "selftest" {
+                TestConfirm.selftest(in: browser, answer: answer)
+            } else {
+                answer(TestConfirm.describe)
+            }
+
+        case "browse":
+            // browse folder PATH|ask …|prefs: the Browsing pages' test seams (Fork/SettingsBrowse.swift).
+            answer(SettingsBrowseBench.handle(arg, in: browser))
 
         default:
             answer(state(browser))

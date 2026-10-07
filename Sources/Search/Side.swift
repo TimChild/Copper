@@ -527,7 +527,7 @@ private struct PinSquare: View {
             if browser.editingPin == tab.id {
                 PinField(browser: browser, tab: tab)
             } else {
-                RowMark(icon: tab.icon, letter: tab.pin ?? tab.monogram, tint: tint, size: mark)
+                SideGlyphMark(prefs: browser.prefs, icon: tab.icon, letter: tab.pin ?? tab.monogram, tint: tint, size: mark) // Fork (settings-browse): Tabs show Letters / Site icons
             }
         }
         .frame(width: width, height: height)
@@ -583,7 +583,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
                     .frame(height: 18)
             } else {
                 if !tab.isBlank {
-                    RowMark(icon: tab.icon, letter: tab.monogram, tint: tint, size: 16)
+                    SideGlyphMark(prefs: browser.prefs, icon: tab.icon, letter: tab.monogram, tint: tint, size: 16) // Fork (settings-browse): Tabs show Letters / Site icons
                         .opacity(live ? 1 : 0.9)
                 }
                 if tab.bench {

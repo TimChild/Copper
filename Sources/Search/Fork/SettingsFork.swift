@@ -1115,7 +1115,7 @@ private struct GrantRow: View {
             Switch(on: Binding(
                 get: { grant.enabled },
                 set: { on in Task { try? await link.setGrant(grant.botId, enabled: on) } }
-            ))
+            ), label: "@\(grant.handle.isEmpty ? grant.botId : grant.handle)") // settings-a11y
             Button { Task { try? await link.removeGrant(grant.botId) } } label: {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.muted)
             }
@@ -1176,7 +1176,7 @@ struct HistorySettingsLine: View {
     @ObservedObject private var flow = Flow.shared
 
     var body: some View {
-        Line("Arc history", detail) {
+        Line("Browsing history", detail) { // settings-browse: it brings Arc's or Chrome's
             if case .reading = flow.historyImport {
                 Text("Reading…")
                     .font(.system(size: 12, weight: .medium))

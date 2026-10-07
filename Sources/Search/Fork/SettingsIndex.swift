@@ -146,8 +146,8 @@ enum SettingsIndex {
           toggle: pref(\.autocorrect)),
         e(.general, "Moving in", "Move in from another browser", "Open tabs, spaces, bookmarks and signed-in state from Chrome or Arc",
           ["import", "flow", "chrome", "arc", "migrate", "switch browsers", "bookmarks import", "transfer"], "general.flow"),
-        e(.general, "Moving in", "Arc history", "Typed addresses complete from Arc or Chrome history",
-          ["import history", "chrome history", "browsing history", "autocomplete", "address completion"], "general.history"),
+        e(.general, "Moving in", "Browsing history", "Typed addresses complete from Arc or Chrome history",
+          ["import history", "arc history", "chrome history", "browsing history", "autocomplete", "address completion"], "general.history"),
         e(.general, "Developer", "Let a script drive Copper", "A local socket for testing — see ./bench",
           ["bench", "automation", "socket", "testing", "script", "developer", "debug"], "general.bench",
           toggle: pref(\.bench)),
@@ -163,7 +163,7 @@ enum SettingsIndex {
           ["favicons", "icons", "letters", "glyph", "tab icons"], "tabs.glyph"),
         e(.tabs, "Switching", "⌃Tab switches to", "Whether Control-Tab follows the row or your most recent tabs",
           ["control tab", "ctrl tab", "mru", "most recent", "recent tabs", "cycle tabs", "tab switching", "switch tabs"], "tabs.switching"),
-        e(.tabs, "Switching", "Swipe between spaces", "Two fingers across the tabs: natural, inverted, or like scrolling",
+        e(.tabs, "Switching", "Swipe between spaces", "Two fingers across the sidebar: natural, inverted, or like scrolling",
           ["trackpad", "gesture", "swipe", "natural scrolling", "inverted", "two fingers", "direction"], "tabs.swipe"),
         e(.tabs, "Tabs you leave", "Sleep tabs you aren't using", "After half an hour away they come back where you left them",
           ["memory", "suspend", "discard", "energy", "battery", "idle", "performance", "hibernate"], "tabs.sleep",
@@ -429,7 +429,8 @@ enum SettingsIndex {
         e(.downloads, "Downloads", "Save to", "The folder downloads go to",
           ["downloads folder", "download location", "directory", "path", "save location", "destination"], "downloads.folder"),
         e(.downloads, "Downloads", "Ask where to save each file", "A save panel for every download",
-          ["save as", "prompt", "choose location", "ask"], "downloads.ask", toggle: pref(\.asksWhereToSave)),
+          ["save as", "prompt", "choose location", "ask", "ask before download", "confirm download", "save dialog"],
+          "downloads.ask", toggle: pref(\.asksWhereToSave)),
     ]
 
     // MARK: privacy

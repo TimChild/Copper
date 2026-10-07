@@ -980,6 +980,14 @@ final class Browser: NSObject, ObservableObject {
             .dropFirst()
             .sink { [weak self] on in
                 guard let self, let web = active?.web else { return }
+                // Fork (settings-browse): WebKit's toggle writes the app's own
+                // defaults — in a test run, the real Copper's. There the
+                // change waits for the next launch (`tellWebKit`).
+                if Store.testing {
+                    Preferences.tellWebKit(autocorrect: on)
+                    announce(on ? "Autocorrect on" : "Autocorrect off")
+                    return
+                }
                 let selector = NSSelectorFromString("toggleAutomaticSpellingCorrection:")
                 guard web.responds(to: selector) else { return }
                 // Toggling is all there is, so it is only sent when the two
@@ -2511,17 +2519,33 @@ extension Browser: WKDownloadDelegate {
         let name = asked ?? (suggestedFilename.isEmpty ? "download" : suggestedFilename)
 
         guard !prefs.asksWhereToSave else {
+            // Fork (settings-browse): a test run never puts a save panel on
+            // somebody's screen; the bench answers it (Fork/SettingsBrowse.swift).
+            if Store.testing {
+                guard let url = DownloadAsk.answer(name, in: prefs.downloads) else {
+                    completionHandler(nil)
+                    return
+                }
+                completionHandler(url)
+                Downloads.shared.destined(download, to: url)
+                announce("Downloading \(url.lastPathComponent)")
+                return
+            }
             let panel = NSSavePanel()
             panel.nameFieldStringValue = name
             panel.directoryURL = prefs.downloads
             panel.canCreateDirectories = true
-            guard panel.runModal() == .OK, let url = panel.url else {
-                completionHandler(nil)
-                return
+            // Fork (settings-browse): a sheet on this window rather than a
+            // modal that froze every window until it was answered.
+            SettingsPanels.present(panel, on: Windows.window(of: self)) { [weak self] url in
+                guard let url else {
+                    completionHandler(nil)
+                    return
+                }
+                completionHandler(url)
+                Downloads.shared.destined(download, to: url)
+                self?.announce("Downloading \(url.lastPathComponent)")
             }
-            completionHandler(url)
-            Downloads.shared.destined(download, to: url)
-            announce("Downloading \(url.lastPathComponent)")
             return
         }
 

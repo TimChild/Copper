@@ -195,7 +195,7 @@ private struct CloudConnectCard: View {
                                 .autocorrectionDisabled()
                                 .focused($focus, equals: .code)
                                 .padding(.horizontal, 8).padding(.vertical, 6)
-                                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                .settingsField() // SB-04
                                 .onSubmit(go)
                             Button {
                                 if let pasted = SettingsActions.pasteboard.string(forType: .string) { code = pasted.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -403,7 +403,7 @@ private struct CloudAccountForm: View {
         VStack(alignment: .leading, spacing: 8) {
             Caption("2 · Your account on this instance")
             Card {
-                Segmented(options: [(Mode.signIn, "Sign in"), (Mode.create, "Create account")], selection: $mode, wide: true)
+                Segmented(options: [(Mode.signIn, "Sign in"), (Mode.create, "Create account")], selection: $mode, wide: true, label: "Account")
                     .padding(.horizontal, 14).padding(.vertical, 10)
                 Rule()
                 Line("Email") {
@@ -740,7 +740,7 @@ private struct CloudAccountCard: View {
                         .font(.system(size: 12))
                         .frame(width: 170)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .settingsField() // SB-04
                         .onSubmit(rename)
                 }
             }
@@ -1230,6 +1230,6 @@ private func field(_ placeholder: String, text: Binding<String>, width: CGFloat,
     .autocorrectionDisabled()
     .frame(width: width)
     .padding(.horizontal, 8).padding(.vertical, 4)
-    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    .settingsField() // SB-04
     .onSubmit { submit?() }
 }

@@ -136,7 +136,7 @@ struct CloudHistoryDeleteCard: View {
                 .autocorrectionDisabled()
                 .frame(width: 170)
                 .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .settingsField() // SB-04
         }
         Rule()
         HStack(spacing: 8) {

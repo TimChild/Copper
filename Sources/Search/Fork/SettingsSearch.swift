@@ -6,8 +6,9 @@ import SwiftUI
 //
 // Matching is per word, after folding case and diacritics. A query word
 // scores against each word of a field: exact, then prefix, then inside a
-// word, then a typo (one edit, two for long words — transpositions count as
-// one), then the letters in order. Fields weigh title > keywords > page and
+// word, then a typo (one edit, two for words of nine letters or more —
+// transpositions count as one; only in words of five letters or more, first
+// letter kept), then the letters in order. Fields weigh title > keywords > page and
 // section > subtitle, every query word has to land somewhere (synonyms
 // count), and a few whole-query bonuses put the obvious answer first.
 
@@ -152,13 +153,12 @@ enum SettingsMatcher {
         if q.count >= 3, let at = find(q, in: w) {
             return (0.55, Array(at..<(at + q.count)))
         }
-        // A slip keeps the first letter (or swaps the first two): "bitwardn",
-        // "dowloads", "privcy" — but not "block" for "lock".
-        // (Two steps, not one long chain: kind to the older type checker.)
-        let swapped = q.count > 1 && w.count > 1 && q[0] == w[1] && q[1] == w[0]
-        let sameStart = q[0] == w[0] || swapped
-        if q.count >= 4, sameStart {
-            let most = q.count >= 8 ? 2 : 1
+        // A slip keeps the first letter: "extensons", "dowloads", "privcy" —
+        // but not "block" for "lock". Only in words of five letters or more:
+        // a slip in four was as often another word ("font" lit "front",
+        // "unpacked" ranked "unlocked"). (settings-browse)
+        if q.count >= 5, q[0] == w[0] {
+            let most = q.count >= 9 ? 2 : 1
             let whole = distance(q, w, cap: most)
             if whole <= most, abs(q.count - w.count) <= most {
                 return (whole == 1 ? 0.62 : 0.48, Array(0..<w.count))
@@ -172,7 +172,10 @@ enum SettingsMatcher {
                 if best <= 1 { return (0.5, Array(0..<min(q.count, w.count))) }
             }
         }
-        if q.count >= 3, q[0] == w[0], let lit = subsequence(q, in: w) {
+        // The letters in order ("pswd"). One letter short of the word is a
+        // slip, not shorthand, so it takes the same five letters a slip
+        // does ("font" is not "front").
+        if q.count >= 3, q[0] == w[0], w.count - q.count > 1 || q.count >= 5, let lit = subsequence(q, in: w) {
             let spread = Double(lit.last! - lit.first! + 1)
             return (0.35 + 0.25 * Double(q.count) / spread, lit)
         }

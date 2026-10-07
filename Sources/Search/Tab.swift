@@ -133,8 +133,21 @@ final class Tab: ObservableObject, Identifiable {
     /// The letter a pinned tab is reduced to, and what a tab shows in place of
     /// an icon it doesn't have yet.
     var monogram: String {
-        let host = address?.host()?.replacingOccurrences(of: "www.", with: "") ?? ""
-        return host.first.map { String($0).uppercased() } ?? "•"
+        Tab.monogram(host: address?.host(), title: title) // Fork (settings-browse): see below
+    }
+
+    /// Fork (settings-browse): the letter for a host — but a numbered host
+    /// (127.0.0.1, [::1]) gave every such tab a "1", so those take the first
+    /// letter of the page's title instead.
+    nonisolated static func monogram(host: String?, title: String) -> String {
+        let host = host?.replacingOccurrences(of: "www.", with: "") ?? ""
+        let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        let parts = bare.split(separator: ".", omittingEmptySubsequences: false)
+        let v4 = parts.count == 4 && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+        if v4 || bare.contains(":"), let letter = title.first(where: { $0.isLetter || $0.isNumber }) {
+            return String(letter).uppercased()
+        }
+        return host.first(where: { $0.isLetter || $0.isNumber }).map { String($0).uppercased() } ?? "•"
     }
 
     private func adoptIcon() {
@@ -243,6 +256,14 @@ final class Tab: ObservableObject, Identifiable {
     /// When you last looked at it. The summon lists pages by this, because
     /// what you were just reading is what you are most likely to want back.
     private(set) var touched = Date()
+
+    /// Fork (settings-browse): `bench sections age` — a test run sets when the
+    /// tab was last looked at, so the archive window can be proven without
+    /// waiting a day for it.
+    func backdate(touched date: Date) {
+        guard Store.testing else { return }
+        touched = date
+    }
 
     /// Set on a tab brought back from the last session and not yet opened. It
     /// has a name and an address in the row, and costs nothing until you go to

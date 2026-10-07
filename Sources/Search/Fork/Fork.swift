@@ -7,7 +7,12 @@ import Foundation
 // upstream release touches as few of their lines as possible. See PATCHES.md.
 enum Fork {
     static let name = "Copper"
+    /// Copper as released and installed. Only a release build is this
+    /// (build.sh with COPPER_RELEASE=1); see Fork/Signing.swift.
     static let bundle = "com.collinrijock.copper"
+    /// Every other ./build.sh build: its own TCC records, defaults domain,
+    /// WebKit container and keychain identity, and always a test world.
+    static let devBundle = "com.collinrijock.copper.dev"
     /// Upstream's updater verifies Office Commun's signature against their
     /// feed. Running it from a Copper build would replace Copper with Search.
     /// Until there is a Copper feed and a signing identity, it stays off.
@@ -372,6 +377,15 @@ enum Fork {
             case "dry-run":
                 Updates.shared.dryRun = (request["arg"] as? String ?? "off") == "on"
                 return ["dryRun": Updates.shared.dryRun]
+            case "requirement":
+                // `updates requirement [TEXT|off]`: what a staged bundle must
+                // satisfy (Fork/Signing.swift); TEXT holds a test world to it.
+                let arg = (request["arg"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+                if !arg.isEmpty {
+                    guard Store.testing else { return ["error": "updates requirement TEXT only works in a test world"] }
+                    Updates.shared.requirementOverride = arg == "off" ? nil : arg
+                }
+                return ["requirement": Updates.shared.requirement, "overridden": Updates.shared.requirementOverride != nil]
             case "stage":
                 Updates.shared.stage(force: true)
                 return ["downloading": Updates.shared.downloading]

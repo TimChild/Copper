@@ -1,8 +1,9 @@
 # Updates and relaunch
 
 Copper's updater (`Sources/Search/Fork/Updates.swift`) verifies the feed manifest, the
-archive's SHA-256, the bundle's identity and version and its code signature before it swaps
-anything (README › Updates). This page is about how an update is offered — the sidebar's pill —
+archive's SHA-256, the bundle's identity and version, its code signature, and that the signature
+satisfies Copper's release requirement — Copper's own certificate, as `com.collinrijock.copper`
+(`Fork/Signing.swift`, docs/releasing.md) — before it swaps anything (README › Updates). This page is about how an update is offered — the sidebar's pill —
 and the part after the swap: getting the new
 Copper running again, in the same world, every time — and about the instance lock that keeps
 agents' probe worlds from swallowing the real browser.
@@ -172,10 +173,14 @@ For end-to-end tests that must never reach the real browser: a probe started wit
 
 ## Testing it
 
-Only in an isolated copy: `build/Copper.app` copied to `/tmp`, `CFBundleIdentifier` set to a
-test id (a separate LaunchServices identity, so nothing reaches the installed Copper —
-`fetchAndStage` accepts the running bundle's own id), `codesign --force --deep --sign -`,
-`xattr -cr`. Always headless, always a named world. A fake feed is a stamped copy zipped with
+Only in an isolated copy: `build/Copper.app` copied to `/tmp`. A `./build.sh` build is already
+`com.collinrijock.copper.dev`, a LaunchServices identity of its own, so nothing reaches the
+installed Copper; for a second identity set `CFBundleIdentifier` to another test id and
+`codesign --force --deep --sign -`; `xattr -cr`. `fetchAndStage` accepts the running bundle's own
+id and holds a test copy to its own identifier (`identifier "<id>"`); `./bench --world <w>
+updates requirement TEXT` holds it to any requirement instead — a certificate's
+(`identifier "com.collinrijock.copper.dev" and certificate leaf = H"<sha1>"`) to rehearse the
+release check, `off` to go back. Always headless, always a named world. A fake feed is a stamped copy zipped with
 `ditto -c -k --keepParent` plus a schema-1 manifest served by `python3 -m http.server` on
 127.0.0.1; drive it with `./bench --world <w> updates stub <manifest URL>`, `updates check`,
 `updates upgrade` (the world needs `defaults write com.officecommun.search.test.<w> bench

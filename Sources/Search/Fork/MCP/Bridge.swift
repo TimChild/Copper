@@ -135,7 +135,8 @@ enum Bridge {
 
     private static func copperProcessExists() -> Bool {
         let current = ProcessInfo.processInfo.processIdentifier
-        return NSRunningApplication.runningApplications(withBundleIdentifier: Fork.bundle)
+        // This binary's own app: a development build waits for its own kind.
+        return NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? Fork.bundle)
             .contains { $0.processIdentifier != current }
     }
 

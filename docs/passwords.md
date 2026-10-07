@@ -230,7 +230,7 @@ way, agents never receive the secret itself (next section).
 
 Copper reads 1Password through the official CLI, `op` 2.x — the browser
 extension route is closed to Copper (1Password's desktop link checks the
-browser's code signature, and Copper is ad-hoc signed). Install it first:
+browser's code signature, and Copper's is its own certificate, not a Developer ID). Install it first:
 
 ```sh
 brew install 1password-cli

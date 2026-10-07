@@ -49,7 +49,7 @@ On purpose:
 
 | What | Where it is | Who can read it |
 |---|---|---|
-| Passwords | The macOS login keychain, as ordinary keychain items tagged `Copper` | Copper, signed with our Developer ID. Any other app triggers the system's permission dialog. |
+| Passwords | The macOS login keychain, as ordinary keychain items tagged `Copper` | Copper, signed with Copper's release certificate. Any other app triggers the system's permission dialog. |
 | History, bookmarks, open tabs, hidden elements | Small JSON files in `~/Library/Application Support/Copper/` | You. |
 | Cookies and site data | WebKit's own store for the app | The sites that set them, as in any browser. |
 | Extensions | Unpacked in `~/Library/Application Support/Copper/Extensions/`, their data in WebKit's extension store | Each extension, within the permissions you accepted when adding it. |
@@ -62,7 +62,7 @@ A **private tab** (`⇧⌘N`) has its own cookie jar and leaves nothing behind w
 
 Copper checks `https://github.com/copper-browser/Copper/releases/latest/download/copper-version.json` (the manifest attached to the newest release) after launch and then every six hours. It never restarts without your say-so.
 
-Everything that can fail happens before you are asked. When the manifest names a newer release, Copper downloads the archive from the feed, checks it against the manifest's SHA-256, unpacks it under `~/Library/Application Support/Copper/updates/<version>/`, and checks that the bundle is Copper, is that version, and that its code signature verifies. Only then does **Settings › Updates** say *Copper X is ready* and offer **Update** (also ⌘K › **Update Copper**). Update backs up `session.json` (ten copies are kept), moves the running bundle to `updates/previous/`, moves the verified one into its place, and relaunches; the tab session comes back as it was. A refused swap puts the old bundle back and says why.
+Everything that can fail happens before you are asked. When the manifest names a newer release, Copper downloads the archive from the feed, checks it against the manifest's SHA-256, unpacks it under `~/Library/Application Support/Copper/updates/<version>/`, and checks that the bundle is Copper, is that version, and that its code signature verifies and is Copper's own (the release certificate and requirement in `release/`, docs/releasing.md). Only then does **Settings › Updates** say *Copper X is ready* and offer **Update** (also ⌘K › **Update Copper**). Update backs up `session.json` (ten copies are kept), moves the running bundle to `updates/previous/`, moves the verified one into its place, and relaunches; the tab session comes back as it was. A refused swap puts the old bundle back and says why.
 
 Whatever goes wrong is shown where it happened: a download or verification failure sits under the release with a **Retry** button and the reason (`did not match the feed's checksum`, `answered 404`, `the signature did not verify`, …); a refused update stays as *The last update didn't finish* with the reason and an **Open log** button (`~/Library/Logs/Copper/update.log`, one dated line per step). Offline checks stay quiet; a failed download after a successful check is announced once per release.
 
@@ -73,11 +73,11 @@ brew install --cask copper-browser/copper/copper      # Homebrew (tap: copper-br
 curl -fsSL https://github.com/copper-browser/Copper/releases/latest/download/copper-install.sh | sh
 ```
 
-Or download [`copper-macos-arm64.zip`](https://github.com/copper-browser/Copper/releases/latest/download/copper-macos-arm64.zip) from the [latest release](https://github.com/copper-browser/Copper/releases/latest), move `Copper.app` to `/Applications` and run `xattr -cr /Applications/Copper.app` once — builds are ad-hoc signed, not notarized, and Homebrew and the installer clear the quarantine flag for you. Apple Silicon, macOS 14 or later.
+Or download [`copper-macos-arm64.zip`](https://github.com/copper-browser/Copper/releases/latest/download/copper-macos-arm64.zip) from the [latest release](https://github.com/copper-browser/Copper/releases/latest), move `Copper.app` to `/Applications` and run `xattr -cr /Applications/Copper.app` once — builds are signed with Copper's own certificate, not notarized, and Homebrew and the installer clear the quarantine flag for you. Because every release carries the same signature, the permissions you give Copper (Full Disk Access, Files & Folders, the keychain's Always Allow) survive updates. Apple Silicon, macOS 14 or later.
 
 `brew upgrade --cask copper` (by name) still works as a manual path; the cask declares `auto_updates` so a plain `brew upgrade` leaves the app to update itself. Re-running the curl installer is the other manual path.
 
-Releases are cut by `.github/workflows/release.yml` (`gh workflow run release.yml -R copper-browser/Copper -f ref=fork`): it builds on a GitHub-hosted Mac, stamps `<VERSION>.<YYYYMMDD>.<run>` into the bundle, and attaches the zip, its `.sha256`, `copper-version.json` and `copper-install.sh` to a `v<version>` release. The tap bumps its cask from that manifest.
+Releases are cut by `.github/workflows/release.yml` (`gh workflow run release.yml -R copper-browser/Copper -f ref=fork`): it builds on a GitHub-hosted Mac, stamps `<VERSION>.<YYYYMMDD>.<run>` into the bundle, signs it with Copper's release certificate (docs/releasing.md; `-f publish=false` is a dry run that keeps the signed zip as the run's artifact), and attaches the zip, its `.sha256`, `copper-version.json` and `copper-install.sh` to a `v<version>` release. The tap bumps its cask from that manifest.
 
 The installer accepts `COPPER_NO_LAUNCH=1` / `--no-launch` for scripts that want to relaunch separately. For the bench: `./bench updates status|check|stub URL|stage|dry-run on|off|upgrade` — `stub` points a test world at a local manifest, `stage` downloads and verifies now, `dry-run on` makes `upgrade` stop after the checks and the session backup and log what it would have swapped.
 
@@ -104,9 +104,9 @@ So anyone can read exactly what a browser handling their passwords and history i
 
 - macOS 14 or later, Xcode 16 / Swift 6 toolchain
 - `swift build` — runs the app straight from the SwiftPM binary
-- `./build.sh` — assembles a real, double-clickable `Copper.app` in `build/`, ad-hoc signed so it runs on your own Mac
+- `./build.sh` — assembles a real, double-clickable `Copper.app` in `build/`, ad-hoc signed so it runs on your own Mac. It is the development app, `com.collinrijock.copper.dev`: its own permissions, settings, cookies and keychain identity, always a test world (`Copper (dev)` unless `SEARCH_PROBE` names one), so it never touches an installed Copper. `COPPER_RELEASE=1` builds Copper itself (docs/releasing.md)
 
-A build you make yourself won't be notarized or carry our Developer ID, so the first launch needs a right-click → Open (or an allow in System Settings → Privacy & Security). That's expected — it's the same thing that happens with any app that isn't from the App Store or a notarized DMG. Your own build also keeps its passwords apart from a signed Copper's: the keychain tells the two apart by their signatures.
+A build you make yourself won't be notarized or carry Copper's release certificate, so the first launch may need a right-click → Open (or an allow in System Settings → Privacy & Security). That's expected — it's the same thing that happens with any app that isn't from the App Store or a notarized DMG. Your own build also keeps its passwords apart from a released Copper's: it is a different app to macOS (`com.collinrijock.copper.dev`), and the keychain tells the two apart by their signatures.
 
 `./build.sh release dmg` also makes `Copper.dmg` / `Copper.zip`. `./build.sh release ship` additionally notarizes and staples — that step needs a Developer ID certificate and Apple credentials, so it only really does anything for our releases.
 

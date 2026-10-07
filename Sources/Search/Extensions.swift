@@ -301,7 +301,7 @@ final class Extensions: NSObject, ObservableObject {
     /// "Extensions" switch is the consent, so no second dialog per item. Runs
     /// to completion so a caller can install a list one after another instead
     /// of racing twenty downloads and twenty prompts. True when it landed.
-    func installAgreed(id text: String) async -> Bool {
+    func installAgreed(id text: String, enabled: Bool = true) async -> Bool {
         guard let id = Crx.id(in: text) else { return false }
         if installed.contains(where: { $0.id == id }) { return true }
         busy = id
@@ -313,7 +313,7 @@ final class Extensions: NSObject, ObservableObject {
             let staged = Extensions.folder.appendingPathComponent(".staging-\(id)", isDirectory: true)
             try Crx.unpack(zip, into: staged)
             try ExtensionShims.prepare(staged)
-            try await admit(staged, as: id, fromStore: true, finalFolder: target, confirm: false)
+            try await admit(staged, as: id, fromStore: true, finalFolder: target, confirm: false, enabled: enabled)
             return installed.contains(where: { $0.id == id })
         } catch {
             NSLog("Copper: Flow could not install extension %@: %@", id, error.localizedDescription)
@@ -451,7 +451,7 @@ final class Extensions: NSObject, ObservableObject {
 
     /// Reads what was unpacked, asks, and — on yes — moves it into place and
     /// loads it. On no, nothing is left behind.
-    private func admit(_ staged: URL, as id: String, fromStore: Bool, finalFolder: URL, confirm: Bool = true, source: URL? = nil) async throws {
+    private func admit(_ staged: URL, as id: String, fromStore: Bool, finalFolder: URL, confirm: Bool = true, source: URL? = nil, enabled: Bool = true) async throws {
         let files = FileManager.default
         let found: WKWebExtension
         do {
@@ -470,14 +470,17 @@ final class Extensions: NSObject, ObservableObject {
         try? files.removeItem(at: finalFolder)
         try files.moveItem(at: staged, to: finalFolder)
         let item = Installed(
-            id: id, name: name, version: found.version ?? "?", enabled: true, fromStore: fromStore,
+            id: id, name: name, version: found.version ?? "?", enabled: enabled, fromStore: fromStore,
             permissions: found.requestedPermissions.map(\.rawValue).sorted(),
             source: source?.path
         )
         installed.removeAll { $0.id == id }
         installed.append(item)
         save()
-        if await load(item) {
+        let started: Bool
+        if enabled { started = await load(item) }
+        else { started = true }
+        if started {
             browser?.announce("\(name) is installed")
         } else {
             browser?.announce("\(name) is installed, but WebKit couldn't start it")

@@ -607,7 +607,11 @@ final class Flow: ObservableObject {
             let haul = scanNow(source)
             return ["source": source.name, "tabs": haul.tabCount, "spaces": haul.spaces.count, "groups": haul.groupCount,
                     "bookmarks": haul.bookmarkCount, "places": haul.placeCount,
-                    "passkeys": haul.passkeyCount, "extensions": haul.extensions.count, "notes": haul.notes]
+                    "passkeys": haul.passkeyCount, "extensions": haul.extensions.count,
+                    "extensionDetails": haul.extensions.map { item in
+                        ["id": item.id, "name": item.name, "enabled": item.enabled] as [String: Any]
+                    },
+                    "notes": haul.notes]
         case "move":
             // A test run moves freely; the real profile only when the script
             // says so outright (`bench flow move … --real`) — the one way to

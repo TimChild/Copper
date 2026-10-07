@@ -285,6 +285,8 @@ enum SettingsIndex {
           ["canvas", "whiteboard", "board"], "cloud.sync", fallback: "cloud.steps"),
         e(.cloud, "Devices", "On your other devices", "The tabs open on your other Macs",
           ["other macs", "devices", "remote tabs", "handoff"], "cloud.devices", fallback: "cloud.steps"),
+        e(.cloud, "Delete history on cloud", "Delete history on cloud", "The last hour, day or week, or all of it — or only one site. History on this Mac stays",
+          ["delete cloud history", "erase history", "remove history", "clear synced history", "forget site", "privacy", "last hour", "all time"], "cloud.history", fallback: "cloud.steps"),
         e(.cloud, "Account", "Account", "Who you're signed in as, and this Mac's name",
           ["this mac", "device name", "sign out", "display name"], "cloud.account", fallback: "cloud.steps"),
         e(.cloud, "Pair another Mac", "One-time code", "Signs another Mac in as you with one paste",
@@ -422,6 +424,13 @@ enum SettingsIndex {
           ["check for updates", "update", "latest version"], "about.version"),
         e(.about, "Version", "Send Feedback", "Opens a draft with the version already in it",
           ["feedback", "bug", "report a problem", "issue", "contact", "support"], "about.feedback"),
+        // Drawn only after a crash; until then search lands on Send Feedback.
+        e(.about, "Diagnostics", "Last crash", "When Copper last quit unexpectedly, and what it was",
+          ["crash", "crashed", "crash report", "quit unexpectedly", "diagnostics", "logs", "breadcrumbs"],
+          "about.crash", fallback: "about.feedback"),
+        e(.about, "Diagnostics", "Copy crash report", "Copies the last crash's summary and breadcrumbs, or shows its report in Finder",
+          ["copy report", "reveal in finder", "ips", "diagnostic report", "crash log", "symbolicate"],
+          "about.crash", fallback: "about.feedback"),
         e(.about, "Keyboard shortcuts", "Keyboard shortcuts", "Every keystroke Copper answers to",
           ["shortcuts", "hotkeys", "keys", "keyboard", "key bindings", "cheat sheet"], "about.shortcuts"),
     ] + SettingsShortcuts.all.map { shortcut in

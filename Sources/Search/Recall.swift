@@ -70,6 +70,7 @@ struct HistoryPanel: View {
                                                 },
                                                 forget: {
                                                     browser.history.forget(trace.key)
+                                                    CloudSync.shared.historyForgot(trace.key) // Fork (cloud-history-delete): its rows on Copper Cloud too
                                                     refresh()
                                                 }
                                             )

@@ -159,7 +159,7 @@ enum CloudBench {
         case "log":
             answer(["log": sync.log.suffix(60).map { "\(CloudSync.stamp($0.at)) \($0.text)" }])
         case "selftest":
-            answer(CloudSelfTest.run())
+            Task { answer(await CloudSelfTest.run()) }
         case "history-limits":
             // A stale belief, on purpose: the push then meets the cloud's own
             // refusals (400 at most N / entry I exceeds N) and must learn from them.
@@ -338,7 +338,7 @@ enum CloudBench {
 /// target; this is what `bench cloud selftest` runs instead.
 @MainActor
 enum CloudSelfTest {
-    static func run() -> [String: Any] {
+    static func run() async -> [String: Any] {
         var failures: [String] = []
         var count = 0
         func check(_ ok: Bool, _ name: String) {
@@ -466,6 +466,7 @@ enum CloudSelfTest {
         check(CloudSync.date(CloudSync.stamp(now)).map { abs($0.timeIntervalSince(now)) < 0.01 } == true, "history: RFC 3339 round trip")
 
         historyPush(check)
+        await historyDelete(check)
 
         return ["checks": count, "passed": count - failures.count, "failures": failures]
     }
@@ -656,5 +657,266 @@ enum CloudSelfTest {
         let newer = upload(visits(10))
         let eighth = drive(newer, { entries in entries.count > 3 ? [(index: 3, why: "entry is 20000 bytes; the limit is 16384")] : [] })
         check(eighth.error == nil && newer.sent == 9 && newer.skipped.count == 1 && newer.through == start + 10, "history: a 0.5.0 server's skips are said, the cursor moves on")
+    }
+
+    /// Deleting history (CloudHistoryDelete) against a pretend copper-cloud
+    /// 0.8.0: what each request carries, paging and matching on this Mac,
+    /// the batches, a stop, the page's choices, and that nothing deleted is
+    /// sent back up. No network, no clock but the one given.
+    private static func historyDelete(_ check: (Bool, String) -> Void) async {
+        typealias D = CloudHistoryDelete
+        typealias H = CloudHistory
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let mac = UUID(), other = UUID()
+
+        // What goes in a request.
+        let named = D.seqs([3, 1, 2])
+        check(named.method == "DELETE" && named.query.isEmpty
+              && named.body.map { String(decoding: $0, as: UTF8.self) } == "{\"seqs\":[3,1,2]}", "delete: seqs in the body, no query")
+        let hourAgo = now.addingTimeInterval(-3_600)
+        let filtered = D.window(D.Selector(since: hourAgo, until: now, device: other))
+        check(filtered.method == "DELETE" && filtered.body == nil && filtered.query.keys.sorted() == ["device", "since", "until"]
+              && filtered.query["device"] == other.uuidString.lowercased() && filtered.query["since"].flatMap(CloudSync.date) == hourAgo
+              && filtered.query["until"]?.hasSuffix("Z") == true && !filtered.query.values.contains { $0.contains("+") },
+              "delete: since, until, device in the query, in UTC, and no body")
+        let everything = D.window(D.Selector(everything: true))
+        check(everything.method == "DELETE" && everything.query.isEmpty && everything.body == nil, "delete: everything is no filters at all")
+        check(D.page(after: 42) == D.Ask(method: "GET", query: ["since": "42", "limit": "500"]), "delete: paging asks for every Mac's rows")
+        check(D.batches((1...12_345).map(Int64.init)).map(\.count) == [5_000, 5_000, 2_345] && D.batches([]).isEmpty, "delete: 5,000 seqs a request at most")
+        check(!D.Selector().valid && D.Selector(everything: true).valid && !D.Selector(hosts: ["x.com"], everything: true).valid
+              && !D.Selector(since: now, until: now).valid && D.Selector(device: mac).valid, "delete: nothing chosen is never everything")
+
+        // What the cloud can do.
+        check(Cloud.features(in: ["version": "0.8.0", "features": ["history_delete", "other"]]).contains(D.feature), "delete: /v1/info lists history_delete")
+        check(!Cloud.features(in: ["version": "0.7.0"]).contains(D.feature) && Cloud.features(in: ["features": "history_delete"]).isEmpty,
+              "delete: no feature listed, no delete")
+
+        // Words in, a choice out.
+        check(D.site("https://WWW.X.com/a?b") == "x.com" && D.site(" x.com. ") == "x.com" && D.site("*.x.com") == "x.com"
+              && D.site("not a site") == nil && D.site("com") == nil && D.site("") == nil, "delete: a site as typed")
+        check(D.within("x.com", "x.com") && D.within("www.x.com", "x.com") && D.within("a.b.x.com", "x.com")
+              && !D.within("notx.com", "x.com") && !D.within("x.com.evil.org", "x.com"), "delete: a site and its subdomains, nothing else")
+        check(D.time("1h", now: now) == hourAgo && D.time("24h", now: now) == now.addingTimeInterval(-86_400)
+              && D.time("7d", now: now) == now.addingTimeInterval(-604_800)
+              && D.time("2026-10-07T10:00:00+02:00", now: now) == CloudSync.date("2026-10-07T08:00:00Z")
+              && D.time("soon", now: now) == nil && D.time("-1h", now: now) == nil, "delete: 1h, 24h, 7d and RFC 3339")
+        let asked = try? D.selector(from: ["since": "7d", "host": ["x.com", "https://www.x.com/"], "page": "x.com/a?q=1"], now: now, me: mac)
+        check(asked?.since == now.addingTimeInterval(-604_800) && asked?.hosts == ["x.com"] && asked?.pages == ["x.com/a"] && asked?.everything == false,
+              "delete: since, host and page as an agent says them")
+        check((try? D.selector(from: [:], now: now, me: mac)) == nil && (try? D.selector(from: ["all": true, "host": "x.com"], now: now, me: mac)) == nil
+              && (try? D.selector(from: ["since": "1h", "until": "2h"], now: now, me: mac)) == nil
+              && (try? D.selector(from: ["all": true], now: now, me: mac))?.everything == true
+              && (try? D.selector(from: ["device": "this"], now: now, me: mac))?.device == mac, "delete: nothing chosen, or all and more, refused")
+        let hour = CloudHistoryEraser.selector(.hour, site: nil, now: now)
+        let allOfIt = CloudHistoryEraser.selector(.all, site: nil, now: now)
+        let oneSite = CloudHistoryEraser.selector(.all, site: "x.com", now: now)
+        check(hour.since == hourAgo && !hour.scans && !hour.everything && allOfIt.everything && allOfIt.valid
+              && oneSite.hosts == ["x.com"] && oneSite.since == nil && !oneSite.everything && oneSite.valid, "delete: the page's choices")
+
+        // Rows read leniently: a time from the payload in milliseconds, a
+        // row with no time or address, a page that still reads.
+        let odd = Data(#"{"entries":[{"seq":1,"payload":{"url":"https://x.com/","visited_at":2000000000000}},{"seq":2,"device_id":"nope","payload":7},{"seq":3,"visited_at":"2033-05-18T03:33:20Z","payload":{"url":"https://x.com/"}}],"next":3,"more":false}"#.utf8)
+        let oddPage = try? JSONDecoder().decode(D.Page.self, from: odd)
+        let clock = D.Clock()
+        check(oddPage?.entries.count == 3 && oddPage?.entries[0].at(clock) == now && oddPage?.entries[1].at(clock) == nil
+              && oddPage?.entries[1].url == nil && oddPage?.entries[2].at(clock) == now
+              && oddPage.map { page in page.entries.filter { D.covers(D.Selector(since: now, hosts: ["x.com"]), url: $0.url, at: $0.at(clock), device: $0.device) }.count } == 2,
+              "delete: odd rows read, and match only on what they show")
+
+        // A history of 1,234 rows from two Macs, a minute apart: x.com as it
+        // is written, things that only look like it, and others.
+        let urls = ["https://x.com/", "https://www.x.com/a", "https://a.b.x.com/c", "https://X.COM/d", "https://notx.com/",
+                    "https://x.com.evil.org/", "https://other.org/x.com", "https://x.com/a?utm=1", "not a url"]
+        let rows = (1...1_234).map { i in
+            PretendHistory.Row(seq: Int64(i), device: i % 2 == 0 ? mac : other, at: now.addingTimeInterval(-Double(1_234 - i) * 60), url: urls[i % urls.count])
+        }
+        let onX = Set(rows.filter { [0, 1, 2, 3, 7].contains(Int($0.seq) % urls.count) }.map(\.seq))
+
+        // A site: paged through here, matched here, deleted by seq.
+        let cloud = PretendHistory(rows)
+        let bySite = try? await D.run(D.Selector(hosts: ["x.com"])) { try await cloud.answer($0) }
+        let left = await cloud.rows, requests = await cloud.asked, mixed = await cloud.mixed
+        check(bySite?.deleted == onX.count && bySite?.matched == onX.count && bySite?.looked == 1_234 && bySite?.scanned == true && bySite?.cut == false,
+              "delete: a site is found on this Mac and deleted by seq")
+        check(left.count == 1_234 - onX.count && !left.contains { onX.contains($0.seq) }
+              && left.contains { $0.url.contains("notx.com") } && left.contains { $0.url.contains("evil.org") } && left.contains { $0.url.contains("other.org") },
+              "delete: x.com and www.x.com go, notx.com and x.com.evil.org stay")
+        check(requests.filter { $0.method == "GET" }.count == 3 && requests.filter { $0.method == "DELETE" }.count == 1 && !mixed
+              && !requests.contains { $0.body != nil && !$0.query.isEmpty }, "delete: three pages read, one delete, never seqs and filters together")
+
+        // A page, in a window, from one Mac — what a forget in the History
+        // window asks for, narrowed further.
+        let windowed = PretendHistory(rows)
+        let from = now.addingTimeInterval(-600 * 60), to = now.addingTimeInterval(-100 * 60)
+        let page = D.Selector(since: from, until: to, device: mac, pages: ["x.com/a"])
+        let pageRows = Set(rows.filter { $0.device == mac && $0.at >= from && $0.at < to && ["https://www.x.com/a", "https://x.com/a?utm=1"].contains($0.url) }.map(\.seq))
+        let byPage = try? await D.run(page) { try await windowed.answer($0) }
+        let pageLeft = Set(await windowed.rows.map(\.seq))
+        check(!pageRows.isEmpty && byPage?.deleted == pageRows.count && pageLeft.isDisjoint(with: pageRows) && pageLeft.count == 1_234 - pageRows.count,
+              "delete: one page, inside the window, from one Mac only")
+        let forgotten = PretendHistory(rows)
+        let forgot = try? await D.run(D.forgot("x.com/a")) { try await forgotten.answer($0) }
+        let forgotLeft = await forgotten.rows
+        check(forgot?.deleted == rows.filter { ["https://www.x.com/a", "https://x.com/a?utm=1"].contains($0.url) }.count
+              && !forgotLeft.contains { $0.url.hasSuffix("x.com/a") || $0.url.hasSuffix("/a?utm=1") } && forgotLeft.contains { $0.url == "https://x.com/" },
+              "delete: a forgotten page goes from every Mac, the rest of the site stays")
+
+        // A time window, and everything: the server's own filters, no paging.
+        let lastHour = PretendHistory(rows)
+        let byWindow = try? await D.run(D.Selector(since: hourAgo)) { try await lastHour.answer($0) }
+        let windowAsks = await lastHour.asked, windowLeft = await lastHour.rows
+        check(byWindow?.deleted == 61 && byWindow?.scanned == false && windowAsks.count == 1 && windowAsks.first?.query.keys.sorted() == ["since"]
+              && windowAsks.first?.body == nil && !windowLeft.contains { $0.at >= hourAgo }, "delete: the last hour is one request")
+        let cleared = PretendHistory(rows)
+        let all = try? await D.run(D.cleared) { try await cleared.answer($0) }
+        let clearedAsks = await cleared.asked, clearedLeft = await cleared.rows
+        check(all?.deleted == 1_234 && clearedLeft.isEmpty && clearedAsks == [D.Ask(method: "DELETE")], "delete: History cleared here clears it all there")
+        let untouched = PretendHistory(rows)
+        let refused = try? await D.run(D.Selector()) { try await untouched.answer($0) }
+        let untouchedAsks = await untouched.asked
+        check(refused == nil && untouchedAsks.isEmpty, "delete: nothing chosen asks the cloud nothing")
+
+        // More than 5,000 matches: three deletes.
+        let many = (1...12_345).map { i in
+            PretendHistory.Row(seq: Int64(i), device: mac, at: now, url: i % 100 == 0 ? "https://keep.example/" : "https://x.com/\(i)")
+        }
+        let large = PretendHistory(many)
+        let batched = try? await D.run(D.Selector(hosts: ["x.com"])) { try await large.answer($0) }
+        let largeAsks = await large.asked, largeLeft = await large.rows
+        let sizes = largeAsks.filter { $0.method == "DELETE" }.compactMap { ask in
+            ask.body.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["seqs"].flatMap { ($0 as? [Any])?.count }
+        }
+        check(batched?.deleted == 12_222 && sizes == [5_000, 5_000, 2_222] && largeLeft.count == 123 && largeAsks.filter { $0.method == "GET" }.count == 25,
+              "delete: 12,222 matches go in three requests of 5,000 at most")
+
+        // Bounded: the page limit stops the looking, and says so.
+        let bounded = PretendHistory(rows)
+        let cut = try? await D.run(D.Selector(hosts: ["x.com"]), pageLimit: 2) { try await bounded.answer($0) }
+        check(cut?.cut == true && cut?.looked == 1_000 && cut?.deleted == onX.filter { $0 <= 1_000 }.count, "delete: looking stops at the page limit, and says so")
+
+        // A stop while looking deletes nothing.
+        let stoppable = PretendHistory(rows)
+        let stopping = Task { () -> Bool in
+            do {
+                _ = try await D.run(D.Selector(hosts: ["x.com"])) { ask in
+                    let data = try await stoppable.answer(ask)
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return data
+                }
+                return false
+            } catch {
+                return error is CancellationError
+            }
+        }
+        let stopped = await stopping.value
+        let stoppedAsks = await stoppable.asked, stoppedLeft = await stoppable.rows
+        check(stopped && stoppedAsks.count == 1 && stoppedLeft.count == 1_234, "delete: a stop while looking deletes nothing")
+
+        // Nothing deleted is sent back up. The push cursor is at `through`:
+        // what is older went up already and is never offered again; what is
+        // newer and covered is settled as on the server already.
+        let t0 = now.timeIntervalSince1970 - 10_000, through = t0 + 100, moment = now.timeIntervalSince1970
+        let visits = [
+            H.Visit(key: "x.com/old", url: "https://x.com/old", title: "", at: t0 + 1),
+            H.Visit(key: "x.com/new", url: "https://www.x.com/new", title: "", at: t0 + 200),
+            H.Visit(key: "notx.com", url: "https://notx.com/", title: "", at: t0 + 300),
+        ]
+        func sends(_ plan: [(visit: H.Visit, slot: H.Slot)]) -> [String] {
+            plan.compactMap { step -> String? in if case .send(let item) = step.slot { return item.visit.key } else { return nil } }
+        }
+        let siteSince = D.Selector(since: Date(timeIntervalSince1970: t0), hosts: ["x.com"])
+        let kept = D.push(after: siteSince, here: .kept, visits: visits, through: through, remote: ["far.org": t0 + 9_000], device: mac, now: moment)
+        check(kept.through == through && kept.remote == ["far.org": t0 + 9_000, "x.com/new": t0 + 200]
+              && D.push(after: D.Selector(device: other), here: .kept, visits: visits, through: through, remote: [:], device: mac, now: moment).remote.isEmpty,
+              "no resend: a delete settles only covered visits not yet pushed")
+        let plan = H.plan(visits, after: kept.through ?? 0, known: kept.remote, now: moment, limits: .standard)
+        check(sends(plan) == ["notx.com"], "no resend: the push sends neither what went up nor what was deleted before it could")
+        let push = H.Upload(plan, limits: .standard, from: through, now: moment)
+        if push.next() != nil { push.accepted() }
+        check(push.through == t0 + 300 && H.plan(visits, after: push.through, known: [:], now: moment, limits: .standard).isEmpty,
+              "no resend: the cursor passes them, and they are never offered again")
+        let revisited = [visits[0], H.Visit(key: "x.com/new", url: "https://www.x.com/new", title: "", at: t0 + 500), visits[2]]
+        check(sends(H.plan(revisited, after: kept.through ?? 0, known: kept.remote, now: moment, limits: .standard)) == ["notx.com", "x.com/new"],
+              "no resend: a page visited again after the delete is new history, and goes up")
+        let clearedHere = D.push(after: D.cleared, here: .cleared, visits: visits, through: through, remote: ["x.com/new": t0 + 200], device: mac, now: moment)
+        check(clearedHere.through == moment && clearedHere.remote.isEmpty
+              && H.plan(visits, after: clearedHere.through ?? 0, known: clearedHere.remote, now: moment, limits: .standard).isEmpty,
+              "no resend: History cleared, the cursor at now, nothing old goes up")
+        let forgotHere = D.push(after: D.forgot("x.com/new"), here: .forgot, visits: visits, through: through, remote: [:], device: mac, now: moment)
+        let stale = D.unforgotten(visits + [H.Visit(key: "y.com", url: "https://y.com/", title: "", at: t0 + 400)], ["x.com/new": t0 + 250, "y.com": t0 + 350])
+        check(forgotHere.through == through && stale.map(\.key) == ["x.com/old", "notx.com", "y.com"]
+              && sends(H.plan(stale, after: through, known: forgotHere.remote, now: moment, limits: .standard)) == ["notx.com", "y.com"],
+              "no resend: a forgotten page isn't pushed from a stale history.json, unless visited again")
+        check(D.cleared.everything && D.cleared.valid && D.forgot("x.com/a") == D.Selector(pages: ["x.com/a"]),
+              "mirror: Clear History is everything, a forgotten page is that page")
+        check(!clearedLeft.contains { $0.seq > 0 } && !left.contains { onX.contains($0.seq) }, "no re-import: deleted rows aren't there to pull")
+    }
+}
+
+/// copper-cloud 0.8.0's `/v1/sync/history`, as paging and deleting see it:
+/// rows by seq, deleted by seq or by window, refusing seqs and filters
+/// together and more than 5,000 seqs at once.
+private actor PretendHistory {
+    struct Row {
+        var seq: Int64
+        var device: UUID
+        var at: Date
+        var url: String
+    }
+
+    private(set) var rows: [Row]
+    private(set) var asked: [CloudHistoryDelete.Ask] = []
+    /// Seqs and filters in one request.
+    private(set) var mixed = false
+    /// Each row's time as the server writes it, once.
+    private var stamps: [Int64: String] = [:]
+
+    init(_ rows: [Row]) {
+        self.rows = rows
+        var seen: [Date: String] = [:]
+        for row in rows {
+            if seen[row.at] == nil { seen[row.at] = CloudSync.stamp(row.at) }
+            stamps[row.seq] = seen[row.at]
+        }
+    }
+
+    func answer(_ ask: CloudHistoryDelete.Ask) throws -> Data {
+        asked.append(ask)
+        let query = ask.query
+        func refuse(_ text: String) -> Cloud.Failure { Cloud.Failure(status: 400, code: "bad_request", message: text) }
+        func json(_ object: Any) -> Data { (try? JSONSerialization.data(withJSONObject: object)) ?? Data() }
+        switch ask.method {
+        case "GET":
+            guard query["exclude_device"] == nil, let since = query["since"].flatMap({ Int64($0) }) else { throw refuse("since") }
+            let page = rows.filter { $0.seq > since }.prefix(min(Int(query["limit"] ?? "") ?? 100, 500))
+            let next = page.last?.seq ?? since
+            let entries = page.map { row -> [String: Any] in
+                let stamp = stamps[row.seq] ?? ""
+                return ["seq": row.seq, "device_id": row.device.uuidString.lowercased(), "visited_at": stamp,
+                        "payload": ["url": row.url, "title": "", "visited_at": stamp]]
+            }
+            return json(["entries": entries, "next": next, "more": rows.contains { $0.seq > next }])
+        case "DELETE":
+            let before = rows.count
+            if let body = ask.body {
+                guard query.isEmpty else {
+                    mixed = true
+                    throw refuse("seqs and filters can't be used together")
+                }
+                guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+                      let seqs = object["seqs"] as? [NSNumber], seqs.count <= CloudHistoryDelete.batch else { throw refuse("seqs") }
+                let doomed = Set(seqs.map(\.int64Value))
+                rows.removeAll { doomed.contains($0.seq) }
+            } else {
+                let since = query["since"].flatMap(CloudSync.date), until = query["until"].flatMap(CloudSync.date)
+                let device = query["device"].flatMap(UUID.init(uuidString:))
+                rows.removeAll { row in
+                    (since.map { row.at >= $0 } ?? true) && (until.map { row.at < $0 } ?? true) && (device.map { row.device == $0 } ?? true)
+                }
+            }
+            return json(["deleted": before - rows.count])
+        default:
+            throw Cloud.Failure(status: 405, code: "method_not_allowed", message: ask.method)
+        }
     }
 }

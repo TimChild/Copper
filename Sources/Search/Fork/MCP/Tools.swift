@@ -194,13 +194,28 @@ enum Tools {
                 "action": string("list, assign, remove", ["enum": ["list", "assign", "remove"]]),
                 "group": string("Group name for assign (created if new)"),
             ], required: ["action"]),
-        ] + Probe.catalogue
+        ] + Probe.catalogue + [Crashes.tool]
     }
 
     // MARK: - dispatch
 
     @MainActor
     static func call(_ name: String, _ args: [String: Any], in browser: Browser) async throws -> [Content] {
+        // Every caller's calls pass here (MCP, the agent pane, linked apps):
+        // one breadcrumb each — the name, the tab, the time, ok or not.
+        let started = Date()
+        do {
+            let content = try await pinnedCall(name, args, in: browser)
+            Breadcrumbs.tool(name, tab: AgentTabs.peek(args, in: browser, caller: AgentTabs.callerKey)?.id, started: started, error: nil)
+            return content
+        } catch {
+            Breadcrumbs.tool(name, tab: AgentTabs.peek(args, in: browser, caller: AgentTabs.callerKey)?.id, started: started, error: error)
+            throw error
+        }
+    }
+
+    @MainActor
+    private static func pinnedCall(_ name: String, _ args: [String: Any], in browser: Browser) async throws -> [Content] {
         // browser_tabs reads `tab` as the tab to close or select, not to work in.
         guard name != "browser_tabs", let named = try AgentTabs.resolve(args["tab"], in: browser) else {
             return try await dispatch(name, args, in: browser)
@@ -210,7 +225,7 @@ enum Tools {
 
     @MainActor
     private static func dispatch(_ name: String, _ args: [String: Any], in browser: Browser) async throws -> [Content] {
-        if !["browser_tabs", "browser_close", "browser_resize", "browser_groups"].contains(name), !CanvasTools.names.contains(name),
+        if !["browser_tabs", "browser_close", "browser_resize", "browser_groups", "browser_crashes", CloudHistoryTool.name].contains(name), !CanvasTools.names.contains(name),
            !(name == "jev_run" && (args["newTab"] as? Bool) == true) {
             await AgentTabs.ready(in: browser)
         }
@@ -230,6 +245,8 @@ enum Tools {
         case "browser_groups": return groups(args, in: browser)
         case "jev_run", "jev_step", "jev_observe", "jev_extract": return try await Ultrafast.call(name, args, in: browser)
         case _ where CanvasTools.names.contains(name): return try await CanvasTools.call(name, args, in: browser)
+        case "browser_crashes": return [.text(try Crashes.answer(args))]
+        case CloudHistoryTool.name: return try await CloudHistoryTool.call(args)
         default: break
         }
 

@@ -18,6 +18,9 @@ name: release
 #   copper-macos-arm64.zip(.sha256)            stable name → releases/latest/download/…
 #   copper-version.json                        manifest for the updater + the tap's bump job
 #   copper-install.sh                          the curl installer
+#   copper-<version>-macos-arm64.dSYM.zip      the symbols build.sh strips out of the app, for
+#                                              `copper crashes show N --symbolicate` (atos);
+#                                              nothing installs or downloads it on its own
 #
 # Builds are ad-hoc signed (no Developer ID, not notarized); the cask and the
 # installer clear the quarantine flag.
@@ -105,6 +108,31 @@ jobs:
           echo "dir=${out}" >> "$GITHUB_OUTPUT"
           plutil -p build/Copper.app/Contents/Info.plist | grep -E 'CFBundle(ShortVersionString|Version|Identifier)'
 
+      - name: Zip the dSYM
+        env:
+          OUT: ${{ steps.package.outputs.dir }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The release binary ships stripped, so its crash reports have bare
+          # offsets; this is what names them. Only attached when its UUID is
+          # the shipped binary's (strip and the ad-hoc re-sign keep LC_UUID) —
+          # a dSYM that doesn't match would only mislead. Missing is a warning,
+          # not a failed release: build.sh treats it the same way.
+          dsym=build/Copper.app.dSYM
+          if [ ! -d "$dsym" ]; then
+            echo "::warning::no $dsym — this release's crash reports won't symbolicate"
+            exit 0
+          fi
+          app_uuid="$(dwarfdump --uuid build/Copper.app/Contents/MacOS/Copper | awk '{print $2}')"
+          dsym_uuid="$(dwarfdump --uuid "$dsym" | awk '{print $2}')"
+          echo "binary ${app_uuid} · dSYM ${dsym_uuid}"
+          if [ -z "$app_uuid" ] || [ "$app_uuid" != "$dsym_uuid" ]; then
+            echo "::warning::dSYM UUID ${dsym_uuid} is not the binary's ${app_uuid}; not attaching it"
+            exit 0
+          fi
+          ditto -c -k --keepParent "$dsym" "$OUT/copper-${VERSION}-macos-arm64.dSYM.zip"
+
       - name: Write copper-version.json
         env:
           OUT: ${{ steps.package.outputs.dir }}
@@ -189,6 +217,9 @@ jobs:
           EOF
           flags=(--latest)
           [ "$PRERELEASE" = "true" ] && flags=(--prerelease --latest=false)
+          # Present only when the dSYM step made it (it warns when it can't).
+          dsym_zip="$OUT/copper-${VERSION}-macos-arm64.dSYM.zip"
+          [ -f "$dsym_zip" ] || dsym_zip=""
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$COMMIT" \
@@ -197,7 +228,8 @@ jobs:
             "${flags[@]}" \
             "$OUT/$ZIP_NAME" "$OUT/$ZIP_NAME.sha256" \
             "$OUT/copper-macos-arm64.zip" "$OUT/copper-macos-arm64.zip.sha256" \
-            "$OUT/copper-version.json" "$OUT/copper-install.sh"
+            "$OUT/copper-version.json" "$OUT/copper-install.sh" \
+            ${dsym_zip:+"$dsym_zip"}
 
       - name: Verify the published bytes
         env:

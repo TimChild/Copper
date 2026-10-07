@@ -550,6 +550,8 @@ struct SettingsPanel: View {
                 .settingsAnchor("about.feedback")
             }
 
+            CrashesSection() // Fork: the last crash, only when there is one (Fork/CrashesUI.swift)
+
             SettingsSection("Keyboard shortcuts", carded: false) {
                 Card {
                     ForEach(Array(SettingsShortcuts.all.enumerated()), id: \.offset) { index, shortcut in

@@ -114,7 +114,7 @@ that certificate from then on, exactly as an `fp=` would have.
 | Settings | The allowlist below | Never passwords, passkeys, paths, keys, accounts or agent setup. |
 | Bookmarks | The whole tree, ids and folders kept | |
 | Open tabs | This Mac's open (non-pinned) tabs, for the others to see under *On your other devices* | One way: another Mac's tabs never open here by themselves — click one to open it. Turning the switch (or sync) off publishes an empty list. |
-| History | Places visited | Append-only: pushed oldest first, at most 500 a request (fewer if the cloud says so), from where the last push stopped; pulled from where the last pull stopped. A title too long for the cloud is shortened; an address too big to store stays on this Mac (the log says so). Clearing history here doesn't clear it on the server or other Macs. |
+| History | Places visited | Append-only: pushed oldest first, at most 500 a request (fewer if the cloud says so), from where the last push stopped; pulled from where the last pull stopped. A title too long for the cloud is shortened; an address too big to store stays on this Mac (the log says so). Clearing history here, or forgetting a page in the History window, deletes it on the cloud too (copper-cloud 0.8.0); other Macs keep what they already have. |
 
 Those five are *Browser sync*. The page shows the **Personal canvas** switch
 apart from them, under *Canvas*, once CloudSync has it: Personal's room
@@ -212,6 +212,41 @@ future (a bad import, another Mac's clock) goes up with the time now and is
 remembered beside the merged-in ones, so it isn't sent again and doesn't hide
 everything visited until then.
 
+### Deleting history on the cloud
+
+Only the person picks what goes, and only this Mac reads history to find it
+(`Fork/Cloud/CloudHistoryDelete.swift`). A copper-cloud that lists
+`history_delete` in `GET /v1/info`'s `features` (0.8.0) takes `DELETE
+/v1/sync/history` in two shapes, never mixed: a body `{"seqs": […]}` (at most
+5,000), or the query `since` (inclusive), `until` (exclusive), `device` — none
+of them is everything. It never filters by what a visit is.
+
+- **A time range, a device, everything:** one request with those filters.
+- **A site or a page:** this Mac pages through the account's history (`GET
+  /v1/sync/history?since=SEQ&limit=500`, no `exclude_device`, at most 1,000
+  pages), matches each row here — a site with its subdomains (`x.com` takes
+  `www.x.com`, not `notx.com`), a page by its History key — and deletes the
+  matches by seq in batches of 5,000. A stop while looking deletes nothing;
+  once deleting starts it finishes.
+
+Where: Settings › Cloud › *Delete history on cloud* (last hour, 24 hours, 7
+days or all time, optionally one site; one confirmation; *Deleted N visits
+from the cloud*); `copper cloud-history delete` and the loopback-only MCP
+tool `cloud_history_delete` (refused to the agent pane and to agent-link
+bots); and, while History syncs, *Clear History* here (everything) and
+forgetting a page in the History window (that page's rows, from every Mac).
+History on this Mac is never changed by a delete on the cloud, and other Macs
+keep what they pulled. Without the feature the card says the cloud can't and
+the mirrors only log it. `history_deleted` events are ignored.
+
+Nothing deleted comes back. A delete runs in the history lane — after any
+push or pull in flight, before the next. A push only sends visits newer than
+`pushedThrough`, which a delete never moves back; covered visits here not yet
+pushed are recorded as on the server already, so the cursor passes over them.
+Clearing here moves `pushedThrough` to now. A page forgotten here is kept out
+of pushes for the run in case `history.json` hasn't been rewritten yet. A pull
+only asks for seqs after `pulledSeq`, and deleted rows are gone.
+
 The per-domain state — the last-synced copy of each document and the history
 cursors — lives in `cloud-sync.json` (0600) beside `cloud.json`; signing in as
 another account starts it over.
@@ -307,7 +342,7 @@ In a probe world (never your own Copper), with *Let a script drive Copper* on:
 ./bench --world NAME cloud status          # no secrets in it
 ./bench --world NAME cloud devices         # other devices' tabs
 ./bench --world NAME cloud doc spaces      # this Mac's document as it would be pushed
-./bench --world NAME cloud selftest        # link codes, the allowlist, the merges, history pushes against a pretend cloud
+./bench --world NAME cloud selftest        # link codes, the allowlist, the merges, history pushes and deletes against a pretend cloud
 ./bench --world NAME cloud wstest          # a canvas WebSocket through the pinned session
 ./bench --world NAME cloud picture /tmp/cloud.png [dark] [CODE]   # the whole page, drawn off screen
 ./bench --world NAME cloud pairing-code    # signed in: a code for another Mac → {id, code, link, expiresAt}

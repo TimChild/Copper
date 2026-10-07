@@ -535,6 +535,7 @@ final class Drive: ObservableObject {
         case "browser_sign_in": return ((args["what"] as? String) == "otp" ? "Filling the one-time code from the vault" : "Signing in with a saved account", detail)
         case "browser_autofill": return ("Filling a saved \((args["kind"] as? String) ?? "item")", detail)
         case "browser_perf_probe": return ("Sampling the page's performance", detail)
+        case "browser_crashes": return ("Reading Copper's crash history", detail)
         case "jev_observe": return ("Reading the page (Jev)", detail)
         case "canvas_read": return ("Reading the canvas", detail)
         case "canvas_apply":
@@ -547,6 +548,7 @@ final class Drive: ObservableObject {
         case "canvas_invite": return ("Inviting someone to a canvas", detail)
         case "canvas_screenshot": return ("Picturing the canvas", detail)
         case "jev_extract": return ("Extracting values (Jev)", detail)
+        case "cloud_history_delete": return ("Deleting history on Copper Cloud", detail)
         default:
             let plain = tool.hasPrefix("browser_") ? String(tool.dropFirst("browser_".count)) : tool
             return (plain.replacingOccurrences(of: "_", with: " ").capitalized, detail)
@@ -567,7 +569,7 @@ final class Drive: ObservableObject {
         case "browser_evaluate": return "SCRIPT"
         case "browser_wait_for": return "WAIT"
         case "browser_scroll": return "SCROLL"
-        case "browser_snapshot", "browser_get_text", "browser_console_messages", "browser_find", "jev_observe", "jev_extract": return "READ"
+        case "browser_snapshot", "browser_get_text", "browser_console_messages", "browser_find", "jev_observe", "jev_extract", "browser_crashes": return "READ"
         case "browser_tabs":
             switch (args["action"] as? String) ?? "list" {
             case "new", "close", "select": return "TABS"
@@ -579,6 +581,7 @@ final class Drive: ObservableObject {
         case "browser_perf_probe": return "PROBE"
         case "canvas_read", "canvas_list": return "READ"
         case _ where tool.hasPrefix("canvas_"): return "CANVAS"
+        case "cloud_history_delete": return "CLOUD"
         default: return String(tool.uppercased().prefix(12))
         }
     }
@@ -587,7 +590,8 @@ final class Drive: ObservableObject {
     static func mayChange(_ tool: String) -> Bool {
         switch tool {
         case "browser_snapshot", "browser_get_text", "browser_console_messages", "browser_find", "browser_take_screenshot",
-             "browser_hover", "browser_perf_probe", "jev_observe", "jev_extract", "browser_resize", "browser_groups", "browser_wait_for":
+             "browser_hover", "browser_perf_probe", "jev_observe", "jev_extract", "browser_resize", "browser_groups", "browser_wait_for",
+             "browser_crashes", "cloud_history_delete":
             return false
         // The canvas tools change a board, not the page: their result is
         // what they say they did (`result`), never "page changed".

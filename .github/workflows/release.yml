@@ -77,10 +77,16 @@ jobs:
         id: mode
         env:
           PUBLISH: ${{ inputs.publish }}
+          REF: ${{ inputs.ref || github.ref }}
         run: |
           # Only an explicit true publishes; anything else is a dry run.
           if [ "$PUBLISH" = "true" ]; then echo "publish=true"; else echo "publish=false"; fi >> "$GITHUB_OUTPUT"
-          echo "publish input: '${PUBLISH}'"
+          echo "publish input: '${PUBLISH}', ref: '${REF}'"
+          # A real release is built from fork only; dry runs may build any ref.
+          if [ "$PUBLISH" = "true" ] && [ "$REF" != "fork" ] && [ "$REF" != "refs/heads/fork" ]; then
+            echo "::error::publish=true builds from fork only, not '${REF}'. Use publish=false for a dry run of another ref."
+            exit 1
+          fi
 
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -137,6 +143,10 @@ jobs:
           umask 077
           keychain="${RUNNER_TEMP}/copper-signing.keychain-db"
           p12="${RUNNER_TEMP}/copper-signing.p12"
+          # Before anything can fail: the delete step needs the path, and the
+          # decoded p12 never outlives this step.
+          echo "keychain=${keychain}" >> "$GITHUB_OUTPUT"
+          trap 'rm -f "$p12"' EXIT
           pass="$(openssl rand -hex 24)"
           printf '%s' "$P12_BASE64" | base64 --decode > "$p12"
           security create-keychain -p "$pass" "$keychain"
@@ -148,7 +158,6 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" "$keychain" >/dev/null
           # On the search list too, so codesign can build the identity's chain.
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          echo "keychain=${keychain}" >> "$GITHUB_OUTPUT"
           # The secret's certificate is the one release/ pins (hashes are public).
           want="$(shasum -a 1 release/copper-release-signing.cer | cut -d' ' -f1)"
           grep -q "certificate leaf = H\"${want}\"" release/designated-requirement.txt \

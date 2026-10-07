@@ -256,7 +256,9 @@ the installed Copper alone:
 defaults export com.collinrijock.copper - | shasum -a 256     # before and after: identical
 log show --last 30m --style compact --predicate 'subsystem == "com.apple.TCC"' \
   | grep -o 'com\.collinrijock\.copper[.a-z]*' | sort | uniq -c   # probe events under .dev only
-``` `CGWindowListCopyWindowInfo` filtered by the pid is the
+```
+
+`CGWindowListCopyWindowInfo` filtered by the pid is the
 reliable window count (System Events needs Accessibility, and two processes are named Copper).
 
 ## What it cannot do

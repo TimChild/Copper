@@ -259,6 +259,8 @@ Needs Settings › General › "Let a script drive Copper" switched on in the
 running app. IDs are the first characters of a tab's id, as `tabs` prints
 them. With --test, talks to a SEARCH_PROBE run instead of the real one;
 with --world NAME, to a SEARCH_PROBE=NAME run, the world "Copper (NAME)".
+A development build opened without SEARCH_PROBE is the world "dev": drive it
+with --world dev; plain ./bench talks to the installed Copper.
 """
 
 import json

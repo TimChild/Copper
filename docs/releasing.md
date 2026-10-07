@@ -27,7 +27,8 @@ nothing else happens — no tag, no GitHub release, no asset upload, nothing the
 installer or tap reads. Only the *Create the GitHub release* step is handed a token
 (`GH_TOKEN`; checkout keeps no credentials), and it and *Verify the published bytes* run only
 when publish is exactly `true`.
-`ref` defaults to the branch the run was started from (`fork` from the Actions page).
+`ref` defaults to the branch the run was started from (`fork` from the Actions page). A
+publishing run refuses any ref but `fork`; dry runs build any ref.
 
 ## How a release is signed
 
@@ -115,7 +116,8 @@ they stay.
   (`~/Library/Application Support/Copper (<name>)`, defaults suite
   `com.officecommun.search.test.<name>`); started with no world at all — a double-click, a plain
   `open build/Copper.app` — it is the world **dev**, `Copper (dev)`, suite
-  `com.officecommun.search.test.dev`. It never opens `~/Library/Application Support/Copper`;
+  `com.officecommun.search.test.dev`. It never opens `~/Library/Application Support/Copper`.
+  Drive it with `./bench --world dev …`; plain `./bench` talks to the installed Copper;
 - no `copper://` URL scheme, so canvas links clicked in another app always reach the installed
   Copper;
 - ad hoc as before (`SEARCH_SIGN_IDENTITY=-` skips the keychain lookup), so each rebuild is a
@@ -153,7 +155,10 @@ first signed release did.
    refuses any update that isn't signed with the certificate it pins, so first ship one release
    whose updater accepts both: `Signing.releaseRequirement` becomes
    `identifier "com.collinrijock.copper" and (certificate leaf = H"<old>" or certificate leaf = H"<new>")`.
-   `release/` and the secrets stay on the old certificate. Let it reach people (a few days).
+   `release/` and the secrets stay on the old certificate. The same commit relaxes
+   `SigningTests.theUpdaterPinsTheCertificateInRelease`: it expects the single-leaf text of
+   `release/designated-requirement.txt`, and the Swift requirement is now the two-leaf `or`.
+   Let it reach people (a few days).
 3. **The switch.** In one commit: the new `.cer` in `release/`, the new SHA-1 in
    `release/designated-requirement.txt` and `Signing.releaseCertificate` (the requirement back to
    the single new leaf), then the secrets:

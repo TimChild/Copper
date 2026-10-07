@@ -300,7 +300,7 @@ final class Updates: ObservableObject {
                     persist()
                     browser?.announce("Copper \(done.version) is ready — ⌘K “Update Copper” or Settings › Updates")
                 }
-            case .failure(let why):
+            case .failure(let why), .unsigned(let why):
                 stageError = why
                 Self.note("staging \(want.version) failed: \(why)")
                 // Once per version: the feed answered a moment ago, so this is
@@ -308,7 +308,11 @@ final class Updates: ObservableObject {
                 if saved.troubleAnnounced != want.version {
                     saved.troubleAnnounced = want.version
                     persist()
-                    browser?.announce("Couldn’t download Copper \(want.version) — see Settings › Updates")
+                    if case .unsigned = result {
+                        browser?.announce("Copper \(want.version) isn’t signed as a Copper release — see Settings › Updates")
+                    } else {
+                        browser?.announce("Couldn’t download Copper \(want.version) — see Settings › Updates")
+                    }
                 }
             }
         }
@@ -317,6 +321,8 @@ final class Updates: ObservableObject {
     private enum StageResult {
         case success(Staged)
         case failure(String)
+        /// Downloaded and intact, but refused for its signature.
+        case unsigned(String)
     }
 
     /// A late report from a download that already finished must not put a
@@ -412,7 +418,7 @@ final class Updates: ObservableObject {
         // not a Copper release, however well it verifies on its own.
         if let why = Signing.unsatisfied(app, requirement: requirement) {
             note("Copper \(version) does not satisfy \(requirement): \(why)")
-            return .failure(requirement.contains("certificate leaf")
+            return .unsigned(requirement.contains("certificate leaf")
                 ? "Copper \(version) isn’t signed with Copper’s release certificate, so it won’t replace this one. Download it from github.com/copper-browser/Copper/releases instead."
                 : "Copper \(version) isn’t signed as this app (\(requirement)), so it won’t replace this one.")
         }

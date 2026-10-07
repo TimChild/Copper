@@ -22,8 +22,9 @@ import Foundation
 
 enum VoiceBench {
     /// Checks the other voice pieces add; `voice selftest` runs every one and
-    /// reports each one's failures (an empty list is a pass). Wave B adds
-    /// LiveSession's here.
+    /// reports each one's failures (an empty list is a pass). Dictation adds
+    /// its own at launch (VoiceChecks in DictationBench.swift): the live
+    /// session on the real decoder, a 15.00 s clip, the composer insert, keys.
     static var extraChecks: [(name: String, run: () async -> [String])] = []
 
     /// The model folder tests use: SEARCH_VOICE_MODEL_DIR, when it names a
@@ -53,7 +54,14 @@ enum VoiceBench {
         case "status":
             Task { @MainActor in answer(await status()) }
         default:
-            answer(["error": "unknown voice operation \(op) — selftest, replay PATH, status, result"])
+            // Dictation's verbs (DictationBench.swift): dictate, source, key, seed, render, prefs, model, state.
+            let args = request["args"] as? [String] ?? []
+            let handled = DictationBench.handle(op, args, in: Windows.main, answer: answer) { name, work in
+                run(name, answer: answer, work)
+            }
+            if !handled {
+                answer(["error": "unknown voice operation \(op) — selftest, replay PATH, status, result, dictate PATH, source, key, seed, render, prefs, model, state"])
+            }
         }
     }
 

@@ -1,0 +1,768 @@
+import AppKit
+import AVFoundation
+import Combine
+import Foundation
+import os
+
+// Dictation into the agent composer: the one place voice reaches in v1.
+//
+// A press of ⌃⇧D (or the composer's mic) starts one dictation — a microphone
+// capture feeding one LiveSession, which hears the whole hold and decodes it
+// once at the end. Its partials are shown under the composer, never put in
+// the draft; when it stops, the final text goes into the composer at the
+// caret it had when it started (ComposerInsert), and with Settings › Voice ›
+// "Send right away" the message is sent the way Return sends it.
+//
+//   idle → arming → dictating → finishing → idle
+//                \→ error(…)      (permission off, the mic failing)
+//
+// Every event from the audio and decode threads hops to the main actor
+// asynchronously and carries the dictation's number; a number that isn't the
+// current one is dropped, so nothing from a cancelled dictation lands. (A
+// synchronous hop would deadlock: LiveSession.cancel waits for an emit in
+// flight, and VoiceCapture.stop for its own queue.)
+//
+// Audio and words stay in memory; nothing is logged but counts and times.
+
+/// Where a dictation's audio comes from: the microphone, or a file in tests.
+/// The same contract as VoiceCapture: 800-sample 16 kHz blocks on a private
+/// queue, `onStop` once after the last one, `stop()` synchronous.
+protocol VoiceAudioSource: AnyObject, Sendable {
+    func start(onBlock: @escaping @Sendable ([Swift.Float]) -> Void,
+               onStop: @escaping @Sendable (VoiceCaptureStop) -> Void) throws
+    func stop()
+}
+
+extension VoiceCapture: VoiceAudioSource {}
+
+@MainActor
+final class Voice: ObservableObject {
+    static let shared = Voice()
+
+    enum Phase: Equatable {
+        case idle
+        /// Pressed; the microphone is being asked for (or opened).
+        case arming
+        case dictating
+        /// Released; the last decode is running.
+        case finishing
+        case error(String)
+    }
+
+    /// Who started a dictation, so only the same one can end a hold.
+    enum Hand: String { case key, button, bench }
+
+    /// What the composer's mic shows.
+    enum Mic: Equatable {
+        /// Voice is off (or can't be on this Mac): no mic at all.
+        case hidden
+        /// The agent can't take a message: disabled, with why.
+        case unavailable(String)
+        /// The speech model isn't ready: dimmed, with why; a click opens Settings › Voice.
+        case waiting(String)
+        case ready
+    }
+
+    @Published private(set) var phase: Phase = .idle
+    /// The newest partial, for the line under the composer. Never the draft.
+    @Published private(set) var preview = ""
+    /// A brief line under the composer: "Hold to talk", "Inserted — press Return to send".
+    @Published private(set) var note: String?
+    /// Arming has taken longer than a blink: say so.
+    @Published private(set) var slowStart = false
+    /// The bench's frozen model state, for pictures of the mic waiting.
+    @Published var seededModel: ModelStore.State?
+
+    /// The window and browser the current dictation belongs to.
+    private(set) weak var browser: Browser?
+    private(set) weak var window: NSWindow?
+    /// The current dictation's number. Bumped by every start and cancel.
+    private(set) var session = 0
+
+    nonisolated static let denied = "Microphone access is off. Open System Settings to allow Copper, then try again."
+    nonisolated static let privacyPane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+    static let holdThreshold = 0.25
+    static let cap: TimeInterval = 120
+    static let idleUnload: TimeInterval = 600
+
+    private let prefs = VoicePrefs.shared
+    private var source: VoiceAudioSource?
+    private var live: LiveSession?
+    private var anchor: ComposerInsert.Anchor?
+    private var hand: Hand?
+    private var pressedAt = Date()
+    private var releasedWhileArming = false
+    private var capTimer: DispatchWorkItem?
+    private var slowTimer: DispatchWorkItem?
+    private var noteTimer: DispatchWorkItem?
+    private var unloadTimer: DispatchWorkItem?
+    private var warming = false
+    private var booted = false
+    private var bag: Set<AnyCancellable> = []
+    private var tokens: [NSObjectProtocol] = []
+    /// Composers that have the keyboard, by browser.
+    private var focused: Set<ObjectIdentifier> = []
+
+    private static let log = Logger(subsystem: "com.collinrijock.copper", category: "voice")
+
+    // MARK: - test hooks (bench only)
+
+    /// A file instead of the microphone (bench `voice source`, `voice dictate`).
+    var testSource: (() -> VoiceAudioSource)?
+    /// Where a bench dictation puts its words when no composer editor has the keyboard.
+    var benchRange: NSRange?
+    /// Overrides the agent's readiness when deciding whether to send.
+    var benchAgentReady: Bool?
+    /// A shorter cap than 120 s, to see it end a dictation.
+    var benchCap: TimeInterval?
+    /// With a test source: the permission macOS would report, and how a
+    /// question would be answered after `seconds` — no prompt is ever shown.
+    var benchPermission: (status: AVAuthorizationStatus, grant: Bool, seconds: Double)?
+    /// What the last dictation did, for the bench: counts and times; the text only here.
+    private(set) var timeline: [(ms: Int, event: String, count: Int?)] = []
+    private(set) var lastInsert: ComposerInsert.Landed?
+    private(set) var lastSent: String?
+    private(set) var partials = 0
+    private(set) var announced: [String] = []
+    private var origin = Date()
+
+    private init() {}
+
+    // MARK: - launch
+
+    /// At launch: the engine behind the model store, the key monitor, and
+    /// what ends a dictation. Idempotent.
+    func boot() {
+        guard !booted else { return }
+        booted = true
+        if #available(macOS 15, *) {
+            ModelStore.prepareHook = { dir, progress in
+                try await VoiceEngine.shared.prepare(modelDir: dir, progress: progress)
+            }
+            ModelStore.unloadHook = { await VoiceEngine.shared.unload() }
+        }
+        VoiceChecks.register()
+        VoiceKeys.install()
+
+        // The pane closing, voice going off, the model going away: cancel.
+        // The pane opening or voice coming on with the model ready: warm up.
+        Agent.shared.$open.removeDuplicates().sink { [weak self] open in
+            guard let self else { return }
+            if open { DispatchQueue.main.async { self.warm() } } else { self.cancel("pane closed") }
+        }.store(in: &bag)
+        prefs.$enabled.removeDuplicates().sink { [weak self] on in
+            guard let self else { return }
+            if on { DispatchQueue.main.async { self.warm() } } else { self.cancel("voice off") }
+        }.store(in: &bag)
+        ModelStore.shared.$state.removeDuplicates().sink { [weak self] state in
+            guard let self else { return }
+            if state != .ready { self.cancel("model not ready") }
+            else { DispatchQueue.main.async { self.warm() } }
+        }.store(in: &bag)
+
+        let center = NotificationCenter.default
+        tokens.append(center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { Voice.shared.lostFocus("app inactive") }
+        })
+        tokens.append(center.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated { if let window, window === Voice.shared.window { Voice.shared.lostFocus("window not key") } }
+        })
+        tokens.append(center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated { if let window, window === Voice.shared.window { Voice.shared.cancel("window closed") } }
+        })
+        tokens.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { Voice.shared.cancel("sleep") }
+        })
+    }
+
+    // MARK: - what the pane shows
+
+    func mic(agentReady: Bool) -> Mic {
+        guard VoicePrefs.supported, prefs.enabled else { return .hidden }
+        guard agentReady else { return .unavailable("Sign in with Claude or add a key to use the agent") }
+        switch seededModel ?? ModelStore.shared.state {
+        case .ready: return .ready
+        case .downloading(let fraction): return .waiting("Speech model downloading · \(Int((fraction * 100).rounded(.down)))%")
+        case .verifying, .compiling, .preparing: return .waiting("Preparing speech model — one time, about a minute")
+        case .failed: return .waiting("Speech model needs attention")
+        case .absent: return .waiting("Set up voice in Settings")
+        }
+    }
+
+    /// A dictation is under way (or starting, or landing).
+    var active: Bool {
+        switch phase {
+        case .arming, .dictating, .finishing: return true
+        case .idle, .error: return false
+        }
+    }
+
+    /// The window an event came from is the dictation's.
+    func owns(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        if window === self.window { return true }
+        if let browser, Windows.owner(of: window) === browser { return true }
+        return false
+    }
+
+    /// Whether this window's composer has the keyboard (the pane says).
+    func composerFocused(in window: NSWindow) -> Bool {
+        guard let browser = Windows.owner(of: window) else { return false }
+        return focused.contains(ObjectIdentifier(browser))
+    }
+
+    /// The pane's composer took or lost the keyboard.
+    func composer(focused on: Bool, in browser: Browser) {
+        if on { focused.insert(ObjectIdentifier(browser)) } else { focused.remove(ObjectIdentifier(browser)) }
+    }
+
+    /// Whether this browser's pane shows the current dictation's line.
+    func shows(in browser: Browser) -> Bool { self.browser == nil || self.browser === browser }
+
+    // MARK: - gestures
+
+    /// ⌃⇧D down, the mic pressed (or clicked), or the bench.
+    func press(_ hand: Hand, in browser: Browser, window: NSWindow?) {
+        // A note this press brings up shows in this window's pane.
+        if !active {
+            self.browser = browser
+            self.window = window ?? Windows.window(of: browser)
+        }
+        switch mic(agentReady: Agent.shared.ready) {
+        case .hidden, .unavailable:
+            return
+        case .waiting(let why):
+            if hand == .button { browser.openSettings(.voice) } else { show(note: why, for: 2.5) }
+            return
+        case .ready:
+            break
+        }
+        switch prefs.trigger {
+        case .toggle:
+            switch phase {
+            case .idle, .error: start(hand, in: browser, window: window)
+            case .dictating: finish("stop")
+            case .arming: cancel("pressed again")
+            case .finishing: break
+            }
+        case .hold:
+            switch phase {
+            case .idle, .error: start(hand, in: browser, window: window)
+            case .arming, .dictating, .finishing: break
+            }
+        }
+    }
+
+    /// ⌃⇧D up (or ⌃/⇧ let go), the mic released. Ends a hold.
+    func lift(_ hand: Hand) {
+        guard prefs.trigger == .hold, self.hand == hand else { return }
+        self.hand = nil
+        switch phase {
+        case .arming:
+            releasedWhileArming = true
+            mark("release")
+        case .dictating:
+            mark("release")
+            if Date().timeIntervalSince(pressedAt) < Voice.holdThreshold {
+                cancel("tap")
+                show(note: "Hold to talk", for: 1.6)
+            } else {
+                finish("release")
+            }
+        default:
+            break
+        }
+    }
+
+    /// VoiceOver's press of the mic: start or stop, without a held chord.
+    func accessibilityActivate(in browser: Browser) {
+        let window = Windows.window(of: browser)
+        if phase == .dictating { finish("stop"); return }
+        guard !active else { return }
+        if case .ready = mic(agentReady: Agent.shared.ready) {
+            start(.button, in: browser, window: window)
+            hand = nil // no hold to let go of: the next activation stops it
+        } else {
+            press(.button, in: browser, window: window)
+        }
+    }
+
+    /// The line's ✕, or an error dismissed.
+    func dismiss() {
+        if active { cancel("✕") } else {
+            if case .error = phase { phase = .idle }
+            clearNote()
+        }
+    }
+
+    // MARK: - one dictation
+
+    private func start(_ hand: Hand, in browser: Browser, window: NSWindow?) {
+        stopTimers()
+        clearNote()
+        session += 1
+        let id = session
+        self.hand = hand
+        self.browser = browser
+        self.window = window ?? Windows.window(of: browser)
+        pressedAt = Date()
+        origin = pressedAt
+        releasedWhileArming = false
+        timeline = []
+        lastInsert = nil
+        lastSent = nil
+        partials = 0
+        announced = []
+        preview = ""
+        let draft = Agent.shared.draft
+        if let range = benchRange {
+            anchor = ComposerInsert.Anchor(draft: draft, range: ComposerInsert.clamp(range, in: draft), editor: nil, window: self.window)
+        } else {
+            anchor = ComposerInsert.capture(in: self.window, draft: draft)
+        }
+        phase = .arming
+        mark("press:\(hand.rawValue)")
+        let slow = DispatchWorkItem { [weak self] in
+            guard let self, self.session == id, self.phase == .arming else { return }
+            self.slowStart = true
+        }
+        slowTimer = slow
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: slow)
+
+        if testSource == nil {
+            // The real microphone: never in headless Copper, and in a test
+            // world only when the run says so — an automated run must never
+            // bring up the permission prompt or open someone's mic.
+            if Headless.on {
+                fail("Dictation isn't available in headless Copper")
+                return
+            }
+            if Store.testing, ProcessInfo.processInfo.environment["SEARCH_VOICE_MIC"] != "1" {
+                fail("The microphone is off in test worlds")
+                return
+            }
+        }
+        // A file needs nobody's permission; the bench can stand in for the
+        // question macOS would ask (benchPermission), never asking it.
+        let fake = testSource == nil ? nil : benchPermission
+        let status = fake?.status ?? (testSource != nil ? .authorized : VoiceCapture.authorization)
+        switch status {
+        case .authorized:
+            open(makeSource(), session: id)
+        case .notDetermined:
+            // The first explicit gesture asks. A hold let go while the
+            // prompt was up doesn't start once it is answered.
+            mark("permission asked")
+            Task { @MainActor in
+                let granted: Bool
+                if let fake {
+                    try? await Task.sleep(nanoseconds: UInt64(fake.seconds * 1_000_000_000))
+                    granted = fake.grant
+                } else {
+                    granted = await VoiceCapture.requestAccess()
+                }
+                guard self.session == id, self.phase == .arming else { return }
+                self.mark(granted ? "permission granted" : "permission denied")
+                if !granted {
+                    self.fail(Voice.denied)
+                } else if self.releasedWhileArming {
+                    self.mark("released during the prompt")
+                    self.end(nil)
+                } else {
+                    self.open(self.makeSource(), session: id)
+                }
+            }
+        default:
+            fail(Voice.denied)
+        }
+    }
+
+    /// The microphone, or the bench's file.
+    private func makeSource() -> VoiceAudioSource { testSource?() ?? VoiceCapture() }
+
+    private func open(_ source: VoiceAudioSource, session id: Int) {
+        guard #available(macOS 15, *) else { fail("Voice needs macOS 15 or later."); return }
+        guard let dir = ModelStore.shared.modelDir else { fail("Speech model needs attention"); return }
+        let decode: @Sendable ([Swift.Float]) async throws -> String = { samples in
+            // Joins the warm-up in flight, or loads again after an idle unload.
+            try await VoiceEngine.shared.prepare(modelDir: dir) { _ in }
+            return try await VoiceEngine.shared.transcribe(samples).text
+        }
+        let live = LiveSession(mode: .hold, decode: decode) { event in
+            DispatchQueue.main.async { MainActor.assumeIsolated { Voice.shared.heard(event, session: id) } }
+        }
+        do {
+            try source.start(onBlock: { block in live.feed(block) }, onStop: { reason in
+                DispatchQueue.main.async { MainActor.assumeIsolated { Voice.shared.stopped(reason, session: id) } }
+            })
+        } catch {
+            live.cancel()
+            fail(Voice.words(for: error))
+            return
+        }
+        self.live = live
+        self.source = source
+        slowTimer?.cancel()
+        slowStart = false
+        phase = .dictating
+        mark("dictating")
+        announce("Dictation listening")
+        let cap = DispatchWorkItem { [weak self] in
+            guard let self, self.session == id, self.phase == .dictating else { return }
+            self.finish("cap")
+        }
+        capTimer = cap
+        DispatchQueue.main.asyncAfter(deadline: .now() + (benchCap ?? Voice.cap), execute: cap)
+    }
+
+    /// Release, the second press, or the 120 s cap: the microphone off, the
+    /// whole hold decoded, the words in.
+    func finish(_ why: String) {
+        guard phase == .dictating, let live else { return }
+        let id = session
+        capTimer?.cancel()
+        hand = nil
+        phase = .finishing
+        mark("finishing:\(why)")
+        // Off before this returns; the converter's tail is fed first.
+        source?.stop()
+        Task { @MainActor in
+            let text = await live.finish()
+            self.land(text, session: id)
+        }
+    }
+
+    private func land(_ text: String, session id: Int) {
+        guard id == session, phase == .finishing else { return }
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let heard = Date()
+        defer { end(nil) }
+        mark("decoded", count: words.split(whereSeparator: \.isWhitespace).count)
+        guard !words.isEmpty, let anchor else {
+            mark("empty")
+            return
+        }
+        let agent = Agent.shared
+        lastInsert = ComposerInsert.insert(words, at: anchor, agent: agent)
+        mark("inserted", count: lastInsert?.piece.utf16.count)
+        Voice.log.info("dictation: \(self.partials) partials, \(words.split(whereSeparator: \.isWhitespace).count) words, insert \(Int(Date().timeIntervalSince(heard) * 1000)) ms after the decode")
+        guard prefs.finish == .send else {
+            announce("Dictation inserted")
+            return
+        }
+        let ready = benchAgentReady ?? agent.ready
+        if ready, !agent.busy, let browser, !agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lastSent = agent.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            agent.send(in: browser)
+            mark("sent")
+            announce("Dictation sent")
+        } else {
+            mark(ready ? "not sent: busy" : "not sent: not ready")
+            show(note: "Inserted — press Return to send", for: 6)
+            announce("Dictation inserted")
+        }
+    }
+
+    /// Escape, ✕, the pane or window closing, sleep, a tap too short: audio
+    /// and partials thrown away, the draft and its selection as they were.
+    func cancel(_ why: String) {
+        guard active else { return }
+        session += 1
+        mark("cancelled:\(why)")
+        live?.cancel()
+        source?.stop()
+        if let anchor { ComposerInsert.restore(anchor, agent: Agent.shared) }
+        end(nil)
+    }
+
+    /// The app or the window lost the keyboard. Not while the permission
+    /// prompt is up — the prompt is what took it.
+    private func lostFocus(_ why: String) {
+        guard phase != .arming else { return }
+        cancel(why)
+    }
+
+    /// The capture ended without being asked: sleep, a lost device, an error.
+    private func stopped(_ reason: VoiceCaptureStop, session id: Int) {
+        guard id == session, phase == .dictating else { return }
+        switch reason {
+        case .requested:
+            break
+        case .sleep, .sessionResigned:
+            cancel("capture stopped")
+        case .deviceLost:
+            cancel("device lost")
+            phase = .error("The microphone was disconnected — try again")
+        case .failed:
+            cancel("capture failed")
+            phase = .error("The microphone stopped — try again")
+        }
+    }
+
+    private func heard(_ event: LiveEvent, session id: Int) {
+        guard id == session else { return }
+        switch event {
+        case .partial(let text):
+            guard phase == .dictating || phase == .finishing else { return }
+            partials += 1
+            preview = text
+            mark("partial", count: text.split(whereSeparator: \.isWhitespace).count)
+        case .final:
+            mark("final")
+        }
+    }
+
+    private func fail(_ message: String) {
+        session += 1
+        mark("error")
+        live?.cancel()
+        source?.stop()
+        end(message)
+        if message == Voice.denied { announce("Microphone access is off") }
+    }
+
+    /// Back to idle (or to an error), with everything of the dictation let go.
+    private func end(_ error: String?) {
+        stopTimers()
+        live = nil
+        source = nil
+        anchor = nil
+        hand = nil
+        preview = ""
+        slowStart = false
+        phase = error.map(Phase.error) ?? .idle
+        if error == nil { mark("idle") }
+        scheduleUnload()
+    }
+
+    private func stopTimers() {
+        capTimer?.cancel()
+        capTimer = nil
+        slowTimer?.cancel()
+        slowTimer = nil
+    }
+
+    // MARK: - notes, announcements
+
+    private func show(note text: String, for seconds: TimeInterval) {
+        noteTimer?.cancel()
+        note = text
+        let clear = DispatchWorkItem { [weak self] in self?.note = nil }
+        noteTimer = clear
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: clear)
+    }
+
+    private func clearNote() {
+        noteTimer?.cancel()
+        noteTimer = nil
+        note = nil
+    }
+
+    /// VoiceOver, once per change of state — never for a partial.
+    private func announce(_ text: String) {
+        announced.append(text)
+        mark("announce:\(text)")
+        guard let element = window ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        NSAccessibility.post(element: element, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    private func mark(_ event: String, count: Int? = nil) {
+        timeline.append((Int(Date().timeIntervalSince(origin) * 1000), event, count))
+    }
+
+    static func words(for error: Error) -> String {
+        switch error as? VoiceCaptureError {
+        case .notAuthorized: return Voice.denied
+        case .noInput: return "No microphone is connected"
+        case .headless: return "Dictation isn't available in headless Copper"
+        default: return "The microphone couldn't start — try again"
+        }
+    }
+
+    // MARK: - the engine, warm and then let go
+
+    /// The pane is open with voice ready: load the model now (a third of a
+    /// second once this Mac has prepared it), so the first dictation doesn't wait.
+    func warm() {
+        guard #available(macOS 15, *), !warming, Agent.shared.open, case .ready = mic(agentReady: Agent.shared.ready),
+              seededModel == nil, let dir = ModelStore.shared.modelDir else { return }
+        warming = true
+        Task { @MainActor in
+            let started = Date()
+            do {
+                try await VoiceEngine.shared.prepare(modelDir: dir) { _ in }
+                Voice.log.info("voice warm in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+            } catch {
+                Voice.log.error("voice warm failed")
+            }
+            self.warming = false
+            self.scheduleUnload()
+        }
+    }
+
+    /// Ten minutes without a dictation lets the model go (100–200 MB).
+    private func scheduleUnload() {
+        unloadTimer?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.active else { return }
+            if #available(macOS 15, *) { Task { await VoiceEngine.shared.unload() } }
+            Voice.log.info("voice model unloaded after 10 idle minutes")
+        }
+        unloadTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Voice.idleUnload, execute: work)
+    }
+
+    // MARK: - bench
+
+    /// The frozen states the pane is pictured in (`voice seed`).
+    func seed(_ scenario: String, in browser: Browser) -> String? {
+        cancel("seed")
+        stopTimers()
+        clearNote()
+        seededModel = nil
+        self.browser = browser
+        self.window = Windows.window(of: browser)
+        let words = "open the Copper agent pane, check the API logs on the staging server and file a bug for the failing Swift build"
+        switch scenario {
+        case "idle", "idle-with-mic": phase = .idle; preview = ""
+        case "dictating": phase = .dictating; preview = words
+        case "dictating-short": phase = .dictating; preview = "open the Copper"
+        case "finishing": phase = .finishing; preview = words
+        case "denied": phase = .error(Voice.denied); preview = ""
+        case "preparing": phase = .idle; seededModel = .preparing
+        case "downloading": phase = .idle; seededModel = .downloading(0.42)
+        case "failed": phase = .idle; seededModel = .failed("seeded")
+        case "hint": phase = .idle; note = "Hold to talk"
+        case "inserted": phase = .idle; note = "Inserted — press Return to send"
+        case "off": phase = .idle; preview = ""
+        default: return "voice seed idle|dictating|dictating-short|finishing|denied|preparing|downloading|failed|hint|inserted|off"
+        }
+        return nil
+    }
+
+    func benchState() -> [String: Any] {
+        var out: [String: Any] = [
+            "phase": Voice.name(phase), "previewWords": preview.split(whereSeparator: \.isWhitespace).count,
+            "note": note ?? NSNull(), "session": session, "enabled": prefs.enabled, "trigger": prefs.trigger.rawValue,
+            "finish": prefs.finish.rawValue, "paneOpen": Agent.shared.open, "draft": Agent.shared.draft,
+            "agentReady": Agent.shared.ready, "agentBusy": Agent.shared.busy, "model": ModelStore.shared.stateName,
+            "testSource": testSource != nil, "keysConsumed": VoiceKeys.consumed, "keysPassed": VoiceKeys.passed,
+            "announced": announced, "partials": partials,
+            "timeline": timeline.map { row -> [String: Any] in
+                var r: [String: Any] = ["ms": row.ms, "event": row.event]
+                if let n = row.count { r["n"] = n }
+                return r
+            },
+        ]
+        switch mic(agentReady: Agent.shared.ready) {
+        case .hidden: out["mic"] = "hidden"
+        case .unavailable(let why): out["mic"] = "unavailable: \(why)"
+        case .waiting(let why): out["mic"] = "waiting: \(why)"
+        case .ready: out["mic"] = "ready"
+        }
+        if case .error(let message) = phase { out["message"] = message }
+        if let lastInsert { out["inserted"] = lastInsert.piece; out["insertedVia"] = lastInsert.via; out["caret"] = lastInsert.caret }
+        out["sendCalled"] = lastSent != nil
+        if let lastSent { out["sent"] = lastSent }
+        return out
+    }
+
+    static func name(_ phase: Phase) -> String {
+        switch phase {
+        case .idle: return "idle"
+        case .arming: return "arming"
+        case .dictating: return "dictating"
+        case .finishing: return "finishing"
+        case .error: return "error"
+        }
+    }
+}
+
+/// A file instead of the microphone, for tests: its samples in 50 ms blocks
+/// at real time (or `speed` times it), then room-quiet until stopped, as a
+/// microphone keeps hearing the room after someone stops talking.
+final class VoiceFileSource: VoiceAudioSource, @unchecked Sendable {
+    private let samples: [Swift.Float]
+    private let speed: Double
+    private let failAt: Double?
+    private let queue = DispatchQueue(label: "com.collinrijock.copper.voice.file", qos: .userInitiated)
+    private let onQueueKey = DispatchSpecificKey<Bool>()
+    private let lock = NSLock()
+    private var run: Run?
+    private var drainedFlag = false
+
+    private final class Run {
+        let onBlock: @Sendable ([Swift.Float]) -> Void
+        let onStop: @Sendable (VoiceCaptureStop) -> Void
+        var timer: DispatchSourceTimer?
+        var position = 0
+        var finished = false
+        init(onBlock: @escaping @Sendable ([Swift.Float]) -> Void, onStop: @escaping @Sendable (VoiceCaptureStop) -> Void) {
+            self.onBlock = onBlock
+            self.onStop = onStop
+        }
+    }
+
+    /// `speed` 1 is real time; 0 feeds as fast as the queue goes. `failAt`
+    /// (seconds of audio) ends the capture with an error there.
+    init(samples: [Swift.Float], speed: Double = 1, failAt: Double? = nil) {
+        self.samples = samples
+        self.speed = speed
+        self.failAt = failAt
+        queue.setSpecific(key: onQueueKey, value: true)
+    }
+
+    /// Every sample of the file has been handed over.
+    var drained: Bool { lock.withLock { drainedFlag } }
+
+    func start(onBlock: @escaping @Sendable ([Swift.Float]) -> Void,
+               onStop: @escaping @Sendable (VoiceCaptureStop) -> Void) throws {
+        let fresh = Run(onBlock: onBlock, onStop: onStop)
+        try lock.withLock {
+            guard run == nil else { throw VoiceCaptureError.busy }
+            run = fresh
+            drainedFlag = false
+        }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        let every = speed > 0 ? 0.05 / speed : 0.001
+        timer.schedule(deadline: .now() + every, repeating: every, leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in self?.tick(fresh) }
+        fresh.timer = timer
+        timer.resume()
+    }
+
+    private func tick(_ run: Run) {
+        guard !run.finished else { return }
+        if let failAt, run.position >= Int(failAt * 16_000) {
+            finish(run, .failed("test failure"))
+            return
+        }
+        var block: [Swift.Float]
+        if run.position < samples.count {
+            block = Array(samples[run.position..<min(run.position + 800, samples.count)])
+            if block.count < 800 { block += VoiceBench.roomQuiet(seconds: Double(800 - block.count) / 16_000) }
+            if run.position + 800 >= samples.count { lock.withLock { drainedFlag = true } }
+        } else {
+            block = VoiceBench.roomQuiet(seconds: 0.05)
+        }
+        run.position += 800
+        run.onBlock(block)
+    }
+
+    private func finish(_ run: Run, _ reason: VoiceCaptureStop) {
+        lock.withLock { if self.run === run { self.run = nil } }
+        run.timer?.cancel()
+        guard !run.finished else { return }
+        run.finished = true
+        run.onStop(reason)
+    }
+
+    func stop() {
+        guard let current = lock.withLock({ run }) else { return }
+        if DispatchQueue.getSpecific(key: onQueueKey) == true { finish(current, .requested) }
+        else { queue.sync { finish(current, .requested) } }
+    }
+}

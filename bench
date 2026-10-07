@@ -213,6 +213,18 @@
                                        transcribed and scored ("skipped" without it); exits 1 on a failure
     ./bench voice replay PATH          one audio file (wav, aiff, m4a…; any rate) → text, words, timing
     ./bench voice status|result        what the engine has loaded; the last selftest/replay's answer
+    ./bench voice dictate PATH [--trigger hold|toggle] [--finish insert|send] [--draft TEXT] [--caret N|--select A,B]
+                      [--cancel-at S] [--tap] [--fail-at S] [--speed X] [--agent busy|unready] [--cap S] [--undo]
+                      [--permission denied|ask-grant|ask-deny [--release-during-prompt]]   (a stand-in; no prompt is shown)
+                                       test world: one real dictation into the agent composer, the file standing in for
+                                       the mic → state timeline, the words inserted, draft before/after, whether it sent
+    ./bench voice source PATH [--speed X]|off   test world: ⌃⇧D and the mic hear this file instead of the microphone
+    ./bench voice key down|up|press|ctrl-up|escape   test world: ⌃⇧D (or Escape) through the app's key monitors
+    ./bench voice seed idle|dictating|finishing|denied|preparing|downloading|failed|hint|inserted|off
+                                       the composer frozen in a dictation state, for pictures
+    ./bench voice render PATH [WIDTH] [dark]   the agent pane drawn off screen at WIDTH (340–620)
+    ./bench voice prefs on|off|hold|toggle|insert|send · voice model status|install|cancel|remove · voice state
+    ./bench voice editor state|type TEXT|event|undo   test world: the composer's field editor against the draft
     ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
     ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
     ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark] [CODE]|bookmark URL [TITLE]|pin URL|open URL
@@ -405,8 +417,14 @@ def main(argv):
         if request["op"] == "replay":
             if len(args) != 2: sys.exit("usage: bench voice replay PATH")
             request["path"] = os.path.abspath(args[1])
+        elif request["op"] in ("dictate", "source", "key", "seed", "render", "prefs", "model", "state", "editor"):
+            # Dictation (Fork/Voice/DictationBench.swift): the words after the op, a file path made absolute.
+            rest = args[1:]
+            if request["op"] in ("dictate", "source", "render") and rest and rest[0] != "off" and not rest[0].startswith("--"):
+                rest[0] = os.path.abspath(rest[0])
+            request["args"] = rest
         elif len(args) > 1 or request["op"] not in ("selftest", "status", "result"):
-            sys.exit("usage: bench voice selftest|replay PATH|status|result")
+            sys.exit("usage: bench voice selftest|replay PATH|status|result|dictate PATH …|source PATH|off|key …|seed …|render PATH [W] [dark]|prefs …|model …|state")
     elif verb == "settings":
         words = [a for a in args if a != "--table"]
         request["op"] = words[0] if words else "state"

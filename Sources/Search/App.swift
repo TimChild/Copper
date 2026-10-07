@@ -14,6 +14,7 @@ struct SearchApp: App {
         Instance.acquireIfNeeded() // Fork: one process per world, before anything is restored (Fork/Instance.swift)
         Fork.migratePasskeysPreference()
         Bridge.runIfAsked()
+        Voice.shared.boot() // Fork (voice): the speech engine behind Settings › Voice, and ⌃⇧D (Fork/Voice/VoiceSession.swift)
     } // Fork: `--mcp-stdio` pipes to the running app and exits
 
     var body: some Scene {
@@ -735,6 +736,10 @@ struct ContentView: View {
     private func take(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+        // Fork (voice): Escape cancels a dictation before anything else hears
+        // it, and ⌃⇧D is the agent pane's while it is open (Fork/Voice/VoiceKeys.swift).
+        if VoiceKeys.take(event) { return true }
 
         // Fork (new-tab-launcher): while the ⌘T card is up, Escape, ⇧/⌥
         // Return and ⌘1–9 are its own.

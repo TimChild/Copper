@@ -5,13 +5,15 @@ import SwiftUI
 // Dictation, checked from the shell without a microphone: the real Voice
 // session fed from a sound file instead of the mic, the keys sent through
 // the app the way a press arrives, and the pane frozen in each state for
-// pictures. Every verb here that changes something runs only in a test world.
+// pictures. Every verb here that changes something runs only in a test world
+// (`refusal`); `state` and `model status` run anywhere.
 //
 //   voice dictate PATH [--trigger hold|toggle] [--finish insert|send]
 //                      [--draft TEXT] [--caret N | --select A,B | --reopen] [--type TEXT]
 //                      [--cancel-at S] [--tap] [--fail-at S] [--speed X]
-//                      [--agent busy|unready] [--cap S] [--undo] [--keys CHARS]
-//                      [--warm-delay S [--start-cold]]
+//                      [--agent busy|unready] [--cap S] [--undo] [--keys CHARS | --button]
+//                      [--warm-delay S [--start-cold]] [--decode-fails]
+//                      [--blur-at dictating|finishing]
 //                      [--permission denied|ask-grant|ask-deny [--release-during-prompt]]
 //   voice source PATH [--speed X] | off     ⌃⇧D and the mic hear this file
 //   voice key down|up|press|ctrl-up|escape [CHARS]   ⌃⇧D (or Escape) through NSApp.sendEvent;
@@ -19,24 +21,49 @@ import SwiftUI
 //   voice warm cold [DELAY] | now           the model let go (and every load held DELAY s), then loaded as
 //                                           the pane opening does; now = loaded and waited for
 //   voice seed idle|dictating|finishing|finishing-warming|denied|preparing|warming|downloading|…
-//   voice render PATH [WIDTH] [dark]        the pane, drawn off screen at WIDTH
+//   voice render PATH [WIDTH] [dark] [settings]   the pane (or Settings › Voice), drawn off screen at WIDTH
 //   voice prefs on|off|hold|toggle|insert|send
 //   voice model status|install|cancel|remove
 //   voice state                             phase, mic, line, engine, counts, the last timeline
-//   voice editor state|type TEXT|event|boundary|undo|redo   the composer's field editor against the draft
+//   voice editor state|type TEXT|event|boundary|undo|redo|resync   the composer's field editor against the draft
 
 @MainActor
 enum DictationBench {
+    /// The verbs that change something — the pane, the model on disk, the
+    /// prefs, keys pressed in a window, a picture of the pane written out —
+    /// run only in a test world. What to answer when `op` may not run here,
+    /// or nil when it may.
+    nonisolated static func refusal(_ op: String, _ args: [String], testing: Bool) -> String? {
+        guard !testing else { return nil }
+        switch op {
+        case "model":
+            let sub = args.first ?? "status"
+            return sub.isEmpty || sub == "status" ? nil : "voice model \(sub) only works in a test world"
+        case "seed": return "voice seed only works in a test world — it changes your agent pane"
+        case "render": return "voice render only works in a test world — it writes your agent pane to a file"
+        case "prefs": return "voice prefs only changes a test world"
+        case "source": return "voice source only works in a test world"
+        case "key": return "voice key only works in a test world — it presses keys in your window"
+        case "warm": return "voice warm only works in a test world"
+        case "editor": return "voice editor only works in a test world"
+        case "dictate": return "voice dictate only runs in a test world"
+        default: return nil
+        }
+    }
+
     static func handle(_ op: String, _ args: [String], in browser: Browser?, answer: @escaping ([String: Any]) -> Void,
                        job: (String, @escaping @MainActor () async -> [String: Any]) -> Void) -> Bool {
         let voice = Voice.shared
+        if let refused = refusal(op, args, testing: Store.testing) {
+            answer(["error": refused])
+            return true
+        }
         switch op {
         case "state":
             answer(voice.benchState())
         case "model":
             answer(ModelStore.shared.bench(args.first ?? "status"))
         case "prefs":
-            guard Store.testing else { answer(["error": "voice prefs only changes a test world"]); return true }
             for word in args {
                 switch word {
                 case "on": VoicePrefs.shared.enabled = true
@@ -58,7 +85,6 @@ enum DictationBench {
             guard let browser else { answer(["error": "no browser"]); return true }
             answer(render(args, in: browser))
         case "source":
-            guard Store.testing else { answer(["error": "voice source only works in a test world"]); return true }
             if args.first == "off" {
                 voice.testSource = nil
                 answer(voice.benchState())
@@ -79,7 +105,6 @@ enum DictationBench {
             guard let browser else { answer(["error": "no browser"]); return true }
             answer(key(args.first ?? "press", characters: args.dropFirst().first ?? "d", in: browser))
         case "warm":
-            guard Store.testing else { answer(["error": "voice warm only works in a test world"]); return true }
             switch args.first ?? "now" {
             case "cold":
                 let delay = args.dropFirst().first.flatMap(Double.init)
@@ -100,7 +125,7 @@ enum DictationBench {
             // The composer's field editor itself: what it holds against the
             // draft, typing into it, and its undo — to tell a dictation's
             // insert from a person's typing.
-            guard Store.testing, let browser else { answer(["error": "voice editor only works in a test world"]); return true }
+            guard let browser else { answer(["error": "no browser"]); return true }
             let window = Windows.window(of: browser)
             guard let editor = window?.firstResponder as? NSTextView, editor.isFieldEditor else { answer(["error": "the composer doesn't have the keyboard"]); return true }
             var out: [String: Any] = [:]
@@ -113,6 +138,15 @@ enum DictationBench {
                 // What happens between two key presses: an event fetched (the
                 // last edit's undo group closes).
                 postBoundary()
+            case "resync":
+                // The editor's text changed without a word to its field (as
+                // AppKit's own undo does): Return's re-sync brings the draft
+                // along before anything is sent.
+                let end = (editor.string as NSString).length
+                let unsaid = args.dropFirst().joined(separator: " ")
+                editor.replaceCharacters(in: NSRange(location: end, length: 0), with: unsaid.isEmpty ? " unsaid" : unsaid)
+                out["desyncedBefore"] = editor.string != Agent.shared.draft
+                out["resynced"] = ComposerInsert.syncDraft(in: window)
             case "event":
                 // One event through the app, as a key press between the
                 // insert and ⌘Z would be.
@@ -139,7 +173,6 @@ enum DictationBench {
             }
         case "dictate":
             guard let browser else { answer(["error": "no browser"]); return true }
-            guard Store.testing else { answer(["error": "voice dictate only runs in a test world"]); return true }
             job("dictate") { await dictate(args, in: browser) }
         default:
             return false
@@ -163,6 +196,11 @@ enum DictationBench {
         // ⌃⇧D through the app's key monitor instead of the bench's own hand,
         // with CHARS what the D key types (в: a Russian layout).
         let keys = value(args, "--keys")
+        // The composer's mic pressed and let go (its own hand) instead of the bench's.
+        let hand: Voice.Hand = args.contains("--button") ? .button : .bench
+        // The window losing the keyboard (⌘Tab, a click elsewhere) while
+        // talking, or right after letting go.
+        let blurAt = value(args, "--blur-at")
         let warmDelay = number(args, "--warm-delay")
         let samples: [Swift.Float]
         do { samples = try await Task.detached(priority: .userInitiated) { try VoiceBench.read(URL(fileURLWithPath: path)) }.value } catch {
@@ -209,6 +247,8 @@ enum DictationBench {
         }
         voice.benchAgentReady = agentMode == "unready" ? false : nil
         voice.benchCap = number(args, "--cap")
+        voice.benchDecodeFails = args.contains("--decode-fails")
+        defer { voice.benchDecodeFails = false }
         switch value(args, "--permission") {
         case "denied": voice.benchPermission = (.denied, false, 0)
         case "ask-grant": voice.benchPermission = (.notDetermined, true, 0.6)
@@ -242,11 +282,11 @@ enum DictationBench {
         voice.testSource = { source }
         func press() {
             if let keys { out["keyDown"] = key(trigger == .hold ? "down" : "press", characters: keys, in: browser)["consumedNow"] }
-            else { voice.press(.bench, in: browser, window: window) }
+            else { voice.press(hand, in: browser, window: window) }
         }
         func release() {
             if let keys { out["keyUp"] = key(trigger == .hold ? "up" : "press", characters: keys, in: browser)["consumedNow"] }
-            else if trigger == .hold { voice.lift(.bench) } else { voice.press(.bench, in: browser, window: window) }
+            else if trigger == .hold { voice.lift(hand) } else { voice.press(hand, in: browser, window: window) }
         }
 
         if let warmDelay {
@@ -293,11 +333,15 @@ enum DictationBench {
         defer { voice.benchWarmDelay = nil }
 
         press()
-        // The stand-in permission question: let go while it is up, or wait for its answer.
-        if voice.phase == .arming {
-            if args.contains("--release-during-prompt") {
+        // The stand-in permission question. The real one takes the window's
+        // keyboard as it comes up, and a hold's let-go goes to it, not here;
+        // `--release-during-prompt` lets go anyway, through the same keys or
+        // mic as the press. Either way the answer decides what happens next.
+        if voice.phase == .arming, voice.benchPermission != nil {
+            resignKey(window)
+            if args.contains("--release-during-prompt"), trigger == .hold {
                 await sleep(0.2)
-                voice.lift(.bench)
+                release()
             }
             let asking = Date().addingTimeInterval(5)
             while voice.phase == .arming, Date() < asking { await sleep(0.02) }
@@ -312,14 +356,27 @@ enum DictationBench {
                 // cancel still puts the selection back where it started.
                 editor?.setSelectedRange(NSRange(location: 0, length: 0))
                 voice.cancel("bench")
+            } else if blurAt == "dictating" {
+                // A second into talking, the window loses the keyboard: cancelled.
+                await sleep(1 / max(speed, 0.01))
+                out["blurredWhile"] = Voice.name(voice.phase)
+                resignKey(window)
             } else {
                 let limit = Date().addingTimeInterval(Double(samples.count) / 16_000 / max(speed, 0.01) + 15)
                 while !source.drained, voice.phase == .dictating, Date() < limit { await sleep(0.02) }
                 // A person lets go a beat after the last word.
                 await sleep(0.15)
-                if voice.phase == .dictating { release() }
+                if voice.phase == .dictating {
+                    release()
+                    if blurAt == "finishing" {
+                        // Let go, then straight to another app: the words still land.
+                        out["blurredWhile"] = Voice.name(voice.phase)
+                        resignKey(window)
+                    }
+                }
             }
         }
+        out["micOpened"] = voice.timeline.contains { $0.event == "dictating" }
         // What the line says while the last decode waits (on a slow load, too).
         var lines: [String] = []
         let limit = Date().addingTimeInterval(90)
@@ -457,6 +514,13 @@ enum DictationBench {
         return "none"
     }
 
+    /// What the window losing the keyboard tells the app — ⌘Tab, a click in
+    /// another window, a system prompt coming up — without moving any window.
+    static func resignKey(_ window: NSWindow?) {
+        guard let window else { return }
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+    }
+
     /// An event for the app's loop to fetch, as a person's next key press
     /// would be: AppKit closes the undo group the last edit opened when it
     /// fetches one. Nothing receives it.
@@ -471,16 +535,31 @@ enum DictationBench {
 
     /// The pane at WIDTH (340–620), light or dark, drawn through a hosting
     /// view like `render agent` — whole, off screen, no window brought forward.
+    /// With `settings`: Settings › Voice instead, at WIDTH of the panel's
+    /// content column (409–699 pt: the panel's 600–920 less its rail), with
+    /// the column's own 32 pt margins and Settings' look.
     static func render(_ args: [String], in browser: Browser) -> [String: Any] {
-        guard let path = args.first else { return ["error": "voice render PATH [WIDTH] [dark]"] }
-        let width = CGFloat(args.dropFirst().compactMap { Double($0) }.first ?? Double(AgentPane.width))
+        guard let path = args.first else { return ["error": "voice render PATH [WIDTH] [dark] [settings]"] }
+        let settings = args.contains("settings")
+        let width = CGFloat(args.dropFirst().compactMap { Double($0) }.first ?? (settings ? 409 : Double(AgentPane.width)))
         let dark = args.contains("dark")
-        let height: CGFloat = 520
-        let pane = AgentPane(browser: browser, fixedWidth: width)
-            .frame(height: height)
-            .background(Palette.ground)
-            .environment(\.colorScheme, dark ? .dark : .light)
-        let host = NSHostingView(rootView: pane)
+        let height: CGFloat = settings ? 600 : 520
+        let view: AnyView
+        if settings {
+            view = AnyView(VoicePage(browser: browser)
+                .padding(.horizontal, 32)
+                .padding(.top, 20)
+                .frame(width: width, height: height, alignment: .topLeading)
+                .background(SettingsInk.content)
+                .environment(\.settingsLook, true)
+                .environment(\.colorScheme, dark ? .dark : .light))
+        } else {
+            view = AnyView(AgentPane(browser: browser, fixedWidth: width)
+                .frame(height: height)
+                .background(Palette.ground)
+                .environment(\.colorScheme, dark ? .dark : .light))
+        }
+        let host = NSHostingView(rootView: view)
         host.frame = NSRect(x: 0, y: 0, width: width, height: height)
         let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -535,6 +614,29 @@ enum VoiceChecks {
         }))
         VoiceBench.extraChecks.append(("15.00 s clip", { await fifteenSeconds() }))
         VoiceBench.extraChecks.append(("keys and mic states", { await MainActor.run { keyAndMicChecks() } }))
+        VoiceBench.extraChecks.append(("bench verbs that change things: test worlds only", { gateChecks() }))
+    }
+
+    /// Outside a test world (the browser someone uses) every verb that
+    /// changes something is refused, and only those.
+    static func gateChecks() -> [String] {
+        var failures: [String] = []
+        let changing: [(String, [String])] = [
+            ("seed", ["dictating"]), ("seed", []), ("render", ["/tmp/pane.png", "340"]), ("model", ["install"]),
+            ("model", ["cancel"]), ("model", ["remove"]), ("model", ["bogus"]), ("prefs", ["on"]), ("source", ["clip.wav"]),
+            ("source", ["off"]), ("key", ["down"]), ("warm", ["now"]), ("editor", ["state"]), ("dictate", ["clip.wav"]),
+        ]
+        for (op, args) in changing {
+            let call = (["voice", op] + args).joined(separator: " ")
+            if DictationBench.refusal(op, args, testing: false) == nil { failures.append("\(call) runs outside a test world") }
+            if let refused = DictationBench.refusal(op, args, testing: true) { failures.append("\(call) refused in a test world: \(refused)") }
+        }
+        for (op, args) in [("state", [String]()), ("model", []), ("model", ["status"]), ("model", [""])] {
+            if let refused = DictationBench.refusal(op, args, testing: false) {
+                failures.append("\((["voice", op] + args).joined(separator: " ")) refused outside a test world: \(refused)")
+            }
+        }
+        return failures
     }
 
     /// Exactly 240,000 samples — one more frame than the 15 s encoder takes
@@ -577,8 +679,13 @@ enum VoiceChecks {
             ([.control, .shift], "в", 2, true), ([.control, .shift], "В", 2, true), ([.control, .shift], "δ", 2, true),
             ([.control, .shift], "ф", 0, false), ([.control], "в", 2, false), ([.control, .shift, .command], "в", 2, false),
             ([.control, .shift, .option], "в", 2, false), ([.shift], "в", 2, false),
-            // D moved (Dvorak): the key that types d, wherever it is.
-            ([.control, .shift], "d", 4, true), ([.control, .shift], "", 2, true), ([.control, .shift], "", 14, false),
+            ([.control, .shift], "„", 2, true), ([.control, .shift], "ى", 2, true),
+            // D moved (Dvorak): the key that types d, wherever it is — and not
+            // the key in D's US place, which types e there (⌃⇧E is Copper's own).
+            ([.control, .shift], "d", 4, true), ([.control, .shift], "D", 4, true),
+            ([.control, .shift], "e", 2, false), ([.control, .shift], "E", 2, false),
+            // Nothing typed (no layout): the key's place.
+            ([.control, .shift], "", 2, true), ([.control, .shift], "", 14, false),
         ]
         for (flags, characters, code, wanted) in cases {
             guard let e = event(.keyDown, flags, characters, code: code) else { failures.append("couldn't make a key event"); continue }
@@ -586,6 +693,8 @@ enum VoiceChecks {
         }
         // Letting go of D's key on a Russian layout ends a hold.
         if let up = event(.keyUp, [.control, .shift], "в"), !VoiceKeys.isD(up) { failures.append("key up of в (key 2) isn't D") }
+        // …and on Dvorak, letting go of the e in D's US place is not letting go of D.
+        if let up = event(.keyUp, [.control, .shift], "e"), VoiceKeys.isD(up) { failures.append("key up of e (key 2) is D") }
         // A key event for no window is never taken (no pane can be open in it).
         if let e = event(.keyDown, [.control, .shift], "d"), VoicePrefs.shared.enabled, VoiceKeys.take(e) {
             failures.append("⌃⇧D for no window was taken")

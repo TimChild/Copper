@@ -83,20 +83,26 @@ struct VoicePage: View {
     // MARK: - credits
 
     /// CC BY 4.0 asks for the name, the source and the licence wherever the
-    /// model is offered; the links open in a tab beside yours.
+    /// model is offered, and Apache-2.0 credits the runner that drives it
+    /// (its LICENSE and NOTICE ride in the app: Contents/Resources/phonon-coreml).
+    /// The links open in a tab beside yours.
     private var credits: some View {
-        Text(creditsLine)
-            .font(.system(size: 11.5))
-            .foregroundStyle(SettingsInk.detail)
-            .tint(Palette.ink)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .environment(\.openURL, OpenURLAction { url in
-                browser.tuning = false
-                browser.open(url, foreground: true)
-                return .handled
-            })
+        VStack(alignment: .leading, spacing: 4) {
+            Text(creditsLine)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(runtimeLine)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.system(size: 11.5))
+        .foregroundStyle(SettingsInk.detail)
+        .tint(Palette.ink)
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .environment(\.openURL, OpenURLAction { url in
+            browser.tuning = false
+            browser.open(url, foreground: true)
+            return .handled
+        })
     }
 
     private var creditsLine: AttributedString {
@@ -108,9 +114,19 @@ struct VoicePage: View {
         parakeet.link = URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")
         parakeet.underlineStyle = .single
         line += phonon
-        line += AttributedString(" by Fermion Research, based on ")
+        line += AttributedString(" by Fermion Research, derived from ")
         line += parakeet
         line += AttributedString(" · CC BY 4.0")
+        return line
+    }
+
+    private var runtimeLine: AttributedString {
+        var line = AttributedString("Speech runtime: ")
+        var runner = AttributedString("phonon-coreml")
+        runner.link = URL(string: "https://github.com/fermionresearch/phonon-coreml")
+        runner.underlineStyle = .single
+        line += runner
+        line += AttributedString(" by Fermion Research · Apache-2.0")
         return line
     }
 }

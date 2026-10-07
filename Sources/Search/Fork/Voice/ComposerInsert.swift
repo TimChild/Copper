@@ -156,6 +156,22 @@ enum ComposerInsert {
         }
     }
 
+    /// Return sends what the field shows. Should the draft have fallen behind
+    /// the composer's editor — an edit that didn't say so, which `followUndo`
+    /// exists to prevent — the editor says so now, before the send reads it.
+    /// Nothing at all when they agree, or while an input method is composing.
+    @discardableResult
+    static func syncDraft(in window: NSWindow?) -> Bool {
+        guard let window, Voice.shared.composerFocused(in: window),
+              let editor = window.firstResponder as? NSTextView, editor.isFieldEditor, !editor.hasMarkedText(),
+              let field = editor.delegate as? NSTextField, field.window === window,
+              editor.string != Agent.shared.draft
+        else { return false }
+        editor.didChangeText()
+        if editor.string != Agent.shared.draft { Agent.shared.draft = editor.string }
+        return true
+    }
+
     /// The selection the dictation started with, back where it was — after
     /// a cancel, when the composer still holds the same text.
     static func restore(_ anchor: Anchor, agent: Agent) {

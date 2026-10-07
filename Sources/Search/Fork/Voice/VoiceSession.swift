@@ -14,7 +14,8 @@ import os
 // "Send right away" the message is sent the way Return sends it.
 //
 //   idle → arming → dictating → finishing → idle
-//                \→ error(…)      (permission off, the mic failing)
+//                \→ error(…)      (permission off, the mic failing,
+//                                  the model failing to load or decode)
 //
 // Every event from the audio and decode threads hops to the main actor
 // asynchronously and carries the dictation's number; a number that isn't the
@@ -111,6 +112,11 @@ final class Voice: ObservableObject {
     nonisolated static let preparingNote = "Preparing speech model… try again in a moment"
     nonisolated static let finishingPreparing = "Finishing… preparing speech model"
     nonisolated static let loadFailed = "Speech model failed to load — try again"
+    /// Hold to talk, after the first-use microphone question was answered Allow.
+    nonisolated static let allowedHoldKey = "Microphone allowed — hold ⌃⇧D to talk"
+    nonisolated static let allowedHoldButton = "Microphone allowed — hold the mic button to talk"
+    /// VoiceOver, once the words are in the message (and not sent).
+    nonisolated static let insertedAnnouncement = "Dictation inserted; review before sending"
     /// How long a load runs before the mic says the model is being prepared.
     nonisolated static let slowLoad: TimeInterval = 1
     static let holdThreshold = 0.25
@@ -158,6 +164,9 @@ final class Voice: ObservableObject {
     var benchWarmDelay: TimeInterval?
     /// Presses turned away while the model was being prepared.
     private(set) var refusedPreparing = 0
+    /// Every decode of the next dictation throws, as a model that fails to
+    /// load or decode would (`voice dictate --decode-fails`).
+    var benchDecodeFails = false
     /// With a test source: the permission macOS would report, and how a
     /// question would be answered after `seconds` — no prompt is ever shown.
     var benchPermission: (status: AVAuthorizationStatus, grant: Bool, seconds: Double)?
@@ -358,8 +367,8 @@ final class Voice: ObservableObject {
         if phase == .dictating { finish("stop"); return }
         guard !active else { return }
         if case .ready = mic(agentReady: Agent.shared.ready) {
-            start(.button, in: browser, window: window)
-            hand = nil // no hold to let go of: the next activation stops it
+            // No hold to let go of: the next activation stops it.
+            start(.button, in: browser, window: window, held: false)
         } else {
             press(.button, in: browser, window: window)
         }
@@ -375,12 +384,15 @@ final class Voice: ObservableObject {
 
     // MARK: - one dictation
 
-    private func start(_ hand: Hand, in browser: Browser, window: NSWindow?) {
+    /// `held`: a gesture that is let go of to stop (a key or a pointer held
+    /// down); not VoiceOver's activation, which starts and stops by itself.
+    private func start(_ hand: Hand, in browser: Browser, window: NSWindow?, held: Bool = true) {
         stopTimers()
         clearNote()
         session += 1
         let id = session
-        self.hand = hand
+        self.hand = held ? hand : nil
+        let holding = held && prefs.trigger == .hold
         self.browser = browser
         self.window = window ?? Windows.window(of: browser)
         pressedAt = Date()
@@ -428,8 +440,11 @@ final class Voice: ObservableObject {
         case .authorized:
             open(makeSource(), session: id)
         case .notDetermined:
-            // The first explicit gesture asks. A hold let go while the
-            // prompt was up doesn't start once it is answered.
+            // The first explicit gesture asks. The question takes the keyboard
+            // and the pointer, so a hold's let-go goes to it and never comes
+            // here: after Allow nobody may be holding anything. A hold
+            // therefore never starts once it is answered — the line says to
+            // hold again. Press to start and stop starts, as asked.
             mark("permission asked")
             Task { @MainActor in
                 let granted: Bool
@@ -443,9 +458,14 @@ final class Voice: ObservableObject {
                 self.mark(granted ? "permission granted" : "permission denied")
                 if !granted {
                     self.fail(Voice.denied)
-                } else if self.releasedWhileArming {
-                    self.mark("released during the prompt")
+                } else if holding {
+                    if self.releasedWhileArming { self.mark("released during the prompt") }
+                    self.mark("not started: hold again")
                     self.end(nil)
+                    let button = hand == .button
+                    self.show(note: button ? Voice.allowedHoldButton : Voice.allowedHoldKey, for: 6)
+                    self.announce(button ? "Microphone allowed. Hold the mic button to talk."
+                                         : "Microphone allowed. Hold Control-Shift-D to talk.")
                 } else {
                     self.open(self.makeSource(), session: id)
                 }
@@ -465,7 +485,9 @@ final class Voice: ObservableObject {
         // now, while the person talks. A decode waits for it; past a second
         // the line says the model is being prepared.
         if engineState == .cold { startWarm(dir) }
+        let failing = benchDecodeFails
         let decode: @Sendable ([Swift.Float]) async throws -> String = { samples in
+            if failing { throw VoiceBenchError("the bench made this decode fail") }
             await Voice.untilWarm()
             // A no-op once warm; loads again if something let the model go.
             try await VoiceEngine.shared.prepare(modelDir: dir) { _ in }
@@ -511,17 +533,21 @@ final class Voice: ObservableObject {
         source?.stop()
         Task { @MainActor in
             let text = await live.finish()
-            self.land(text, session: id)
+            self.land(text, decodeFailed: live.lastDecodeError != nil, session: id)
         }
     }
 
-    private func land(_ text: String, session id: Int) {
+    private func land(_ text: String, decodeFailed: Bool, session id: Int) {
         guard id == session, phase == .finishing else { return }
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let heard = Date()
         mark("decoded", count: words.split(whereSeparator: \.isWhitespace).count)
-        // Nothing heard because the model never loaded: say so, once.
-        if words.isEmpty, warmFailed, engineState == .cold {
+        // Nothing heard because the model never loaded, or a decode threw
+        // (a load inside it failing, Core ML refusing): say so, once — never
+        // the silence of an empty result.
+        if words.isEmpty, decodeFailed || (warmFailed && engineState == .cold) {
+            if decodeFailed { mark("decode failed") }
+            Voice.log.error("dictation: no words; the speech model failed")
             mark("model failed")
             end(Voice.loadFailed)
             announce("Speech model failed to load")
@@ -537,7 +563,7 @@ final class Voice: ObservableObject {
         mark("inserted", count: lastInsert?.piece.utf16.count)
         Voice.log.info("dictation: \(self.partials) partials, \(words.split(whereSeparator: \.isWhitespace).count) words, insert \(Int(Date().timeIntervalSince(heard) * 1000)) ms after the decode")
         guard prefs.finish == .send else {
-            announce("Dictation inserted")
+            announce(Voice.insertedAnnouncement)
             return
         }
         let ready = benchAgentReady ?? agent.ready
@@ -549,7 +575,7 @@ final class Voice: ObservableObject {
         } else {
             mark(ready ? "not sent: busy" : "not sent: not ready")
             show(note: "Inserted — press Return to send", for: 6)
-            announce("Dictation inserted")
+            announce(Voice.insertedAnnouncement)
         }
     }
 
@@ -565,10 +591,11 @@ final class Voice: ObservableObject {
         end(nil)
     }
 
-    /// The app or the window lost the keyboard. Not while the permission
-    /// prompt is up — the prompt is what took it.
+    /// The app or the window lost the keyboard: a hold under way is
+    /// cancelled. Not while the permission prompt is up — the prompt is what
+    /// took it — and not once the hold has ended: finishing words land.
     private func lostFocus(_ why: String) {
-        guard phase != .arming else { return }
+        guard phase == .dictating else { return }
         cancel(why)
     }
 

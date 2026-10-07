@@ -297,8 +297,9 @@ enum SettingsIndex {
         e(.voice, "Talking to the agent", "When you stop", "Insert the words into the message, or send it right away",
           ["send", "auto send", "send right away", "insert", "conversational", "conversation", "dictation", "review before sending"],
           "voice.finish"),
-        e(.voice, "Credits", "Speech model credits", "Phonon-2 by Fermion Research, based on NVIDIA Parakeet TDT 0.6B v3 · CC BY 4.0",
-          ["license", "licence", "attribution", "credits", "fermion", "nvidia", "parakeet", "cc by", "phonon", "speech model"],
+        e(.voice, "Credits", "Speech model credits", "Phonon-2 by Fermion Research, derived from NVIDIA Parakeet TDT 0.6B v3 · CC BY 4.0; runtime phonon-coreml · Apache-2.0",
+          ["license", "licence", "attribution", "credits", "fermion", "nvidia", "parakeet", "cc by", "phonon", "speech model",
+           "phonon-coreml", "apache", "speech runtime", "notice"],
           "voice.credits"),
     ]
 

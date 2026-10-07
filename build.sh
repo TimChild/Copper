@@ -67,6 +67,10 @@ chmod 755 "$APP/Contents/Resources/bin/copper"
 if [ -d ".build/$CONFIG/Search_Search.bundle" ]; then
   cp -R ".build/$CONFIG/Search_Search.bundle" "$APP/Contents/Resources/"
 fi
+# Fork (voice): the vendored speech runner's Apache-2.0 LICENSE and NOTICE
+# travel with the binary it is compiled into (Settings › Voice credits it).
+mkdir -p "$APP/Contents/Resources/phonon-coreml"
+cp Sources/Search/Fork/Voice/Phonon/LICENSE Sources/Search/Fork/Voice/Phonon/NOTICE "$APP/Contents/Resources/phonon-coreml/"
 
 # Symbols stay out of the app. The linker leaves every function's name and a
 # map back to the source in the binary — 15,000 entries, more than half of

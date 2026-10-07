@@ -83,13 +83,16 @@ enum VoiceKeys {
         return flags == [.control, .shift] && isD(event)
     }
 
-    /// The D key: the key in D's place on a US keyboard (kVK_ANSI_D), or
-    /// whichever key types a d. Its place is what works on a layout with no
-    /// Latin letters (Russian, Greek, Hebrew…), where ⌃⇧ and that key type
-    /// something else; its letter is what works where D has moved (Dvorak).
+    /// The D key. On a layout that types Latin letters (QWERTY, AZERTY,
+    /// Dvorak…) it is the key that types a d, wherever it sits; on one that
+    /// doesn't (Russian, Greek, Hebrew, Arabic…) it is the key in D's place on
+    /// a US keyboard (kVK_ANSI_D). Never "either": on Dvorak D's US place
+    /// types an e, and ⌃⇧E is a Copper shortcut of its own.
     static func isD(_ event: NSEvent) -> Bool {
-        if event.keyCode == 2 { return true }
-        guard let typed = event.charactersIgnoringModifiers else { return false }
-        return typed.lowercased() == "d"
+        if let typed = event.charactersIgnoringModifiers?.lowercased(), typed.unicodeScalars.count == 1,
+           let scalar = typed.unicodeScalars.first, scalar.isASCII, scalar.properties.isAlphabetic {
+            return typed == "d"
+        }
+        return event.keyCode == 2
     }
 }

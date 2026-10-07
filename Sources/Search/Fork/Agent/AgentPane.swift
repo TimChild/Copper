@@ -507,7 +507,8 @@ struct AgentPane: View {
                 .lineLimit(1...8)
                 .focused($focused)
                 .disabled(!agent.ready)
-                .onSubmit { agent.send(in: browser) }
+                // What the field shows is what goes (Fork/Voice/ComposerInsert.swift).
+                .onSubmit { ComposerInsert.syncDraft(in: Windows.window(of: browser)); agent.send(in: browser) }
                 // Return sends (the field's submit); ⇧Return is a new line,
                 // as in every chat (LineBreak).
                 .onChange(of: focused, initial: true) { _, on in

@@ -55,8 +55,6 @@ final class VoiceCapture: @unchecked Sendable {
 
     deinit { stop() }
 
-    var isRunning: Bool { lock.withLock { current != nil } }
-
     /// Opens the microphone. `onBlock` gets 16 kHz mono Float32 blocks of
     /// exactly 800 samples and `onStop` gets the reason capture ended, once,
     /// after the last block; both run on the private serial queue and must not
@@ -265,13 +263,6 @@ final class VoiceBlockMaker {
             pending.append(contentsOf: [Swift.Float](repeating: 0, count: Self.blockSize - pending.count % Self.blockSize))
         }
         return takeBlocks()
-    }
-
-    /// Forgets the converter and any partial block.
-    func reset() {
-        converter = nil
-        converterRate = 0
-        pending = []
     }
 
     private func takeBlocks() -> [[Swift.Float]] {

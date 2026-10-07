@@ -215,7 +215,8 @@
     ./bench voice status|result        what the engine has loaded; the last selftest/replay's answer
     ./bench voice dictate PATH [--trigger hold|toggle] [--finish insert|send] [--draft TEXT] [--caret N|--select A,B|--reopen]
                       [--type TEXT] [--cancel-at S] [--tap] [--fail-at S] [--speed X] [--agent busy|unready] [--cap S]
-                      [--undo] [--keys CHARS] [--warm-delay S [--start-cold]]
+                      [--undo] [--keys CHARS|--button] [--warm-delay S [--start-cold]] [--decode-fails]
+                      [--blur-at dictating|finishing]
                       [--permission denied|ask-grant|ask-deny [--release-during-prompt]]   (a stand-in; no prompt is shown)
                                        test world: one real dictation into the agent composer, the file standing in for
                                        the mic → state timeline, the words inserted, draft before/after, whether it sent
@@ -225,10 +226,12 @@
     ./bench voice warm cold [DELAY]|now   test world: the model let go (each load held DELAY s, as a first-time
                                        Neural Engine preparation), then loaded as the pane opening does
     ./bench voice seed idle|dictating|finishing|finishing-warming|denied|preparing|warming|downloading|failed|hint|inserted|off
-                                       the composer frozen in a dictation state, for pictures
-    ./bench voice render PATH [WIDTH] [dark]   the agent pane drawn off screen at WIDTH (340–620)
+                                       test world: the composer frozen in a dictation state, for pictures
+    ./bench voice render PATH [WIDTH] [dark] [settings]   test world: the agent pane drawn off screen at WIDTH (340–620),
+                                       or Settings › Voice at the panel's column width (409–699)
     ./bench voice prefs on|off|hold|toggle|insert|send · voice model status|install|cancel|remove · voice state
-    ./bench voice editor state|type TEXT|event|boundary|undo|redo   test world: the composer's field editor against the draft
+                                       prefs and model install/cancel/remove: test world only
+    ./bench voice editor state|type TEXT|event|boundary|undo|redo|resync   test world: the composer's field editor against the draft
     ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
     ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
     ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark] [CODE]|bookmark URL [TITLE]|pin URL|open URL

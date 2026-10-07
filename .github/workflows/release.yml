@@ -36,7 +36,8 @@ name: release
 # publish=false (a dry run) builds, signs, checks and launches the release
 # exactly the same way and keeps the zip as this run's artifact. No tag, no
 # GitHub release, no asset upload — so nothing the updater, the installer or the
-# tap reads changes — and no step in that path is given a token:
+# tap reads changes. Only "Create the GitHub release" is handed GH_TOKEN, and
+# checkout keeps no credentials, so no step in that path can write to the repo:
 #
 #   gh workflow run release.yml -R copper-browser/Copper --ref <branch> -f publish=false
 
@@ -328,7 +329,7 @@ jobs:
           ( cd "$OUT" && shasum -a 256 ./* )
 
       # Publish off: the signed zip, its sha256, the manifest and the dSYM stay
-      # with this run as an artifact. No token, no tag, no release.
+      # with this run as an artifact. No tag, no release, no repo token.
       - name: Keep the build as this run's artifact (dry run)
         if: steps.mode.outputs.publish != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

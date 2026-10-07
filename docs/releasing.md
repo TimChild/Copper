@@ -24,8 +24,9 @@ the Homebrew tap all read that release.
 **`publish=false`** is a dry run: everything up to and including the launch check, then the zip,
 its `.sha256`, `copper-version.json` and the dSYM are kept as the run's artifact (7 days) and
 nothing else happens — no tag, no GitHub release, no asset upload, nothing the updater,
-installer or tap reads. Only the *Create the GitHub release* step holds a token
-(`GH_TOKEN`), and it and *Verify the published bytes* run only when publish is exactly `true`.
+installer or tap reads. Only the *Create the GitHub release* step is handed a token
+(`GH_TOKEN`; checkout keeps no credentials), and it and *Verify the published bytes* run only
+when publish is exactly `true`.
 `ref` defaults to the branch the run was started from (`fork` from the Actions page).
 
 ## How a release is signed

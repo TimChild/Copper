@@ -66,17 +66,24 @@ enum FlowChromium {
 }
 
 extension Browser {
-    /// Same bookmark merge as the normal importer, but rooted at Flow's
-    /// selected copy when Login Data is absent from that copy.
-    @discardableResult
+    /// Same bookmark merge as the normal importer, rooted at Flow's selected
+    /// copy when there is one. The file is read, and the merge worked out,
+    /// off the main actor; only the swap of the top level happens here, so a
+    /// large bookmarks file doesn't stall the window. Answers with the read
+    /// itself and how many of its sites are new here, so the summary can
+    /// tell "none" from "couldn't read the file" from "already here".
     @MainActor
-    func takeBookmarks(from source: FlowSource) -> Int {
-        let found = FlowChromium.bookmarks(in: source)
-        bookmarks.take(found, from: source.name)
-        let count = Bookmarks.count(found.nodes)
+    func bringBookmarks(from source: FlowSource) async -> (read: FlowBookmarks.Read, new: Int) {
+        let before = bookmarks.roots
+        let (found, new) = await Task.detached(priority: .userInitiated) { () -> (FlowBookmarks.Read, Int) in
+            let found = FlowChromium.bookmarks(in: source)
+            return (found, FlowBookmarks.addresses(found.nodes).subtracting(FlowBookmarks.addresses(before)).count)
+        }.value
+        await FlowBookmarks.takeInBackground(found, from: source.name, into: bookmarks)
+        let count = FlowBookmarks.count(found.nodes)
         announce(count == 0 ? "No bookmarks in \(source.name)" : "\(count) bookmarks from \(source.name)")
-        guard source.rootOverride == nil else { return count }
-        let urls = Bookmarks.urls(found.nodes)
+        guard source.rootOverride == nil, count > 0 else { return (found, new) }
+        let urls = FlowBookmarks.urls(found.nodes)
         DispatchQueue.global(qos: .utility).async {
             let icons = Chromium.icons(in: source.readerSource, for: urls)
             Task { @MainActor in
@@ -84,6 +91,6 @@ extension Browser {
                 self.objectWillChange.send()
             }
         }
-        return count
+        return (found, new)
     }
 }

@@ -10,8 +10,15 @@ enum FlowChromeTabs {
 
     /// Profile directories are the children of Chromium's user-data root.
     static func profiles(of source: Chromium.Source) -> [String] {
+        profiles(at: source.root)
+    }
+
+    /// The profile folders (children with a Preferences file) under `root`.
+    /// Chrome's own names win the order: Default first, then Profile 1, 2…
+    /// compared as numbers (Profile 10 after Profile 9).
+    static func profiles(at root: URL) -> [String] {
         guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: source.root,
+            at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
@@ -25,9 +32,9 @@ enum FlowChromeTabs {
             return url.lastPathComponent
         }
         return names.sorted {
-            if $0 == "Default" { return true }
+            if $0 == "Default" { return $1 != "Default" }
             if $1 == "Default" { return false }
-            return $0 < $1
+            return $0.localizedStandardCompare($1) == .orderedAscending
         }
     }
 

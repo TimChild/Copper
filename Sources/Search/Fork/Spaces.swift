@@ -708,78 +708,159 @@ final class Spaces: ObservableObject {
         adopt(imported, in: browser, sourceName: "Chrome", sourceIsArc: false)
     }
 
+    /// The older form: moves in through the source's registry
+    /// (`flow.spaces.<source>`), so a second move fills rather than repeats.
     func adopt(_ imported: [FlowModel.Space], in browser: Browser, sourceName: String, sourceIsArc: Bool) -> (spaces: [UUID], tabs: Int, groups: Int) {
-        guard !imported.isEmpty else { return ([], 0, 0) }
+        let done = adopt(imported, in: browser, sourceName: sourceName, registry: FlowAdopt.registry(for: sourceName),
+                         brought: FlowAdopt.brought(for: sourceName))
+        FlowAdopt.keep(done.registry, for: sourceName)
+        FlowAdopt.keep(brought: FlowAdopt.merged(FlowAdopt.brought(for: sourceName), done), for: sourceName)
+        return (done.made, done.tabs, done.groups)
+    }
+
+    /// Moves imported spaces in, by `FlowAdopt.plan`: a space an earlier move
+    /// made (and the person kept) is filled with the tabs it doesn't have; a
+    /// new one — or one the person deleted — is made, named apart from any
+    /// space already called that with the source's name; a space with
+    /// nothing to open is not made. Every tab counts as seen at `movedAt`,
+    /// so Today doesn't sweep a fresh import away. What this run added is
+    /// returned, so Undo takes back only that.
+    func adopt(_ imported: [FlowModel.Space], in browser: Browser, sourceName: String,
+               registry: [String: UUID], brought: [String: Set<String>] = [:], movedAt: Date = Date()) -> FlowAdoption {
+        var result = FlowAdoption(registry: registry)
+        guard !imported.isEmpty else { return result }
         SessionGuard.beginRestore()
         defer { SessionGuard.finishRestore() }
-        var made: [UUID] = []
-        var tabCount = 0
-        var groupCount = 0
-        var names = Set(all.map { $0.name.lowercased() })
-        for incoming in imported {
-            var name = incoming.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if name.isEmpty { name = sourceName }
-            let original = name
-            if names.contains(name.lowercased()) {
-                let suffix = " (\(sourceIsArc ? "Arc" : "Chrome"))"
-                name = original + suffix
-                var n = 2
-                while names.contains(name.lowercased()) {
-                    name = "\(original)\(suffix) \(n)"
-                    n += 1
-                }
+        func address(_ tab: Tab) -> String? { (tab.pending ?? tab.address).map(FlowAdopt.address) }
+        let existing = all.map { space in
+            FlowAdopt.Existing(id: space.id, name: space.name, addresses: Set(row(space.id).compactMap(address)))
+        }
+        let steps = FlowAdopt.plan(imported, source: sourceName, registry: registry,
+                                   existing: existing, pinned: Set(pins.compactMap(address)), brought: brought)
+        var touched: [UUID] = []
+        for step in steps {
+            let incoming = imported[step.index]
+            result.skipped += step.skipped
+            var spaceID: UUID?
+            var filling = false
+            switch step.target {
+            case .fill(let id):
+                spaceID = id
+                filling = true
+            case .make(let name):
+                var space = Space(name: name, hue: incoming.theme?.hue ?? incoming.hue, profile: incoming.profile)
+                space.theme = incoming.theme
+                space.icon = incoming.icon
+                all.append(space)
+                rows[space.id] = []
+                spaceID = space.id
+                result.made.append(space.id)
+                result.fresh.insert(step.key)
+            case .none:
+                spaceID = nil
             }
-            names.insert(name.lowercased())
-            var space = Space(name: name, hue: incoming.theme?.hue ?? incoming.hue, profile: incoming.profile)
-            space.theme = incoming.theme
-            space.icon = incoming.icon
-            all.append(space)
-            made.append(space.id)
+            if let spaceID {
+                result.registry[step.key] = spaceID
+                if result.landing == nil { result.landing = spaceID }
+            }
+            let home = spaceID ?? current(in: browser)
+            let adding = (step.pins + step.loose).sorted()
+            guard !adding.isEmpty else { continue }
+            if filling, let spaceID { result.filled.append(spaceID) }
 
+            // Folders: all of a new space's (an empty one still stands, as
+            // in the browser); only those a new tab goes into when filling,
+            // reusing the space's own folder of that name.
             var groups: [UUID: TabGroup] = [:]
+            let wanted = Set(adding.compactMap { incoming.tabs[$0].group })
+            let own = filling ? row(home).compactMap { Groups.shared.group(of: $0) } : []
             for incomingGroup in incoming.groups {
+                if filling || spaceID == nil {
+                    guard wanted.contains(incomingGroup.id) else { continue }
+                    if let found = own.first(where: { $0.name == incomingGroup.name }) {
+                        groups[incomingGroup.id] = found
+                        continue
+                    }
+                }
                 // Always a folder of its own, under its own name: the nesting
                 // lives in the names and the tree is read per space, so two
                 // spaces' `Misc` stay apart without a suffix — and a suffix
                 // on `Misc` would cut `Misc › BuildrFi` loose from it.
                 let group = Groups.shared.adding(named: incomingGroup.name, hue: incomingGroup.hue)
                 Groups.shared.imported(group.id, collapsed: incomingGroup.collapsed,
-                                       space: incomingGroup.slot == nil ? nil : space.id, slot: incomingGroup.slot)
+                                       space: incomingGroup.slot == nil ? nil : home, slot: incomingGroup.slot)
                 groups[incomingGroup.id] = group
-                groupCount += 1
+                result.groups += 1
+                result.madeGroups.append(group.id)
             }
             var tabs: [Tab] = []
             var splits: [UUID: [Tab.ID]] = [:]
-            for incomingTab in incoming.tabs {
-                // A favourite joins the one set of pins. One whose address is
-                // already pinned — from Copper, or from another Arc space or
-                // window in this same import — is skipped before it is built.
-                if incomingTab.pinned, let key = pinKey(incomingTab.url), pins.contains(where: { pinKey($0) == key }) { continue }
-                let tab = building(for: space.id) { Tab() }
+            for index in adding {
+                let incomingTab = incoming.tabs[index]
+                let tab = building(for: home) { Tab() }
                 browser.prepare(tab)
                 tab.restore(url: incomingTab.url, title: incomingTab.title)
                 tab.pin = incomingTab.pinned ? (tab.monogram.isEmpty ? "•" : tab.monogram) : nil
-                Sections.shared.restore(tab, saved: incomingTab.saved || incomingTab.pinned, seen: incomingTab.seen)
+                Sections.shared.restore(tab, saved: incomingTab.saved || incomingTab.pinned,
+                                        seen: FlowAdopt.seen(incomingTab.seen, movedAt: movedAt))
                 if let groupID = incomingTab.group, let group = groups[groupID] {
                     Groups.shared.restore(tab, group: group.id)
                 }
                 if let token = incomingTab.split { splits[token, default: []].append(tab.id) }
                 if incomingTab.pinned {
                     pins.append(tab)
-                    pinHome[tab.id] = space.id
+                    pinHome[tab.id] = home
+                    result.pins += 1
+                    result.addedPins.append(tab.id)
+                    result.brought[FlowAdopt.pinsKey, default: []].insert(FlowAdopt.address(incomingTab.url))
                 } else {
                     tabs.append(tab)
+                    if filling { result.addedTabs.append(tab.id) }
+                    result.brought[step.key, default: []].insert(FlowAdopt.address(incomingTab.url))
                 }
-                tabCount += 1
+                result.tabs += 1
             }
             Split.shared.keep(splits)
-            rows[space.id] = tabs
+            if let spaceID {
+                rows[spaceID, default: []].append(contentsOf: tabs)
+                if filling { touched.append(spaceID) }
+            }
         }
         objectWillChange.send()
-        // The new spaces are nobody's current one, but new pins are in every
-        // space, so every window has them at once.
+        // New pins are in every space, and a filled space may be on screen:
+        // every window gets its projection again.
+        if result.pins > 0 || !touched.isEmpty { publishAll() }
+        return result
+    }
+
+    /// Takes back what one move added: the spaces it made (and their tabs),
+    /// the tabs it put into spaces that were already there, and its pins.
+    /// Anything the person had before the move stays.
+    func undo(_ adoption: FlowAdoption, in browser: Browser) {
+        for id in adoption.made where all.count > 1 { remove(id, in: browser) }
+        // Out of the rows and pins first and every window told, so none is
+        // left showing a tab as it closes; then they close.
+        let added = Set(adoption.addedTabs)
+        var leaving: [Tab] = []
+        for (id, row) in rows where row.contains(where: { added.contains($0.id) }) {
+            leaving += row.filter { added.contains($0.id) }
+            rows[id] = row.filter { !added.contains($0.id) }
+        }
+        let pinned = Set(adoption.addedPins)
+        leaving += pins.filter { pinned.contains($0.id) }
+        pins.removeAll { pinned.contains($0.id) }
+        for tab in leaving {
+            pinHome.removeValue(forKey: tab.id)
+            Sections.shared.forget(tab.id)
+        }
         publishAll()
-        return (made, tabCount, groupCount)
+        leaving.forEach { $0.close() }
+        for id in adoption.madeGroups where Groups.shared.group(id) != nil {
+            let left = rows.values.joined().contains { Groups.shared.membership[$0.id] == id }
+            if !left { Groups.shared.dissolve(id) }
+        }
+        objectWillChange.send()
+        keep()
     }
 
     /// Fold tabs written by the pre-shared-spaces windows.json format into

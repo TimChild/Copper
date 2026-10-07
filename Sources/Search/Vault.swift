@@ -236,7 +236,9 @@ enum Vault {
     /// A CSV as Google Password Manager, Chrome or Dia write it: name, url,
     /// username, password, note. Read once, put in the keychain, and the file
     /// is yours to delete — this never keeps a copy of it.
-    static func take(csv text: String) -> (kept: Int, skipped: Int) {
+    /// Fork (flow-files): `keep` stands in for the keychain — Move in's
+    /// test runs keep what a file brings in memory instead.
+    static func take(csv text: String, keep: ((String, String, String) -> Bool)? = nil) -> (kept: Int, skipped: Int) {
         var rows = parse(csv: text)
         guard !rows.isEmpty else { return (0, 0) }
 
@@ -261,7 +263,8 @@ enum Vault {
                 skipped += 1
                 continue
             }
-            save(host: host, user: row[userAt], password: password) ? (kept += 1) : (skipped += 1)
+            let saved = keep.map { $0(host, row[userAt], password) } ?? save(host: host, user: row[userAt], password: password)
+            saved ? (kept += 1) : (skipped += 1)
         }
         return (kept, skipped)
     }

@@ -114,6 +114,9 @@ enum FlowModel {
         /// Free-text notes for the report ("3 windows", "7 spaces, 283 tabs",
         /// "Arc Safe Storage refused").
         var notes: [String] = []
+        /// Why no spaces could be read at all, in the summary's words
+        /// ("couldn't read Chrome's open tabs"); nil when they were read.
+        var tabsTrouble: String? = nil
 
         var tabCount: Int { spaces.reduce(0) { $0 + $1.tabs.count } }
         var groupCount: Int { spaces.reduce(0) { $0 + $1.groups.count } }

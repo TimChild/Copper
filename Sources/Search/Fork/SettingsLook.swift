@@ -167,11 +167,36 @@ struct SettingsAnchor: ViewModifier {
     @Environment(\.settingsFlash) private var flash
     @Environment(\.accessibilityReduceMotion) private var still
 
+    /// The anchors that are whole cards. A card can be taller than the page
+    /// column, so search lands it by its top edge (`land`), never by a
+    /// point inside it that would push its title under the header.
+    @MainActor static var cards: Set<String> = []
+    /// How far under the page header a card's top edge lands: room for the
+    /// section title above it (`SettingsSection`, 8 pt over the card).
+    static let cardMargin: CGFloat = 36
+    /// The id of the mark just above a card's top edge.
+    nonisolated static func top(_ id: String) -> String { id + "#top" }
+
+    /// Scrolls the open page to `id`: a row a fifth of the way down (`spot`),
+    /// a card with its top edge just under the header, so its title shows.
+    @MainActor static func land(_ proxy: ScrollViewProxy, on id: String, spot: UnitPoint) {
+        if cards.contains(id) { proxy.scrollTo(top(id), anchor: .top) } else { proxy.scrollTo(id, anchor: spot) }
+    }
+
+    /// Whether a landing glides there: only in a window that is in view. A
+    /// parked (headless) or covered window gets none of the frames a glide
+    /// runs on, so search there would never land at all; it jumps instead.
+    @MainActor static var glides: Bool {
+        guard let window = Links.window else { return true }
+        return window.occlusionState.contains(.visible)
+    }
+
     func body(content: Content) -> some View {
         SettingsPerf.tick("anchor")
+        if card, !Self.cards.contains(id) { Self.cards.insert(id) }
         let lit = flash == id
         let radius: CGFloat = card ? 11 : 8
-        return content
+        let marked = content
             .overlay {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(Palette.ink.opacity(0.045))
@@ -186,6 +211,23 @@ struct SettingsAnchor: ViewModifier {
             }
             .id(id)
             .transformPreference(SettingsAnchorsKey.self) { $0.insert(id) }
+        return Group {
+            if card {
+                // A mark `cardMargin` tall just above the card, for `land`;
+                // the negative padding keeps the card where it was.
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear
+                        .frame(width: 1, height: Self.cardMargin)
+                        .id(Self.top(id))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    marked
+                }
+                .padding(.top, -Self.cardMargin)
+            } else {
+                marked
+            }
+        }
     }
 }
 

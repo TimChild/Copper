@@ -329,8 +329,12 @@ final class Extensions: NSObject, ObservableObject {
         panel.canChooseFiles = false
         panel.prompt = "Load Extension"
         panel.message = "Choose the folder that holds the extension's manifest.json."
-        guard panel.runModal() == .OK, let source = panel.url else { return }
-        installFolder(at: source)
+        // Fork (settings-browse): a sheet on the window, not a modal that
+        // froze every window until it was answered.
+        SettingsPanels.present(panel, on: browser.flatMap(Windows.window(of:)) ?? Links.window) { [weak self] source in
+            guard let source else { return }
+            self?.installFolder(at: source)
+        }
     }
 
     func installFolder(at source: URL, confirm: Bool = true) {

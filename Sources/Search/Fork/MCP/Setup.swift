@@ -39,7 +39,20 @@ struct Setup {
     private static let marker = "<!-- copper-setup v1 -->"
     private static let fileManager = FileManager.default
 
+    /// A test run never writes the real agents' configuration: it would point
+    /// them at a probe's port and token (Store's rule, for the files of the
+    /// tools beside it). Its home is SEARCH_SETUP_HOME when given, else a
+    /// folder inside the test world; the CLI goes in that home's bin.
+    static var testHome: URL? {
+        guard Store.testing else { return nil }
+        if let raw = ProcessInfo.processInfo.environment["SEARCH_SETUP_HOME"], !raw.isEmpty {
+            return URL(fileURLWithPath: raw).standardizedFileURL
+        }
+        return Store.file("setup-home")
+    }
+
     private static var home: URL {
+        if let testHome { return testHome }
         if let raw = ProcessInfo.processInfo.environment["HOME"], !raw.isEmpty {
             return URL(fileURLWithPath: raw).standardizedFileURL
         }
@@ -221,7 +234,7 @@ struct Setup {
     }
 
     private static func chosenCLIDirectory() throws -> URL {
-        for directory in cliDirectories where writableDirectory(directory) { return directory }
+        for directory in cliDirectories where testHome == nil && writableDirectory(directory) { return directory }
         let fallback = cliFallbackDirectory
         do {
             try fileManager.createDirectory(at: fallback, withIntermediateDirectories: true,
@@ -328,7 +341,7 @@ struct Setup {
 
     private static func cliState() -> State {
         let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/bin/copper")
-        for directory in cliDirectories + [cliFallbackDirectory] {
+        for directory in (testHome == nil ? cliDirectories : []) + [cliFallbackDirectory] {
             let link = directory.appendingPathComponent(cliName)
             guard fileManager.fileExists(atPath: link.path) || (try? fileManager.attributesOfItem(atPath: link.path)) != nil else { continue }
             guard (try? fileManager.attributesOfItem(atPath: link.path))?[.type] as? FileAttributeType == .typeSymbolicLink,

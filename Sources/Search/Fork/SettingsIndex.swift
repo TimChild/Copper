@@ -92,7 +92,7 @@ extension SettingsPanel.Page {
         case .passwords: return ["pw", "pwd", "logins", "keychain", "autofill", "credentials", "password manager"]
         case .downloads: return ["files", "download folder"]
         case .privacy: return ["security", "tracking", "data", "clear"]
-        case .labs: return ["experiments", "flights", "beta", "preview"]
+        case .labs: return ["experiments", "experimental", "flights", "beta", "beta features", "preview", "previews", "labs"]
         case .about: return ["version", "credits", "help", "shortcuts"]
         }
     }
@@ -146,8 +146,8 @@ enum SettingsIndex {
           toggle: pref(\.autocorrect)),
         e(.general, "Moving in", "Move in from another browser", "Open tabs, spaces, bookmarks and signed-in state from Chrome or Arc",
           ["import", "flow", "chrome", "arc", "migrate", "switch browsers", "bookmarks import", "transfer"], "general.flow"),
-        e(.general, "Moving in", "Arc history", "Typed addresses complete from Arc or Chrome history",
-          ["import history", "chrome history", "browsing history", "autocomplete", "address completion"], "general.history"),
+        e(.general, "Moving in", "Browsing history", "Typed addresses complete from Arc or Chrome history",
+          ["import history", "arc history", "chrome history", "browsing history", "autocomplete", "address completion"], "general.history"),
         e(.general, "Developer", "Let a script drive Copper", "A local socket for testing — see ./bench",
           ["bench", "automation", "socket", "testing", "script", "developer", "debug"], "general.bench",
           toggle: pref(\.bench)),
@@ -163,7 +163,7 @@ enum SettingsIndex {
           ["favicons", "icons", "letters", "glyph", "tab icons"], "tabs.glyph"),
         e(.tabs, "Switching", "⌃Tab switches to", "Whether Control-Tab follows the row or your most recent tabs",
           ["control tab", "ctrl tab", "mru", "most recent", "recent tabs", "cycle tabs", "tab switching", "switch tabs"], "tabs.switching"),
-        e(.tabs, "Switching", "Swipe between spaces", "Two fingers across the tabs: natural, inverted, or like scrolling",
+        e(.tabs, "Switching", "Swipe between spaces", "Two fingers across the sidebar: natural, inverted, or like scrolling",
           ["trackpad", "gesture", "swipe", "natural scrolling", "inverted", "two fingers", "direction"], "tabs.swipe"),
         e(.tabs, "Tabs you leave", "Sleep tabs you aren't using", "After half an hour away they come back where you left them",
           ["memory", "suspend", "discard", "energy", "battery", "idle", "performance", "hibernate"], "tabs.sleep",
@@ -196,21 +196,22 @@ enum SettingsIndex {
     // MARK: intelligence
 
     private static let intelligence: [SettingsEntry] = [
-        e(.intelligence, "Model access", "Use", "Your Claude account, or a key for an OpenAI-compatible gateway such as LiteLLM",
-          ["claude account", "api key", "gateway", "litellm", "provider", "openai", "lane"], "intelligence.lane"),
+        e(.intelligence, "Model access", "Use", "Your Claude account, or an API key for a model gateway",
+          ["claude account", "api key", "gateway", "litellm", "provider", "openai", "lane", "model provider", "where the model comes from", "change provider"], "intelligence.lane"),
         e(.intelligence, "Model access", "Claude account", "Sign in with Claude Pro, Max, Team or Enterprise",
-          ["sign in", "anthropic", "pro", "max", "subscription", "claude.ai", "login"], "intelligence.account", fallback: "intelligence.lane"),
-        e(.intelligence, "Model access", "API key", "For an OpenAI-compatible gateway — LiteLLM, or anything that speaks /v1/chat/completions",
-          ["gateway key", "sk", "token", "openai compatible", "router key"], "intelligence.key", fallback: "intelligence.lane"),
+          ["sign in", "sign out", "anthropic", "pro", "max", "subscription", "claude.ai", "login", "logout", "oauth", "claude sign in"], "intelligence.account", fallback: "intelligence.lane"),
+        e(.intelligence, "Model access", "API key", "From your gateway — anything that speaks /v1/chat/completions",
+          ["gateway key", "sk", "token", "openai compatible", "router key", "paste key", "model key"], "intelligence.key", fallback: "intelligence.lane"),
         e(.intelligence, "Model access", "Gateway address", "Where the gateway lives",
           ["url", "base url", "endpoint", "litellm", "router url", "server"], "intelligence.gateway", fallback: "intelligence.lane"),
         e(.intelligence, "Model access", "Model", "Haiku, Sonnet or Opus — fast, balanced or most capable",
-          ["haiku", "sonnet", "opus", "model size", "tier", "which model"], "intelligence.tier"),
-        e(.intelligence, "Model access", "Model names", "What Haiku, Sonnet and Opus are called at Anthropic or on your gateway",
-          ["model id", "alias", "model mapping", "custom model"], "intelligence.names"),
-        e(.intelligence, "Model access", "Check", "One question each way, so you know before a tab does",
-          ["test", "test connection", "ping", "verify", "diagnose"], "intelligence.check"),
-        e(.intelligence, "Jev — the fast lane", "Jev", "TypeSafe's System One: typed questions answered in a fifth of a second",
+          ["haiku", "sonnet", "opus", "model size", "tier", "which model", "change model", "switch model", "smarter model", "smarter",
+           "faster model", "faster", "cheaper model", "cheaper", "better model"], "intelligence.tier"),
+        e(.intelligence, "Model access", "Model names", "What Haiku, Sonnet and Opus are called for your Claude account or on your gateway",
+          ["model id", "alias", "model mapping", "custom model", "rename model"], "intelligence.names"),
+        e(.intelligence, "Model access", "Check", "Asks Jev and the model one small question each, so you know they answer",
+          ["test", "test key", "test connection", "ping", "verify", "diagnose", "is my key working", "key not working", "check key"], "intelligence.check"),
+        e(.intelligence, "Jev — the fast lane", "Jev", "Picks between choices in about a fifth of a second, for agents' quick decisions",
           ["jev key", "typesafe", "ts key", "system one", "fast lane"], "intelligence.jev"),
     ]
 
@@ -230,21 +231,22 @@ enum SettingsIndex {
     }
 
     private static let agents: [SettingsEntry] = [
-        e(.agents, "MCP server", "Let agents drive this window", "An MCP server on this Mac only — Claude Code, phi, Cursor and the rest act in your tabs",
-          ["mcp", "mcp server", "automation", "playwright", "claude code", "cursor", "phi", "proxy", "bot", "remote control"], "agents.server",
+        e(.agents, "MCP server", "Let agents drive this window", "An MCP server on this Mac only — agents in your terminal or editor act in your tabs",
+          ["mcp", "mcp server", "automation", "playwright", "claude code", "cursor", "phi", "proxy", "bot", "remote control", "enable", "disable", "agent access",
+           "mcp off", "mcp on", "turn off mcp", "turn off agents", "stop agents", "agents off"], "agents.server",
           toggle: mcpEnabled),
         e(.agents, "MCP server", "Status", "Whether the server is listening, and where",
           ["listening", "running", "endpoint", "localhost", "127.0.0.1"], "agents.status"),
         e(.agents, "MCP server", "Say what the agent does", "Each tool call, in the line at the bottom of the window",
           ["announce", "narrate", "status line", "notifications"], "agents.announce", toggle: mcpAnnounces),
-        e(.agents, "MCP server", "Port", "Change it if something else has the port",
+        e(.agents, "MCP server", "Port", "Change it if another app already uses the port",
           ["port number", "4123", "listen port"], "agents.port"),
-        e(.agents, "Jev mode", "Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract — browser-use's ultrafast loop",
+        e(.agents, "Jev mode", "Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract: Jev drives this window towards a goal",
           ["jev", "ultrafast", "jev_run", "browser-use", "goal", "fast mode"], "agents.jev", toggle: mcpJev),
-        e(.agents, "Jev mode", "Jev key", "A TypeSafe key, shared with Settings › Intelligence",
+        e(.agents, "Jev mode", "Jev key", "A Jev key, shared with Settings › Intelligence",
           ["typesafe", "ts key"], "agents.jevkey", fallback: "agents.jev"),
         e(.agents, "Jev mode", "Text model", "Writes what gets typed and answers jev_extract",
-          ["type text", "extract model", "small model"], "agents.textmodel", fallback: "agents.jev"),
+          ["type text", "extract model", "small model", "typing model"], "agents.textmodel", fallback: "agents.jev"),
         e(.agents, "Your agents", "Connect an agents app", "Linked agent apps get these tools for the bots you grant",
           ["agent link", "linked app", "bots", "grant", "personal token", "remote", "agents app"], "agents.links"),
         e(.agents, "Your agents", "Add an agents app", "Paste its address and a personal token",
@@ -252,25 +254,25 @@ enum SettingsIndex {
         e(.agents, "The agent in the window", "Page in front of every question", "The current tab's address, title and text go with each question in the agent pane (⌘E)",
           ["context", "ask on page", "agent pane", "cmd e", "page text"], "agents.context", toggle: pageContext),
         e(.agents, "The agent in the window", "Tool-call rounds per question", "How many times the agent may use its tools before it stops and asks",
-          ["max turns", "turns", "rounds", "tool calls", "limit", "budget", "stopped after", "steps"], "agents.turns"),
+          ["max turns", "turns", "rounds", "tool calls", "limit", "budget", "stopped after", "steps", "max steps", "iterations"], "agents.turns"),
         e(.agents, "The agent in the window", "Your other MCP servers", "mcp.json servers — http with headers, or a command to run",
           ["mcp.json", "servers", "tools", "stdio", "mcp client"], "agents.servers"),
-        e(.agents, "Terminal agents", "phi", "User-scoped ~/.pi/agent/mcp.json and /jev prompt",
-          ["pi", "set up phi", "terminal", "setup"], "agents.phi"),
-        e(.agents, "Terminal agents", "Claude Code", "User-scoped ~/.claude.json and /jev command",
-          ["claude code", "set up claude", "terminal", "cli"], "agents.claude"),
-        e(.agents, "Terminal agents", "copper CLI", "The bundled copper command in your PATH",
+        e(.agents, "Terminal agents", "phi", "Adds Copper to phi (~/.pi/agent/mcp.json) and a /jev prompt",
+          ["pi", "set up phi", "terminal", "setup", "connect phi"], "agents.phi"),
+        e(.agents, "Terminal agents", "Claude Code", "Adds Copper to Claude Code for your user (~/.claude.json) and a /jev command",
+          ["claude code", "set up claude", "terminal", "cli", "connect claude code"], "agents.claude"),
+        e(.agents, "Terminal agents", "copper CLI", "Puts the copper command in your PATH",
           ["command line", "install cli", "shell", "path", "terminal"], "agents.cli"),
         e(.agents, "Terminal agents", "Copy /jev", "A goal-first command for the agent in your terminal",
           ["slash command", "jev command"], "agents.copyjev"),
-        e(.agents, "Terminal agents", "Copy prompt", "Instructions for this mode, for any agent",
+        e(.agents, "Terminal agents", "Copy prompt", "How to use Copper, for any agent — with the address and token",
           ["system prompt", "instructions", "agent prompt"], "agents.prompt"),
-        e(.agents, "Terminal agents", "Copy config", "The current HTTP config for a client that is not set up yet",
+        e(.agents, "Terminal agents", "Copy config", "The MCP server's JSON, for a client set up by hand",
           ["json config", "client config", "http config"], "agents.config"),
-        e(.agents, "Terminal agents", "Copy install command", "The one-liner for the Copper CLI",
+        e(.agents, "Terminal agents", "Copy install command", "The one line that installs the copper CLI on another Mac",
           ["install", "brew", "homebrew", "curl"], "agents.install"),
-        e(.agents, "The key", "Bearer token", "Every request must carry it. Rotate it and every client's config goes stale",
-          ["token", "secret", "rotate", "auth", "authentication", "api key"], "agents.token"),
+        e(.agents, "The key", "Bearer token", "Every request must carry it. A new token stops every client that has the old one",
+          ["token", "secret", "rotate", "rotate token", "new token", "reset token", "auth", "authentication", "api key", "mcp token"], "agents.token"),
     ]
 
     // MARK: voice
@@ -315,7 +317,7 @@ enum SettingsIndex {
         e(.cloud, "Connect", "Connect to an instance", "Paste a link code or a pairing code from another Mac",
           ["link code", "pairing code", "server", "instance", "self-hosted", "address", "certificate"], "cloud.connect", fallback: "cloud.steps"),
         e(.cloud, "Account", "Your account on this instance", "Sign in, or create the account",
-          ["sign in", "sign up", "email", "password", "create account", "login"], "cloud.signin", fallback: "cloud.steps"),
+          ["sign in", "sign up", "email", "password", "create account", "login", "copper cloud sign in", "cloud sign in", "cloud login", "cloud account"], "cloud.signin", fallback: "cloud.steps"),
         e(.cloud, "Sync", "Browser sync", "Spaces, settings, bookmarks, open tabs and history — each on its own switch",
           ["sync", "turn on sync", "spaces sync", "bookmarks sync", "history sync", "settings sync", "tabs sync", "pause sync", "sync now"], "cloud.sync", fallback: "cloud.steps"),
         e(.cloud, "Sync", "Personal canvas", "Your Personal canvas follows you between Macs",
@@ -339,8 +341,10 @@ enum SettingsIndex {
           ["check now", "version", "latest", "new version", "upgrade", "release"], "updates.check"),
         e(.updates, "Updates", "Install the update", "Downloads, verifies, backs up your tabs and relaunches",
           ["update", "relaunch", "install update", "download update", "restart"], "updates.install", fallback: "updates.check"),
+        e(.updates, "Updates", "What's new", "What the newer Copper brings, before you update",
+          ["release notes", "changelog", "what's new", "whats new", "notes", "new features"], "updates.notes", fallback: "updates.check"),
         e(.updates, "Updates", "Where updates come from", "The feed, and whether Homebrew manages this copy",
-          ["feed", "homebrew", "brew", "source", "last checked"], "updates.source"),
+          ["feed", "homebrew", "brew", "source", "last checked", "update channel", "channel", "release channel", "nightly"], "updates.source"),
     ]
 
     // MARK: extensions
@@ -369,10 +373,10 @@ enum SettingsIndex {
           ["credit card", "address", "identity", "checkout", "autofill forms", "payment"], "passwords.everything", toggle: pref(\.fillsEverything)),
         e(.passwords, "Saved passwords", "Offer passkeys", "Touch ID to sign in on sites that offer a passkey",
           ["passkey", "webauthn", "fido", "touch id", "passwordless"], "passwords.passkeys", toggle: pref(\.passkeys)),
-        e(.passwords, "Saved passwords", "Sites never asked", "Sites told to stop offering to save",
-          ["never save", "exceptions", "blocked sites", "forget"], "passwords.never", fallback: "passwords.save"),
+        e(.passwords, "Saved passwords", "Sites never asked", "Each site told to stop offering to save, with its own Forget",
+          ["never save", "never ask", "exceptions", "blocked sites", "forget", "let a site ask again"], "passwords.never", fallback: "passwords.save"),
         e(.passwords, "Password managers", "Bitwarden", "Connect an existing Bitwarden or Vaultwarden vault",
-          ["bitwarden", "bw", "vault", "vaultwarden", "password manager", "unlock", "master password", "sync vault", "lock"], "bitwarden"),
+          ["bitwarden", "bw", "vault", "vaultwarden", "password manager", "unlock", "master password", "sync vault", "lock", "sign out bitwarden", "log out", "switch account"], "bitwarden"),
         e(.passwords, "Password managers", "Bitwarden server", "bitwarden.com, EU, or a self-hosted Vaultwarden server",
           ["self-hosted", "vaultwarden", "eu server", "server url"], "bitwarden.server", fallback: "bitwarden"),
         e(.passwords, "Password managers", "Save new passwords to", "Keychain, Bitwarden or 1Password — where a password saved from a page goes",
@@ -409,8 +413,12 @@ enum SettingsIndex {
           ["agents", "ai", "automation", "share logins", "bot sign in", "agent access"], "passwords.agents"),
         e(.passwords, "Agent access", "Accounts, identities and cards agents may use", "Allow each saved account, Bitwarden or 1Password identity or card on its own",
           ["allow agent", "per account", "identities", "cards", "agent permissions"], "passwords.agents"),
-        e(.passwords, "Import", "Bring yours in", "From Dia, Chrome, Arc, Brave or Edge on this Mac — nothing leaves it",
+        e(.passwords, "Import and export", "Bring yours in", "From Dia, Chrome, Arc, Brave or Edge on this Mac — nothing leaves it",
           ["import passwords", "chrome", "arc", "brave", "edge", "dia", "migrate", "transfer passwords"], "passwords.import"),
+        e(.passwords, "Import and export", "From a CSV file", "A passwords export from Chrome, Safari, Apple Passwords or a password manager",
+          ["csv", "import csv", "apple passwords", "icloud keychain", "safari passwords", "chrome passwords", "password manager export", "import file"], "passwords.csv"),
+        e(.passwords, "Import and export", "Export to a CSV file", "Every password Copper keeps, after Touch ID",
+          ["export passwords", "export csv", "backup passwords", "download passwords", "save passwords to file"], "passwords.export"),
         e(.passwords, "Passkeys", "Copper passkeys", "The passkeys Copper keeps, and forgetting one",
           ["passkeys", "forget passkey", "webauthn credentials"], "passwords.passkeylist"),
     ]
@@ -421,14 +429,15 @@ enum SettingsIndex {
         e(.downloads, "Downloads", "Save to", "The folder downloads go to",
           ["downloads folder", "download location", "directory", "path", "save location", "destination"], "downloads.folder"),
         e(.downloads, "Downloads", "Ask where to save each file", "A save panel for every download",
-          ["save as", "prompt", "choose location", "ask"], "downloads.ask", toggle: pref(\.asksWhereToSave)),
+          ["save as", "prompt", "choose location", "ask", "ask before download", "confirm download", "save dialog"],
+          "downloads.ask", toggle: pref(\.asksWhereToSave)),
     ]
 
     // MARK: privacy
 
     private static let privacy: [SettingsEntry] = [
         e(.privacy, "Blocking", "Block ads and trackers", "Third parties whose only job is to watch",
-          ["adblock", "ad blocker", "ads", "trackers", "tracking", "privacy shield", "shield", "content blocker", "ublock"], "privacy.shield",
+          ["adblock", "ad blocker", "ads", "trackers", "tracking", "privacy shield", "shield", "content blocker", "ublock", "tracking protection", "anti-tracking", "privacy protection", "block tracking"], "privacy.shield",
           toggle: pref(\.shielded)),
         e(.privacy, "Blocking", "Block on this site", "Turn off on a site that breaks — the page reloads",
           ["pause blocking", "allow site", "allowlist", "whitelist", "broken site", "exception"], "privacy.site", fallback: "privacy.shield"),
@@ -436,8 +445,8 @@ enum SettingsIndex {
           ["permissions", "webcam", "mic", "site permissions", "forget choices"], "privacy.capture"),
         e(.privacy, "Clear browsing data", "History", "Every address you have been to",
           ["clear history", "delete history", "browsing data", "erase"], "privacy.history"),
-        e(.privacy, "Clear browsing data", "Cookies and sign-ins", "Signs you out of every site",
-          ["clear cookies", "sign out everywhere", "site data", "storage", "local storage"], "privacy.cookies"),
+        e(.privacy, "Clear browsing data", "Cookies and sign-ins", "Signs you out of every site, in every space",
+          ["clear cookies", "sign out everywhere", "sign out of everything", "sign out of every site", "log out everywhere", "log out of everything", "site data", "storage", "local storage"], "privacy.cookies"),
         e(.privacy, "Clear browsing data", "Cache", "Only what was fetched to draw pages",
           ["clear cache", "cached files", "empty cache"], "privacy.cache"),
     ]
@@ -445,11 +454,16 @@ enum SettingsIndex {
     // MARK: labs
 
     private static let labs: [SettingsEntry] = [
-        e(.labs, "Flights", "Trails", "Organise tabs by what you were doing — a search or an address, and every page opened from it",
-          ["trails", "flights", "experiments", "preview", "beta", "organise tabs", "organize tabs", "intent", "grouping"], "labs.trails",
-          toggle: { _ in Binding(get: { Flights.shared.trails }, set: { Flights.shared.trails = $0 }) }),
-        e(.labs, "Flights", "Tide", "Trails left alone this long drift under Earlier, quieter",
-          ["drift", "earlier", "fade", "age", "timeout"], "labs.tide"),
+        e(.labs, "Previews", "Trails", "Tabs by what you were doing, shown in the sidebar — a search or an address, and every page opened from it",
+          ["trails", "flights", "experiments", "preview", "beta", "organise tabs", "organize tabs", "intent", "grouping",
+           "trails off", "trails on", "turn off trails", "sidebar trails"], "labs.trails",
+          // Trails are drawn only in the sidebar: from search, as on the
+          // page, they can be turned off anywhere but on only there.
+          toggle: { browser in Binding(get: { Flights.shared.trails }, set: { on in
+              if !on || browser.prefs.sidebar { Flights.shared.trails = on }
+          }) }),
+        e(.labs, "Previews", "Tide", "Trails left alone this long drift under Earlier, quieter",
+          ["drift", "earlier", "fade", "age", "timeout", "how long", "trails fade", "how long until trails fade", "older trails"], "labs.tide"),
     ]
 
     // MARK: about
@@ -457,10 +471,10 @@ enum SettingsIndex {
     private static let about: [SettingsEntry] = [
         e(.about, "Copper", "Copper", "Version, build, and who made it",
           ["version", "build", "credits", "collin", "felipe", "search", "office commun"], "about.identity"),
-        e(.about, "Version", "Updates", "Checked once a day on its own",
-          ["check for updates", "update", "latest version"], "about.version"),
-        e(.about, "Version", "Send Feedback", "Opens a draft with the version already in it",
-          ["feedback", "bug", "report a problem", "issue", "contact", "support"], "about.feedback"),
+        e(.about, "Version", "Updates", "Whether a newer Copper is out — Copper looks every six hours on its own",
+          ["check for updates", "update", "latest version", "check now"], "about.version"),
+        e(.about, "Version", "Send Feedback", "Opens a new issue on Copper’s page, with the version already in it",
+          ["feedback", "bug", "report a problem", "issue", "file an issue", "new issue", "contact", "support"], "about.feedback"),
         // Drawn only after a crash; until then search lands on Send Feedback.
         e(.about, "Diagnostics", "Last crash", "When Copper last quit unexpectedly, and what it was",
           ["crash", "crashed", "crash report", "quit unexpectedly", "diagnostics", "logs", "breadcrumbs"],
@@ -488,6 +502,14 @@ enum SettingsShortcuts {
         .init(keys: "⌘L", does: "Address", words: ["location", "url bar", "omnibox"]),
         .init(keys: "⌘K", does: "Switch tab", words: ["command bar", "tab search", "palette"]),
         .init(keys: "⌘T  ⌘W  ⇧⌘T", does: "New, close, reopen tab", words: ["new tab", "close tab", "reopen closed tab"]),
+        .init(keys: "⌘N  ⇧⌘N", does: "New window, new private tab", words: ["new window", "private tab", "private browsing"]),
+        .init(keys: "⌃⇧E", does: "New canvas", words: ["whiteboard", "new board"]),
+        .init(keys: "⌘D", does: "Duplicate tab", words: ["duplicate", "copy tab"]),
+        .init(keys: "⇧⌘C", does: "Copy the address", words: ["copy url", "copy link"]),
+        .init(keys: "⇧⌘K", does: "Clear tabs", words: ["close tabs", "clean up tabs"]),
+        .init(keys: "⇧⌘B", does: "Bookmark this page", words: ["add bookmark"]),
+        .init(keys: "⌘Y", does: "History", words: ["show history"]),
+        .init(keys: "⇧⌘J", does: "Downloads", words: ["show downloads"]),
         .init(keys: "⇧⌘S", does: "Tabs in a sidebar", words: ["toggle sidebar", "vertical tabs"]),
         .init(keys: "⌘S", does: "Fold the sidebar away", words: ["hide sidebar", "collapse"]),
         .init(keys: "⌥⌘R", does: "Reading mode", words: ["reader", "reader mode"]),

@@ -28,9 +28,9 @@ struct VoicePage: View {
                         }
                     ))
                     .opacity(VoicePrefs.supported ? 1 : 0.4)
-                    .allowsHitTesting(VoicePrefs.supported)
-                    .accessibilityLabel("Voice")
-                    .accessibilityValue(prefs.enabled ? "On" : "Off")
+                    // Out of reach for the pointer, Tab and VoiceOver alike;
+                    // the switch takes its name and value from this `Line`.
+                    .disabled(!VoicePrefs.supported)
                 }
                 .settingsAnchor("voice.enabled")
                 // Shown while voice is on, and while a model (or part of one)
@@ -58,9 +58,7 @@ struct VoicePage: View {
 
             SettingsSection("Listen") {
                 Line("Let agents on this Mac read the Listen transcript", shareDetail) {
-                    Switch(on: $prefs.shareTranscript)
-                        .accessibilityLabel("Let agents on this Mac read the Listen transcript")
-                        .accessibilityValue(prefs.shareTranscript ? "On" : "Off")
+                    Switch(on: $prefs.shareTranscript) // named by its `Line`, like the Voice switch
                 }
                 .modifier(VoiceDimmed(on: live))
                 .settingsAnchor("voice.shareTranscript")
@@ -222,21 +220,28 @@ private struct VoiceModelRow: View {
 
     @ViewBuilder
     private var control: some View {
+        // Each pill says what it acts on, for VoiceOver, since the row's
+        // title sits beside it rather than above it as in a `Line`.
         if !voiceOn {
             Pill("Remove") { store.remove() }
+                .accessibilityLabel("Remove the speech model")
         } else {
             switch store.state {
             case .absent:
                 Pill(store.partialBytes > 0 ? "Resume" : "Download") { store.install() }
+                    .accessibilityLabel(store.partialBytes > 0 ? "Resume the speech model download" : "Download the speech model")
             case .downloading:
                 Pill("Cancel") { store.cancel() }
+                    .accessibilityLabel("Cancel the speech model download")
             case .verifying, .compiling, .preparing:
                 Ring(size: 12)
                     .accessibilityLabel("Preparing")
             case .ready:
                 Pill("Remove") { store.remove() }
+                    .accessibilityLabel("Remove the speech model")
             case .failed:
                 Pill("Try again") { store.install() }
+                    .accessibilityLabel("Try the speech model download again")
             }
         }
     }

@@ -250,17 +250,37 @@ struct ExtensionsSettings: View {
         return parts.joined(separator: " · ")
     }
 
-    /// The filter, and the two ways to get more.
+    /// The filter, and the two ways to get more. The filter only once
+    /// there is something to filter; beside the two ways in when the page
+    /// has the width, over them when it hasn't — squeezed, its prompt broke
+    /// onto three lines.
+    @ViewBuilder
     private var tools: some View {
-        HStack(spacing: 8) {
-            Hunt(text: $manager.query, prompt: "Search extensions", focus: $hunting)
-            Pill("Chrome Web Store") {
-                manager.close()
-                browser.open(Browser.webStore, foreground: true)
+        if extensions.installed.isEmpty {
+            HStack(spacing: 8) { ways }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Hunt(text: $manager.query, prompt: "Search extensions", focus: $hunting)
+                        .frame(minWidth: 180)
+                    ways
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Hunt(text: $manager.query, prompt: "Search extensions", focus: $hunting)
+                    HStack(spacing: 8) { ways }
+                }
             }
-            Pill("Load Unpacked…") {
-                DispatchQueue.main.async { extensions.installFolder() }
-            }
+        }
+    }
+
+    @ViewBuilder
+    private var ways: some View {
+        Pill("Chrome Web Store") {
+            manager.close()
+            browser.open(Browser.webStore, foreground: true)
+        }
+        Pill("Load Unpacked…") {
+            DispatchQueue.main.async { extensions.installFolder() }
         }
     }
 
@@ -269,7 +289,7 @@ struct ExtensionsSettings: View {
             let rows = shown
             if extensions.installed.isEmpty {
                 Card {
-                    Line("No extensions yet", "Add one from the Chrome Web Store — press Add to \(Fork.name) on its page — or load a folder with a manifest.json.") { EmptyView() }
+                    Line("Add your first extension", "Find one in the Chrome Web Store and press Add to \(Fork.name) on its page, paste its link below, or load a folder with a manifest.json.") { EmptyView() }
                 }
             } else if rows.isEmpty {
                 Card { Nothing("Nothing matches “\(manager.query)”.") }
@@ -294,11 +314,12 @@ struct ExtensionsSettings: View {
                         .textFieldStyle(.plain)
                         .foregroundStyle(Palette.ink)
                         .onSubmit(add)
+                        .accessibilityLabel("Chrome Web Store link or id")
                 }
                 .font(.system(size: 12.5))
                 .padding(.horizontal, 10)
                 .frame(height: 28)
-                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .settingsField(radius: 8) // SB-04: the ink edge while the keyboard is in it
                 if extensions.busy != nil {
                     Ring(size: 12)
                 } else {
@@ -361,16 +382,18 @@ private struct ExtensionCardRow: View {
         HStack(alignment: .top, spacing: 12) {
             icon
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(item.name)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(item.enabled ? Palette.ink : Palette.muted)
-                        .lineLimit(1)
-                    Text(found?.displayVersion ?? item.version)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.muted)
-                    if !item.fromStore { ExtensionTag("Unpacked") }
-                    if !problems.isEmpty { ExtensionTag("\(problems.count) error\(problems.count == 1 ? "" : "s")", warn: true) }
+                // The name, then its version and tags beside it — or under it
+                // when the card is narrow, where they left the name a word
+                // and an ellipsis.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        name.lineLimit(1)
+                        badges
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        name.lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 6) { badges }
+                    }
                 }
                 // On one line of prose: some carry a build note after a
                 // blank line (React's does), which would take the second line.
@@ -379,19 +402,23 @@ private struct ExtensionCardRow: View {
                     .foregroundStyle(Palette.muted)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
+                // Each pill one line, and onto a second line when the card is
+                // narrow: in one fixed row they ran past Settings' narrowest
+                // page and pushed the switch off its edge.
+                SettingsFlow(spacing: 6) {
                     Quick(open ? "Hide Details" : "Details") {
                         withAnimation(Motion.settle) { manager.expanded = open ? nil : item.id }
                     }
+                    .accessibilityLabel(open ? "Hide details of \(item.name)" : "Details of \(item.name)")
                     if context?.optionsPageURL != nil {
                         Quick("Options") { manager.close(); extensions.openOptions(item.id) }
+                            .accessibilityLabel("Options of \(item.name)")
                     }
                     Quick("Reload") { extensions.reload(item.id) }
+                        .accessibilityLabel("Reload \(item.name)")
                     Quick("Remove", tint: .red.opacity(0.8)) { ExtensionRemoval.ask(item.id, name: item.name, icon: found?.icon(for: CGSize(width: 64, height: 64))) }
+                        .accessibilityLabel("Remove \(item.name)")
                 }
-                // Each pill one line: Settings' page is narrower than the
-                // card this row was drawn for.
-                .fixedSize()
                 .padding(.top, 2)
             }
             Spacer(minLength: 8)
@@ -399,7 +426,7 @@ private struct ExtensionCardRow: View {
                 ExtensionPin(on: item.pinned == true, usable: context?.action(for: extensions.activeAdapter) != nil) {
                     extensions.setPinned(item.id, item.pinned != true)
                 }
-                Switch(on: Binding(get: { item.enabled }, set: { extensions.setEnabled(item.id, $0) }))
+                Switch(on: Binding(get: { item.enabled }, set: { extensions.setEnabled(item.id, $0) }), label: item.name)
                     .help(item.enabled ? "On — switch off" : "Off — switch on")
             }
             .padding(.top, 2)
@@ -411,6 +438,22 @@ private struct ExtensionCardRow: View {
             Button(item.pinned == true ? "Unpin" : "Pin to Toolbar") { extensions.setPinned(item.id, item.pinned != true) }
             Button(item.enabled ? "Turn Off" : "Turn On") { extensions.setEnabled(item.id, !item.enabled) }
         }
+    }
+
+    private var name: some View {
+        Text(item.name)
+            .font(.system(size: 13.5, weight: .semibold))
+            .foregroundStyle(item.enabled ? Palette.ink : Palette.muted)
+    }
+
+    /// Its version, and the tags beside it.
+    @ViewBuilder
+    private var badges: some View {
+        Text(found?.displayVersion ?? item.version)
+            .font(.system(size: 11))
+            .foregroundStyle(Palette.muted)
+        if !item.fromStore { ExtensionTag("Unpacked") }
+        if !problems.isEmpty { ExtensionTag("\(problems.count) error\(problems.count == 1 ? "" : "s")", warn: true) }
     }
 
     static func prose(_ text: String) -> String {
@@ -446,6 +489,9 @@ private struct ExtensionDetails: View {
     @ObservedObject private var manager = ExtensionManager.shared
     @ObservedObject private var facts = ExtensionFacts.shared
 
+    /// The card is too narrow to indent the details under the name.
+    @State private var narrow = false
+
     private var context: WKWebExtensionContext? { extensions.contexts[item.id] }
     private var found: WKWebExtension? { facts.of(item, in: extensions) }
 
@@ -477,10 +523,13 @@ private struct ExtensionDetails: View {
             if !problems.isEmpty { errors }
             about
         }
-        .padding(.horizontal, 62)
+        // Under the name, past the icon — unless the card is narrow, where
+        // that indent left the details a sliver and slid the page sideways.
+        .padding(.horizontal, narrow ? 14 : 62)
         .padding(.top, 12)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: Bool.self) { $0.size.width < 460 } action: { narrow = $0 }
     }
 
     private func section<Content: View>(_ title: String, trailing: String? = nil, @ViewBuilder _ content: () -> Content) -> some View {
@@ -528,7 +577,7 @@ private struct ExtensionDetails: View {
                         row("Every website", detail: every.map(\.string).joined(separator: "  ")) {
                             Switch(on: Binding(get: { on }, set: { value in
                                 for pattern in every { extensions.setSite(pattern, allowed: value, for: item.id) }
-                            }))
+                            }), label: "Every website")
                             .disabled(context == nil)
                             .opacity(context == nil ? 0.5 : 1)
                         }
@@ -536,7 +585,7 @@ private struct ExtensionDetails: View {
                     ForEach(asked.filter { !($0.matchesAllHosts || $0.matchesAllURLs) }, id: \.string) { pattern in
                         let allowed = allowed(pattern)
                         row(Extensions.site(pattern), detail: pattern.string == Extensions.site(pattern) ? nil : pattern.string) {
-                            Switch(on: Binding(get: { allowed }, set: { extensions.setSite(pattern, allowed: $0, for: item.id) }))
+                            Switch(on: Binding(get: { allowed }, set: { extensions.setSite(pattern, allowed: $0, for: item.id) }), label: Extensions.site(pattern))
                                 .disabled(context == nil)
                                 .opacity(context == nil ? 0.5 : 1)
                         }
@@ -688,7 +737,7 @@ private struct ExtensionDetails: View {
                 Switch(on: Binding(get: { Store.settings.object(forKey: key) as? Bool == true }, set: {
                     Store.settings.set($0, forKey: key)
                     extensions.objectWillChange.send()
-                }))
+                }), label: "Its page in new tabs")
             }
         }
     }
@@ -892,18 +941,15 @@ enum ExtensionRemoval {
             Extensions.shared.remove(id)
         }
         asking = alert
-        DispatchQueue.main.async {
-            if let window = Links.window, window.isVisible {
-                alert.beginSheetModal(for: window, completionHandler: decide)
-            } else {
-                decide(alert.runModal())
-            }
-        }
+        // A sheet on the window — or, in a test run, a question the bench
+        // can answer too (X-13).
+        TestConfirm.present(alert, kind: "extensions.remove", window: Links.window, decide: decide)
     }
 
     /// `bench ext-manager answer remove|cancel`.
     static func answer(_ remove: Bool) -> Bool {
         guard let alert = asking else { return false }
+        if TestConfirm.holds { return TestConfirm.answer(remove ? "1" : "2")["answered"] != nil }
         alert.buttons[remove ? 0 : 1].performClick(nil)
         return true
     }

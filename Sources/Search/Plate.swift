@@ -141,6 +141,7 @@ struct Line<Control: View>: View {
                 }
             }
         }
+        .environment(\.controlLabel, title) // Fork (settings-a11y): the row's name for its switch or choices
         .padding(.horizontal, SettingsMetrics.lineInset(settings)) // Fork (settings-revamp)
         .padding(.vertical, SettingsMetrics.lineHeight(settings)) // Fork (settings-revamp)
     }
@@ -179,20 +180,24 @@ struct Hunt: View {
     @Binding var text: String
     var prompt = "Search"
     var focus: FocusState<Bool>.Binding
+    @Environment(\.settingsLook) private var inSettings // Fork (settings-a11y)
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Palette.muted)
+                .accessibilityHidden(true) // Fork (settings-a11y)
             ZStack(alignment: .leading) {
                 if text.isEmpty {
                     Text(prompt).foregroundStyle(Palette.muted.opacity(0.7))
+                        .accessibilityHidden(true) // Fork (settings-a11y): the field says it
                 }
                 TextField("", text: $text)
                     .textFieldStyle(.plain)
                     .foregroundStyle(Palette.ink)
                     .focused(focus)
+                    .accessibilityLabel(prompt) // Fork (settings-a11y)
             }
             .font(.system(size: 13))
             if !text.isEmpty {
@@ -202,11 +207,21 @@ struct Hunt: View {
                         .foregroundStyle(Palette.faint)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Clear search") // Fork (settings-a11y)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Palette.wash, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        // Fork (settings-a11y): in Settings, the quiet ink edge every field
+        // there wears while the keyboard is in it (Fork/SettingsField.swift).
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Palette.ink.opacity(0.35), lineWidth: 1.5)
+                .opacity(inSettings && focus.wrappedValue ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -229,6 +244,9 @@ struct Quick: View {
     let title: String
     var tint: Color = Palette.ink
     let act: () -> Void
+    @FocusState private var focused: Bool // Fork (settings-a11y)
+    @Environment(\.isEnabled) private var enabled // Fork (settings-a11y)
+    @Environment(\.settingsPageName) private var pageName // Fork (settings-a11y)
 
     init(_ title: String, tint: Color = Palette.ink, act: @escaping () -> Void) {
         self.title = title
@@ -237,6 +255,7 @@ struct Quick: View {
     }
 
     var body: some View {
+        let _ = SettingsControlLedger.note("button", page: pageName, name: title, keyboard: enabled, disabled: !enabled, focused: focused) // Fork (settings-a11y)
         Button(action: act) {
             Text(title)
                 .font(.system(size: 11.5))
@@ -246,5 +265,6 @@ struct Quick: View {
                 .background(Palette.wash, in: Capsule())
         }
         .buttonStyle(.plain)
+        .settingsFocusRing($focused, shape: Capsule()) // Fork (settings-a11y): Settings' ring, not the system halo
     }
 }

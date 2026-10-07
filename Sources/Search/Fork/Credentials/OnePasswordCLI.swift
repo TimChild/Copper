@@ -209,7 +209,7 @@ enum OnePasswordCLI {
         let out = stdout
         let err = stderr
         lock.unlock()
-        if didTimeOut { throw Failure(.timeout, "1Password took too long to answer") }
+        if didTimeOut { throw Failure(.timeout, "1Password took too long to answer — try again") }
         return Execution(stdout: out, stderr: err, status: process.terminationStatus)
     }
 
@@ -294,13 +294,20 @@ enum OnePasswordCLI {
         case .dismissed: return "The 1Password approval was dismissed"
         case .wrongPassword: return "1Password didn't accept those sign-in details"
         case .badToken: return "That service account token wasn't accepted"
-        case .timeout: return "1Password took too long to answer"
+        case .timeout: return "1Password took too long to answer — try again"
         case .passkey: return raw
         case .other: return raw.isEmpty ? "1Password command failed" : raw
         }
     }
 
     // MARK: - JSON
+
+    /// A whole JSON array — what `op vault list` and `op item list` print —
+    /// or nothing at all (no items). Anything else was cut short or garbled.
+    static func isArray(_ data: Data) -> Bool {
+        if String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        return (try? JSONSerialization.jsonObject(with: data)) is [Any]
+    }
 
     /// `op item get -` writes one JSON object per item, back to back, rather
     /// than an array. Accept either, and split the stream by depth.

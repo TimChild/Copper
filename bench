@@ -175,7 +175,7 @@
     ./bench groups [toggle NAME|inside PARENT NAME|plan [today]]
                                        folders: fold or open one (by its whole "A › B" name or
                                        its last part), or make one inside another
-    ./bench sections [save ID|unsave ID|archive [HOURS]|window 12h|24h|48h|never]
+    ./bench sections [save ID|unsave ID|archive [HOURS]|window 12h|24h|48h|never|age ID HOURS]
                                        the sidebar's Saved and Today blocks: counts per space,
                                        move a tab across the seam, run the archive sweep now
                                        (with HOURS, against that age instead of the setting)
@@ -208,6 +208,14 @@
     ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
                                        the MCP server agents drive the window through; setup bridges terminal agents
     ./bench ai [lane key|claude|tier haiku|sonnet|opus]   which model lane is active and ready
+    ./bench ai picture intelligence|agents|labs PATH [dark] [WIDTH]   the whole page drawn off screen
+    ./bench ai check [status]          Settings › Intelligence › Check: run it, or its last verdict (fresh, refused)
+    ./bench ai cloud fake JSON|clear   stand in Copper Cloud's /v1/intelligence answer (test world)
+    ./bench ai clipboard               what the AI pages copied/opened in this test world
+    ./bench ai click X Y | ai key tab|shift-tab|return|escape|space|TEXT   input at window points (test run)
+    ./bench ai views                   the window's AppKit views by class, and tracking areas
+    ./bench ai churn mcp|brain|agent|links|servers|check|account [N]   one redraw of the open page per change
+    ./bench ai ax [WORDS]              accessibility walk (needs a windowed probe)
     ./bench voice selftest             the speech engine: pure checks, then — when the run has
                                        SEARCH_VOICE_MODEL_DIR — three clips spoken in-process,
                                        transcribed and scored ("skipped" without it); exits 1 on a failure
@@ -251,6 +259,16 @@
                                        test world: the Listen transcript agents read (voice_transcript,
                                        `copper transcript`), driven with no audio; share = Settings › Voice's switch
     ./bench mcp transcript check       test world: a linked bot's tools/list has no voice tools and its calls are refused
+    ./bench passwords status|list|add HOST USER PW|forget HOST [USER]|check HOST USER PW
+                     |import CSV|export CSV|csvcheck CSV|prove yes|no|wipe
+                     |never [offer|add HOST…|forget HOST…|clear]
+                                       Copper's own passwords in a probe world whose keychain is a file
+                                       (defaults write …test.WORLD probe.keychain -string file, before launch)
+    ./bench privacy status|ask history|cookies|none|clear history|cookies|cache
+                                       Settings › Privacy's questions (for a picture) and its clears, every jar
+    ./bench about status|feedback|default|copy pairing|clipboard
+                                       Send Feedback's prefilled page, Make default (refused in a test run),
+                                       and where Settings' Copy and Open went in a test world
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
     ./bench mouse back|forward|middle [X Y] [--shift] [--window N]
                                        a click of that mouse button at window point X Y (top-left
@@ -284,6 +302,25 @@
     ./bench settings perf scroll|layers|[reset]|stop
                                        a scripted scroll of the open page; the window's view/layer count;
                                        the meters since reset
+    ./bench settings ax [focus|controls|raw|sweep]
+                                       what VoiceOver finds in the window: named elements; who has the
+                                       keyboard; only the controls (named? focusable?); every node; or
+                                       `controls` on every page in turn with the unnamed ones listed
+    ./bench settings confirm [answer CHOICE|selftest]
+                                       the question a Settings page is asking (delete a space, remove an
+                                       extension, a dialog) — held for the bench in a headless test run;
+                                       answer it by button number, title, or the start of its title;
+                                       selftest puts up a SwiftUI dialog and answers it end to end
+    ./bench settings browse folder PATH|ask [PATH|cancel|folder|reset]|prefs|glyph letters|icons
+                                       Downloads' Change… as a pick of PATH; how "Ask where to save" is
+                                       answered in a test run, and the names it was asked about; the
+                                       Browsing pages' values (test runs only)
+    ./bench settings browse scroll [top|bottom|next|PX]
+                                       move the open page's scroll as the wheel would; where it is,
+                                       and whether anything on it is wider than the column (test runs only)
+    ./bench settings browse picture spaces|extensions|voice|cloud|updates|intelligence|agents|labs PATH [WIDTH] [light|dark]
+                                       the whole page as a PNG, laid out at a page-column WIDTH
+                                       (345 is Settings' narrowest), not scrolled
     ./bench ui KEY VALUE               settings/passwords/welcome/history/downloads/bookmarks/hidden on|off,
                                        look light|dark|system, sidebar on|off, folded on|off, peek on|off,
                                        tabswitch row|recent, page general|tabs (which Settings page), focus none (the keyboard to the window itself), width N (the sidebar),
@@ -422,6 +459,15 @@ def main(argv):
             request["arg"] = args[1]
         elif len(args) > 1:
             sys.exit("usage: bench passkeys list|count|forget --id ID|answer yes|no|ask")
+    elif verb in ("privacy", "about"):
+        request["op"] = args[0] if args else "status"
+        request["arg"] = " ".join(args[1:])
+    elif verb == "passwords":
+        # Copper's own passwords in a probe world with the file keychain; paths made absolute.
+        request["op"] = args[0] if args else "status"
+        rest = args[1:]
+        if request["op"] in ("import", "export", "csvcheck") and rest: rest = [os.path.abspath(rest[0])] + rest[1:]
+        request["arg"] = " ".join(rest)
     elif verb == "render":
         if len(args) < 2: sys.exit("usage: bench render bitwarden|onepassword[-app|-password|-service|-dark]|managers[-dark]|picker|agent|agent-dark|drive|hands|hands-dark|pill|pill-dark PATH [HOST]")
         request["op"] = args[0]

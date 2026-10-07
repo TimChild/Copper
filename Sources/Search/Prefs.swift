@@ -179,7 +179,7 @@ final class Preferences: ObservableObject {
         let testDownloads = Store.folder.appendingPathComponent("Downloads", isDirectory: true)
         if Store.testing { try? FileManager.default.createDirectory(at: testDownloads, withIntermediateDirectories: true) }
         downloads = Store.testing
-            ? testDownloads
+            ? (Preferences.testFolder(store.string(forKey: "downloads"), world: Store.folder.path) ?? testDownloads) // Fork (settings-browse)
             : (store.string(forKey: "downloads")).map { URL(fileURLWithPath: $0) }
                 ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
         asksWhereToSave = store.bool(forKey: "downloads.ask")
@@ -201,14 +201,37 @@ final class Preferences: ObservableObject {
         }
     }
 
+    /// Fork (settings-browse): a folder a test run chose for itself — inside
+    /// its own world folder or under /tmp — is kept across its relaunch like
+    /// a person's choice; anything else (~/Downloads above all) still is not.
+    static func testFolder(_ path: String?, world: String) -> URL? {
+        guard let path, !path.contains("/../") else { return nil }
+        let inside = [world + "/", "/tmp/", "/private/tmp/"].contains { path.hasPrefix($0) }
+        return inside ? URL(fileURLWithPath: path, isDirectory: true) : nil
+    }
+
     /// WebKit's text checker takes its orders from the app's standard
     /// defaults — the real ones, not the test suite, because it is WebKit
     /// reading them and not us. Smart quotes and dashes go off outright: in a
     /// browser they are wrong in every code field and wanted in almost none.
     static func tellWebKit(autocorrect: Bool) {
+        let values = [
+            "WebAutomaticSpellingCorrectionEnabled": autocorrect,
+            "WebAutomaticQuoteSubstitutionEnabled": false,
+            "WebAutomaticDashSubstitutionEnabled": false,
+        ]
+        // Fork (settings-browse): a test run shares this app's own defaults
+        // with the Copper somebody is using (same bundle id), so it tells
+        // WebKit in the launch's volatile domain, which WebKit reads first
+        // and nothing writes to disk.
+        if Store.testing {
+            let defaults = UserDefaults.standard
+            var launch = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+            for (key, value) in values { launch[key] = value }
+            defaults.setVolatileDomain(launch, forName: UserDefaults.argumentDomain)
+            return
+        }
         let defaults = UserDefaults.standard
-        defaults.set(autocorrect, forKey: "WebAutomaticSpellingCorrectionEnabled")
-        defaults.set(false, forKey: "WebAutomaticQuoteSubstitutionEnabled")
-        defaults.set(false, forKey: "WebAutomaticDashSubstitutionEnabled")
+        for (key, value) in values { defaults.set(value, forKey: key) }
     }
 }

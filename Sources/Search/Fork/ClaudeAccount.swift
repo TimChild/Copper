@@ -58,7 +58,12 @@ final class ClaudeAccount: ObservableObject {
         var errorDescription: String? { text }
     }
 
-    @Published private(set) var credential: Credential?
+    @Published private(set) var credential: Credential? {
+        didSet { if (oldValue == nil) != (credential == nil) || oldValue?.email != credential?.email { session += 1 } }
+    }
+    /// Counts sign-ins and sign-outs (not token refreshes), so whatever was
+    /// learnt about one sign-in — a check's verdict — can tell it is past.
+    private(set) var session = 0
     @Published private(set) var phase: Phase = .idle
 
     private var listener: NWListener?
@@ -173,6 +178,9 @@ final class ClaudeAccount: ObservableObject {
         stopFlowListener(closeConnections: true)
         verifier = nil
         redirectURI = nil
+        // Cancel ends the attempt, so the claude.ai tab it opened goes too;
+        // nobody should have to find and close it by hand.
+        closeSignInTabIfAppropriate()
         signInTabID = nil
         callbackHandled = false
         setPhase(.idle)
@@ -285,6 +293,8 @@ final class ClaudeAccount: ObservableObject {
                 return
             }
             guard let self, self.phase == .waiting else { return }
+            // Ten minutes on: the code that tab shows has run out too.
+            self.closeSignInTabIfAppropriate()
             self.failFlow("Sign-in timed out — try again")
         }
     }
@@ -365,10 +375,14 @@ final class ClaudeAccount: ObservableObject {
                 // A new sign-in or cancel owns the next state transition.
             } catch let failure as Failure {
                 guard !Task.isCancelled else { return }
+                // The attempt is spent (its verifier goes below), so its tab
+                // is no use; Try again opens a fresh one.
+                self.closeSignInTabIfAppropriate()
                 self.cleanupFlow()
                 self.setPhase(.failed(failure.text))
             } catch {
                 guard !Task.isCancelled else { return }
+                self.closeSignInTabIfAppropriate()
                 self.cleanupFlow()
                 self.setPhase(.failed(error.localizedDescription))
             }
@@ -531,12 +545,21 @@ final class ClaudeAccount: ObservableObject {
         exchangeTask = nil
     }
 
+    /// Closes the tab the sign-in opened — unless it has since gone
+    /// somewhere that isn't part of signing in, which makes it the person's.
     private func closeSignInTabIfAppropriate() {
         guard let browser, let signInTabID,
               let tab = browser.tabs.first(where: { $0.id == signInTabID }) else { return }
-        let host = tab.address?.host?.lowercased() ?? ""
-        guard host == "claude.ai" || host == "anthropic.com" || host == "localhost" else { return }
+        guard Self.isSignInHost(tab.address?.host) else { return }
         browser.close(tab)
+    }
+
+    /// claude.ai and its sign-in pages, or the callback on this Mac. A tab
+    /// that never got an address is still the one the sign-in opened.
+    nonisolated static func isSignInHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased(), !host.isEmpty else { return true }
+        if host == "localhost" || host == "127.0.0.1" { return true }
+        return ["claude.ai", "claude.com", "anthropic.com"].contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
     private func setPhase(_ next: Phase) {

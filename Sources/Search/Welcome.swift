@@ -88,7 +88,8 @@ struct WelcomePanel: View {
                     if sources.count > 1 {
                         Segmented(
                             options: sources.map { ($0, $0.name) },
-                            selection: Binding(get: { source ?? sources[0] }, set: { source = $0 })
+                            selection: Binding(get: { source ?? sources[0] }, set: { source = $0 }),
+                            label: "Bring in from" // Fork (settings-a11y)
                         )
                     } else {
                         Text("From \(sources[0].name)")
@@ -131,7 +132,7 @@ struct WelcomePanel: View {
                 Text("Tabs wear")
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.muted)
-                Segmented(options: Glyph.allCases.map { ($0, $0.title) }, selection: $prefs.glyph)
+                Segmented(options: Glyph.allCases.map { ($0, $0.title) }, selection: $prefs.glyph, label: "Tabs wear") // Fork (settings-a11y)
             }
         }
     }
@@ -322,7 +323,7 @@ struct WelcomePanel: View {
                     Text(detail).font(.system(size: 11.5)).foregroundStyle(Palette.faint)
                 }
                 Spacer()
-                Switch(on: $on)
+                Switch(on: $on, label: title) // Fork (settings-a11y)
             }
         }
     }

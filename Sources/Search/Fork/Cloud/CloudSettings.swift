@@ -195,15 +195,16 @@ private struct CloudConnectCard: View {
                                 .autocorrectionDisabled()
                                 .focused($focus, equals: .code)
                                 .padding(.horizontal, 8).padding(.vertical, 6)
-                                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                .settingsField() // SB-04
                                 .onSubmit(go)
                             Button {
-                                if let pasted = NSPasteboard.general.string(forType: .string) { code = pasted.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                if let pasted = SettingsActions.pasteboard.string(forType: .string) { code = pasted.trimmingCharacters(in: .whitespacesAndNewlines) }
                             } label: {
                                 Image(systemName: "doc.on.clipboard").font(.system(size: 11)).foregroundStyle(Palette.muted)
                             }
                             .buttonStyle(.plain)
                             .help("Paste")
+                            .accessibilityLabel("Paste link code")
                         }
                         if let parsed { kind(parsed) }
                     }
@@ -402,7 +403,7 @@ private struct CloudAccountForm: View {
         VStack(alignment: .leading, spacing: 8) {
             Caption("2 · Your account on this instance")
             Card {
-                Segmented(options: [(Mode.signIn, "Sign in"), (Mode.create, "Create account")], selection: $mode, wide: true)
+                Segmented(options: [(Mode.signIn, "Sign in"), (Mode.create, "Create account")], selection: $mode, wide: true, label: "Account")
                     .padding(.horizontal, 14).padding(.vertical, 10)
                 Rule()
                 Line("Email") {
@@ -664,11 +665,14 @@ private struct CloudDevicesCard: View {
                             Spacer()
                             Image(systemName: open.contains(device.id) ? "chevron.down" : "chevron.right")
                                 .font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.muted)
+                                .accessibilityHidden(true)
                         }
                         .contentShape(Rectangle())
                         .padding(.horizontal, 14).padding(.vertical, 10)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("\(device.name)'s tabs")
+                    .accessibilityValue(open.contains(device.id) ? "Shown" : "Hidden")
                     if open.contains(device.id) {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(device.tabs.prefix(60).enumerated()), id: \.offset) { _, tab in
@@ -736,7 +740,7 @@ private struct CloudAccountCard: View {
                         .font(.system(size: 12))
                         .frame(width: 170)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .settingsField() // SB-04
                         .onSubmit(rename)
                 }
             }
@@ -1019,11 +1023,14 @@ private struct CloudLogCard: View {
                 HStack(spacing: 4) {
                     Caption("Log")
                     Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .medium)).foregroundStyle(Palette.muted)
+                        .accessibilityHidden(true)
                     Spacer()
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Log")
+            .accessibilityValue(open ? "Shown" : "Hidden")
             if open {
                 Card {
                     VStack(alignment: .leading, spacing: 3) {
@@ -1223,6 +1230,6 @@ private func field(_ placeholder: String, text: Binding<String>, width: CGFloat,
     .autocorrectionDisabled()
     .frame(width: width)
     .padding(.horizontal, 8).padding(.vertical, 4)
-    .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    .settingsField() // SB-04
     .onSubmit { submit?() }
 }

@@ -68,6 +68,7 @@ struct SpacesSettingsPage: View {
                 }
                 .buttonStyle(.plain)
                 .help("New Space")
+                .accessibilityLabel("New Space")
             }
             .padding(.vertical, 2)
         }
@@ -106,6 +107,7 @@ struct SpacesSettingsPage: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
         .contextMenu { SpaceMenu(browser: browser, space: space) }
     }
 }
@@ -164,6 +166,22 @@ struct SpacePage: View {
         "camera", "film", "bolt", "flame", "moon", "sun.max", "cup.and.saucer", "dumbbell", "chart.bar", "folder",
     ]
 
+    /// What a symbol is called to a person — in the tooltip, the Icon
+    /// caption and VoiceOver — rather than its SF Symbols name.
+    static func symbolName(_ symbol: String) -> String {
+        let names = [
+            "house": "Home", "briefcase": "Briefcase", "book": "Book", "hammer": "Hammer",
+            "gamecontroller": "Game controller", "cart": "Cart", "heart": "Heart", "star": "Star",
+            "flask": "Flask", "graduationcap": "Graduation cap", "music.note": "Music", "airplane": "Airplane",
+            "paintbrush": "Paintbrush", "leaf": "Leaf", "terminal": "Terminal", "globe": "Globe",
+            "camera": "Camera", "film": "Film", "bolt": "Bolt", "flame": "Flame", "moon": "Moon",
+            "sun.max": "Sun", "cup.and.saucer": "Cup", "dumbbell": "Dumbbell", "chart.bar": "Chart", "folder": "Folder",
+        ]
+        if let name = names[symbol] { return name }
+        let words = symbol.split(separator: ".").joined(separator: " ")
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
     enum Kind: String, CaseIterable, Identifiable {
         case colour, gradient, picture, animated
         var id: String { rawValue }
@@ -192,8 +210,10 @@ struct SpacePage: View {
         if let space {
             VStack(alignment: .leading, spacing: 18) {
                 // The preview beside the short controls: Settings has the
-                // width for one or the other down the page, not both.
-                HStack(alignment: .top, spacing: 16) {
+                // width for one or the other down the page, not both. At
+                // Settings' narrowest there isn't room for both side by side,
+                // so the controls come first and the preview under them.
+                SpaceSplit(spacing: 16) {
                     preview(space)
                     VStack(alignment: .leading, spacing: 16) {
                         header(space)
@@ -203,7 +223,7 @@ struct SpacePage: View {
                             // Settings' own segmented control, so the page reads
                             // as one with the rest of Settings.
                             Segmented(options: Kind.allCases.map { ($0, $0.title) },
-                                      selection: Binding(get: { kind }, set: choose(kind:)), wide: true)
+                                      selection: Binding(get: { kind }, set: choose(kind:)), wide: true, label: "Look")
                         }
                         .settingsAnchor("spaces.look")
                         section("Profile") { profile(space) }
@@ -231,6 +251,9 @@ struct SpacePage: View {
                 .frame(width: SpacePage.rail / 0.72, height: 330 / 0.72)
                 .scaleEffect(0.72)
                 .frame(width: SpacePage.rail, height: 330)
+                // A picture of the column, not tabs to read out one by one.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Preview of the column")
             Picker("", selection: Binding(get: { shown }, set: { previewNight = $0 == night ? nil : $0 })) {
                 Text("Light").tag(false)
                 Text("Dark").tag(true)
@@ -239,6 +262,7 @@ struct SpacePage: View {
             .labelsHidden()
             .controlSize(.small)
             .frame(width: 120)
+            .accessibilityLabel("Preview in")
         }
         .frame(width: SpacePage.rail)
     }
@@ -268,7 +292,7 @@ struct SpacePage: View {
     /// What is too wide to sit beside the preview, in cards down the page.
     private func controls(_ space: Space) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            group { section("Icon", trailing: space.symbol ?? (space.icon == nil ? (space.emoji == nil ? "None" : "From the name") : "Emoji")) { icons(space) } }
+            group { section("Icon", trailing: space.symbol.map(SpacePage.symbolName) ?? (space.icon == nil ? (space.emoji == nil ? "None" : "From the name") : "Emoji")) { icons(space) } }
                 .settingsAnchor("spaces.icon", card: true)
             group {
                 VStack(alignment: .leading, spacing: 18) {
@@ -311,7 +335,7 @@ struct SpacePage: View {
             .focused($focus, equals: .name)
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.wash))
+            .settingsField(radius: 8) // SB-04: the ink edge while the keyboard is in it
             .onChange(of: draft) { _, now in
                 let trimmed = now.trimmingCharacters(in: .whitespaces)
                 if !trimmed.isEmpty { spaces.rename(id, to: trimmed) }
@@ -325,16 +349,20 @@ struct SpacePage: View {
     /// a field for an emoji.
     private func icons(_ space: Space) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(34), spacing: 5), count: 9), alignment: .leading, spacing: 5) {
+            // As many to a line as the card has room for: nine fixed
+            // columns ran off the card at Settings' narrowest.
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 34, maximum: 34), spacing: 5)], alignment: .leading, spacing: 5) {
                 tile(selected: space.icon == nil) {
                     Circle().fill(tint.mark).frame(width: 7, height: 7)
                 } act: { spaces.icon(id, nil); emoji = "" }
                 .help("No icon — a dot, or the emoji the name starts with")
+                .accessibilityLabel("No icon")
                 ForEach(SpacePage.symbols, id: \.self) { symbol in
                     tile(selected: space.symbol == symbol) {
                         Image(systemName: symbol).font(.system(size: 13, weight: .semibold)).foregroundStyle(tint.mark)
                     } act: { spaces.icon(id, "sf:" + symbol); emoji = "" }
-                    .help(symbol)
+                    .help(SpacePage.symbolName(symbol))
+                    .accessibilityLabel(SpacePage.symbolName(symbol))
                 }
             }
             HStack(spacing: 8) {
@@ -347,7 +375,7 @@ struct SpacePage: View {
                     .focused($focus, equals: .emoji)
                     .padding(.horizontal, 9)
                     .frame(height: 28)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.wash))
+                    .settingsField() // SB-04
                     .onChange(of: emoji) { _, now in
                         // The first emoji typed is the icon; the rest is noise.
                         guard let first = now.first(where: { $0.unicodeScalars.first?.properties.isEmojiPresentation == true
@@ -379,6 +407,7 @@ struct SpacePage: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     // MARK: look
@@ -445,7 +474,9 @@ struct SpacePage: View {
             // The named colours set the first stop and leave the rest of the
             // look alone. A space that comes back to exactly a named colour's
             // theme goes back to being that hue, as the menu's Colour does.
-            HStack(spacing: 7) {
+            // Wrapped rather than one line: eleven swatches ran off the
+            // card at Settings' narrowest.
+            SettingsFlow(spacing: 7) {
                 ForEach(SpaceColour.allCases) { colour in
                     let named = theme(for: colour)
                     let chosen = look.colors.first == named.colors.first
@@ -468,6 +499,8 @@ struct SpacePage: View {
                     }
                     .buttonStyle(.plain)
                     .help(colour.name)
+                    .accessibilityLabel(colour.name)
+                    .accessibilityAddTraits(chosen ? .isSelected : [])
                     .scaleEffect(chosen ? 1.12 : 1)
                     .animation(Motion.quick, value: chosen)
                 }
@@ -490,7 +523,7 @@ struct SpacePage: View {
             }
             let recent = SpacePictures.recent()
             if !recent.isEmpty {
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(54), spacing: 7), count: 6), alignment: .leading, spacing: 7) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 54, maximum: 54), spacing: 7)], alignment: .leading, spacing: 7) {
                     ForEach(recent, id: \.self) { name in
                         Button {
                             set { $0.image = name; $0.motion = nil }
@@ -512,6 +545,8 @@ struct SpacePage: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(name == SpaceTheme.copperPicture ? "\(Fork.name) picture" : "Picture used before")
+                        .accessibilityAddTraits(look.image == name ? .isSelected : [])
                     }
                 }
             } else {
@@ -620,6 +655,7 @@ struct SpacePage: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     private func choosePicture() {
@@ -628,9 +664,12 @@ struct SpacePage: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.message = "A picture for the space's column"
-        guard panel.runModal() == .OK, let url = panel.url, let name = SpaceTheme.adopt(image: url) else { return }
-        set { $0.image = name; $0.motion = nil }
-        picked = nil
+        // A sheet on this window, not a modal that froze every window.
+        SettingsPanels.present(panel, on: Windows.window(of: browser)) { url in
+            guard let url, let name = SpaceTheme.adopt(image: url) else { return }
+            set { $0.image = name; $0.motion = nil }
+            picked = nil
+        }
     }
 
     // MARK: profile and the foot
@@ -660,7 +699,7 @@ struct SpacePage: View {
                     .focused($focus, equals: .profile)
                     .padding(.horizontal, 9)
                     .frame(height: 28)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.wash))
+                    .settingsField() // SB-04
                     .onSubmit {
                         let name = profileDraft.trimmingCharacters(in: .whitespaces)
                         guard !name.isEmpty else { return }
@@ -687,6 +726,51 @@ struct SpacePage: View {
                 }
             }
             .settingsAnchor("spaces.delete", card: true)
+        }
+    }
+}
+
+// MARK: - preview beside, or under
+
+/// The preview and the short controls: side by side when the page has the
+/// width for both, else the controls first and the preview under them — so
+/// nothing runs off the page at Settings' narrowest.
+private struct SpaceSplit: Layout {
+    var spacing: CGFloat = 16
+    /// The least the controls need beside the preview: the Look choices
+    /// whole, without "Gradie…".
+    var least: CGFloat = 270
+
+    private func beside(_ width: CGFloat, preview: CGSize) -> Bool {
+        width >= preview.width + spacing + least
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        let preview = subviews[0].sizeThatFits(.unspecified)
+        guard let width = proposal.width else {
+            let rest = subviews[1].sizeThatFits(ProposedViewSize(width: least, height: nil))
+            return CGSize(width: preview.width + spacing + rest.width, height: max(preview.height, rest.height))
+        }
+        if beside(width, preview: preview) {
+            let rest = subviews[1].sizeThatFits(ProposedViewSize(width: width - preview.width - spacing, height: nil))
+            return CGSize(width: width, height: max(preview.height, rest.height))
+        }
+        let rest = subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        return CGSize(width: width, height: rest.height + spacing + preview.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let preview = subviews[0].sizeThatFits(.unspecified)
+        if beside(bounds.width, preview: preview) {
+            subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(preview))
+            let x = bounds.minX + preview.width + spacing
+            subviews[1].place(at: CGPoint(x: x, y: bounds.minY), proposal: ProposedViewSize(width: bounds.maxX - x, height: nil))
+        } else {
+            let rest = subviews[1].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+            subviews[1].place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY + rest.height + spacing), proposal: ProposedViewSize(preview))
         }
     }
 }

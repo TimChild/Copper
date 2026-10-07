@@ -17,7 +17,6 @@ struct SettingsPanel: View {
     let browser: Browser
     @ObservedObject var prefs: Preferences
 
-    @ObservedObject private var updater = Updater.shared
     @ObservedObject private var shield = Shield.shared
     @State private var isDefault = SettingsDefaultBrowser.isDefault // Fork (settings-perf): one LaunchServices ask per opening, not per redraw
     /// Fork (settings-revamp): the panel's own width, for the rail's.
@@ -131,6 +130,10 @@ struct SettingsPanel: View {
             edge.scrolled = false
         }
         .onDisappear { SettingsDefaultBrowser.forget() } // Fork (settings-perf)
+        // Fork (settings-browse): opened again before the last close had
+        // faded, the panel is the same view, so onAppear doesn't come round —
+        // start fresh all the same, not on the old query.
+        .onReceive(browser.$tuning.removeDuplicates().dropFirst().filter { $0 }) { _ in finder.opened() }
     }
 
     // MARK: - the rail
@@ -167,8 +170,9 @@ struct SettingsPanel: View {
                         }
                     }
                 }
-                .padding(.bottom, 14)
+                .padding(.bottom, SettingsRailFade.height) // Fork (settings-browse): was 14; room for the fade
             }
+            .mask(SettingsRailFade()) // Fork (settings-browse): a soft lower edge says there is more below
         }
         .padding(.horizontal, 12)
         .frame(width: rail, alignment: .leading)
@@ -203,7 +207,8 @@ struct SettingsPanel: View {
     }
 
     private var close: some View {
-        Door(icon: "xmark", help: "Done   esc") { browser.tuning = false }
+        Door(icon: "xmark", help: "Close  ⎋") { browser.tuning = false } // Fork (settings-a11y): ⎋ as everywhere else in Copper
+            .accessibilityLabel("Close Settings") // Fork (settings-a11y)
     }
 
     private func resultsLine(_ finder: SettingsFinder) -> String {
@@ -243,6 +248,7 @@ struct SettingsPanel: View {
                 .padding(.top, 4)
                 .padding(.bottom, 36)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+                .environment(\.settingsPageName, page.rawValue) // Fork (settings-a11y): the bench's control ledger
                 .onGeometryChange(for: Bool.self) { $0.frame(in: .scrollView).minY < -2 } action: { now in
                     if edge.scrolled != now { edge.scrolled = now }
                 }
@@ -254,8 +260,8 @@ struct SettingsPanel: View {
                 try? await Task.sleep(nanoseconds: 140_000_000)
                 let anchor = finder.resolve(target, on: page)
                 let spot = target.flash ? UnitPoint(x: 0.5, y: 0.22) : UnitPoint.top
-                withAnimation(still ? nil : Motion.glide) {
-                    if let anchor { proxy.scrollTo(anchor, anchor: spot) }
+                withAnimation(still || !SettingsAnchor.glides ? nil : Motion.glide) { // Fork (settings-a11y): no glide where no one sees it
+                    if let anchor { SettingsAnchor.land(proxy, on: anchor, spot: spot) } // Fork (settings-a11y): a card lands by its top edge
                     // A card another build marks with a plain `.id` still
                     // scrolls into view, even though the index check can't see it.
                     if anchor != target.anchor { proxy.scrollTo(target.anchor, anchor: spot) }
@@ -272,7 +278,9 @@ struct SettingsPanel: View {
             SettingsSection("Copper on this Mac") {
                 Line(
                     "Open links from other apps",
-                    isDefault ? "Copper is the default browser on this Mac" : "Mail, Slack and the rest still send links elsewhere"
+                    isDefault ? "Copper is the default browser on this Mac"
+                        : Links.refusesDefault ? "Not in a test run — links stay with the browser you use" // Fork (default-guard)
+                        : "Mail, Slack and the rest still send links elsewhere"
                 ) {
                     if isDefault {
                         Image(systemName: "checkmark")
@@ -286,6 +294,7 @@ struct SettingsPanel: View {
                                 browser.announce(worked && isDefault ? "Links now open here" : "macOS didn't change it")
                             }
                         }
+                        .disabled(Links.refusesDefault) // Fork (default-guard): Links.becomeDefault refuses too
                     }
                 }
                 .settingsAnchor("general.default")
@@ -321,7 +330,7 @@ struct SettingsPanel: View {
     private var tabs: some View {
         Group {
             SettingsSection("Layout") {
-                Line("Tabs in a sidebar", "Down the left instead of across the top. Pull its edge to make it wider; double-click the edge to reset.") {
+                Line("Tabs in a sidebar", "Down the left instead of across the top. Drag its edge to resize.") { // Fork (settings-browse): copy
                     Switch(on: Binding(
                         get: { prefs.sidebar },
                         set: { on in withAnimation(Motion.glide) { prefs.sidebar = on } }
@@ -329,6 +338,7 @@ struct SettingsPanel: View {
                 }
                 .settingsAnchor("tabs.sidebar")
                 Rule()
+                // Fork (settings-browse): the sidebar honours it too (Side.swift).
                 Line("Tabs show", "Beside the title, and on a pinned square") {
                     Segmented(options: Glyph.allCases.map { ($0, $0.title) }, selection: $prefs.glyph)
                 }
@@ -343,8 +353,14 @@ struct SettingsPanel: View {
                 // Fork (swipe-direction): here rather than on the Spaces page,
                 // which is the editor for one space at a time; this is how the
                 // column itself answers the trackpad, like ⌃Tab above it.
-                Line("Swipe between spaces", "Two fingers across the tabs. Natural moves them with your fingers, Inverted the other way; Like scrolling follows the Mac's Natural scrolling") {
+                // Fork (settings-browse): the swipe lives over the sidebar's
+                // column, so with the strip it has nothing to act on.
+                Line("Swipe between spaces", prefs.sidebar
+                     ? "Two fingers across the sidebar. Natural moves it with your fingers, Inverted the other way; Like scrolling follows the Mac's own setting."
+                     : "Needs tabs in a sidebar — the swipe is two fingers across it.") {
                     Segmented(options: SwipeDirection.allCases.map { ($0, $0.title) }, selection: $prefs.swipeDirection)
+                        .disabled(!prefs.sidebar)
+                        .opacity(prefs.sidebar ? 1 : 0.45)
                 }
                 .settingsAnchor("tabs.swipe")
             }
@@ -405,16 +421,7 @@ struct SettingsPanel: View {
                     Switch(on: $prefs.passkeys)
                 }
                 .settingsAnchor("passwords.passkeys")
-                if !Vault.never.isEmpty {
-                    Rule()
-                    Line("Sites never asked", "\(Vault.never.count) sites told to stop offering") {
-                        Pill("Forget") {
-                            Vault.never = []
-                            browser.announce("Every site can ask again")
-                        }
-                    }
-                    .settingsAnchor("passwords.never")
-                }
+                NeverAskedLines(browser: browser) // Fork (never-asked): one row per site, each with Forget — Fork/Credentials/NeverAsked.swift
             }
             // Fork (settings-revamp): one card per password manager, one
             // under the other — Bitwarden's here, 1Password's beside it.
@@ -432,7 +439,7 @@ struct SettingsPanel: View {
                 AgentAccessCard(browser: browser)
                     .settingsAnchor("passwords.agents", card: true)
             }
-            SettingsSection("Import") {
+            SettingsSection("Import and export") { // Fork (password-csv): CSV in and out — Fork/Credentials/PasswordCSV.swift
                 Line("Bring yours in", "From Dia, Chrome, Arc, Brave or Edge on this Mac — nothing leaves it") {
                     Pill("Import…") {
                         browser.tuning = false
@@ -440,6 +447,7 @@ struct SettingsPanel: View {
                     }
                 }
                 .settingsAnchor("passwords.import")
+                PasswordCSVLines(browser: browser)
             }
             SettingsSection("Passkeys", carded: false) {
                 PasskeysSettings()
@@ -451,13 +459,13 @@ struct SettingsPanel: View {
     // MARK: - downloads
 
     private var downloads: some View {
-        SettingsSection("Downloads") {
+        SettingsSection(nil) { // Fork (settings-browse): the page is already called Downloads
             Line("Save to", prefs.downloads.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) {
                 Pill("Change…") { chooseFolder() }
             }
             .settingsAnchor("downloads.folder")
             Rule()
-            Line("Ask where to save each file") {
+            Line("Ask where to save each file", "A save panel for every download, starting in the folder above") { // Fork (settings-browse): every row says what it does
                 Switch(on: $prefs.asksWhereToSave)
             }
             .settingsAnchor("downloads.ask")
@@ -500,20 +508,7 @@ struct SettingsPanel: View {
                 .settingsAnchor("privacy.capture")
             }
             SettingsSection("Clear browsing data") {
-                Line("History", "Every address you have been to") {
-                    Pill("Clear") { browser.clearHistory() }
-                }
-                .settingsAnchor("privacy.history")
-                Rule()
-                Line("Cookies and sign-ins", "Signs you out of every site") {
-                    Pill("Sign out of everything") { browser.clearSites() }
-                }
-                .settingsAnchor("privacy.cookies")
-                Rule()
-                Line("Cache", "Only what was fetched to draw pages") {
-                    Pill("Clear") { browser.clearCache() }
-                }
-                .settingsAnchor("privacy.cache")
+                ClearBrowsingDataLines(browser: browser) // Fork (privacy-clear): asks first, every jar — Fork/PrivacySettings.swift
             }
         }
     }
@@ -544,10 +539,10 @@ struct SettingsPanel: View {
             .settingsAnchor("about.identity", card: true)
 
             SettingsSection("Version") {
-                Line(versionTitle, versionDetail) { versionControl }
+                AboutUpdatesLine(browser: browser) // Fork (about-updates): Copper's updater, not upstream's — Fork/SettingsFork.swift
                     .settingsAnchor("about.version")
                 Rule()
-                Line("Found something wrong?", "Opens a draft with the version already in it") {
+                Line("Found something wrong?", "Opens a new issue on Copper’s page, with the version already in it") { // Fork (feedback)
                     Pill("Send Feedback") { Links.writeFeedback() }
                 }
                 .settingsAnchor("about.feedback")
@@ -567,53 +562,6 @@ struct SettingsPanel: View {
         }
     }
 
-    /// The version line follows the newer build from found to fetched to
-    /// in place; with none, it is simply this one.
-    private var versionTitle: String {
-        switch updater.stage {
-        case .none: return "Updates"
-        case .fetching(let next): return "Copper \(next.version) is downloading…"
-        case .ready(let next): return "Copper \(next.version) is ready"
-        case .offered(let next): return "Copper \(next.version) is out"
-        }
-    }
-
-    private var versionDetail: String {
-        switch updater.stage {
-        case .none:
-            return updater.lastChecked.map { "Checked \($0.formatted(.relative(presentation: .named))) — once a day on its own" }
-                ?? "Checked once a day on its own"
-        case .fetching(let next):
-            return next.notes ?? "Quietly, in the background — nothing you have set is touched"
-        case .ready(let next):
-            return next.notes ?? "It's there the next time you open Copper"
-        case .offered(let next):
-            return next.notes ?? "Open the disk image, the same as the first time"
-        }
-    }
-
-    @ViewBuilder
-    private var versionControl: some View {
-        switch updater.stage {
-        case .none:
-            Pill(updater.checking ? "Checking…" : "Check now") {
-                updater.check { found in
-                    if found == nil { browser.announce("This is the latest one") }
-                }
-            }
-            .disabled(updater.checking)
-        case .fetching:
-            Ring(size: 12)
-        case .ready:
-            Pill("Relaunch now", filled: true) { updater.relaunch() }
-        case .offered(let next):
-            Pill("Download", filled: true) {
-                browser.tuning = false
-                browser.open(next.dmg, foreground: true)
-            }
-        }
-    }
-
     // MARK: - doing
 
     private func chooseFolder() {
@@ -623,8 +571,12 @@ struct SettingsPanel: View {
         panel.canCreateDirectories = true
         panel.directoryURL = prefs.downloads
         panel.prompt = "Use this folder"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        prefs.downloads = url
+        // Fork (settings-browse): a sheet on this window, not a modal that
+        // froze every window until it was answered.
+        let prefs = prefs
+        SettingsPanels.present(panel, on: Windows.window(of: browser)) { url in
+            if let url { prefs.downloads = url }
+        }
     }
 
     // MARK: - pieces
@@ -659,10 +611,32 @@ struct Segmented<Option: Hashable>: View {
     /// True when the control has the whole width to itself, so the choices
     /// share it evenly instead of each taking only what its word needs.
     var wide = false
+    /// Fork (settings-a11y): what VoiceOver calls the row of choices; a
+    /// `Line` hands its title down instead (Fork/SettingsControls.swift).
+    var label: String? = nil
 
     @Namespace private var slide
+    @Environment(\.controlLabel) private var rowLabel // Fork (settings-a11y)
+    @Environment(\.isEnabled) private var enabled // Fork (settings-a11y)
+    @Environment(\.settingsPageName) private var pageName // Fork (settings-a11y)
+    @FocusState private var focused: Bool // Fork (settings-a11y)
+
+    init(options: [(Option, String)], selection: Binding<Option>, wide: Bool = false, label: String? = nil) {
+        self.options = options
+        self._selection = selection
+        self.wide = wide
+        self.label = label
+    }
+
+    /// Fork (settings-a11y): ← → move the choice along, as in a radio group.
+    private func step(_ by: Int) {
+        guard enabled, let next = SettingsControlRules.step(from: options.firstIndex { $0.0 == selection }, by: by, count: options.count) else { return }
+        withAnimation(Motion.settle) { selection = options[next].0 }
+    }
 
     var body: some View {
+        let _ = SettingsControlLedger.note("choices", page: pageName, name: SettingsControlRules.name(given: label, row: rowLabel),
+                                           value: options.first { $0.0 == selection }?.1 ?? "", keyboard: enabled, disabled: !enabled, focused: focused) // Fork (settings-a11y)
         HStack(spacing: 2) {
             ForEach(options, id: \.0) { option, title in
                 Text(title)
@@ -683,22 +657,56 @@ struct Segmented<Option: Hashable>: View {
                     }
                     .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     .onTapGesture {
+                        guard enabled else { return } // Fork (settings-a11y)
                         withAnimation(Motion.settle) { selection = option }
                     }
+                    // Fork (settings-a11y): each choice a button VoiceOver can press.
+                    .accessibilityElement()
+                    .accessibilityLabel(title)
+                    .accessibilityAddTraits(option == selection ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityAction { if enabled { withAnimation(Motion.settle) { selection = option } } }
             }
         }
         .padding(2)
         .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .animation(Motion.settle, value: selection)
+        // Fork (settings-a11y): one stop for Tab; ← → choose.
+        .settingsFocusable($focused, enabled: enabled, shape: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
+            step(press.key == .leftArrow ? -1 : 1)
+            return .handled
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(SettingsControlRules.name(given: label, row: rowLabel))
+        .accessibilityValue(options.first { $0.0 == selection }?.1 ?? "")
     }
 }
 
 /// On or off, in ink rather than in blue.
 struct Switch: View {
     @Binding var on: Bool
+    /// Fork (settings-a11y): what VoiceOver calls it; a `Line` hands its
+    /// title down instead (Fork/SettingsControls.swift).
+    var label: String? = nil
+    @Environment(\.controlLabel) private var rowLabel // Fork (settings-a11y)
+    @Environment(\.isEnabled) private var enabled // Fork (settings-a11y)
+    @Environment(\.settingsPageName) private var pageName // Fork (settings-a11y)
+    @FocusState private var focused: Bool // Fork (settings-a11y)
+
+    init(on: Binding<Bool>, label: String? = nil) {
+        self._on = on
+        self.label = label
+    }
+
+    private func flip() {
+        guard enabled else { return }
+        withAnimation(Motion.settle) { on.toggle() }
+    }
 
     var body: some View {
         let _ = SettingsPerf.tick("switch") // Fork (settings-perf)
+        let _ = SettingsControlLedger.note("switch", page: pageName, name: SettingsControlRules.name(given: label, row: rowLabel),
+                                           value: on ? "On" : "Off", keyboard: enabled, disabled: !enabled, focused: focused) // Fork (settings-a11y)
         Capsule()
             .fill(on ? Palette.ink : Palette.faint)
             .frame(width: 30, height: 18)
@@ -709,8 +717,20 @@ struct Switch: View {
                     .padding(2)
             }
             .contentShape(Capsule())
-            .onTapGesture { withAnimation(Motion.settle) { on.toggle() } }
+            .onTapGesture { flip() }
             .animation(Motion.settle, value: on)
+            // Fork (settings-a11y): a switch to VoiceOver, and Space or
+            // Return flips it once Tab has reached it.
+            .settingsFocusable($focused, enabled: enabled, shape: Capsule())
+            .onKeyPress(keys: [.space, .return]) { _ in
+                flip()
+                return .handled
+            }
+            .accessibilityElement()
+            .accessibilityLabel(SettingsControlRules.name(given: label, row: rowLabel))
+            .accessibilityValue(on ? "On" : "Off")
+            .accessibilityAddTraits(.isToggle)
+            .accessibilityAction { flip() }
     }
 }
 
@@ -723,6 +743,9 @@ struct Pill: View {
     let action: () -> Void
 
     @State private var hovering = false
+    @FocusState private var focused: Bool // Fork (settings-a11y)
+    @Environment(\.isEnabled) private var enabled // Fork (settings-a11y)
+    @Environment(\.settingsPageName) private var pageName // Fork (settings-a11y)
 
     init(_ title: String, filled: Bool = false, tint: Color = Palette.ink, action: @escaping () -> Void) {
         self.title = title
@@ -733,6 +756,7 @@ struct Pill: View {
 
     var body: some View {
         let _ = SettingsPerf.tick("pill") // Fork (settings-perf)
+        let _ = SettingsControlLedger.note("button", page: pageName, name: title, keyboard: enabled, disabled: !enabled, focused: focused) // Fork (settings-a11y)
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11.5))
@@ -749,6 +773,7 @@ struct Pill: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(Motion.quick, value: hovering)
+        .settingsFocusRing($focused, shape: Capsule()) // Fork (settings-a11y)
     }
 }
 

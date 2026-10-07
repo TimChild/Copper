@@ -84,6 +84,9 @@ struct PasswordsPanel: View {
                         Text(browser.saved.count == 1 ? "1 password" : "\(browser.saved.count) passwords")
                             .font(.system(size: 12))
                             .foregroundStyle(Palette.muted)
+                        if !browser.saved.isEmpty { // Fork (password-csv): out as well as in
+                            Pill("Export…") { browser.exportPasswordsCSV() }
+                        }
                     }
                 }
                 Text("macOS asks once for that browser's keychain key. Nothing is changed there; everything lands in your own keychain, under \(Fork.name).")

@@ -279,6 +279,9 @@ private enum Swizzles {
         }
         replace(NSAlert.self, #selector(NSAlert.runModal), imp_implementationWithBlock(alertModal))
         let alertSheet: @convention(block) (NSAlert, NSWindow?, (@convention(block) (NSApplication.ModalResponse) -> Void)?) -> Void = { alert, _, done in
+            // A Settings page's own question, in a test run, waits for the
+            // bench instead (X-13, Fork/SettingsControls.swift `TestConfirm`).
+            if let done, MainActor.assumeIsolated({ TestConfirm.adopt(alert, done: { done($0) }) }) { return }
             Headless.log("declined alert sheet: \(summary(alert))")
             DispatchQueue.main.async { done?(.abort) }
         }

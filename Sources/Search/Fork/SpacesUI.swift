@@ -517,6 +517,8 @@ enum SpaceDelete {
         default: index = titles.firstIndex { $0 == "Cancel" }
         }
         guard let index else { return false }
+        // Held for the bench in a headless test run: no sheet to click (X-13).
+        if TestConfirm.holds { return TestConfirm.answer(String(index + 1))["answered"] != nil }
         alert.buttons[index].performClick(nil)
         return true
     }
@@ -563,12 +565,8 @@ enum SpaceDelete {
             }
         }
         asking = alert
-        DispatchQueue.main.async {
-            if let window = Links.window, window.isVisible {
-                alert.beginSheetModal(for: window, completionHandler: decide)
-            } else {
-                decide(alert.runModal())
-            }
-        }
+        // A sheet on the window — or, in a test run, a question the bench
+        // can answer too (X-13).
+        TestConfirm.present(alert, kind: "spaces.delete", window: Links.window, decide: decide)
     }
 }

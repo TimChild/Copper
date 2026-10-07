@@ -43,7 +43,8 @@ struct SettingsSearchField: View {
                         .foregroundStyle(Palette.muted.opacity(0.8))
                 }
                 .buttonStyle(.plain)
-                .help("Clear   esc")
+                .help("Clear  ⎋")
+                .accessibilityLabel("Clear search")
             }
         }
         .padding(.horizontal, 10)
@@ -135,6 +136,20 @@ struct SettingsResults: View {
     /// Narrow, the section names on the right give their room to the
     /// sentences under the titles.
     @State private var wide = true
+    /// The preferences most in-place switches stand for, watched so a flip —
+    /// here or anywhere else — shows in its row at once rather than at the
+    /// next keystroke. (Rows are equatable on the switch's value, so only the
+    /// flipped row redraws.)
+    @ObservedObject private var prefs: Preferences
+    /// Bumped by a flip in the list, for the switches that stand for
+    /// something other than the preferences (agents, Labs).
+    @State private var flips = 0
+
+    init(finder: SettingsFinder, browser: Browser) {
+        self.finder = finder
+        self.browser = browser
+        self._prefs = ObservedObject(wrappedValue: browser.prefs)
+    }
 
     static let suggestions = ["dark mode", "passwords", "downloads folder", "agents", "default browser", "updates", "block ads", "1Password"]
 
@@ -186,7 +201,10 @@ struct SettingsResults: View {
 
     private func row(_ hit: SettingsHit) -> some View {
         let index = finder.results.firstIndex { $0.id == hit.id } ?? -1
-        let toggle = hit.entry.toggle?(browser)
+        let _ = flips
+        let toggle = (hit.entry.toggle?(browser)).map { binding in
+            Binding(get: { binding.wrappedValue }, set: { binding.wrappedValue = $0; flips &+= 1 })
+        }
         return SettingsResultRow(
             hit: hit,
             index: index,
@@ -267,7 +285,7 @@ struct SettingsResultRow: View, Equatable {
                     .fixedSize()
             }
             if let toggle {
-                Switch(on: toggle)
+                Switch(on: toggle, label: hit.entry.title) // settings-a11y
             }
             Image(systemName: "return")
                 .font(.system(size: 10.5, weight: .medium))

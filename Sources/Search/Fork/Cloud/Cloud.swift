@@ -113,6 +113,10 @@ final class Cloud: ObservableObject {
     @Published private(set) var link: Link?
     @Published private(set) var account: Account?          // the token is never published; it lives in cloud.json (0600)
     @Published private(set) var reachable: Bool = false     // the last request or health check got an answer
+    /// How many requests the server has answered (any status) this run.
+    /// CloudSync stamps "last synced" only when this moved: a sync that
+    /// sent nothing proves nothing about the server.
+    private(set) var answers = 0
 
     var isLinked: Bool { link != nil }
     var isSignedIn: Bool { account != nil }
@@ -377,6 +381,9 @@ final class Cloud: ObservableObject {
         } catch let failure as Failure {
             throw failure
         } catch {
+            if Cloud.lacksFingerprint(error, pinned: link.fingerprint != nil, https: link.url.scheme == "https") {
+                throw Failure(status: 0, code: "tls", message: Cloud.incompleteLinkCode)
+            }
             throw Cloud.transportFailure(error, trust: probeTrust)
         }
         if let old = self.link, old.url != link.url || old.key != link.key { forgetAccount() }
@@ -523,6 +530,20 @@ final class Cloud: ObservableObject {
             break
         }
         return failure
+    }
+
+    nonisolated static let incompleteLinkCode = "This link code is incomplete — copy the whole code from `copper-cloud link-code` and paste it again"
+
+    /// A link code with no fingerprint, to an instance whose certificate this
+    /// Mac doesn't know: what `copper-cloud link-code` prints always carries
+    /// the fingerprint, so the code was cut short — not "the server's
+    /// certificate isn't trusted" and the system's paragraph about it.
+    nonisolated static func lacksFingerprint(_ error: Error, pinned: Bool, https: Bool) -> Bool {
+        guard !pinned, https else { return false }
+        switch (error as? URLError)?.code {
+        case .serverCertificateUntrusted, .serverCertificateHasUnknownRoot: return true
+        default: return false
+        }
     }
 
     /// A TLS failure that means "the certificate wasn't trusted", as opposed
@@ -724,6 +745,7 @@ final class Cloud: ObservableObject {
                     throw Failure(status: 0, code: "network", message: "No HTTP answer")
                 }
                 setReachable(true)
+                answers += 1
                 if (200..<300).contains(http.statusCode) { return (data, http) }
                 if idempotent, attempt < 3, [502, 503, 504].contains(http.statusCode) {
                     try await Task.sleep(nanoseconds: UInt64(attempt) * 600_000_000)

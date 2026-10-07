@@ -495,14 +495,30 @@ final class Bitwarden: ObservableObject {
 
     func unlock(password: String) async throws {
         guard !password.isEmpty else { throw Failure(message: "Bitwarden master password is required") }
-        let data = try await run(["unlock", "--passwordenv", "BW_PASSWORD", "--raw"],
+        let data: Data
+        do {
+            data = try await run(["unlock", "--passwordenv", "BW_PASSWORD", "--raw"],
                                  env: ["BW_PASSWORD": password], timeout: 30)
+        } catch let failure as Failure {
+            throw Failure(message: Self.unlockMessage(failure.message))
+        }
         let key = Self.session(from: data)
         guard !key.isEmpty else { throw Failure(message: "Bitwarden did not return a session") }
         sessionKey = key
         persistSession()
         await refreshStatus()
         await refreshCacheIfPossible()
+    }
+
+    /// What `bw unlock` says when the master password is wrong — the SDK's
+    /// "Cryptography error, The decryption operation failed", or the older
+    /// "Invalid master password." — in words; anything else as it came.
+    nonisolated static func unlockMessage(_ raw: String) -> String {
+        let said = raw.lowercased()
+        if said.contains("decryption operation failed") || said.contains("invalid master password") || said.contains("cryptography error") {
+            return "Wrong master password — try again"
+        }
+        return raw
     }
 
     func lock() async {

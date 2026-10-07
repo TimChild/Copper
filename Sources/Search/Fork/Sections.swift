@@ -202,6 +202,18 @@ final class Sections: ObservableObject {
             // age in hours runs it against that instead, for a test that
             // doesn't want to wait a day for something to go stale.
             note["archived"] = sweep(in: browser, olderThan: Double(arg))
+        case "age":
+            // age TAB HOURS: the row was last looked at that long ago, so a
+            // bare `archive` afterwards proves the window itself (test runs only).
+            let words = arg.split(separator: " ").map(String.init)
+            guard Store.testing else { return ["error": "only in a test run"] }
+            guard words.count == 2, let tab = find(words[0]), let hours = Double(words[1]) else {
+                return ["error": "sections age TAB HOURS"]
+            }
+            let then = Date().addingTimeInterval(-hours * 3600)
+            seen[tab.id] = then
+            tab.backdate(touched: then)
+            note["aged"] = ["tab": tab.id.uuidString, "hours": hours]
         case "window":
             // 24, 24h, h24 and never all say the same thing.
             let key = arg.lowercased().trimmingCharacters(in: .whitespaces)

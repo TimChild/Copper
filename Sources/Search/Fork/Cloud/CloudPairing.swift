@@ -255,8 +255,7 @@ final class CloudPairing: ObservableObject {
 
     func copy() {
         guard let current else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(current.link, forType: .string)
+        SettingsActions.copy(current.link)
         copied = true
         let id = current.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in

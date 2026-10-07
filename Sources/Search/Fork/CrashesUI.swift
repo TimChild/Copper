@@ -53,7 +53,10 @@ struct CrashesSection: View {
 
     private func reveal(_ crash: Crashes.Entry) {
         let file = crash.file.map { Crashes.folder.appendingPathComponent($0) }
-        if let file, FileManager.default.fileExists(atPath: file.path) {
+        // A test world notes it rather than bringing Finder forward.
+        if SettingsActions.probe {
+            SettingsActions.open(file ?? Crashes.folder)
+        } else if let file, FileManager.default.fileExists(atPath: file.path) {
             NSWorkspace.shared.activateFileViewerSelecting([file])
         } else {
             NSWorkspace.shared.activateFileViewerSelecting([Crashes.folder])
@@ -63,8 +66,7 @@ struct CrashesSection: View {
     /// The readable summary — how it ended, the frames, the breadcrumbs —
     /// with the full report's path in it, the same as `copper crashes show N`.
     private func copy(_ crash: Crashes.Entry) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(Crashes.text(crash, n: log.position, of: max(log.total, 1)), forType: .string)
+        SettingsActions.copy(Crashes.text(crash, n: log.position, of: max(log.total, 1)))
         copied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
     }

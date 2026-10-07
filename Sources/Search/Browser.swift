@@ -559,8 +559,7 @@ final class Browser: NSObject, ObservableObject {
             announce("The keychain didn't give up that password")
             return
         }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(full.password, forType: .string)
+        SettingsActions.copy(full.password) // Fork (probe-pasteboard): a test world's copy stays in its own pasteboard — Fork/SettingsActions.swift
         announce("Password copied")
     }
 
@@ -607,19 +606,9 @@ final class Browser: NSObject, ObservableObject {
         panel.allowedContentTypes = [.commaSeparatedText, .plainText]
         panel.allowsMultipleSelection = false
         panel.prompt = "Import"
-        panel.message = "A passwords export, as Chrome, Dia or Google Password Manager write it."
+        panel.message = "A passwords export — from Chrome, Safari, Apple Passwords or a password manager." // Fork (password-csv)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-            announce("Couldn't read that file as text")
-            return
-        }
-        let result = Vault.take(csv: text)
-        relist()
-        announce(
-            result.skipped == 0
-                ? "\(result.kept) passwords in the keychain"
-                : "\(result.kept) in the keychain, \(result.skipped) skipped"
-        )
+        importPasswordsCSV(from: url) // Fork (password-csv): checked, off the main thread, one clear sentence — Fork/Credentials/PasswordCSV.swift
     }
 
     // MARK: - what is kept, and getting rid of it
@@ -631,25 +620,16 @@ final class Browser: NSObject, ObservableObject {
     /// Cookies, caches, local storage — everything a site left on this Mac.
     /// Clearing it signs you out of everything, which is the point.
     func clearSites() {
-        let types = WKWebsiteDataStore.allWebsiteDataTypes()
-        Store.websites.removeData(
-            ofTypes: types, modifiedSince: .distantPast
-        ) { [weak self] in
-            MainActor.assumeIsolated { self?.announce("Signed out of everything") }
+        // Fork (privacy-clear): every jar — the shared one and each space profile's — not only the front space's.
+        PrivacyClear.remove(WKWebsiteDataStore.allWebsiteDataTypes()) { [weak self] in
+            self?.announce("Signed out of everything")
         }
     }
 
     /// Only what was fetched to draw pages, not what identifies you.
     func clearCache() {
-        let types: Set<String> = [
-            WKWebsiteDataTypeDiskCache,
-            WKWebsiteDataTypeMemoryCache,
-            WKWebsiteDataTypeOfflineWebApplicationCache,
-        ]
-        Store.websites.removeData(
-            ofTypes: types, modifiedSince: .distantPast
-        ) { [weak self] in
-            MainActor.assumeIsolated { self?.announce("Cache cleared") }
+        PrivacyClear.remove(PrivacyClear.cacheTypes) { [weak self] in // Fork (privacy-clear): every jar
+            self?.announce("Cache cleared")
         }
     }
 
@@ -800,7 +780,7 @@ final class Browser: NSObject, ObservableObject {
         hush?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.announcement = nil }
         hush = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.7, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Announcements.seconds(text), execute: work) // Fork (announce-time): long enough to read — Fork/Announcements.swift
     }
 
     /// A download door is present in either chrome mode unless the page owns
@@ -1000,6 +980,14 @@ final class Browser: NSObject, ObservableObject {
             .dropFirst()
             .sink { [weak self] on in
                 guard let self, let web = active?.web else { return }
+                // Fork (settings-browse): WebKit's toggle writes the app's own
+                // defaults — in a test run, the real Copper's. There the
+                // change waits for the next launch (`tellWebKit`).
+                if Store.testing {
+                    Preferences.tellWebKit(autocorrect: on)
+                    announce(on ? "Autocorrect on" : "Autocorrect off")
+                    return
+                }
                 let selector = NSSelectorFromString("toggleAutomaticSpellingCorrection:")
                 guard web.responds(to: selector) else { return }
                 // Toggling is all there is, so it is only sent when the two
@@ -2531,17 +2519,33 @@ extension Browser: WKDownloadDelegate {
         let name = asked ?? (suggestedFilename.isEmpty ? "download" : suggestedFilename)
 
         guard !prefs.asksWhereToSave else {
+            // Fork (settings-browse): a test run never puts a save panel on
+            // somebody's screen; the bench answers it (Fork/SettingsBrowse.swift).
+            if Store.testing {
+                guard let url = DownloadAsk.answer(name, in: prefs.downloads) else {
+                    completionHandler(nil)
+                    return
+                }
+                completionHandler(url)
+                Downloads.shared.destined(download, to: url)
+                announce("Downloading \(url.lastPathComponent)")
+                return
+            }
             let panel = NSSavePanel()
             panel.nameFieldStringValue = name
             panel.directoryURL = prefs.downloads
             panel.canCreateDirectories = true
-            guard panel.runModal() == .OK, let url = panel.url else {
-                completionHandler(nil)
-                return
+            // Fork (settings-browse): a sheet on this window rather than a
+            // modal that froze every window until it was answered.
+            SettingsPanels.present(panel, on: Windows.window(of: self)) { [weak self] url in
+                guard let url else {
+                    completionHandler(nil)
+                    return
+                }
+                completionHandler(url)
+                Downloads.shared.destined(download, to: url)
+                self?.announce("Downloading \(url.lastPathComponent)")
             }
-            completionHandler(url)
-            Downloads.shared.destined(download, to: url)
-            announce("Downloading \(url.lastPathComponent)")
             return
         }
 

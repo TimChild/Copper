@@ -255,7 +255,9 @@ unmasked, never in any status, and deleted on sign-out or disconnect. While
 the cloud provides a gateway key, every model call uses it — the gateway lane
 with the cloud's key and address, even with a Claude account signed in; the
 lane chosen on the Mac is kept and back in force after sign-out. A Jev key
-typed on the Mac wins. See [intelligence.md](intelligence.md#keys-from-copper-cloud).
+typed on the Mac wins. The same answer may set the org's agent tool-call
+rounds per question (`agent.max_turns`), which wins over the Mac's own while
+signed in. See [intelligence.md](intelligence.md#keys-from-copper-cloud).
 
 `cloud.json` holds: the device id (minted once per data folder, so each probe
 world is its own device) and name, the link (address, key, fingerprint), the

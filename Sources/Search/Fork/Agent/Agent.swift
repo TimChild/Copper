@@ -21,18 +21,46 @@ final class Agent: ObservableObject {
     struct Config: Codable, Equatable {
         /// Empty means the router model.
         var model = ""
-        /// Tool-call rounds per question.
-        var maxTurns = 24
+        /// Tool-call rounds per question (Settings › Agents), 1…500. Copper
+        /// Cloud's value wins while it sets one (Agent.turnBudget).
+        var maxTurns = Config.defaultMaxTurns {
+            didSet { let n = Config.clamped(maxTurns); if n != maxTurns { maxTurns = n } }
+        }
         /// Put the current page's address, title and a slice of its text in
         /// front of every question.
         var pageContext = true
+
+        static let defaultMaxTurns = 60
+        static let maxTurnsRange = 1...500
+        /// What builds before Settings › Agents always wrote, with no way to
+        /// change it: in a file without `version`, read as the default, not
+        /// as a choice. Files written now carry `version: 2`, so a 24 picked
+        /// in Settings stays 24.
+        static let legacyMaxTurns = 24
+        static let version = 2
+
+        enum CodingKeys: String, CodingKey { case model, maxTurns, pageContext, version }
+
+        static func clamped(_ n: Int) -> Int { min(max(n, maxTurnsRange.lowerBound), maxTurnsRange.upperBound) }
 
         init() {}
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
-            maxTurns = try c.decodeIfPresent(Int.self, forKey: .maxTurns) ?? 24
+            let legacy = ((try? c.decodeIfPresent(Int.self, forKey: .version)) ?? nil) == nil
+            if let stored = (try? c.decodeIfPresent(Int.self, forKey: .maxTurns)) ?? nil, !(legacy && stored == Config.legacyMaxTurns) {
+                maxTurns = Config.clamped(stored)
+            } else {
+                maxTurns = Config.defaultMaxTurns
+            }
             pageContext = try c.decodeIfPresent(Bool.self, forKey: .pageContext) ?? true
+        }
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(model, forKey: .model)
+            try c.encode(maxTurns, forKey: .maxTurns)
+            try c.encode(pageContext, forKey: .pageContext)
+            try c.encode(Config.version, forKey: .version)
         }
     }
 
@@ -119,6 +147,24 @@ final class Agent: ObservableObject {
     private func save() {
         guard let data = try? JSONEncoder().encode(config) else { return }
         try? data.write(to: Agent.file, options: .atomic)
+    }
+
+    /// Tool-call rounds per question in force: Copper Cloud's while it sets
+    /// one (`"agent": {"max_turns": N}`), else this Mac's (Settings › Agents),
+    /// which the cloud never changes and which is back after sign-out.
+    var turnBudget: (turns: Int, cloud: Bool) {
+        Agent.budget(local: config.maxTurns, cloud: Intelligence.shared.cloudMaxTurns)
+    }
+
+    static func budget(local: Int, cloud: Int?) -> (turns: Int, cloud: Bool) {
+        if let cloud, CloudProvided.maxTurnsRange.contains(cloud) { return (cloud, true) }
+        return (Config.clamped(local), false)
+    }
+
+    /// What the pane says when the budget is spent, and where to change it.
+    static func stopNote(turns: Int, cloud: Bool) -> String {
+        cloud ? "Stopped after \(turns) rounds of tool calls — ask again to continue. The limit is set by your Copper Cloud."
+              : "Stopped after \(turns) rounds of tool calls — ask again to continue, or raise the limit in Settings › Agents."
     }
 
     var modelName: String { Intelligence.shared.modelName }
@@ -303,7 +349,9 @@ final class Agent: ObservableObject {
         // Whether the model has already been told it announced work it never
         // started. Once per question: a second time it is an answer.
         var nudged = false
-        for turn in 0..<max(1, config.maxTurns) {
+        // Read once: a cloud refresh mid-run does not move the goalposts.
+        let budget = turnBudget
+        for turn in 0..<budget.turns {
             if !live() { return }
             status = turn == 0 ? "Thinking…" : "Thinking… (\(turn + 1))"
             let reply: [String: Any]
@@ -440,7 +488,7 @@ final class Agent: ObservableObject {
                 return
             }
         }
-        items.append(Item(kind: .note, text: "Stopped after \(config.maxTurns) rounds of tool calls — ask again to continue.", ok: false))
+        items.append(Item(kind: .note, text: Agent.stopNote(turns: budget.turns, cloud: budget.cloud), ok: false))
         status = ""
     }
 
@@ -756,6 +804,63 @@ final class Agent: ObservableObject {
         return out
     }
 
+    /// The turn budget: the default, chat.json from older builds, the
+    /// range, and Copper Cloud's value winning while it sets one and going
+    /// with the cloud. Live on the shared instances, put back as found;
+    /// chat.json is never written.
+    static func turnsSelfTest() -> [String] {
+        var failures: [String] = []
+        func check(_ ok: Bool, _ name: String) { if !ok { failures.append("turns: \(name)") } }
+        func decode(_ json: String) -> Config? { try? JSONDecoder().decode(Config.self, from: Data(json.utf8)) }
+
+        check(Config().maxTurns == 60 && Config.defaultMaxTurns == 60, "default is 60")
+        check(decode("{}")?.maxTurns == 60, "absent is the default")
+        check(decode(#"{"model":"","maxTurns":24,"pageContext":true}"#)?.maxTurns == 60, "a stored 24 (the old default) reads as 60")
+        check(decode(#"{"maxTurns":25}"#)?.maxTurns == 25 && decode(#"{"maxTurns":100}"#)?.maxTurns == 100, "a chosen value is kept")
+        check(decode(#"{"maxTurns":0}"#)?.maxTurns == 1 && decode(#"{"maxTurns":-3}"#)?.maxTurns == 1, "below the range clamps to 1")
+        check(decode(#"{"maxTurns":9999}"#)?.maxTurns == 500, "above the range clamps to 500")
+        check(decode(#"{"maxTurns":"lots","pageContext":false}"#).map { $0.maxTurns == 60 && !$0.pageContext } == true, "a wrong type is the default, the rest kept")
+        var c = Config()
+        c.maxTurns = 0
+        check(c.maxTurns == 1, "setting 0 clamps to 1")
+        c.maxTurns = 501
+        check(c.maxTurns == 500, "setting 501 clamps to 500")
+        check(decode(#"{"maxTurns":24,"version":2}"#)?.maxTurns == 24, "a 24 written by this build is a choice")
+        c.maxTurns = 24
+        if let data = try? JSONEncoder().encode(c), let back = try? JSONDecoder().decode(Config.self, from: data) {
+            check(back.maxTurns == 24, "24 picked in Settings survives a relaunch")
+        } else { check(false, "round trip 24") }
+        c.maxTurns = 120
+        if let data = try? JSONEncoder().encode(c), let back = try? JSONDecoder().decode(Config.self, from: data) {
+            check(back == c, "round trip keeps 120")
+        } else { check(false, "round trip 120") }
+
+        check(budget(local: 60, cloud: nil) == (60, false), "no cloud: this Mac's")
+        check(budget(local: 60, cloud: 100) == (100, true) && budget(local: 300, cloud: 5) == (5, true), "the cloud's wins, up or down")
+        check(budget(local: 60, cloud: 0) == (60, false) && budget(local: 60, cloud: 501) == (60, false), "an out-of-range cloud value is ignored")
+        check(budget(local: 0, cloud: nil) == (1, false), "budget never zero")
+        let local = stopNote(turns: 60, cloud: false), org = stopNote(turns: 100, cloud: true)
+        check(local.hasPrefix("Stopped after 60 rounds of tool calls") && local.contains("Settings › Agents"), "stop note names the setting")
+        check(org.hasPrefix("Stopped after 100 rounds") && org.contains("Copper Cloud") && !org.contains("Settings"), "stop note names the cloud")
+
+        // Live: the cloud sets it, the cloud goes (sign-out adopts nil).
+        let brain = Intelligence.shared, agent = Agent.shared
+        let before = brain.cloud
+        let mine = agent.config
+        let onDisk = try? Data(contentsOf: Agent.file)
+        brain.adoptCloud(CloudProvided(agent: .init(maxTurns: 100), host: "selftest.example"))
+        check(brain.cloudMaxTurns == 100 && agent.turnBudget == (100, true), "live: the cloud's 100 is in force")
+        check(((brain.status["cloud"] as? [String: Any])?["agentMaxTurns"] as? Int) == 100, "live: ai status shows it")
+        check(agent.config == mine, "live: this Mac's setting untouched")
+        brain.adoptCloud(CloudProvided(router: .init(key: "sk-selftest", url: "https://gw.selftest.example"), host: "selftest.example"))
+        check(brain.cloudMaxTurns == nil && agent.turnBudget == (Config.clamped(mine.maxTurns), false), "live: keys without an agent value leave this Mac's")
+        brain.adoptCloud(nil)
+        check(brain.cloudMaxTurns == nil && agent.turnBudget == (Config.clamped(mine.maxTurns), false), "live: signed out, this Mac's again")
+        check((try? Data(contentsOf: Agent.file)) == onDisk, "live: chat.json untouched")
+        brain.adoptCloud(before)
+        return failures
+    }
+
     static func sealedSelfTest() -> [String] {
         var failures: [String] = []
         func call(_ id: String) -> [String: Any] { ["id": id, "type": "function", "function": ["name": "x", "arguments": "{}"]] }
@@ -836,8 +941,12 @@ final class Agent: ObservableObject {
         case "close": open = false
         case "clear": clear()
         case "stop": stop()
-        case "selftest": return ["failures": Agent.sealedSelfTest() + Claude.selfTest() + Intelligence.selfTest()]
+        case "selftest": return ["failures": Agent.sealedSelfTest() + Agent.turnsSelfTest() + Claude.selfTest() + Intelligence.selfTest()]
         case "regression": return ["failures": WaveChecks.run()]
+        case "turns":
+            // `bench agent turns N`: Settings › Agents' number, clamped like the field.
+            guard let n = Int((request["arg"] as? String ?? "").trimmingCharacters(in: .whitespaces)) else { return ["error": "turns needs a number"] }
+            config.maxTurns = n
         case "seed":
             if let error = seed(request["arg"] as? String ?? "chat", in: browser) { return ["error": error] }
         case "expand":
@@ -853,6 +962,7 @@ final class Agent: ObservableObject {
         return ["open": open, "busy": busy, "status": status, "model": modelName, "draft": draft,
                 "lane": Intelligence.shared.lane.rawValue, "laneSource": Intelligence.shared.laneSource,
                 "tier": Intelligence.shared.tier.rawValue, "items": rows, "usage": usage,
+                "maxTurns": config.maxTurns, "turnBudget": turnBudget.turns, "turnSource": turnBudget.cloud ? "cloud" : "local",
                 "servers": Servers.shared.all.map { ["name": $0.name, "state": $0.state, "tools": $0.tools.count] as [String: Any] }]
     }
 

@@ -292,6 +292,18 @@ something went wrong (a reply cut off at the output limit, a timeout, an
 empty reply) is an orange callout, never a silence. Outside drivers' cards
 (above) arrive in the same conversation.
 
+**Tool-call rounds per question.** The model may call tools up to 60 times
+for one question (Settings › Agents › *Tool-call rounds per question*, 1–500;
+a `24` in `chat.json` from builds before the setting existed reads as 60).
+When the budget is spent the pane says *Stopped after N rounds of tool calls —
+ask again to continue, or raise the limit in Settings › Agents.* A Copper
+Cloud that sets the org's number (`"agent": {"max_turns": N}` in
+`GET /v1/intelligence`) wins while you're signed in to it: the row is
+greyed and reads *Set by Copper Cloud: N*, the note says the limit is set by
+your Copper Cloud, and your own number is back after sign-out. `./bench agent
+turns N` sets it; `./bench agent chat` shows `maxTurns`, `turnBudget` and
+`turnSource`. (`jev_run`'s own 60-action budget is separate.)
+
 The composer grows with what you type: Return sends, ⇧Return breaks the
 line. The chip under it is the page in front of every question (the tab's
 address, title and first 3000 characters, or the canvas by name) — click it

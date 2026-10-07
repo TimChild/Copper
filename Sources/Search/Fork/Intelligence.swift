@@ -213,6 +213,9 @@ final class Intelligence: ObservableObject {
     /// `cloud` while Copper Cloud's gateway key decides the lane, else `local`.
     var laneSource: String { sources["lane"] ?? "local" }
     var cloudLane: Bool { laneSource == "cloud" }
+    /// The org's tool-call rounds per question while Copper Cloud sets one;
+    /// it wins over Settings › Agents (Agent.turnBudget), which is kept.
+    var cloudMaxTurns: Int? { cloud?.agentMaxTurns }
     var tier: Tier { keys.tier }
 
     /// what Jev mode types with: the text model when one is named, else the chosen model.
@@ -336,6 +339,7 @@ final class Intelligence: ObservableObject {
             var line: [String: Any] = ["host": cloud.host ?? "", "provides": cloud.provides]
             if let updated = cloud.updatedAt { line["updatedAt"] = updated }
             if let fetched = cloud.fetchedAt { line["fetchedAt"] = ISO8601DateFormatter().string(from: fetched) }
+            if let turns = cloud.agentMaxTurns { line["agentMaxTurns"] = turns }
             out["cloud"] = line
         }
         return out
@@ -822,6 +826,31 @@ extension Intelligence {
         check(odd != nil && odd!.isEmpty, "wrong types are not provided")
         check(CloudProvided.parse(Data("{}".utf8))?.isEmpty == true, "an empty object provides nothing")
         check(CloudProvided.parse(Data("[]".utf8)) == nil && CloudProvided.parse(Data("<html>".utf8)) == nil, "not an object is nil")
+        // The org's agent turn budget: top level, beside the keys, 1…500 only.
+        func turns(_ json: String) -> Int? { CloudProvided.parse(Data(json.utf8))?.agentMaxTurns }
+        let withAgent = CloudProvided.parse(Data(#"{"jev":null,"router":{"key":"sk-cloud-1234567","url":"https://gw.example"},"agent":{"max_turns":100}}"#.utf8))
+        check(withAgent?.agentMaxTurns == 100 && withAgent?.provides == ["router"], "parse agent.max_turns beside the keys")
+        check(full?.agent == nil && full?.agentMaxTurns == nil, "agent absent (an older cloud): not provided")
+        check(turns(#"{"agent":null}"#) == nil && turns(#"{"agent":{"max_turns":null}}"#) == nil && turns(#"{"agent":{}}"#) == nil, "agent null: not provided")
+        check(turns(#"{"agent":{"max_turns":1}}"#) == 1 && turns(#"{"agent":{"max_turns":500}}"#) == 500, "agent 1 and 500 are in range")
+        check(turns(#"{"agent":{"max_turns":0}}"#) == nil && turns(#"{"agent":{"max_turns":501}}"#) == nil && turns(#"{"agent":{"max_turns":-5}}"#) == nil, "agent out of range: ignored")
+        check(turns(#"{"agent":{"max_turns":100.5}}"#) == nil && turns(#"{"agent":{"max_turns":true}}"#) == nil && turns(#"{"agent":{"max_turns":"100"}}"#) == nil && turns(#"{"agent":5}"#) == nil, "agent wrong types: ignored")
+        check(turns(#"{"agent":{"max_turns":100.0}}"#) == 100, "agent 100.0 is 100")
+        if let agentOnly = CloudProvided.parse(Data(#"{"jev":null,"router":null,"agent":{"max_turns":80},"updated_at":null}"#.utf8)) {
+            check(!agentOnly.isEmpty && agentOnly.provides == [], "an agent value alone is something provided, not a key")
+            // cloud-intelligence.json keeps it the way CloudIntelligence writes it.
+            var cached = agentOnly
+            cached.fetchedAt = Date(timeIntervalSince1970: 1_790_000_000)
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+            if let data = try? encoder.encode(cached), let text = String(data: data, encoding: .utf8), let back = try? decoder.decode(CloudProvided.self, from: data) {
+                check(text.contains(#""max_turns":80"#) && back == cached && back.agentMaxTurns == 80, "agent survives the cache")
+            } else { check(false, "encode the agent part") }
+            if let old = try? decoder.decode(CloudProvided.self, from: Data(#"{"router":{"key":"sk-x"},"host":"h"}"#.utf8)) {
+                check(old.agent == nil, "a cache from before the agent part decodes")
+            } else { check(false, "decode an older cache") }
+        } else { check(false, "parse an agent-only answer") }
+        check(CloudProvided(agent: .init(maxTurns: 900)).agentMaxTurns == nil && CloudProvided(agent: .init(maxTurns: 900)).isEmpty, "an out-of-range cached value is not used")
         check(CloudProvided.masked("sk-abcdefghijkl") == "sk-…ijkl" && !CloudProvided.masked("sk-abcdefghijkl").contains("abcdefgh"), "masked")
 
         // This Mac and the cloud, field by field.

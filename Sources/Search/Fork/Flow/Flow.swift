@@ -113,7 +113,7 @@ final class Flow: ObservableObject {
         case idle
         case scanning
         case preview(FlowModel.Haul)
-        case moving([String])
+        case moving([FlowStep])
         case done(Report)
 
         /// For the event log and the bench: which phase, not its contents.
@@ -152,25 +152,42 @@ final class Flow: ObservableObject {
     /// — and it says "Arc", so without a name only Arc's folder is looked
     /// at. Chrome's is one macOS protects: walking it on every empty field
     /// would put a refusal on record each time, with nobody having asked.
-    static func hasHistorySource(_ name: String? = nil) -> Bool {
-        let wanted = (name ?? "Arc").lowercased()
-        return Chromium.known.contains { source in
-            guard wanted == source.name.lowercased() else { return false }
-            return historyFiles(in: source.root).isEmpty == false
+    static func hasHistorySource() -> Bool {
+        HistorySource.answer()
+    }
+
+    /// Whether Arc has a history file, for the ⌘K nudge. One level down
+    /// (`<root>/<profile>/History`), never a walk; looked at off the main
+    /// actor at most once a minute, and the last answer given meanwhile.
+    /// Only Arc's folder: it is the nudge's source, and other browsers'
+    /// folders aren't looked at before Move in opens.
+    @MainActor private enum HistorySource {
+        static var known = false
+        static var checked: Date?
+        static var looking = false
+
+        static func answer() -> Bool {
+            if !looking, checked.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
+                looking = true
+                Task.detached(priority: .utility) {
+                    let found = Flow.arcHistoryExists()
+                    await MainActor.run {
+                        known = found
+                        checked = Date()
+                        looking = false
+                    }
+                }
+            }
+            return known
         }
     }
 
-    private static func historyFiles(in root: URL) -> [URL] {
-        guard FileManager.default.fileExists(atPath: root.path),
-              let walk = FileManager.default.enumerator(
-                at: root, includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles, .skipsPackageDescendants]
-              ) else { return [] }
-        var found: [URL] = []
-        for case let url as URL in walk where url.lastPathComponent == "History" {
-            found.append(url)
+    private nonisolated static func arcHistoryExists() -> Bool {
+        guard let arc = Chromium.known.first(where: { $0.name == "Arc" }) else { return false }
+        return FlowChromeTabs.profiles(at: arc.root).contains { profile in
+            FileManager.default.fileExists(atPath: arc.root.appendingPathComponent(profile, isDirectory: true)
+                .appendingPathComponent("History").path)
         }
-        return found
     }
 
     /// Whether the sheet is up. Only `present(from:via:)` turns it on and
@@ -472,7 +489,8 @@ final class Flow: ObservableObject {
         haul.extensions = FlowExtensions.read(source.readerSource, profiles: source.profiles)
         haul.passkeyCount = FlowPasskeys.count(source.readerSource, profiles: source.profiles)
         haul.bookmarkCount = FlowBookmarks.count(FlowChromium.bookmarks(in: source).nodes)
-        haul.placeCount = FlowChromium.places(in: source).count
+        haul.placeCount = FlowChromium.placeCount(in: source)
+        haul.loginCount = FlowChromium.loginCount(in: source)
         haul.notes.append("\(haul.bookmarkCount) bookmarks")
         haul.notes.append("\(haul.placeCount) places")
         return haul
@@ -503,23 +521,25 @@ final class Flow: ObservableObject {
         let movedAt = Date()
         var report = Report()
         report.facts = FlowSummary.Facts(source: source.name)
-        var lines: [String] = []
-        phase = .moving(lines)
+        let choice = self.choice
+        var steps = FlowStep.steps(for: choice)
+        phase = .moving(steps)
         await pause()
         // The counts on screen are this source's own read; anything else is
         // read again rather than moved from a stale preview.
         let haul = previewed == source.id && lastHaulSource == source.id
             ? lastHaul
             : await Task.detached(priority: .userInitiated) { Flow.read(source) }.value
-        let choice = self.choice
         let reader = source.readerSource
         NSLog("Copper: Flow moving from %@ — %d spaces, %d tabs read; notes: %@",
               source.name, haul.spaces.count, haul.tabCount, haul.notes.joined(separator: "; "))
 
         if choice.tabs {
+            mark(.tabs, .working, "making spaces…", &steps)
             report.facts.tabsChosen = true
             report.facts.windowsRead = haul.spaces.count
             report.facts.windowsEmpty = haul.spaces.filter { $0.tabs.isEmpty }.count
+            report.facts.windowsAreSpaces = source.isArc
             report.facts.tabsWhy = haul.tabsTrouble
             // A window of only new-tab pages is a line in the summary, not
             // an empty space.
@@ -537,11 +557,12 @@ final class Flow: ObservableObject {
             report.facts.tabsSkipped = adoption.skipped
             report.facts.spacesMade = adoption.made.count
             report.facts.spacesFilled = adoption.filled.count
+            // A space with nothing of its own to open was not made either.
+            report.facts.windowsEmpty += adoption.leftOut
             report.tabs = adoption.tabs
             report.spaces = adoption.made.count + adoption.filled.count
             report.groups = adoption.groups
-            lines.append(FlowSummary.plural(adoption.tabs, "tab") + " in " + FlowSummary.plural(report.spaces, "space"))
-            phase = .moving(lines)
+            finish(.tabs, report.facts, &steps)
             await pause()
             // The new spaces are the one thing that cannot be re-fetched from
             // the store or re-read later: write them down now, before the
@@ -553,6 +574,7 @@ final class Flow: ObservableObject {
         }
 
         if choice.bookmarks {
+            mark(.bookmarks, .working, "reading…", &steps)
             let (read, new) = await browser.bringBookmarks(from: source)
             report.facts.bookmarksChosen = true
             report.facts.bookmarksRead = FlowBookmarks.count(read.nodes)
@@ -561,32 +583,34 @@ final class Flow: ObservableObject {
                 report.facts.bookmarksWhy = "couldn't read \(source.name)'s bookmarks file"
             }
             report.bookmarks = report.facts.bookmarksRead
-            lines.append(FlowSummary.plural(report.bookmarks, "bookmark"))
-            phase = .moving(lines)
+            finish(.bookmarks, report.facts, &steps)
             await pause()
         }
 
         if choice.history {
+            mark(.history, .working, "reading…", &steps)
             let before = browser.history.visitCount
             let places = await Task.detached(priority: .userInitiated) { FlowChromium.places(in: source) }.value
-            await Self.take(places, into: browser.history)
+            await Self.take(places, into: browser.history) { [weak self] done in
+                self?.progress(.history, "\(done.formatted()) of \(places.count.formatted()) places…")
+            }
             report.facts.historyChosen = true
             report.facts.placesRead = places.count
             report.facts.placesNew = max(0, browser.history.visitCount - before)
             report.places = places.count
-            lines.append(FlowSummary.plural(report.places, "place"))
-            phase = .moving(lines)
+            finish(.history, report.facts, &steps)
             await pause()
         }
 
         if choice.passwords || choice.cookies || choice.passkeys {
-            await moveSecrets(source, reader: reader, choice: choice, report: &report, lines: &lines)
+            await moveSecrets(source, reader: reader, choice: choice, report: &report, steps: &steps)
         }
 
         if choice.localStorage {
             report.facts.storageChosen = true
-            await moveLocalStorage(source, haul: haul, report: &report, lines: &lines)
+            await moveLocalStorage(source, haul: haul, report: &report, steps: &steps)
             report.facts.storageSites = report.storageSites
+            finish(.localStorage, report.facts, &steps)
         }
 
         if choice.extensions {
@@ -608,8 +632,7 @@ final class Flow: ObservableObject {
             } else {
                 report.facts.extensionsWhy = "they need macOS 15.4 or later"
             }
-            lines.append(FlowSummary.plural(report.extensions, "extension"))
-            phase = .moving(lines)
+            finish(.extensions, report.facts, &steps)
         }
 
         report.notes.append(contentsOf: haul.notes.filter { !$0.contains("bookmarks") && !$0.contains("places") })
@@ -622,25 +645,42 @@ final class Flow: ObservableObject {
         log("done", report.summary.map(\.plain).joined(separator: " | "))
     }
 
+    /// A row of the moving view changed in place.
+    private func mark(_ category: FlowSummary.Category, _ state: FlowStep.State, _ text: String, _ steps: inout [FlowStep]) {
+        steps = FlowStep.set(category, state, text, in: steps)
+        phase = .moving(steps)
+    }
+
+    /// A row done: what the summary will say about it.
+    private func finish(_ category: FlowSummary.Category, _ facts: FlowSummary.Facts, _ steps: inout [FlowStep]) {
+        steps = FlowStep.finished(category, facts, in: steps)
+        phase = .moving(steps)
+    }
+
+    /// A working row's progress, from a callback that can't hold the rows.
+    private func progress(_ category: FlowSummary.Category, _ text: String) {
+        guard case .moving(let shown) = phase else { return }
+        phase = .moving(FlowStep.set(category, .working, text, in: shown))
+    }
+
     /// One key read, then three reads that stand or fall on their own: a
     /// broken cookie jar no longer hides the passwords, and a key macOS
     /// refused is said once, against each thing it would have unlocked.
     private func moveSecrets(_ source: FlowSource, reader: Chromium.Source, choice: FlowModel.Choice,
-                             report: inout Report, lines: inout [String]) async {
+                             report: inout Report, steps: inout [FlowStep]) async {
         let seams = FlowSecrets.seams
         let passphrase = FlowSecrets.passphrases[source.name]
         report.facts.passwordsChosen = choice.passwords
         report.facts.cookiesChosen = choice.cookies
         report.facts.passkeysChosen = choice.passkeys
-        lines.append(seams ? "using the test passphrase for \(source.name)…" : "asking macOS for \(source.name)'s key…")
-        phase = .moving(lines)
+        let asking = seams ? "using the test passphrase for \(source.name)…" : "asking macOS for \(source.name)'s key…"
+        for category in [FlowSummary.Category.passwords, .passkeys, .cookies] { mark(category, .working, asking, &steps) }
         // The keychain read, the decryption and the SQLite copies all happen
         // off the main actor; this is where the old path froze the window
         // behind macOS's prompt.
         let key = await Task.detached(priority: .userInitiated) {
             Result { try FlowSecrets.key(for: reader, testPassphrase: passphrase, seams: seams) }
         }.value
-        lines.removeLast()
         guard case .success(let key) = key else {
             let why: String
             if case .failure(FlowSecrets.KeyTrouble.testRun) = key {
@@ -650,11 +690,11 @@ final class Flow: ObservableObject {
             } else {
                 why = "couldn't read \(source.name)'s key"
             }
-            if choice.passwords { report.facts.passwordsWhy = why; lines.append("passwords: \(why)") }
-            if choice.cookies { report.facts.cookiesWhy = why; lines.append("signed-in state: \(why)") }
-            if choice.passkeys { report.facts.passkeysWhy = why; lines.append("passkeys: \(why)") }
+            if choice.passwords { report.facts.passwordsWhy = why }
+            if choice.cookies { report.facts.cookiesWhy = why }
+            if choice.passkeys { report.facts.passkeysWhy = why }
             report.notes.append(why)
-            phase = .moving(lines)
+            for category in [FlowSummary.Category.passwords, .passkeys, .cookies] { finish(category, report.facts, &steps) }
             return
         }
         let profiles = source.profiles
@@ -691,15 +731,14 @@ final class Flow: ObservableObject {
             report.facts.passwordsKept = kept
             report.facts.passwordsNew = known ? new : nil
             report.passwords = kept
-            lines.append(FlowSummary.plural(kept, "password"))
             // Copper's list of saved passwords reads the keychain; a test
             // run's stand-in has nothing there to list.
             if !seams { browser(for: report)?.relist() }
         case .failure:
             report.facts.passwordsWhy = "couldn't read \(source.name)'s saved passwords"
-            lines.append("passwords: couldn't read them")
         case nil: break
         }
+        finish(.passwords, report.facts, &steps)
         switch legs.cookies {
         case .success(let cookies):
             // Awaited: the count is what WebKit took, not what was read.
@@ -716,12 +755,11 @@ final class Flow: ObservableObject {
             report.cookiesInStore = await withCheckedContinuation { done in
                 store.getAllCookies { done.resume(returning: $0.count) }
             }
-            lines.append("signed in to " + FlowSummary.plural(report.facts.cookieSites, "site"))
         case .failure:
             report.facts.cookiesWhy = "couldn't read \(source.name)'s cookies"
-            lines.append("signed-in state: couldn't read it")
         case nil: break
         }
+        finish(.cookies, report.facts, &steps)
         switch legs.passkeys {
         case .success(let passkeys):
             let name = source.name
@@ -729,13 +767,11 @@ final class Flow: ObservableObject {
             report.facts.passkeysFound = passkeys.count
             report.facts.passkeysNew = added
             report.passkeys = added
-            lines.append(FlowSummary.plural(added, "passkey"))
         case .failure:
             report.facts.passkeysWhy = "couldn't read \(source.name)'s passkeys"
-            lines.append("passkeys: couldn't read them")
         case nil: break
         }
-        phase = .moving(lines)
+        finish(.passkeys, report.facts, &steps)
     }
 
     private func browser(for report: Report) -> Browser? { browserForUndo }
@@ -836,9 +872,8 @@ final class Flow: ObservableObject {
     /// Every profile's storage goes into the shared store (where a space with
     /// no profile looks); a profile that one of the moved spaces wears also
     /// gets its own into that profile's store.
-    private func moveLocalStorage(_ source: FlowSource, haul: FlowModel.Haul, report: inout Report, lines: inout [String]) async {
-        lines.append("reading local storage…")
-        phase = .moving(lines)
+    private func moveLocalStorage(_ source: FlowSource, haul: FlowModel.Haul, report: inout Report, steps: inout [FlowStep]) async {
+        mark(.localStorage, .working, "reading…", &steps)
         let root = source.root
         let found = await Task.detached(priority: .userInitiated) { FlowLocalStorage.read(root: root) }.value
         found.warnings.forEach { NSLog("Copper: Flow local storage: %@", $0) }
@@ -849,32 +884,26 @@ final class Flow: ObservableObject {
             plan.append(StorageImport.Target(label: "profile:\(name)", store: Spaces.store(forProfile: name),
                                              data: origins, origins: origins.keys.sorted()))
         }
-        let line = lines.count - 1
         let sites = found.merged.count
         let summary = await StorageImport.shared.put(plan) { [weak self] done, total in
-            guard let self, case .moving(var shown) = self.phase, line < shown.count else { return }
             // Count every few origins rather than redraw the sheet 900 times.
             guard done == total || done.isMultiple(of: 10) else { return }
-            shown[line] = "local storage for \(sites) sites… \(done)/\(total)"
-            self.phase = .moving(shown)
+            self?.progress(.localStorage, "\(done) of \(total) sites…")
         }
         guard let summary else {
-            lines[line] = "local storage: another import is running"
+            report.facts.storageWhy = "another import was already running"
             report.notes.append("local storage was not moved: an import was already running")
-            phase = .moving(lines)
             return
         }
         report.storageSites = sites
         report.storageKeys = found.keyCount
         report.storageKeysSet = summary.keys
-        lines[line] = "local storage for \(sites) sites (\(found.keyCount.formatted()) keys)"
         if summary.failedOrigins > 0 {
             report.notes.append("local storage: \(summary.failedOrigins) sites kept only part of theirs (over WebKit's 5 MB, or would not load)")
         }
         if found.partitioned > 0 {
             report.notes.append("left out \(found.partitioned) third-party (partitioned) local storage keys")
         }
-        phase = .moving(lines)
     }
 
     /// Undo has something to take back.
@@ -1061,7 +1090,7 @@ final class Flow: ObservableObject {
             guard !source.empty else { return ["error": "source has no profile yet"] }
             let haul = scanNow(source)
             return ["source": source.name, "tabs": haul.tabCount, "spaces": haul.spaces.count, "groups": haul.groupCount,
-                    "bookmarks": haul.bookmarkCount, "places": haul.placeCount,
+                    "bookmarks": haul.bookmarkCount, "places": haul.placeCount, "passwords": haul.loginCount,
                     "passkeys": haul.passkeyCount, "extensions": haul.extensions.count,
                     "extensionDetails": haul.extensions.map { item in
                         ["id": item.id, "name": item.name, "enabled": item.enabled] as [String: Any]
@@ -1089,7 +1118,7 @@ final class Flow: ObservableObject {
             return ["started": true, "source": source.name]
         case "status":
             switch phase {
-            case .moving(let lines): return ["running": true, "lines": lines]
+            case .moving(let steps): return ["running": true, "lines": steps.filter { $0.state != .waiting }.map(\.line)]
             case .done(let report):
                 return ["running": false, "source": selected?.name ?? "", "report": report.line,
                         "title": report.title, "summary": report.summary.map(\.plain),
@@ -1157,7 +1186,10 @@ final class Flow: ObservableObject {
             }
             out["movedAt"] = movedAt.mapValues { ISO8601DateFormatter().string(from: $0) }
             out["choice"] = FlowBench.choice(choice)
-            if case .moving(let lines) = phase { out["lines"] = lines }
+            if case .moving(let steps) = phase {
+                out["lines"] = steps.filter { $0.state != .waiting }.map(\.line)
+                out["steps"] = steps.map { ["category": $0.category.rawValue, "state": "\($0.state)", "text": $0.text] }
+            }
             return out
         case "events":
             // Counts of what the sheet did since the last `--clear`.

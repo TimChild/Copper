@@ -111,6 +111,8 @@ enum FlowModel {
         var passkeyCount = 0
         var bookmarkCount = 0
         var placeCount = 0
+        /// Saved passwords, counted without the key.
+        var loginCount = 0
         /// Free-text notes for the report ("3 windows", "7 spaces, 283 tabs",
         /// "Arc Safe Storage refused").
         var notes: [String] = []

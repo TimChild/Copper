@@ -1,123 +1,259 @@
-# Flow
+# Move in (Flow)
 
-Flow is Copper's one-button move in from Chrome or Arc. It reads the other
-browser's files locally and never changes them.
+Move in is Copper's one sheet for bringing your tabs, bookmarks, history,
+passwords and sign-ins over from Chrome or Arc. It reads the other browser's
+files on this Mac and never changes them.
+
+## Opening it
+
+Every door goes through `Flow.present(from:via:)`: ⌘K "Flow: move in from
+Chrome or Arc", Settings › General › Move in from another browser (**Move
+in…**), View › Move in from Another Browser… (⌥⇧⌘I), and `bench flow open`.
+From Settings, Settings closes first with nothing animating and the sheet
+comes up on the next turn, so its text never morphs out of Settings' closing
+animation.
+
+- **One sheet.** `FlowPresenter` is the only thing that puts it on screen: an
+  AppKit sheet on the window that asked (else the key window). With two
+  windows there is still one sheet, and rebuilding a window's page area
+  behind it doesn't dismiss it.
+- **One size.** 560 points wide and up to 640 tall (less in a short window).
+  The content never sizes the sheet: a header, a middle that scrolls, and a
+  footer pinned to the bottom. A new phase redraws the middle in place.
+- **Keys.** Escape closes it (so does ✕, read as "Close"). Return presses the
+  primary button in every state: Bring it all over, Move in again, Done. ⌘Q
+  quits with the sheet up.
+- **Fresh each time.** Reopening shows the picker with every switch on, not
+  the last summary — unless a move is still running, which it shows.
+- **Nothing is read before it opens.** Listing another browser's folder is a
+  request macOS records (and for Chrome's, refuses), so sources are looked
+  for only when the sheet opens, off the main thread. The ⌘K history nudge
+  looks only at Arc's folder, one level deep, at most once a minute.
+
+## Picking a source
+
+A source is found by its profile folders (`Default`, `Profile 1`, … with a
+`Preferences` file), not by `Login Data`, so a browser with no saved passwords
+still appears. Each card is one of:
+
+| Card | Shows |
+|---|---|
+| Readable | the browser and its profile count; picking it reads its counts |
+| Locked | "macOS needs your OK before Copper can read Chrome." with **Allow in System Settings…** and **Use an export instead…** |
+| Installed, never opened | dimmed: "Open Chrome once, then come back." |
+| Not installed | not listed |
+
+When exactly one source can be read it is picked for you; otherwise you pick.
+A selection is never switched under you, and only the newest read for the
+selected source lands. The list is re-checked when Copper comes back to the
+front — only while the sheet is up and a source is locked.
+
+### When macOS keeps Chrome's folder private
+
+On recent macOS another app's data under `~/Library/Application Support` is
+protected ("App Data", `kTCCServiceSystemPolicyAppDataDetailed`). Chrome's
+folder is; Arc's is not. That protection **never shows a prompt**: macOS
+records Copper's first read as refused (tccd: "does not allow prompting;
+recording denied"), which is also what lists Copper in System Settings.
+
+- **Allow in System Settings…** opens Privacy & Security › Files & Folders
+  (Full Disk Access if that page can't be opened). Turn on Copper's switch for
+  Chrome and come back: the card unlocks by itself, with nothing to reopen.
+  Full Disk Access lets Copper in too.
+- **Use an export instead…** needs no permission. Drop a file on the sheet or
+  choose it:
+  - bookmarks: in Chrome, ⋮ › Bookmarks and lists › Bookmark manager, then
+    ⋮ › Export bookmarks (an `.html` file);
+  - passwords: in Chrome, ⋮ › Passwords and autofill › Password Manager ›
+    Settings › Export passwords (a `.csv` file).
+
+  A file brings only bookmarks or passwords — no open tabs, history or
+  sign-ins — and the pane says so. Files are recognised by what is in them,
+  not their names. Bookmarks go through the same merge as a direct read
+  (`FlowBookmarksHTML.read(…, layout: .chromium)` then `FlowBookmarks.take`),
+  so taking the same file twice, or the file after a direct read, replaces
+  rather than doubles. Passwords go through Copper's CSV import into the
+  keychain. Each file gets one sentence back: what arrived, or why nothing did.
+
+Copper releases are signed ad hoc today, so macOS ties a grant to one build:
+after an update the Files & Folders switch (and Full Disk Access, and a
+keychain "Always Allow") has to be turned on again.
 
 ## What moves
 
-- open tabs, windows and Arc spaces (as sleeping Copper tabs)
-- pinned tabs and tab groups
-- bookmarks and history
+| Row | What comes over | Its hint |
+|---|---|---|
+| Tabs and windows (Arc: Tabs and spaces) | each window (Chrome) or space (Arc) with its open pages as sleeping tabs; pinned tabs and tab groups | "12 tabs in 2 windows" |
+| Bookmarks | account and local bookmarks of every profile | "340 bookmarks" |
+| History | every visible page with a visit, every profile | "4,812 places" (counted, not read) |
+| Passwords | saved logins (needs the browser's keychain key) | "58 passwords" (counted without the key) |
+| Passkeys | passkeys saved to the browser's own password manager (needs the key) | "2 passkeys" |
+| Sign-ins | cookies, so you stay signed in (needs the key) | — |
+| Site data | what sites keep in the page: settings, drafts, workspaces | — |
+| Extensions | Chrome Web Store extensions Copper can install, on or off as they were | "8 extensions" |
 
-Chrome stores signed-in synced bookmarks in `AccountBookmarks` and local-only
-bookmarks in `Bookmarks`. Flow reads both for every profile found by
-`Preferences` (no `Login Data` needed), in profile order (`Default`, then named
-profiles); within a profile, account bookmarks come first, then local. The
-Chrome bookmark bar is Copper's top-level bookmark list, followed by an
-`Other` folder and a `Mobile` folder for Chrome's other/synced roots. Matching
-folder names merge recursively, preserving child order; an identical URL and
-title at the same level is kept only once. Only HTTP(S) sites move. Copper's
-existing top-level bookmarks stay in place: imported bar items follow them,
-not a `Chrome` folder. If an imported root folder's name collides with one of
-yours, the imported folder is named `Other (Chrome)` (or similarly). A repeat
-Flow import replaces *untouched top-level items from the previous import*;
-anything you edited, moved (including a move within the top level), or saved
-yourself is left alone. If a present Chrome bookmark file cannot be read,
-Flow keeps previous imported roots and merges what it can read; a successfully
-read empty tree does remove untouched imported roots. The source-owned root
-IDs are recorded in `flow-bookmarks-chrome.json` in Copper's own data folder. On a first import into an older Copper tree without that record,
-previously filed `Chrome` folders are left alone rather than guessed at or
-deleted.
+Hints are counts only, "counting…" while the source is read, "none found"
+when there are none. When Passwords, Passkeys or Sign-ins is on, one line
+under the rows says "macOS will ask once to let Copper use Chrome's saved
+passwords and sign-ins."
 
-History import reads every visible URL with a visit from the selected Chromium
-profile; it is not capped at the old 3,000-row preview limit. Copper keeps up to
-20,000 distinct places locally and merges a repeated import idempotently (the
-larger visit count and newest title/date win).
-- passwords, cookies, and Google Password Manager passkeys, after one macOS
-  approval for the browser's Safe Storage key
-- Chrome Web Store extensions that Copper can reinstall
+**Bookmarks.** Chrome keeps signed-in synced bookmarks in `AccountBookmarks`
+and local-only ones in `Bookmarks`; Flow reads both for every profile, in
+profile order, account first. The bookmark bar becomes Copper's top level,
+followed by `Other` and `Mobile` folders for Chrome's other roots. Matching
+folder names merge recursively and an identical URL and title at one level is
+kept once — in linear time, so tens of thousands of bookmarks merge without
+a pause. The merge is worked out off the main thread; only the swap of the
+top level happens on it. Your own top-level bookmarks stay where they are and
+imported ones follow them; a clashing folder name gets ` (Chrome)`. A repeat
+import replaces the untouched top-level items of the previous one; anything
+you edited, moved or saved yourself stays. If a present bookmark file can't
+be read, the earlier imported roots are kept and what could be read is
+merged in. The roots a source owns are recorded in
+`flow-bookmarks-<source>.json` in Copper's data folder.
 
-A source is detected from its profile folders and `Preferences`, not from the
-presence of `Login Data`, so a browser with no saved passwords still appears.
-Each imported space is new. A name collision gets ` (Chrome)` or ` (Arc)`.
-Imported pages do not load until their space is visited.
+**History.** Every visible URL with a visit from every profile; Copper keeps
+up to 20,000 places and merges a repeat import idempotently (the larger visit
+count and the newest title and date win). It is taken in batches so the
+window keeps drawing.
 
-After a Chrome move finishes, Copper opens **Switching from Chrome** in front: a
-local canvas explaining where Chrome windows, tabs, bookmarks and more landed,
-plus the sidebar and the keys to start with. It stays on this Mac, even when
-Copper Cloud is signed in. A later move reopens the same canvas (including any
-edits you made), without adding its template shapes again. Arc and other
-Chromium sources do not open this Chrome-specific guide.
+**Tabs.** Chrome's open windows come from its newest `Session_*` file.
+`Tabs_*` is Chrome's recently-closed list and is never replayed as open tabs.
+A window that held only new-tab pages makes no space: it becomes a line in
+the summary. Imported tabs don't load until their space is shown, and count as
+seen at the move, so Today's archive sweep doesn't close a tab Chrome or Arc
+last showed weeks ago.
 
-The new spaces are written to `session.json` the moment they are adopted,
-before the keychain prompt, cookie decryption, and extension downloads that
-follow. Quitting (or force-quitting) Copper during those later steps keeps the
-spaces. Extensions are queued and installed one after another in the
-background with no dialog per item — the Extensions switch is the yes — and
-the sheet's "All set" count updates when they have landed. Every step logs one
-`Copper: Flow …` line to the unified log (`log show --predicate 'process ==
-"Copper" AND eventMessage CONTAINS "Flow"'`).
+The new spaces are written to `session.json` as soon as they are made, before
+the keychain, cookies and extensions that follow; a quit during those keeps
+them. Extensions install one after another in the background with no dialog
+per item. Every step logs one `Copper: Flow …` line (`log show --predicate
+'process == "Copper" AND eventMessage CONTAINS "Flow"'`).
 
-## What needs an answer
+## The keychain
 
-macOS may ask once for Chrome or Arc's keychain key. Say **Allow** to move
-passwords, signed-in cookies, and Google Password Manager passkeys. The footer
-names the selected browser and disappears when those three choices are off. If
-the key is refused, tabs, bookmarks, history and extensions still move and Flow
-reports the refusal. The key is never written to disk.
+Passwords, passkeys and sign-ins are encrypted with a key the other
+browser keeps in the macOS keychain ("Chrome Safe Storage"). macOS asks once
+before handing it over; say **Allow**. The sheet says so under the switches
+whenever one of the three is on, and the window keeps working while macOS
+asks. The key is read once, off the main thread, and never written to disk;
+the keychain writes happen off the main thread too. Then each of the three is read on its own: a broken cookie jar costs only
+the sign-ins, and a refused key is said against each thing it would have
+unlocked. Cookies are installed into WebKit and awaited, so the count is what
+WebKit took, not what was read.
 
-### macOS keeps Chrome private
+## Moving in again
 
-macOS 26 puts other apps' data behind "App Data" protection
-(`kTCCServiceSystemPolicyAppDataDetailed`, keyed by the other app's bundle id).
-Copper's first listing of `~/Library/Application Support/Google/Chrome` is
-denied — and, measured on 26.x with a Finder-launched build, **macOS never
-prompts for this service** (`tccd`: "does not allow prompting; recording
-denied"). Arc's folder is not covered. Flow keeps Chrome in the picker as a
-locked source instead of silently dropping it.
+A move is a one-time thing: once a browser is in, the sheet says "Moved in
+from Chrome on …" and running it again is **Move in again**. A second move
+adds only what is new:
 
-Press **Choose folder…** on Chrome's card. The panel opens beside Chrome; pick
-the `Chrome` folder and press **Allow**. Picking it yourself is the consent
-macOS accepts: Copper verifies the folder is the expected root, uses it only
-for this session, and never writes into it. The first denied attempt also
-records Copper under **System Settings › Privacy & Security** (Files & Folders
-/ App Data), where it can be switched on for good; reopen Move in afterwards.
+- **Spaces fill.** Each source keeps a registry, `flow.spaces.<source>` (the
+  name a space or window has in that browser → the Copper space it became),
+  and a record of the addresses each one brought, `flow.brought.<source>`. A
+  space an earlier move made is filled with the pages it doesn't have; one you
+  deleted is made again; a space with nothing to open is never made. A page
+  that was brought once — even if it redirected, or you closed it — isn't
+  brought again. Arc, Chrome and every later source use the same rule.
+- **Names.** A space whose name you already use gets the source's name:
+  "Work (Arc)", "Work (Chrome)", then "Work (Chrome) 2".
+- **Everything else** is idempotent: bookmarks replace the last import's,
+  history and passwords merge, passkeys already kept are skipped, cookies are
+  set again.
 
-Flow does not move Apple Passwords, iCloud tabs, or a password manager's
-private vault. Chrome passkeys saved to iCloud Keychain (rather than Google
-Password Manager) cannot be read by anyone but Apple's own stack, so they do
-not move. Arc's per-space profiles and passwords also depend on Arc's keychain
-key; without it, the spaces still arrive but their signed-in state does not.
+## While it moves
 
-Passwords exported as a CSV can be brought in separately from the empty-state
-link or Settings › Passwords.
+The middle of the sheet becomes one row per switch that was on, made when
+the move starts and changed in place: waiting, working (with what it is
+doing: "asking macOS for Chrome's key…", "2,000 of 4,812 places…"), then a
+check with what arrived or a dash with why nothing did — the same words the
+summary uses. Nothing is added below, so nothing grows or pushes the footer.
+There is no button while it moves; the sheet can be closed and the move
+keeps going.
+
+## The summary
+
+When the move is done the sheet shows one line per switch that was on: a
+check with what arrived, or a dash with why nothing did.
+
+- "Tabs: 3 tabs in 1 space — 2 already here"
+- "Tabs: 228 tabs (5 pinned) in 4 spaces — 3 empty spaces left out"
+- "Tabs: Chrome's last window had only new-tab pages"
+- "Bookmarks: Chrome has none"
+- "History: nothing new — 44 places already here"
+- "Passwords: macOS didn't hand over Chrome's key"
+- "Sign-ins: 2 sites (3 cookies)"
+- "Extensions: none from the Chrome Web Store"
+
+The title is "Moved in from Chrome", "Nothing new from Chrome" or "Nothing
+came over from Chrome". The summary stays up until **Done**, which closes the
+sheet and lands on the first space the move made or filled. **Undo the tabs**
+takes back only the tabs and spaces this move added; spaces an earlier move
+made keep what they had.
+
+After a Chrome move that brought tabs or bookmarks, **Open the Chrome guide**
+opens *Switching from Chrome*: a local canvas on where Chrome's windows, tabs
+and bookmarks landed, the sidebar, and the keys to start with. It never opens
+by itself. It stays on this Mac even with Copper Cloud signed in; a later press
+reopens the same canvas, edits and new name included, without adding its
+template again.
+
+## What doesn't move
+
+Apple Passwords, iCloud tabs, and a password manager's own vault. Chrome
+passkeys saved to iCloud Keychain rather than Chrome's password manager can be
+read only by Apple's own stack. Arc's per-space profiles and passwords depend
+on Arc's keychain key; without it the spaces still arrive, signed out.
 
 ## Test runs
 
-The `bench flow` commands are available in an isolated `SEARCH_PROBE` world:
+Every `bench flow` verb works in an isolated `SEARCH_PROBE` world with bench
+on; the ones marked *test run* do nothing anywhere else.
 
-```sh
-./bench --world flowqa flow sources
-./bench --world flowqa flow root --source Chrome --path /tmp/chrome-copy
-./bench --world flowqa flow scan --source Chrome
-./bench --world flowqa flow move --source Chrome --only bookmarks
-./bench --world flowqa flow bookmarks  # imported tree, sites and folder order
-./bench --world flowqa flow open
-```
+| Verb | What it does |
+|---|---|
+| `flow sources`, `flow probe` | the sources and what was found where |
+| `flow root --source Chrome --path DIR` | *test run*: read a copy instead of the browser's folder |
+| `flow limit --only Chrome,Arc` | *test run*: list only these sources |
+| `flow access --source Chrome [locked\|clear]` | what macOS says about every file a move reads; *test run*: say it is locked (no folder touched), or clear that |
+| `flow allow` | the locked card's Allow in System Settings… (a test run opens nothing and names the page) |
+| `flow activate` | what coming back to Copper does |
+| `flow open [--via settings\|command\|menu] [--window N] [--again]`, `flow close` | the sheet, through a door |
+| `flow state`, `flow events [--clear] [--all]` | phase, selection, the sheet's frame and host; every open, present, dismiss, refresh and scan, `overlapping`, `scansPerOpen` |
+| `flow key escape\|return\|tab`, `flow shot --path OUT.png` | a real key on the sheet; the sheet as drawn |
+| `flow scan`, `flow choose --only tabs,history`, `flow move --source S --only …`, `flow status` | read, set the switches, move (polled until done), the report |
+| `flow export`, `flow back`, `flow file --path FILE` | the export pane and a dropped file (polled until read) |
+| `flow passphrase --source Chrome --path PASS` | *test run*: a test passphrase for an encrypted fixture |
+| `flow secrets [--clear]` | *test run*: what the in-memory stand-in holds (password digests only) |
+| `flow guide`, `flow done`, `flow undo` | the done screen's buttons |
+| `flow spaces`, `flow registry --source Arc`, `flow bookmarks` | what landed |
+| `flow slow --seconds S` | *test run*: pause after each step, to watch the moving view |
 
-`docs/fixtures/flow-bookmarks-e2e.sh` copies the small fake Chrome root,
-starts a fresh headless `SEARCH_PROBE` world, asserts the scan count and the
-actual moved tree (including a moved root, a corrupt file, an empty source,
-and preservation of an existing Copper bookmark), then removes only that world. Build the app with `./build.sh` first.
-The fixture commits only bookmark files for Profile 1 and Profile 2; the
-script writes the two empty `Preferences` markers into its *copy* because
-Flow uses them to discover profiles. The shared fixture root may also hold
-other workers' Default profile metadata.
+Probe seams (all only in a test run): a test passphrase replaces the
+keychain read, and what it unlocks goes to an in-memory stand-in
+(`FlowProbeSink`), never the keychain — without one, a test run reads no
+secrets and says so; `flow.installed` (a comma-separated list in the world's
+defaults) stands in for "is the app installed"; `flow access … locked` stands
+in for macOS's refusal.
 
-The finished `flow move`/`flow status` JSON has a `canvasId` for Chrome. For an
-isolated headless run using a generated fake Chrome profile, run
-`docs/fixtures/flow-canvas-e2e.sh [build/Copper.app]` (no real Chrome data or
-Copper world is opened).
+End-to-end scripts, each in a fresh headless world launched through
+LaunchServices, after `./build.sh`:
+
+- `docs/fixtures/flow-sheet-e2e.sh` — one sheet with two windows, one size,
+  every door, Escape and Return, ⌘Q, nothing read at launch.
+- `docs/fixtures/flow-move-e2e.sh [--chrome DIR] [--arc DIR] [--shots DIR]` —
+  Chrome locked → card → export files → let in → move → summary → Done →
+  reopen → move again adds nothing → Undo; Arc twice from a copy, every space
+  shown and swept.
+- `docs/fixtures/flow-secrets-fixture.sh` — a synthetic encrypted profile:
+  passwords, passkeys and cookies arrive in the stand-in with a test
+  passphrase, a second move adds none, a broken cookie jar costs only the
+  sign-ins; `--make DIR` writes the fixture only.
+- `docs/fixtures/flow-sheet-shots.sh OUTDIR` — every state, light and dark, and
+  the sheet's frame through a move.
+- `docs/fixtures/flow-bookmarks-e2e.sh`, `flow-canvas-e2e.sh`,
+  `flow-extensions-e2e.sh` — bookmark merge and ownership, the Chrome guide
+  through its button, extensions kept on or off.
 
 `./arc-import` remains for older installations and one-off recovery, but is
-superseded by Flow.
+superseded by Move in.

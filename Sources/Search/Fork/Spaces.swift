@@ -758,6 +758,7 @@ final class Spaces: ObservableObject {
                 result.fresh.insert(step.key)
             case .none:
                 spaceID = nil
+                result.leftOut += 1
             }
             if let spaceID {
                 result.registry[step.key] = spaceID

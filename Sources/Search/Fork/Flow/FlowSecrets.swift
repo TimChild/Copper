@@ -25,8 +25,7 @@ protocol FlowSecretSink: AnyObject {
 enum FlowSecrets {
     /// The one switch between the two. A test run (`Store.testing`) always
     /// gets the stand-in.
-    // TODO(integrator): gate on Store.probeSeams (D9) and point FlowProbeSink at
-    // ProbeKeychain (Fork/Credentials/ProbeKeychain.swift, ux/settings-data) once both land.
+    // TODO(integrator): point FlowProbeSink at Data's ProbeKeychain and gate on Store.probeSeams (D9) once ux/settings-data lands.
     static var seams: Bool { Store.testing }
 
     @MainActor static var sink: FlowSecretSink { seams ? FlowProbeSink.shared : FlowKeychainSink.shared }

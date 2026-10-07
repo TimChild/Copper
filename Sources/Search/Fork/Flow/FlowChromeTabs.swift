@@ -15,7 +15,8 @@ enum FlowChromeTabs {
 
     /// The profile folders (children with a Preferences file) under `root`.
     /// Chrome's own names win the order: Default first, then Profile 1, 2…
-    /// compared as numbers (Profile 10 after Profile 9).
+    /// compared as numbers (Profile 10 after Profile 9). Chrome's guest and
+    /// profile-picker folders have Preferences too but hold nothing to move.
     static func profiles(at root: URL) -> [String] {
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: root,
@@ -27,6 +28,7 @@ enum FlowChromeTabs {
             guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
                 return nil
             }
+            guard !["Guest Profile", "System Profile"].contains(url.lastPathComponent) else { return nil }
             let preferences = url.appendingPathComponent("Preferences")
             guard FileManager.default.fileExists(atPath: preferences.path) else { return nil }
             return url.lastPathComponent
@@ -230,19 +232,20 @@ enum FlowChromeTabs {
 
         var commands: [Command] = []
         var readAny = false
-        // Session_* owns window/tab state; Tabs_* owns navigation entries. The
-        // latest file of each kind is the complete current snapshot.
+        // Session_* is the open windows and tabs, navigations included — the
+        // newest one Chrome wrote. Tabs_* is a different thing: the
+        // recently-closed list (TabRestoreService). Its ids restart each
+        // launch, so replaying it here grafted closed tabs' pages onto open
+        // tabs with the same number. It is only noted, never merged.
         for file in sessionFiles {
             guard let data = copiedData(file), let parsed = parseCommands(data, kind: .session) else { continue }
             readAny = true
             commands.append(contentsOf: parsed)
             break
         }
-        for file in tabsFiles {
-            guard let data = copiedData(file), let parsed = parseCommands(data, kind: .tabs) else { continue }
-            readAny = true
-            commands.append(contentsOf: parsed)
-            break
+        if !readAny, let file = tabsFiles.first, copiedData(file).flatMap({ parseCommands($0, kind: .tabs) }) != nil {
+            // Readable, but only a closed-tabs list: nothing open to bring.
+            return ParseResult(spaces: [], readAny: true)
         }
         guard readAny else { return ParseResult(spaces: [], readAny: false) }
 

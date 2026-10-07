@@ -218,8 +218,8 @@ B flow secrets --clear >/dev/null
 printf 'not a database' > "$TEMP/fixture/Chrome/Default/Cookies"
 THIRD=$(B flow move --source Chrome --only passwords,cookies 2>/dev/null)
 check "broken jar: passwords still arrive" '.passwords == 2' "$THIRD"
-check "broken jar: the cookie line says why" '[.summary[] | select(. == "— Signed-in state: couldn'"'"'t read Chrome'"'"'s cookies")] | length == 1' "$THIRD"
-ok "broken cookie jar: passwords still came, signed-in state says it couldn't be read"
+check "broken jar: the cookie line says why" '[.summary[] | select(. == "— Sign-ins: couldn'"'"'t read Chrome'"'"'s cookies")] | length == 1' "$THIRD"
+ok "broken cookie jar: passwords still came, the sign-ins line says they couldn't be read"
 
 B windows quit >/dev/null || :
 for _ in $(seq 1 40); do kill -0 "$PID" 2>/dev/null || break; sleep 0.25; done

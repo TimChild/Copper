@@ -209,11 +209,18 @@ final class FlowPresenter: NSObject {
     }
 
     /// The sheet's content as a PNG, drawn the way it is on screen in the
-    /// app's current appearance. Never brings anything to the front.
+    /// app's current appearance, at 2× whatever the screen is (a review copy
+    /// is as sharp on a 1× display). Never brings anything to the front.
     func shot(to path: String) -> [String: Any] {
         guard let sheet, let view = sheet.contentView else { return ["error": "the sheet is not up"] }
         view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return ["error": "could not draw the sheet"] }
+        let scale: CGFloat = 2
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * scale), pixelsHigh: Int(view.bounds.height * scale),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ) else { return ["error": "could not draw the sheet"] }
+        rep.size = view.bounds.size
         view.cacheDisplay(in: view.bounds, to: rep)
         guard let data = rep.representation(using: .png, properties: [:]) else { return ["error": "could not encode the picture"] }
         do { try data.write(to: URL(fileURLWithPath: path)) } catch { return ["error": error.localizedDescription] }

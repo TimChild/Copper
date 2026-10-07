@@ -122,6 +122,26 @@ struct FlowAdoptTests {
 
 @Suite("Flow move: summary")
 struct FlowSummaryTests {
+    @Test("Empty spaces and new-tab-only windows that made no space are said, not dropped in silence")
+    func emptiesLeftOut() {
+        var arc = FlowSummary.Facts(source: "Arc")
+        arc.tabsChosen = true
+        arc.windowsAreSpaces = true
+        arc.windowsRead = 7
+        arc.windowsEmpty = 3
+        arc.tabsAdded = 228
+        arc.pinsAdded = 5
+        arc.spacesMade = 4
+        #expect(FlowSummary.lines(arc).map(\.plain) == ["✓ Tabs: 228 tabs (5 pinned) in 4 spaces — 3 empty spaces left out"])
+        var chrome = FlowSummary.Facts(source: "Chrome")
+        chrome.tabsChosen = true
+        chrome.windowsRead = 2
+        chrome.windowsEmpty = 1
+        chrome.tabsAdded = 3
+        chrome.tabsSkipped = 2
+        chrome.spacesFilled = 1
+        #expect(FlowSummary.lines(chrome).map(\.plain) == ["✓ Tabs: 3 tabs in 1 space — 2 already here, 1 window of only new-tab pages left out"])
+    }
     @Test("The real Chrome copy: only new-tab pages, no bookmarks, 44 places")
     func realChromeCopy() {
         var f = FlowSummary.Facts(source: "Chrome")
@@ -186,7 +206,7 @@ struct FlowSummaryTests {
         #expect(FlowSummary.lines(f).map(\.plain) == [
             "— Passwords: macOS didn't hand over Chrome's key",
             "— Passkeys: macOS didn't hand over Chrome's key",
-            "— Signed-in state: macOS didn't hand over Chrome's key",
+            "— Sign-ins: macOS didn't hand over Chrome's key",
         ])
         #expect(FlowSummary.title(FlowSummary.lines(f), source: "Chrome") == "Nothing came over from Chrome")
     }
@@ -202,11 +222,11 @@ struct FlowSummaryTests {
         f.cookiesWhy = "couldn't read Chrome's cookies"
         #expect(FlowSummary.lines(f).map(\.plain) == [
             "✓ Passwords: 2 passwords",
-            "— Signed-in state: couldn't read Chrome's cookies",
+            "— Sign-ins: couldn't read Chrome's cookies",
         ])
     }
 
-    @Test("Signed-in state counts sites and what WebKit took; extensions say where from")
+    @Test("Sign-ins count sites and what WebKit took; extensions say where from")
     func cookiesAndExtensions() {
         var f = FlowSummary.Facts(source: "Chrome")
         f.cookiesChosen = true
@@ -216,7 +236,7 @@ struct FlowSummaryTests {
         f.cookieSites = 2
         f.extensionsChosen = true
         #expect(FlowSummary.lines(f).map(\.plain) == [
-            "✓ Signed-in state: 2 sites (3 cookies)",
+            "✓ Sign-ins: 2 sites (3 cookies)",
             "— Extensions: none from the Chrome Web Store",
         ])
     }
@@ -269,6 +289,7 @@ struct FlowAccessFilesTests {
     func sentences() {
         #expect(FlowFiles.bookmarkSentence(read: 40, new: 40, source: "Chrome") == "40 bookmarks from Chrome's file")
         #expect(FlowFiles.bookmarkSentence(read: 40, new: 0, source: "Chrome") == "Nothing new — the 40 bookmarks in that file were already here")
+        #expect(FlowFiles.bookmarkSentence(read: 20_000, new: 20_000, source: "Chrome") == "20,000 bookmarks from Chrome's file")
         #expect(FlowFiles.passwordSentence(kept: 3, skipped: 0, new: 0) == "3 passwords imported — all were already here")
         #expect(FlowFiles.passwordSentence(kept: 0, skipped: 2, new: nil) == "Nothing imported — none of its 2 rows has both a site and a password")
     }
@@ -338,5 +359,54 @@ struct FlowBroughtTests {
         let merged = FlowAdopt.merged(["work": ["a", "b"], "home": ["old"]], run)
         #expect(merged == ["work": ["a", "b", "c"], "home": ["x"]])
         #expect(FlowAdopt.without(merged, run) == ["work": ["a", "b"]])
+    }
+}
+
+@Suite("Flow move: the moving view")
+struct FlowStepTests {
+    @Test("A row per chosen category, in the summary's order, all waiting")
+    func rows() {
+        var choice = FlowModel.Choice()
+        choice.history = false
+        choice.extensions = false
+        let steps = FlowStep.steps(for: choice)
+        #expect(steps.map(\.category) == [.tabs, .bookmarks, .passwords, .passkeys, .cookies, .localStorage])
+        #expect(steps.allSatisfy { $0.state == .waiting && $0.text.isEmpty })
+        #expect(FlowSummary.Category.cookies.title == "Sign-ins")
+        #expect(FlowSummary.Category.localStorage.title == "Site data")
+    }
+
+    @Test("Rows change in place and end on the summary's own words; nothing is added")
+    func inPlace() {
+        var choice = FlowModel.Choice()
+        choice.passwords = false
+        choice.passkeys = false
+        choice.cookies = false
+        choice.localStorage = false
+        choice.extensions = false
+        var steps = FlowStep.steps(for: choice)
+        steps = FlowStep.set(.bookmarks, .working, "reading…", in: steps)
+        #expect(steps.map(\.state) == [.waiting, .working, .waiting])
+        steps = FlowStep.set(.passwords, .working, "not chosen", in: steps)
+        #expect(steps.count == 3)
+
+        var f = FlowSummary.Facts(source: "Chrome")
+        f.tabsChosen = true
+        f.windowsRead = 1
+        f.windowsEmpty = 1
+        steps = FlowStep.finished(.tabs, f, in: steps)
+        #expect(steps[0].state == .missed)
+        #expect(steps[0].text == "Chrome's last window had only new-tab pages")
+        #expect(steps[0].line == "Tabs: Chrome's last window had only new-tab pages")
+
+        f.bookmarksChosen = true
+        f.bookmarksRead = 3
+        f.bookmarksNew = 3
+        steps = FlowStep.finished(.bookmarks, f, in: steps)
+        #expect(steps[1].state == .arrived)
+        #expect("Bookmarks: " + steps[1].text == FlowSummary.lines(f).first { $0.category == .bookmarks }?.text)
+        // The summary's rows show the same words as the moving view's.
+        #expect(FlowSummary.lines(f).map(\.detail) == [steps[0].text, steps[1].text])
+        #expect(steps.map(\.category) == [.tabs, .bookmarks, .history])
     }
 }

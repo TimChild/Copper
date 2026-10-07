@@ -202,8 +202,46 @@ check "CSV went to the stand-in" '[.passwords[] | select(.host == "exported.inva
 R=$(B flow file --path "$TEMP/notes.csv")
 check "a CSV that isn't passwords" '(.ok | not) and (.text | startswith("That isn'"'"'t a bookmarks or passwords file"))' "$R"
 shot export-result
+# A big export: 20,000 loose bookmarks. It is read and merged off the main
+# thread, so the window answers throughout (every bench call is answered on
+# the main thread; the slowest one while the file is taken is the stall).
+python3 - "$TEMP/big.html" <<'PY'
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write('<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<DL><p>\n')
+    for i in range(20000):
+        f.write(f'<DT><A HREF="https://big{i}.invalid/">Big {i}</A>\n')
+    f.write('</DL><p>\n')
+PY
+STALL=$(python3 - "$HOME/Library/Application Support/Copper ($WORLD)/bench.sock" "$TEMP/big.html" <<'PY'
+import json, socket, sys, time
+path, big = sys.argv[1], sys.argv[2]
+def ask(req):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.connect(path)
+        s.sendall((json.dumps(req) + "\n").encode())
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk: break
+            data += chunk
+    return json.loads(data.split(b"\n", 1)[0] or b"{}")
+ask({"do": "flow", "op": "file", "path": big})
+worst, start, st = 0.0, time.time(), {}
+while time.time() - start < 60:
+    t = time.time()
+    st = ask({"do": "flow", "op": "file-status"})
+    worst = max(worst, time.time() - t)
+    if not st.get("running"): break
+    time.sleep(0.02)
+print(json.dumps({"worst": round(worst, 3), "seconds": round(time.time() - start, 2),
+                  "text": st.get("text"), "bookmarks": st.get("bookmarks")}))
+PY
+)
+check "20,000 bookmarks arrive" '.text == "20,000 bookmarks from Chrome'"'"'s file"' "$STALL"
+check "the window answered throughout" '.worst < 0.25' "$STALL"
 B flow back >/dev/null
-ok "export: bookmarks HTML ×2 stable at $N1 bookmarks; passwords CSV into the stand-in; a wrong file is said plainly"
+ok "export: bookmarks HTML ×2 stable at $N1 bookmarks; passwords CSV into the stand-in; a wrong file is said plainly; 20,000 loose bookmarks in $(printf '%s' "$STALL" | jq -r .seconds) s, slowest answer $(printf '%s' "$STALL" | jq -r .worst) s"
 
 # Access granted in System Settings; Copper comes back to the front.
 B flow events --clear >/dev/null
@@ -280,11 +318,18 @@ if [ -n "$ARC" ]; then
   B flow limit --only Arc >/dev/null
   B flow root --source Arc --path "$ARC/User Data" >/dev/null
   SPACES0=$(B flow spaces | jq '.spaces | length')
+  READ=$(B flow scan --source Arc | jq '.spaces')
   FIRST=$(B flow move --source Arc --only tabs 2>/dev/null)
   MADE=$(printf '%s\n' "$FIRST" | jq '.spacesMade')
   TABS=$(printf '%s\n' "$FIRST" | jq '.tabs')
   [ "$MADE" -gt 0 ] || fail "the Arc copy made no space: $FIRST"
   printf '%s\n' "$FIRST" | jq -r '.summary[]' | sed 's/^/     /'
+  # A space Arc has that made none here (nothing of its own to open) is said.
+  if [ "$READ" -gt "$MADE" ]; then
+    LEFT=$((READ - MADE))
+    printf '%s\n' "$FIRST" | jq -e --arg n "$LEFT" '[.summary[] | select(test("Tabs: .* " + $n + " empty spaces? left out"))] | length == 1' >/dev/null \
+      || fail "Arc has $READ spaces, $MADE made, but the summary doesn't say $LEFT were left out: $FIRST"
+  fi
   SPACES1=$(B flow spaces | jq '.spaces | length')
   [ "$SPACES1" = $((SPACES0 + MADE)) ] || fail "space count is not before + made"
   # Show every space, then sweep Today as the clock would: nothing goes.
@@ -292,7 +337,9 @@ if [ -n "$ARC" ]; then
   for i in $(seq 0 $((SPACES1 - 1))); do
     B windows space 0 "$i" >/dev/null
     sleep 0.2
-    SWEPT=$(B sections archive | jq -r '.archived // 0' 2>/dev/null || echo 0)
+    # `sections archive` prints "archived N tab(s)": the sweep the clock runs.
+    SWEPT=$(B sections archive | sed -n 's/^archived \([0-9][0-9]*\) tab.*/\1/p')
+    [ -n "$SWEPT" ] || fail "the Today sweep did not run in space $i"
     [ "$SWEPT" = 0 ] || fail "the Today sweep closed $SWEPT imported tabs in space $i"
   done
   AFTER=$(B flow spaces | jq '[.spaces[].tabs] | add')

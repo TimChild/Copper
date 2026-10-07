@@ -59,7 +59,7 @@ struct FlowSheet: View {
                 .help("Close")
                 .accessibilityLabel("Close")
             }
-            Text("Everything Chrome or Arc has — open tabs, spaces, bookmarks, history, passwords, Google Password Manager passkeys, signed-in state, local storage, extensions — into Copper, in one go.")
+            Text("Bring your tabs, bookmarks, history, passwords and sign-ins over from Chrome or Arc. Nothing in the other browser changes.")
                 .font(.system(size: 13.5))
                 .foregroundStyle(Palette.muted)
                 .lineSpacing(2)
@@ -70,7 +70,7 @@ struct FlowSheet: View {
     @ViewBuilder
     private var middle: some View {
         switch flow.phase {
-        case .moving(let lines): moving(lines)
+        case .moving(let steps): moving(steps)
         case .done(let report): done(report)
         default:
             if let source = flow.exporting { export(source) } else { picker }
@@ -101,8 +101,8 @@ struct FlowSheet: View {
                 // so a short window keeps its room for the list.
                 if flow.choice.passwords || flow.choice.passkeys || flow.choice.cookies,
                    let source = flow.selected {
-                    Text("macOS will ask once for \(source.name)'s keychain key (“\(source.source.service)”) — it unlocks passwords, passkeys and signed-in state. Say Allow; the window keeps working while it asks.")
-                        .font(.system(size: 11.5)).foregroundStyle(Palette.faint)
+                    Text("macOS will ask once to let Copper use \(source.name)'s saved passwords and sign-ins. Say Allow; the window keeps working while it asks.")
+                        .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -288,21 +288,21 @@ struct FlowSheet: View {
 
     private var checklist: some View {
         VStack(alignment: .leading, spacing: 0) {
-            row("Open tabs, spaces and pins", hint: tabHint, binding: binding(\.tabs))
+            row(flow.selected?.isArc == true ? "Tabs and spaces" : "Tabs and windows", hint: tabHint, binding: binding(\.tabs))
             Rule()
-            row("Bookmarks", hint: bookmarkHint, binding: binding(\.bookmarks))
+            row("Bookmarks", hint: count { $0.bookmarkCount == 0 ? "none found" : FlowSummary.plural($0.bookmarkCount, "bookmark") }, binding: binding(\.bookmarks))
             Rule()
-            row("History", hint: placeHint, binding: binding(\.history))
+            row("History", hint: count { $0.placeCount == 0 ? "none found" : FlowSummary.plural($0.placeCount, "place") }, binding: binding(\.history))
             Rule()
-            row("Passwords", hint: "asks macOS once", binding: binding(\.passwords))
+            row("Passwords", hint: count { $0.loginCount == 0 ? "none saved" : FlowSummary.plural($0.loginCount, "password") }, binding: binding(\.passwords))
             Rule()
-            row("Passkeys", hint: passkeyHint, binding: binding(\.passkeys))
+            row("Passkeys", hint: count { $0.passkeyCount == 0 ? "none found" : FlowSummary.plural($0.passkeyCount, "passkey") }, binding: binding(\.passkeys))
             Rule()
-            row("Signed-in state", hint: "cookies — asks macOS once", binding: binding(\.cookies))
+            row("Sign-ins", hint: "", binding: binding(\.cookies))
             Rule()
-            row("Local storage", hint: "what sites keep in the page — settings, drafts, workspaces; no prompt", binding: binding(\.localStorage))
+            row("Site data", hint: "", binding: binding(\.localStorage))
             Rule()
-            row("Extensions", hint: extensionHint, binding: binding(\.extensions))
+            row("Extensions", hint: count { $0.extensions.isEmpty ? "none found" : FlowSummary.plural($0.extensions.count, "extension") }, binding: binding(\.extensions))
         }
         .padding(.horizontal, 13)
         .background(Palette.wash.opacity(0.38), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -316,12 +316,18 @@ struct FlowSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 13)).foregroundStyle(Palette.ink)
                 if !hint.isEmpty {
-                    Text(hint).font(.system(size: 11)).foregroundStyle(Palette.faint)
+                    Text(hint).font(.system(size: 11)).foregroundStyle(Palette.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()
             Switch(on: binding)
+                // The switch is drawn, not a control: say what it is.
+                .accessibilityElement()
+                .accessibilityLabel(title)
+                .accessibilityValue(binding.wrappedValue ? "On" : "Off")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { binding.wrappedValue.toggle() }
         }
         .padding(.vertical, 9)
     }
@@ -338,47 +344,61 @@ struct FlowSheet: View {
         return haul.tabCount == 0 ? "none open" : "\(FlowSummary.plural(haul.tabCount, "tab")) in \(FlowSummary.plural(open, unit))"
     }
 
-    private var passkeyHint: String {
+    /// A row's hint: a count once the source is read, "counting…" while it
+    /// is, nothing before.
+    private func count(_ text: (FlowModel.Haul) -> String) -> String {
         guard case .preview(let haul) = flow.phase else { return countingHint }
-        return haul.passkeyCount == 0 ? "none found" : "\(haul.passkeyCount.formatted()) passkeys — asks macOS once"
-    }
-
-    private var extensionHint: String {
-        guard case .preview(let haul) = flow.phase else { return "reinstalled from the store" }
-        return haul.extensions.isEmpty ? "none found" : "\(haul.extensions.count) found"
-    }
-
-    private var bookmarkHint: String {
-        guard case .preview(let haul) = flow.phase else { return countingHint }
-        return haul.bookmarkCount == 0 ? "none found" : "\(haul.bookmarkCount.formatted()) bookmarks"
-    }
-
-    private var placeHint: String {
-        guard case .preview(let haul) = flow.phase else { return countingHint }
-        return haul.placeCount == 0 ? "none found" : "\(haul.placeCount.formatted()) places"
+        return text(haul)
     }
 
     private func binding(_ keyPath: WritableKeyPath<FlowModel.Choice, Bool>) -> Binding<Bool> {
         Binding(get: { flow.choice[keyPath: keyPath] }, set: { flow.choice[keyPath: keyPath] = $0 })
     }
 
-    @ViewBuilder
-    private func moving(_ lines: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Bringing it over…")
+    /// A row per chosen category, made when the move starts and changed in
+    /// place: nothing is added, so nothing grows or moves.
+    private func moving(_ steps: [FlowStep]) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(flow.selected.map { "Bringing it over from \($0.name)…" } ?? "Bringing it over…")
                 .font(.system(size: 17, weight: .medium)).foregroundStyle(Palette.ink)
-            VStack(alignment: .leading, spacing: 7) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.ink)
-                        Text(line).font(.system(size: 12.5)).foregroundStyle(Palette.muted)
-                    }
-                }
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Working…").font(.system(size: 12.5)).foregroundStyle(Palette.muted)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(steps, id: \.category) { step in
+                    stepRow(step.category, step.state, step.state == .waiting ? "waiting" : step.text)
                 }
             }
+        }
+    }
+
+    /// One category's row, the same while moving and in the summary: the
+    /// move ends on exactly the rows the summary shows, so going from one to
+    /// the other changes the marks and the title, and nothing moves.
+    private func stepRow(_ category: FlowSummary.Category, _ state: FlowStep.State, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            mark(state)
+                .frame(width: 12)
+            Text(category.title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(state == .waiting ? Palette.faint : Palette.ink)
+                .frame(width: 92, alignment: .leading)
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(state == .arrived ? Palette.ink : state == .waiting ? Palette.faint : Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func mark(_ state: FlowStep.State) -> some View {
+        switch state {
+        case .waiting:
+            Circle().strokeBorder(Palette.faint, lineWidth: 1).frame(width: 8, height: 8)
+        case .working:
+            ProgressView().controlSize(.mini)
+        case .arrived:
+            Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.ink)
+        case .missed:
+            Image(systemName: "minus").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.muted)
         }
     }
 
@@ -388,16 +408,7 @@ struct FlowSheet: View {
                 .font(.system(size: 19, weight: .medium)).foregroundStyle(Palette.ink)
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(report.summary, id: \.category) { line in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: line.ok ? "checkmark" : "minus")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(line.ok ? Palette.ink : Palette.muted)
-                            .frame(width: 12)
-                        Text(line.text)
-                            .font(.system(size: 13)).foregroundStyle(line.ok ? Palette.ink : Palette.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .accessibilityElement(children: .combine)
+                    stepRow(line.category, line.ok ? .arrived : .missed, line.detail)
                 }
             }
             if report.undone {
@@ -437,7 +448,7 @@ struct FlowSheet: View {
             }
         case .moving:
             Text("You can close this; the move keeps going.")
-                .font(.system(size: 11.5)).foregroundStyle(Palette.faint)
+                .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
                 .frame(maxWidth: .infinity, alignment: .leading)
         default:
             if let source = flow.exporting {

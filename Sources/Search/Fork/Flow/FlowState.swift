@@ -323,6 +323,9 @@ struct FlowAdoption: Equatable {
     var pins = 0
     /// Tabs left out because Copper already had them.
     var skipped = 0
+    /// Spaces not made: nothing of their own to open (an Arc space of only
+    /// favourites, say).
+    var leftOut = 0
     var groups = 0
     /// The source's registry after this move.
     var registry: [String: UUID] = [:]
@@ -346,6 +349,21 @@ struct FlowAdoption: Equatable {
 enum FlowSummary {
     enum Category: String, CaseIterable {
         case tabs, bookmarks, history, passwords, passkeys, cookies, localStorage, extensions
+
+        /// What the sheet calls it, in its rows, while moving and in the
+        /// summary.
+        var title: String {
+            switch self {
+            case .tabs: return "Tabs"
+            case .bookmarks: return "Bookmarks"
+            case .history: return "History"
+            case .passwords: return "Passwords"
+            case .passkeys: return "Passkeys"
+            case .cookies: return "Sign-ins"
+            case .localStorage: return "Site data"
+            case .extensions: return "Extensions"
+            }
+        }
     }
 
     struct Line: Equatable {
@@ -356,6 +374,13 @@ enum FlowSummary {
 
         /// As the bench prints it.
         var plain: String { (ok ? "✓ " : "— ") + text }
+
+        /// The text after the category's own name ("2 tabs in 1 space"),
+        /// for a row that shows the name in a column of its own.
+        var detail: String {
+            let prefix = category.title + ": "
+            return text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text
+        }
     }
 
     /// What one move came to, category by category. Nil counts mean the
@@ -372,6 +397,8 @@ enum FlowSummary {
         /// Windows/spaces the browser had, and how many held no page Copper opens.
         var windowsRead = 0
         var windowsEmpty = 0
+        /// The browser groups tabs in spaces (Arc), not windows.
+        var windowsAreSpaces = false
         var tabsWhy: String?
         // Bookmarks
         var bookmarksChosen = false
@@ -427,7 +454,16 @@ enum FlowSummary {
             if f.tabsAdded > 0 {
                 var text = "Tabs: \(plural(f.tabsAdded, "tab")) in \(plural(max(spaces, 1), "space"))"
                 if f.pinsAdded > 0 { text = "Tabs: \(plural(f.tabsAdded, "tab")) (\(f.pinsAdded.formatted()) pinned)" + (spaces > 0 ? " in \(plural(spaces, "space"))" : "") }
-                if f.tabsSkipped > 0 { text += " — \(f.tabsSkipped.formatted()) already here" }
+                // An empty window or space makes no space in Copper; say so,
+                // so a space that didn't come over isn't a mystery.
+                var also: [String] = []
+                if f.tabsSkipped > 0 { also.append("\(f.tabsSkipped.formatted()) already here") }
+                if f.windowsEmpty > 0 {
+                    also.append(f.windowsAreSpaces
+                        ? "\(plural(f.windowsEmpty, "empty space")) left out"
+                        : "\(plural(f.windowsEmpty, "window")) of only new-tab pages left out")
+                }
+                if !also.isEmpty { text += " — " + also.joined(separator: ", ") }
                 out.append(Line(category: .tabs, ok: true, text: text))
             } else if f.tabsSkipped > 0 {
                 out.append(Line(category: .tabs, ok: false, text: "Tabs: nothing new — \(f.tabsSkipped == 1 ? "the one tab was" : "\(every(f.tabsSkipped)) were") already here"))
@@ -493,22 +529,22 @@ enum FlowSummary {
         }
         if f.cookiesChosen {
             if let why = f.cookiesWhy {
-                out.append(Line(category: .cookies, ok: false, text: "Signed-in state: \(why)"))
+                out.append(Line(category: .cookies, ok: false, text: "Sign-ins: \(why)"))
             } else if (f.cookiesFound ?? 0) == 0 {
-                out.append(Line(category: .cookies, ok: false, text: "Signed-in state: \(s) has none"))
+                out.append(Line(category: .cookies, ok: false, text: "Sign-ins: \(s) has none"))
             } else if f.cookiesSet > 0, f.cookiesNew == 0 {
-                out.append(Line(category: .cookies, ok: false, text: "Signed-in state: nothing new — already signed in to \(plural(f.cookieSites, "site"))"))
+                out.append(Line(category: .cookies, ok: false, text: "Sign-ins: nothing new — already signed in to \(plural(f.cookieSites, "site"))"))
             } else {
-                out.append(Line(category: .cookies, ok: f.cookiesSet > 0, text: "Signed-in state: \(plural(f.cookieSites, "site")) (\(plural(f.cookiesSet, "cookie")))"))
+                out.append(Line(category: .cookies, ok: f.cookiesSet > 0, text: "Sign-ins: \(plural(f.cookieSites, "site")) (\(plural(f.cookiesSet, "cookie")))"))
             }
         }
         if f.storageChosen {
             if let why = f.storageWhy {
-                out.append(Line(category: .localStorage, ok: false, text: "Local storage: \(why)"))
+                out.append(Line(category: .localStorage, ok: false, text: "Site data: \(why)"))
             } else if f.storageSites == 0 {
-                out.append(Line(category: .localStorage, ok: false, text: "Local storage: \(s) has none"))
+                out.append(Line(category: .localStorage, ok: false, text: "Site data: \(s) has none"))
             } else {
-                out.append(Line(category: .localStorage, ok: true, text: "Local storage: \(plural(f.storageSites, "site"))"))
+                out.append(Line(category: .localStorage, ok: true, text: "Site data: \(plural(f.storageSites, "site"))"))
             }
         }
         if f.extensionsChosen {
@@ -531,4 +567,54 @@ enum FlowSummary {
         if lines.contains(where: { $0.text.contains("nothing new") }) { return "Nothing new from \(source)" }
         return "Nothing came over from \(source)"
     }
+}
+
+// MARK: - while it moves
+
+/// One row of the moving view, per chosen category, made when the move
+/// starts and changed in place as it goes: waiting, working, then what it
+/// came to. Nothing is added below, so nothing grows or pushes the footer.
+struct FlowStep: Equatable {
+    enum State: Equatable {
+        case waiting, working
+        /// Done, and something came (✓) or nothing did, with why (—).
+        case arrived, missed
+    }
+    var category: FlowSummary.Category
+    var state: State = .waiting
+    /// What it is doing, or what it came to.
+    var text = ""
+
+    /// The rows for a move, in the summary's order.
+    static func steps(for choice: FlowModel.Choice) -> [FlowStep] {
+        var chosen: [FlowSummary.Category] = []
+        if choice.tabs { chosen.append(.tabs) }
+        if choice.bookmarks { chosen.append(.bookmarks) }
+        if choice.history { chosen.append(.history) }
+        if choice.passwords { chosen.append(.passwords) }
+        if choice.passkeys { chosen.append(.passkeys) }
+        if choice.cookies { chosen.append(.cookies) }
+        if choice.localStorage { chosen.append(.localStorage) }
+        if choice.extensions { chosen.append(.extensions) }
+        return chosen.map { FlowStep(category: $0) }
+    }
+
+    /// `steps` with one category's row changed; a category that wasn't
+    /// chosen changes nothing.
+    static func set(_ category: FlowSummary.Category, _ state: State, _ text: String, in steps: [FlowStep]) -> [FlowStep] {
+        steps.map { step in
+            guard step.category == category else { return step }
+            return FlowStep(category: category, state: state, text: text)
+        }
+    }
+
+    /// A category's row once it is done: the summary's own line for it, so
+    /// the moving view ends on exactly what the summary will say.
+    static func finished(_ category: FlowSummary.Category, _ facts: FlowSummary.Facts, in steps: [FlowStep]) -> [FlowStep] {
+        guard let line = FlowSummary.lines(facts).first(where: { $0.category == category }) else { return steps }
+        return set(category, line.ok ? .arrived : .missed, line.detail, in: steps)
+    }
+
+    /// As the bench prints a row that has started.
+    var line: String { "\(category.title): \(text)" }
 }

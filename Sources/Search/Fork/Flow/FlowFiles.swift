@@ -49,11 +49,11 @@ enum FlowFiles {
         if kept == 0 {
             return skipped == 1
                 ? "Nothing imported — its one row has no site or no password"
-                : "Nothing imported — none of its \(skipped) rows has both a site and a password"
+                : "Nothing imported — none of its \(skipped.formatted()) rows has both a site and a password"
         }
-        var head = kept == 1 ? "1 password imported" : "\(kept) passwords imported"
-        if let new, new < kept { head += new == 0 ? " — all were already here" : " — \(new) new" }
-        return skipped == 0 ? head : "\(head), \(skipped) skipped (no site or no password)"
+        var head = kept == 1 ? "1 password imported" : "\(kept.formatted()) passwords imported"
+        if let new, new < kept { head += new == 0 ? " — all were already here" : " — \(new.formatted()) new" }
+        return skipped == 0 ? head : "\(head), \(skipped.formatted()) skipped (no site or no password)"
     }
 
     /// The sentence a bookmarks file comes to.
@@ -62,10 +62,10 @@ enum FlowFiles {
         if new == 0 {
             return read == 1
                 ? "Nothing new — the bookmark in that file was already here"
-                : "Nothing new — the \(read) bookmarks in that file were already here"
+                : "Nothing new — the \(read.formatted()) bookmarks in that file were already here"
         }
-        let head = read == 1 ? "1 bookmark from \(source)'s file" : "\(read) bookmarks from \(source)'s file"
-        return new < read ? "\(head), \(new) new" : head
+        let head = read == 1 ? "1 bookmark from \(source)'s file" : "\(read.formatted()) bookmarks from \(source)'s file"
+        return new < read ? "\(head), \(new.formatted()) new" : head
     }
 }
 

@@ -14,7 +14,11 @@ PID=""
 cleanup() {
   if [ -n "$PID" ]; then
     case "$(ps -p "$PID" -o command= 2>/dev/null || :)" in
-      "$APP/Contents/MacOS/Copper"*) kill "$PID" 2>/dev/null || : ;;
+      "$APP/Contents/MacOS/Copper"*)
+        kill "$PID" 2>/dev/null || :
+        # Let it finish quitting first: it writes its session as it goes,
+        # and that would put the world's folder back after the rm below.
+        for _ in $(seq 1 40); do kill -0 "$PID" 2>/dev/null || break; sleep 0.25; done ;;
     esac
   fi
   rm -rf "$TEMP" # only this script's private mktemp folder

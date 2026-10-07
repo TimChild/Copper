@@ -25,6 +25,57 @@ enum FlowChromium {
         return Array(out.sorted { $0.last > $1.last }.prefix(limit))
     }
 
+    /// How many places `places(in:)` would bring, without reading them:
+    /// `SELECT COUNT(*)` over the same rows, for the preview's hint.
+    static func placeCount(in source: FlowSource) -> Int {
+        historyFiles(in: source).reduce(0) { total, file in
+            total + ((try? count("SELECT COUNT(*) FROM urls WHERE hidden = 0 AND visit_count > 0", in: file)) ?? 0)
+        }
+    }
+
+    /// How many saved passwords the Login Data files `Chromium.read` reads
+    /// hold — counted, not decrypted, so it needs no key.
+    static func loginCount(in source: FlowSource) -> Int {
+        source.readerSource.files.reduce(0) { total, file in
+            total + ((try? count("SELECT COUNT(*) FROM logins WHERE blacklisted_by_user = 0 AND length(password_value) > 0",
+                                 in: file)) ?? 0)
+        }
+    }
+
+    /// The History files `places(in:)` reads: beside each profile's Login
+    /// Data for the browser's own folder (Chromium.places), in each profile
+    /// for a selected copy.
+    private static func historyFiles(in source: FlowSource) -> [URL] {
+        let files: [URL]
+        if source.rootOverride == nil {
+            files = source.readerSource.files.map { $0.deletingLastPathComponent().appendingPathComponent("History") }
+        } else {
+            files = source.profiles.map {
+                source.root.appendingPathComponent($0, isDirectory: true).appendingPathComponent("History")
+            }
+        }
+        return files.filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private static func count(_ query: String, in file: URL) throws -> Int {
+        let temporary = FileManager.default.temporaryDirectory
+            .appendingPathComponent("flow-count-\(UUID().uuidString).db")
+        try FileManager.default.copyItem(at: file, to: temporary)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(temporary.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let database
+        else { throw FlowModel.Trouble.unreadable(file.path) }
+        defer { sqlite3_close(database) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK,
+              let statement
+        else { throw FlowModel.Trouble.unreadable(file.path) }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
     private static func placeRows(in file: URL, limit: Int) throws -> [Chromium.Place] {
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("flow-history-\(UUID().uuidString).db")

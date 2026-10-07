@@ -71,8 +71,9 @@ B canvas list > "$TEMP/list.json"
 B canvas tabs "$CID" > "$TEMP/tabs.json"
 [ "$(J '$d->{canvases}[0]{tabs}[0]{active} ? 1 : 0' < "$TEMP/tabs.json")" = 1 ] || fail "guide is not the foreground tab"
 B canvas read "$CID" > "$TEMP/read.json"
-[ "$(J 'scalar @{$d->{shapes}}' < "$TEMP/read.json")" = 60 ] || fail "expected 60 shapes from 73 ops"
-echo "ok: Chrome move imported 1 tab; guide $CID local, foreground, 60 shapes"
+N=$(J 'scalar @{$d->{shapes}}' < "$TEMP/read.json")
+[ "$N" = 73 ] || fail "expected 73 shapes (60 adds + 13 arrows), got $N"
+echo "ok: Chrome move imported 1 tab; guide $CID local, foreground, 73 shapes"
 
 # An owner's edit must survive a second Flow move; reopening is not applying.
 B canvas apply "{\"id\":\"$CID\",\"ops\":[{\"op\":\"add\",\"shape\":{\"id\":\"sfc_e2e_own_edit\",\"type\":\"sticky\",\"text\":\"My note\"}}]}" > "$TEMP/edit.json"
@@ -84,8 +85,9 @@ B canvas list > "$TEMP/list.json"
 [ "$(J 'scalar grep { $_->{id} eq $ENV{SFC_CID} && $_->{name} eq "My Chrome guide" && $_->{kind} eq "local" } @{$d->{canvases}}' < "$TEMP/list.json")" = 1 ] || fail "renamed guide was not reused"
 [ "$(J 'scalar grep { $_->{name} eq "Switching from Chrome" } @{$d->{canvases}}' < "$TEMP/list.json")" = 0 ] || fail "duplicate guide"
 B canvas read "$CID" > "$TEMP/read.json"
-[ "$(J 'scalar @{$d->{shapes}}' < "$TEMP/read.json")" = 61 ] || fail "second move reapplied ops or erased edit"
+N=$(J 'scalar @{$d->{shapes}}' < "$TEMP/read.json")
+[ "$N" = 74 ] || fail "second move reapplied ops or erased edit: $N shapes"
 [ "$(J 'scalar grep { $_->{id} eq "sfc_e2e_own_edit" && $_->{text} eq "My note" } @{$d->{shapes}}' < "$TEMP/read.json")" = 1 ] || fail "owner edit lost"
 B canvas tabs "$CID" > "$TEMP/tabs.json"
 [ "$(J '$d->{canvases}[0]{tabs}[0]{active} ? 1 : 0' < "$TEMP/tabs.json")" = 1 ] || fail "second move did not reopen guide in front"
-echo "ok: second move reused renamed $CID; edited board has 61 shapes and stays in front"
+echo "ok: second move reused renamed $CID; edited board has 74 shapes and stays in front"

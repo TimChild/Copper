@@ -59,6 +59,8 @@ final class Flow: ObservableObject {
         var cookies = 0
         var passkeys = 0
         var extensions = 0
+        /// The local guide opened after a Chrome move, if its tab came up.
+        var canvasId: String?
         /// Sites whose localStorage came over, and how many keys in all.
         var storageSites = 0
         var storageKeys = 0
@@ -385,7 +387,59 @@ final class Flow: ObservableObject {
             arcMovedAt = now
             moveAgain = false
         }
+        // The guide is Chrome-specific (shortcuts and sidebar copy), not a
+        // generic Chromium guide. Do this last, after every imported row has
+        // landed, so the canvas is the final foreground tab.
+        if source.name == "Chrome" { report.canvasId = await landChromeCanvas(in: browser) }
         phase = .done(report)
+        if report.canvasId != nil { open = false }
+    }
+
+    private static let chromeCanvasKey = "flow.chromeCanvasID"
+    private static let chromeCanvasName = "Switching from Chrome"
+
+    /// A renamed guide still belongs to this move; a deleted one may be made
+    /// again. Never apply the template to an existing board — it may have been
+    /// edited by its owner, and a failed first apply must not duplicate ops.
+    private func landChromeCanvas(in browser: Browser) async -> String? {
+        let canvases = Canvases.shared
+        let remembered = Store.settings.string(forKey: Self.chromeCanvasKey)
+            .flatMap { canvases.entry($0) }
+            .flatMap { $0.kind == .local ? $0 : nil }
+        let existing = remembered ?? canvases.visible.first {
+            $0.kind == .local && $0.name.compare(Self.chromeCanvasName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        do {
+            // CanvasPage.folder uses the same Search_Search.bundle resolution as
+            // canvas.html, both beside the bare binary and inside Copper.app.
+            let ops: [Any]?
+            if existing == nil {
+                guard let folder = CanvasPage.folder else { throw CanvasHost.Failure(text: "canvas resource bundle is missing") }
+                let data = try Data(contentsOf: folder.appendingPathComponent("switching-from-chrome.json"))
+                ops = try JSONSerialization.jsonObject(with: data) as? [Any]
+                guard ops != nil else { throw CanvasHost.Failure(text: "guide ops are not an array") }
+            } else {
+                ops = nil
+            }
+            let entry = existing ?? canvases.createLocal(named: Self.chromeCanvasName)
+            Store.settings.set(entry.id, forKey: Self.chromeCanvasKey)
+            let host = try await CanvasTools.open(entry, in: browser, foreground: true)
+            try await host.waitReady()
+            if let ops {
+                let result = try await host.apply(ops, as: CanvasAgent(id: "agent:copper", name: "Copper", color: CanvasColors.stable("Copper")))
+                let applied = result["applied"] as? Int ?? 0
+                let errors = result["errors"] as? [Any] ?? []
+                guard applied == ops.count, errors.isEmpty else {
+                    throw CanvasHost.Failure(text: "guide applied \(applied)/\(ops.count) ops (\(errors.count) errors)")
+                }
+                try await host.zoom(to: ["sfc_header", "sfc_f_map"])
+            }
+            CanvasHost.show(entry.id, in: browser, foreground: true)
+            return entry.id
+        } catch {
+            NSLog("Copper: Flow Chrome canvas: %@", String(describing: error))
+            return nil
+        }
     }
 
     /// What the keychain key unlocked, read in one detached pass.
@@ -671,7 +725,7 @@ final class Flow: ObservableObject {
                         "bookmarks": report.bookmarks, "places": report.places, "passwords": report.passwords, "cookies": report.cookies, "passkeys": report.passkeys, "extensions": report.extensions,
                         "localStorageSites": report.storageSites, "localStorageKeys": report.storageKeys, "localStorageKeysSet": report.storageKeysSet,
                         "arcMovedAt": arcMovedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
-                        "notes": report.notes]
+                        "canvasId": report.canvasId ?? "", "notes": report.notes]
             default: return ["running": false, "phase": "\(phase)"]
             }
         case "localstorage":

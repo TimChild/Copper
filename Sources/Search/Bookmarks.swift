@@ -79,6 +79,7 @@ final class Bookmarks: ObservableObject {
     }
 
     func remove(_ id: Bookmark.ID) {
+        FlowBookmarks.relinquish(touching: [id], in: roots)
         roots = Bookmarks.prune(id, from: roots)
         save()
     }
@@ -107,6 +108,7 @@ final class Bookmarks: ObservableObject {
         } else {
             working.append(node)
         }
+        FlowBookmarks.relinquish(touching: [id, folderID].compactMap { $0 }, in: roots)
         roots = working
         save()
     }
@@ -147,17 +149,10 @@ final class Bookmarks: ObservableObject {
         node.id == id || (node.children ?? []).contains { holds(id, $0) }
     }
 
-    /// Another browser's, kept apart in a folder of that browser's name
-    /// unless there was nothing here yet.
-    func take(_ nodes: [Bookmark], from name: String) {
-        guard !nodes.isEmpty else { return }
-        if roots.isEmpty {
-            roots = nodes
-        } else {
-            roots.removeAll { $0.isFolder && $0.title == name }
-            roots.append(.folder(name, nodes))
-        }
-        save()
+    /// Another browser's, with the bar at the top level and source-owned
+    /// roots replaced on repeat imports, without touching personal bookmarks.
+    func take(_ read: FlowBookmarks.Read, from name: String) {
+        FlowBookmarks.take(read, from: name, into: self)
     }
 
     /// Fork (cloud): the whole tree at once, ids kept — Copper Cloud's merged
@@ -181,6 +176,7 @@ final class Bookmarks: ObservableObject {
         if let parent {
             var nodes = roots
             if Bookmarks.insert(node, into: parent, nodes: &nodes) {
+                FlowBookmarks.relinquish(touching: [parent], in: roots)
                 roots = nodes
                 save()
                 return node
@@ -210,6 +206,7 @@ final class Bookmarks: ObservableObject {
         }
         var nodes = roots
         if walk(&nodes) {
+            FlowBookmarks.relinquish(touching: [id], in: roots)
             roots = nodes
             save()
         }

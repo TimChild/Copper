@@ -114,44 +114,13 @@ enum Chromium {
 
     // MARK: - what they kept
 
-    /// The other browser's bookmarks: the bar first, then anything filed
-    /// elsewhere, folders and all. Chromium keeps them as one JSON file.
-    static func bookmarks(in source: Source) -> [Bookmark] {
-        var out: [Bookmark] = []
-        for file in source.files {
-            let marks = file.deletingLastPathComponent().appendingPathComponent("Bookmarks")
-            guard let data = try? Data(contentsOf: marks),
-                  let top = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let roots = top["roots"] as? [String: Any]
-            else { continue }
-            if let bar = roots["bookmark_bar"] as? [String: Any] {
-                out += nodes(in: bar["children"] as? [[String: Any]] ?? [])
-            }
-            for key in ["other", "synced"] {
-                if let more = roots[key] as? [String: Any] {
-                    let kids = nodes(in: more["children"] as? [[String: Any]] ?? [])
-                    if !kids.isEmpty { out.append(.folder(key == "other" ? "Other" : "Mobile", kids)) }
-                }
-            }
-        }
-        return out
-    }
-
-    private static func nodes(in raw: [[String: Any]]) -> [Bookmark] {
-        raw.compactMap { entry in
-            let name = entry["name"] as? String ?? ""
-            switch entry["type"] as? String {
-            case "folder":
-                return .folder(name, nodes(in: entry["children"] as? [[String: Any]] ?? []))
-            case "url":
-                guard let text = entry["url"] as? String, let url = URL(string: text),
-                      url.scheme == "http" || url.scheme == "https"
-                else { return nil }
-                return .site(name, url)
-            default:
-                return nil
-            }
-        }
+    /// Flow's reader handles both the account and local bookmark trees.
+    static func bookmarks(in source: Source) -> FlowBookmarks.Read {
+        let profiles = FlowChromeTabs.profiles(of: source)
+        let folders = profiles.isEmpty
+            ? source.files.map { $0.deletingLastPathComponent() }
+            : profiles.map { source.root.appendingPathComponent($0, isDirectory: true) }
+        return FlowBookmarks.bookmarks(in: folders)
     }
 
     /// The other browser's icons for the given pages, host by host: the

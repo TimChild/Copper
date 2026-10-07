@@ -187,7 +187,9 @@
                                        a page as ⌘-click would from that tab; backdate lets Tide be seen
                                        without waiting; glance holds a Glance open for `window PATH`
     ./bench flow sources               browsers Flow can see
-    ./bench flow scan --source Chrome  cheap counts (no keychain prompt)
+    ./bench flow scan --source Chrome  cheap site counts (no keychain prompt)
+    ./bench flow bookmarks              actual imported tree, order and site count (test world)
+    ./bench flow bookmark-move --id ID  move a top-level bookmark to the end (test world)
     ./bench flow root --source Chrome --path /tmp/copy
                                        use a test-only read-only source copy
     ./bench flow move --source Arc [--only tabs,bookmarks,history,cookies,localstorage,extensions] [--real]
@@ -427,7 +429,7 @@ def main(argv):
                 else: sys.exit(usage)
                 rest = rest[2:]
     elif verb == "flow":
-        if not args: sys.exit("usage: bench flow sources|scan|move|status|localstorage|open")
+        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open")
         request["op"] = args[0]
         rest = args[1:]
         i = 0
@@ -438,6 +440,8 @@ def main(argv):
                 request["path"] = rest[i + 1]; i += 2
             elif rest[i] == "--only" and i + 1 < len(rest):
                 request["only"] = rest[i + 1]; i += 2
+            elif rest[i] == "--id" and i + 1 < len(rest):
+                request["id"] = rest[i + 1]; i += 2
             elif rest[i] == "--root" and i + 1 < len(rest):
                 request["root"] = os.path.abspath(rest[i + 1]); i += 2
             elif rest[i] == "--real":

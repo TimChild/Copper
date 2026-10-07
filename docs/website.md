@@ -75,6 +75,13 @@ innerWidth`, no console errors or failed requests, the copy buttons, the ⌘K pa
 hide-banner demo in "Try it here", and the theme toggle. Playwright's bundled Chromium cannot
 play H.264, so check the videos in Safari or Chrome.
 
+## Launch graphics
+
+The hero bento, `loop-spaces`/`loop-agents` (captioned loops), `post-*.webp` (the launch thread's
+stills), `tile-*.webp` (bento pieces), `art-*.webp` (copper-art backdrops) and `og.jpg` come from
+the launch kit (bento source, caption renderer and raw recordings), not from `site-capture/`.
+The bento itself is live HTML in `index.html`; `og.jpg` is a 1200×630 crop of its render.
+
 ## Captures (screenshots and loops)
 
 Every image and video of the app on the page is a real capture of Copper, made by
@@ -83,7 +90,6 @@ are using is never touched:
 
 | Asset | What it shows | Made with |
 |---|---|---|
-| `copper-google(-dark).webp` | Copper on google.com with the Personal space | `compose.py still` |
 | `copper-motion(-dark).mp4/.webp` | tab switch, ⌘K filtering, a space switch, tabs on top and back | `rec_motion.py` → `compose.py video` |
 | `copper-jev(-dark).mp4/.webp` | a real Jev run: "Search Wikipedia for patina and stop when the article is visible", with the driver timeline | `rec_jev.py` → `compose.py video` |
 

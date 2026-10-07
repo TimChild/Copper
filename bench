@@ -208,6 +208,30 @@
     ./bench agent [on|off|rotate|setup-phi|setup-claude|setup-cli|setup-status]
                                        the MCP server agents drive the window through; setup bridges terminal agents
     ./bench ai [lane key|claude|tier haiku|sonnet|opus]   which model lane is active and ready
+    ./bench voice selftest             the speech engine: pure checks, then — when the run has
+                                       SEARCH_VOICE_MODEL_DIR — three clips spoken in-process,
+                                       transcribed and scored ("skipped" without it); exits 1 on a failure
+    ./bench voice replay PATH          one audio file (wav, aiff, m4a…; any rate) → text, words, timing
+    ./bench voice status|result        what the engine has loaded; the last selftest/replay's answer
+    ./bench voice dictate PATH [--trigger hold|toggle] [--finish insert|send] [--draft TEXT] [--caret N|--select A,B|--reopen]
+                      [--type TEXT] [--cancel-at S] [--tap] [--fail-at S] [--speed X] [--agent busy|unready] [--cap S]
+                      [--undo] [--keys CHARS|--button] [--warm-delay S [--start-cold]] [--decode-fails]
+                      [--blur-at dictating|finishing]
+                      [--permission denied|ask-grant|ask-deny [--release-during-prompt]]   (a stand-in; no prompt is shown)
+                                       test world: one real dictation into the agent composer, the file standing in for
+                                       the mic → state timeline, the words inserted, draft before/after, whether it sent
+    ./bench voice source PATH [--speed X]|off   test world: ⌃⇧D and the mic hear this file instead of the microphone
+    ./bench voice key down|up|press|ctrl-up|escape [CHARS]   test world: ⌃⇧D (or Escape) through the app's key monitors;
+                                       CHARS is what the D key types (default d; в as on a Russian layout)
+    ./bench voice warm cold [DELAY]|now   test world: the model let go (each load held DELAY s, as a first-time
+                                       Neural Engine preparation), then loaded as the pane opening does
+    ./bench voice seed idle|dictating|finishing|finishing-warming|denied|preparing|warming|downloading|failed|hint|inserted|off
+                                       test world: the composer frozen in a dictation state, for pictures
+    ./bench voice render PATH [WIDTH] [dark] [settings]   test world: the agent pane drawn off screen at WIDTH (340–620),
+                                       or Settings › Voice at the panel's column width (409–699)
+    ./bench voice prefs on|off|hold|toggle|insert|send · voice model status|install|cancel|remove · voice state
+                                       prefs and model install/cancel/remove: test world only
+    ./bench voice editor state|type TEXT|event|boundary|undo|redo|resync   test world: the composer's field editor against the draft
     ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
     ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
     ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark] [CODE]|bookmark URL [TITLE]|pin URL|open URL
@@ -397,6 +421,19 @@ def main(argv):
         request["op"] = args[0] if args else "status"
         if request["op"] == "picture" and len(args) > 1: args[1] = os.path.abspath(args[1])
         request["arg"] = " ".join(args[1:]) if len(args) > 1 else ""
+    elif verb == "voice":
+        request["op"] = args[0] if args else "status"
+        if request["op"] == "replay":
+            if len(args) != 2: sys.exit("usage: bench voice replay PATH")
+            request["path"] = os.path.abspath(args[1])
+        elif request["op"] in ("dictate", "source", "key", "seed", "render", "prefs", "model", "state", "editor", "warm"):
+            # Dictation (Fork/Voice/DictationBench.swift): the words after the op, a file path made absolute.
+            rest = args[1:]
+            if request["op"] in ("dictate", "source", "render") and rest and rest[0] != "off" and not rest[0].startswith("--"):
+                rest[0] = os.path.abspath(rest[0])
+            request["args"] = rest
+        elif len(args) > 1 or request["op"] not in ("selftest", "status", "result"):
+            sys.exit("usage: bench voice selftest|replay PATH|status|result|dictate PATH …|source PATH|off|key …|warm …|seed …|render PATH [W] [dark]|prefs …|model …|state|editor …")
     elif verb == "settings":
         words = [a for a in args if a != "--table"]
         request["op"] = words[0] if words else "state"
@@ -537,6 +574,21 @@ def main(argv):
             if not answer.get("running"): break
             print("\r" + " · ".join(answer.get("lines", []))[-120:], end="", file=sys.stderr, flush=True)
         print(file=sys.stderr)
+    if verb == "voice" and answer.get("running"):
+        # The first load on a Mac prepares the Neural Engine for a minute or
+        # more, past the bench's 25 s: ask for the job's answer until it's in.
+        import time
+        started = time.time()
+        while answer.get("running") and time.time() - started < 900:
+            print(f"\rvoice {answer.get('job', '')}: {time.time() - started:.0f} s", end="", file=sys.stderr, flush=True)
+            time.sleep(2)
+            answer = ask(os.path.join(folder(world), "bench.sock"), {"do": "voice", "op": "result"})
+        print(file=sys.stderr)
+        if answer.get("error"):
+            sys.exit("error: " + str(answer["error"]))
+    if verb == "voice":
+        print(json.dumps(answer, ensure_ascii=False, indent=2, sort_keys=True))
+        return 1 if answer.get("failures") or answer.get("running") else 0
     if verb == "storage" and answer.get("started"):
         # The import runs on in Copper; the bench answers within 25 s, so ask
         # for the report until it is done rather than holding one request.

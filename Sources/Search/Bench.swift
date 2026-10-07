@@ -272,6 +272,10 @@ final class Bench {
             // Fork (cloud): link, sign in and sync a probe world (Fork/Cloud/CloudBench.swift).
             CloudBench.handle(request, in: browser, answer: answer)
 
+        case "voice":
+            // Fork (voice): the speech engine's selftest and replay, async (Fork/Voice/VoiceBench.swift).
+            VoiceBench.handle(request, answer: answer)
+
         case "backdrop":
             // Fork (backdrop): the column's scene — its process and its clock.
             BackdropWeb.bench(answer: answer)

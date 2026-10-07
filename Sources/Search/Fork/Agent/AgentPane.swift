@@ -16,6 +16,8 @@ import SwiftUI
 
 struct AgentPane: View {
     @ObservedObject var browser: Browser
+    /// A width that isn't the dragged one: the bench's pictures at 340–620 pt.
+    var fixedWidth: CGFloat? = nil
     @ObservedObject var agent = Agent.shared
     @ObservedObject var brain = Intelligence.shared
     @ObservedObject private var account = ClaudeAccount.shared
@@ -36,7 +38,7 @@ struct AgentPane: View {
     static let width: CGFloat = 400
     static let widths: ClosedRange<Double> = 340...620
 
-    private var width: CGFloat { CGFloat(min(max(stored, AgentPane.widths.lowerBound), AgentPane.widths.upperBound)) }
+    private var width: CGFloat { fixedWidth ?? CGFloat(min(max(stored, AgentPane.widths.lowerBound), AgentPane.widths.upperBound)) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -505,17 +507,24 @@ struct AgentPane: View {
                 .lineLimit(1...8)
                 .focused($focused)
                 .disabled(!agent.ready)
-                .onSubmit { agent.send(in: browser) }
+                // What the field shows is what goes (Fork/Voice/ComposerInsert.swift).
+                .onSubmit { ComposerInsert.syncDraft(in: Windows.window(of: browser)); agent.send(in: browser) }
                 // Return sends (the field's submit); ⇧Return is a new line,
                 // as in every chat (LineBreak).
-                .onChange(of: focused, initial: true) { _, on in lineBreaks(on) }
-                .onDisappear { lineBreaks(false) }
+                .onChange(of: focused, initial: true) { _, on in
+                    lineBreaks(on)
+                    Voice.shared.composer(focused: on, in: browser) // where dictated words may go through the field editor
+                }
+                .onDisappear { lineBreaks(false); Voice.shared.composer(focused: false, in: browser) }
                 .padding(.horizontal, 4)
                 .padding(.top, 2)
+            // "Listening…" and the words so far, never in the draft (Fork/Voice/VoiceUI.swift).
+            DictationPreview(browser: browser)
             HStack(spacing: 6) {
                 context
                 Spacer(minLength: 4)
                 jev
+                MicButton(browser: browser, agentReady: agent.ready)
                 send
             }
         }
@@ -557,7 +566,9 @@ struct AgentPane: View {
                 }
                 .foregroundStyle(on ? Palette.ink.opacity(0.75) : Palette.muted)
                 .padding(.horizontal, 8).frame(height: 22)
-                .frame(maxWidth: 190, alignment: .leading)
+                // 180: with /jev, the mic and Send beside it, the row still
+                // fits the narrowest pane (340 pt) without spilling over.
+                .frame(maxWidth: 180, alignment: .leading)
                 .background(on ? Palette.ground : .clear, in: Capsule())
                 .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
                 .contentShape(Capsule())

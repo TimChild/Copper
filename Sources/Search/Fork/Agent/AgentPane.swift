@@ -24,6 +24,10 @@ struct AgentPane: View {
     @ObservedObject var servers = Servers.shared
     @ObservedObject private var drive = Drive.shared
     @ObservedObject private var split = Split.shared
+    // Fork (voice): Listen's card and the composer's transcript chip.
+    @ObservedObject private var listen = Listen.shared
+    @ObservedObject private var heard = Transcript.shared
+    @Environment(\.accessibilityReduceMotion) private var still
     @FocusState private var focused: Bool
     @State private var copiedJev = false
     /// Whether this pane holds one of LineBreak's watches.
@@ -45,6 +49,8 @@ struct AgentPane: View {
             header
             Rectangle().fill(Palette.hairline).frame(height: 1)
             liveStatus
+            ListenCard(browser: browser)
+                .transition(still ? .identity : .opacity)
             if agent.items.isEmpty && !agent.busy {
                 empty
             } else {
@@ -55,6 +61,7 @@ struct AgentPane: View {
         .frame(width: width)
         .background(Palette.ground)
         .animation(Motion.quick, value: drive.live)
+        .animation(still ? nil : Motion.quick, value: listen.phase == .off)
         .overlay(alignment: .leading) { grip }
         .onAppear { focused = true }
         .onChange(of: agent.focusTick) { _, _ in focused = true }
@@ -97,6 +104,7 @@ struct AgentPane: View {
             // Real doors, not bare glyphs: a square each, washed under the
             // pointer (PaneDoor). "Close all" only shows beside a split.
             HStack(spacing: 2) {
+                ListenDoor(browser: browser)
                 PaneDoor(icon: "square.and.pencil", help: "New chat", on: !agent.items.isEmpty || agent.busy) { agent.clear() }
                 if split.on {
                     PaneDoor(icon: "xmark.square", help: "Close all panes (⌘⌥E)") { Panes.closeAll(in: browser) }
@@ -522,6 +530,7 @@ struct AgentPane: View {
             DictationPreview(browser: browser)
             HStack(spacing: 6) {
                 context
+                TranscriptChip()
                 Spacer(minLength: 4)
                 jev
                 MicButton(browser: browser, agentReady: agent.ready)
@@ -567,8 +576,9 @@ struct AgentPane: View {
                 .foregroundStyle(on ? Palette.ink.opacity(0.75) : Palette.muted)
                 .padding(.horizontal, 8).frame(height: 22)
                 // 180: with /jev, the mic and Send beside it, the row still
-                // fits the narrowest pane (340 pt) without spilling over.
-                .frame(maxWidth: 180, alignment: .leading)
+                // fits the narrowest pane (340 pt) without spilling over —
+                // less beside the Listen transcript's chip.
+                .frame(maxWidth: pageChipWidth, alignment: .leading)
                 .background(on ? Palette.ground : .clear, in: Capsule())
                 .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
                 .contentShape(Capsule())
@@ -578,6 +588,14 @@ struct AgentPane: View {
             .help(on ? "This \(canvas != nil ? "canvas" : "page") goes in front of every question — click to leave it out"
                      : "Left out — click to put this \(canvas != nil ? "canvas" : "page") in front of every question")
         }
+    }
+
+    /// The page chip's widest: 180, or what the row leaves it beside "Live
+    /// transcript" (the composer's 44 pt of margins, /jev, the mic, Send,
+    /// the gaps, and that chip's ~105 pt).
+    private var pageChipWidth: CGFloat {
+        guard TranscriptChip.shown(heard) else { return 180 }
+        return min(180, max(64, width - 270))
     }
 
     /// The draft as a /jev command for a terminal agent.

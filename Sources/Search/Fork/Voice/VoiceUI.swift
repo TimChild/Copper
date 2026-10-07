@@ -17,6 +17,8 @@ struct MicButton: View {
     @ObservedObject private var voice = Voice.shared
     @ObservedObject private var prefs = VoicePrefs.shared
     @ObservedObject private var store = ModelStore.shared
+    /// Listen live or paused has the microphone: the mic is off meanwhile.
+    @ObservedObject private var listen = Listen.shared
     @Environment(\.accessibilityReduceMotion) private var still
     @State private var over = false
     @State private var held = false

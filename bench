@@ -227,11 +227,17 @@
                                        Neural Engine preparation), then loaded as the pane opening does
     ./bench voice seed idle|dictating|finishing|finishing-warming|denied|preparing|warming|downloading|failed|hint|inserted|off
                                        test world: the composer frozen in a dictation state, for pictures
-    ./bench voice render PATH [WIDTH] [dark] [settings]   test world: the agent pane drawn off screen at WIDTH (340–620),
-                                       or Settings › Voice at the panel's column width (409–699)
+    ./bench voice render PATH [WIDTH [HEIGHT]] [dark] [settings]   test world: the agent pane drawn off screen at WIDTH
+                                       (340–620; HEIGHT default 520), or Settings › Voice at the panel's column width (409–699)
     ./bench voice prefs on|off|hold|toggle|insert|send · voice model status|install|cancel|remove · voice state
                                        prefs and model install/cancel/remove: test world only
     ./bench voice editor state|type TEXT|event|boundary|undo|redo|resync   test world: the composer's field editor against the draft
+    ./bench voice listen start [--source PATH] [--fast|--speed X] [--wait]   test world: Listen in the agent pane, the file
+                                       standing in for the mic (--fast: as fast as it decodes; --wait: answer once heard out)
+    ./bench voice listen pause|resume|stop|forget|close-pane|open-pane|sleep|lock|device-lost   test world: Listen's controls,
+                                       and what pauses it
+    ./bench voice listen state [--settle] [--last N]   phase, reason, segment count, the last N segments, live, partial
+    ./bench voice seed listening|listen-expanded|listen-paused|listen-stopped   test world: Listen's card, for pictures
     ./bench cloud status|link CODE|signup EMAIL PW NAME|signin EMAIL PW|signout|disconnect
     ./bench cloud sync on DOMAINS|off|now|set DOMAIN on|off   (spaces,settings,bookmarks,tabs,history|all)
     ./bench cloud devices|doc DOMAIN|log|selftest|wstest|picture PATH [dark] [CODE]|bookmark URL [TITLE]|pin URL|open URL
@@ -241,6 +247,10 @@
                                        mint a one-time code for another Mac, list or revoke them
     ./bench passkeys list|count|forget --id ID|answer yes|no|ask
                                        Copper's own test-world passkeys (no private keys in list)
+    ./bench mcp transcript begin|append TEXT|live on|off|forget|share on|off|state
+                                       test world: the Listen transcript agents read (voice_transcript,
+                                       `copper transcript`), driven with no audio; share = Settings › Voice's switch
+    ./bench mcp transcript check       test world: a linked bot's tools/list has no voice tools and its calls are refused
     ./bench split [ID|off]           split the stage with tab ID (toggle with none)
     ./bench mouse back|forward|middle [X Y] [--shift] [--window N]
                                        a click of that mouse button at window point X Y (top-left
@@ -426,14 +436,17 @@ def main(argv):
         if request["op"] == "replay":
             if len(args) != 2: sys.exit("usage: bench voice replay PATH")
             request["path"] = os.path.abspath(args[1])
-        elif request["op"] in ("dictate", "source", "key", "seed", "render", "prefs", "model", "state", "editor", "warm"):
+        elif request["op"] in ("dictate", "source", "key", "seed", "render", "prefs", "model", "state", "editor", "warm", "listen"):
             # Dictation (Fork/Voice/DictationBench.swift): the words after the op, a file path made absolute.
             rest = args[1:]
             if request["op"] in ("dictate", "source", "render") and rest and rest[0] != "off" and not rest[0].startswith("--"):
                 rest[0] = os.path.abspath(rest[0])
+            # Listen (Fork/Voice/ListenBench.swift): --source PATH made absolute.
+            if request["op"] == "listen" and "--source" in rest and rest.index("--source") + 1 < len(rest):
+                rest[rest.index("--source") + 1] = os.path.abspath(rest[rest.index("--source") + 1])
             request["args"] = rest
         elif len(args) > 1 or request["op"] not in ("selftest", "status", "result"):
-            sys.exit("usage: bench voice selftest|replay PATH|status|result|dictate PATH …|source PATH|off|key …|warm …|seed …|render PATH [W] [dark]|prefs …|model …|state|editor …")
+            sys.exit("usage: bench voice selftest|replay PATH|status|result|dictate PATH …|source PATH|off|key …|warm …|seed …|render PATH [W] [dark]|prefs …|model …|state|editor …|listen …")
     elif verb == "settings":
         words = [a for a in args if a != "--table"]
         request["op"] = words[0] if words else "state"
@@ -539,6 +552,11 @@ def main(argv):
         request["id"], request["text"] = args
         if via_app: request["via"] = "app"
         if hold: request["hold"] = True
+    elif verb == "mcp":
+        # `mcp transcript …` (Fork/MCP/VoiceTools.swift) rides the agent server's own bench verb.
+        if len(args) < 2 or args[0] != "transcript":
+            sys.exit("usage: bench mcp transcript begin|append TEXT|live on|off|forget|share on|off|state|check")
+        request = {"do": "agent", "op": "transcript", "arg": " ".join(args[1:])}
     elif verb == "resize":
         if len(args) not in (2, 3): sys.exit("usage: bench resize WIDTH HEIGHT [STEPS]")
         request["width"], request["height"] = float(args[0]), float(args[1])
@@ -574,6 +592,16 @@ def main(argv):
             if not answer.get("running"): break
             print("\r" + " · ".join(answer.get("lines", []))[-120:], end="", file=sys.stderr, flush=True)
         print(file=sys.stderr)
+    if verb == "mcp" and answer.get("running"):
+        # `mcp transcript check` runs in the app; ask for its answer.
+        import time
+        for _ in range(50):
+            time.sleep(0.2)
+            answer = ask(os.path.join(folder(world), "bench.sock"), {"do": "agent", "op": "transcript", "arg": "check-result"})
+            if not answer.get("running"): break
+        if answer.get("error"): sys.exit("error: " + str(answer["error"]))
+        print(json.dumps(answer, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if answer.get("ok") else 1
     if verb == "voice" and answer.get("running"):
         # The first load on a Mac prepares the Neural Engine for a minute or
         # more, past the bench's 25 s: ask for the job's answer until it's in.

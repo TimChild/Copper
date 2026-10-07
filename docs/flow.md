@@ -21,9 +21,11 @@ existing top-level bookmarks stay in place: imported bar items follow them,
 not a `Chrome` folder. If an imported root folder's name collides with one of
 yours, the imported folder is named `Other (Chrome)` (or similarly). A repeat
 Flow import replaces *untouched top-level items from the previous import*;
-anything you edited, moved, or saved yourself is left alone. The source-owned
-root IDs are recorded in `flow-bookmarks-chrome.json` in Copper's own data
-folder. On a first import into an older Copper tree without that record,
+anything you edited, moved (including a move within the top level), or saved
+yourself is left alone. If a present Chrome bookmark file cannot be read,
+Flow keeps previous imported roots and merges what it can read; a successfully
+read empty tree does remove untouched imported roots. The source-owned root
+IDs are recorded in `flow-bookmarks-chrome.json` in Copper's own data folder. On a first import into an older Copper tree without that record,
 previously filed `Chrome` folders are left alone rather than guessed at or
 deleted.
 
@@ -98,8 +100,8 @@ The `bench flow` commands are available in an isolated `SEARCH_PROBE` world:
 
 `docs/fixtures/flow-bookmarks-e2e.sh` copies the small fake Chrome root,
 starts a fresh headless `SEARCH_PROBE` world, asserts the scan count and the
-actual moved tree (including re-import and preservation of an existing Copper
-bookmark), then removes only that world. Build the app with `./build.sh` first.
+actual moved tree (including a moved root, a corrupt file, an empty source,
+and preservation of an existing Copper bookmark), then removes only that world. Build the app with `./build.sh` first.
 The fixture commits only bookmark files for Profile 1 and Profile 2; the
 script writes the two empty `Preferences` markers into its *copy* because
 Flow uses them to discover profiles. The shared fixture root may also hold

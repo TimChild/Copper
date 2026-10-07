@@ -115,7 +115,7 @@ enum Chromium {
     // MARK: - what they kept
 
     /// Flow's reader handles both the account and local bookmark trees.
-    static func bookmarks(in source: Source) -> [Bookmark] {
+    static func bookmarks(in source: Source) -> FlowBookmarks.Read {
         let profiles = FlowChromeTabs.profiles(of: source)
         let folders = profiles.isEmpty
             ? source.files.map { $0.deletingLastPathComponent() }

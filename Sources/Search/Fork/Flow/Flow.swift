@@ -224,7 +224,7 @@ final class Flow: ObservableObject {
         }
         haul.extensions = FlowExtensions.read(source.readerSource, profiles: source.profiles)
         haul.passkeyCount = FlowPasskeys.count(source.readerSource, profiles: source.profiles)
-        haul.bookmarkCount = FlowBookmarks.count(FlowChromium.bookmarks(in: source))
+        haul.bookmarkCount = FlowBookmarks.count(FlowChromium.bookmarks(in: source).nodes)
         haul.placeCount = FlowChromium.places(in: source).count
         haul.notes.append("\(haul.bookmarkCount) bookmarks")
         haul.notes.append("\(haul.placeCount) places")
@@ -579,8 +579,8 @@ final class Flow: ObservableObject {
 
     private static func benchBookmarks(_ nodes: [Bookmark]) -> [[String: Any]] {
         nodes.map { node in
-            if node.isFolder { return ["title": node.title, "children": benchBookmarks(node.children ?? [])] }
-            return ["title": node.title, "url": node.url ?? ""]
+            if node.isFolder { return ["id": node.id.uuidString, "title": node.title, "children": benchBookmarks(node.children ?? [])] }
+            return ["id": node.id.uuidString, "title": node.title, "url": node.url ?? ""]
         }
     }
 
@@ -613,6 +613,12 @@ final class Flow: ObservableObject {
             // just the source preview (including root order and nesting).
             guard Store.testing else { return ["error": "bookmark tree only works in a test run"] }
             return ["count": browser.bookmarks.count, "roots": Self.benchBookmarks(browser.bookmarks.roots)]
+        case "bookmark-move":
+            guard Store.testing, let id = (request["id"] as? String).flatMap(UUID.init(uuidString:)),
+                  browser.bookmarks.roots.contains(where: { $0.id == id })
+            else { return ["error": "bookmark-move requires a probe-world top-level id"] }
+            browser.bookmarks.move(id, into: nil)
+            return ["roots": Self.benchBookmarks(browser.bookmarks.roots)]
         case "scan":
             guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
             guard !source.locked else { return ["error": "source is locked"] }

@@ -45,8 +45,10 @@ ready=0
 for _ in $(seq 1 60); do if B tabs >/dev/null 2>&1; then ready=1; break; fi; sleep 0.5; done
 [ "$ready" = 1 ] || { echo "FAIL: headless probe did not start"; tail -15 "$TMP/copper.log"; exit 1; }
 check() {
-  local label=$1 expression=$2 input=$3
-  if printf '%s\n' "$input" | jq -e "$expression" >/dev/null; then echo "ok: $label";
+  local label=$1; shift
+  local input=${!#}
+  set -- "${@:1:$#-1}"
+  if printf '%s\n' "$input" | jq -e "$@" >/dev/null; then echo "ok: $label";
   else echo "FAIL: $label"; printf '%s\n' "$input"; exit 1; fi
 }
 ROOT_RESULT=$(B flow root --source Chrome --path "$TMP/chrome")
@@ -76,4 +78,41 @@ check 're-import reports the same 12 source sites' '.bookmarks == 12' "$REPEAT"
 AFTER=$(B flow bookmarks)
 check 're-import replaces its previous roots, not the owned bookmark' \
   '.count == 13 and [.roots[].title] == ["Owned", "Alpha updated", "Projects", "Shared", "Local", "Beta", "Other", "Mobile"]' "$AFTER"
+# Move one imported top-level root to the end, then remove it from the copied
+# Chrome file. Its value has not changed, but its ownership has.
+ALPHA_ID=$(printf '%s\n' "$AFTER" | jq -r '.roots[] | select(.title == "Alpha updated") | .id')
+MOVED=$(B flow bookmark-move --id "$ALPHA_ID")
+check 'moving a root to the top-level tail keeps its id' \
+  --arg id "$ALPHA_ID" '[.roots[].title] == ["Owned", "Projects", "Shared", "Local", "Beta", "Other", "Mobile", "Alpha updated"] and .roots[-1].id == $id' "$MOVED"
+jq '(.roots.bookmark_bar.children) |= map(select(.name != "Alpha updated"))' \
+  "$TMP/chrome/Profile 1/AccountBookmarks" > "$TMP/new-bookmarks"
+mv "$TMP/new-bookmarks" "$TMP/chrome/Profile 1/AccountBookmarks"
+REMOVED_SOURCE=$(B flow move --source Chrome --only bookmarks)
+check 'source no longer contains the moved site' '.bookmarks == 11' "$REMOVED_SOURCE"
+PRESERVED=$(B flow bookmarks)
+check 're-import does not delete the moved root even if Chrome removed it' \
+  --arg id "$ALPHA_ID" '.count == 13 and ([.roots[] | select(.id == $id and .title == "Alpha updated")] | length) == 1' "$PRESERVED"
+# One present file is corrupt, while the other account/local files still
+# parse. Their partial tree must never replace the prior imported roots.
+printf '{not-json\n' > "$TMP/chrome/Profile 1/Bookmarks"
+PARTIAL=$(B flow move --source Chrome --only bookmarks)
+check 'partial read still brings in valid files' '.bookmarks > 0 and .bookmarks < 11' "$PARTIAL"
+AFTER_PARTIAL=$(B flow bookmarks)
+check 'an unreadable present file preserves previous imported roots' \
+  '.count == 13 and [.roots[].title] == ["Owned", "Alpha updated", "Projects", "Shared", "Local", "Beta", "Other", "Mobile"]' "$AFTER_PARTIAL"
+[ "$(grep -c 'Copper: Flow Chrome bookmarks: 1 unreadable file(s)' "$TMP/copper.log")" -eq 1 ] || {
+  echo 'FAIL: incomplete import must log one Copper: Flow line'; exit 1;
+}
+echo 'ok: incomplete read logged once'
+# Every present file now parses and explicitly has an empty tree. Unlike a
+# failed read, this is authoritative and may remove untouched imported roots.
+for file in "$TMP/chrome"/Profile*/{AccountBookmarks,Bookmarks}; do
+  [ -e "$file" ] || continue
+  printf '{"roots":{"bookmark_bar":{"children":[]},"other":{"children":[]},"synced":{"children":[]}}}\n' > "$file"
+done
+EMPTY=$(B flow move --source Chrome --only bookmarks)
+check 'complete empty Chrome tree contains no sites' '.bookmarks == 0' "$EMPTY"
+FINAL=$(B flow bookmarks)
+check 'complete empty read removes untouched imports, keeps moved and personal roots' \
+  --arg id "$ALPHA_ID" '.count == 2 and [.roots[].title] == ["Owned", "Alpha updated"] and .roots[-1].id == $id' "$FINAL"
 echo 'ok: flow Chrome bookmark import end to end'

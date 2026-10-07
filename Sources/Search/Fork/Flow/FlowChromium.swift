@@ -6,7 +6,7 @@ import SQLite3
 /// Login Data; a read-only fallback copy may deliberately contain only the
 /// session, history and bookmark files, so those paths are walked directly.
 enum FlowChromium {
-    static func bookmarks(in source: FlowSource) -> [Bookmark] {
+    static func bookmarks(in source: FlowSource) -> FlowBookmarks.Read {
         let profiles = source.profiles.map { source.root.appendingPathComponent($0, isDirectory: true) }
         return FlowBookmarks.bookmarks(in: profiles)
     }
@@ -73,10 +73,10 @@ extension Browser {
     func takeBookmarks(from source: FlowSource) -> Int {
         let found = FlowChromium.bookmarks(in: source)
         bookmarks.take(found, from: source.name)
-        let count = Bookmarks.count(found)
+        let count = Bookmarks.count(found.nodes)
         announce(count == 0 ? "No bookmarks in \(source.name)" : "\(count) bookmarks from \(source.name)")
         guard source.rootOverride == nil else { return count }
-        let urls = Bookmarks.urls(found)
+        let urls = Bookmarks.urls(found.nodes)
         DispatchQueue.global(qos: .utility).async {
             let icons = Chromium.icons(in: source.readerSource, for: urls)
             Task { @MainActor in

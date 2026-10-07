@@ -207,6 +207,11 @@ the main world opens the link itself. `Fork/LinkRelay.swift`; every hand-off is 
 `Copper (<name>)` as main — launched headless and hidden, and told it is main itself, so a chain
 of test worlds never reaches the installed Copper.
 
+All of this is about probes of a **release** build (`com.collinrijock.copper`, such as the
+downloaded app `site-capture/launch.sh` runs). A probe of a development build
+(`com.collinrijock.copper.dev`, below) is a different app to LaunchServices: a Dock click or a
+link meant for the installed Copper never reaches it, and it hands nothing on.
+
 ## Probing it without touching a real profile
 
 ```sh
@@ -225,7 +230,33 @@ kill <that pid only>
 
 `SEARCH_PROBE=<name>` keeps the data in its own world; `SEARCH_MCP_PORT` keeps it off the
 windowed Copper's 4123; `SEARCH_MEASURE=1` keeps WebKit's shipped background policy, so the probe
-sees what a real headless run sees. `CGWindowListCopyWindowInfo` filtered by the pid is the
+sees what a real headless run sees.
+
+### A development build is its own app
+
+`./build.sh` (no `COPPER_RELEASE=1`) builds `com.collinrijock.copper.dev`, not
+`com.collinrijock.copper` (docs/releasing.md). What macOS files under a bundle id is therefore
+the dev app's, never the installed Copper's:
+
+| | installed Copper | probe of a dev build |
+|---|---|---|
+| Privacy grants (TCC: Files & Folders, Full Disk Access, Automation…) | `com.collinrijock.copper` | `com.collinrijock.copper.dev` |
+| `UserDefaults.standard` (WebKit's spelling switches, window frames) | `com.collinrijock.copper` | `com.collinrijock.copper.dev` |
+| Copper's own settings (`Store.settings`) | `com.collinrijock.copper` | `com.officecommun.search.test.<world>` (unchanged) |
+| Data folder | `~/Library/Application Support/Copper` | `Copper (<world>)` (unchanged) |
+| WebKit container | `~/Library/WebKit/com.collinrijock.copper` | `~/Library/WebKit/com.collinrijock.copper.dev`, one store per world inside |
+| Keychain | items labelled `Copper`, ACLs for the release certificate | items labelled `Copper (<world>)`, ACLs for that ad-hoc build |
+| `copper://` links from other apps | yes | no (not claimed) |
+
+Without `SEARCH_PROBE` a dev build is the world `dev` (`Copper (dev)`, suite
+`com.officecommun.search.test.dev`) — it never opens the real folder. To check that a QA run left
+the installed Copper alone:
+
+```sh
+defaults export com.collinrijock.copper - | shasum -a 256     # before and after: identical
+log show --last 30m --style compact --predicate 'subsystem == "com.apple.TCC"' \
+  | grep -o 'com\.collinrijock\.copper[.a-z]*' | sort | uniq -c   # probe events under .dev only
+``` `CGWindowListCopyWindowInfo` filtered by the pid is the
 reliable window count (System Events needs Accessibility, and two processes are named Copper).
 
 ## What it cannot do

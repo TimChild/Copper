@@ -467,7 +467,7 @@ enum CLI {
         // must never make a recovery test notice, quit, or wait on live Copper.
         if ProcessInfo.processInfo.environment["COPPER_APP_NAME"] != nil,
            ProcessInfo.processInfo.environment["COPPER_BUNDLE_ID"] == nil { return false }
-        let bundle = ProcessInfo.processInfo.environment["COPPER_BUNDLE_ID"] ?? Fork.bundle
+        let bundle = ProcessInfo.processInfo.environment["COPPER_BUNDLE_ID"] ?? Bundle.main.bundleIdentifier ?? Fork.bundle
         return !NSRunningApplication.runningApplications(withBundleIdentifier: bundle).isEmpty
     }
 
@@ -1107,7 +1107,7 @@ enum CLI {
 
     private static func copperProcessExists() -> Bool {
         let current = ProcessInfo.processInfo.processIdentifier
-        let bundle = ProcessInfo.processInfo.environment["COPPER_PROCESS_BUNDLE_ID"] ?? Fork.bundle
+        let bundle = ProcessInfo.processInfo.environment["COPPER_PROCESS_BUNDLE_ID"] ?? Bundle.main.bundleIdentifier ?? Fork.bundle
         return NSRunningApplication.runningApplications(withBundleIdentifier: bundle)
             .contains { $0.processIdentifier != current }
     }

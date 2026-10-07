@@ -52,7 +52,7 @@
                                        allow or take back one site it asked for (kept across launches)
     ./bench ext-manager remove ID | answer remove|cancel
                                        the Remove sheet, and its buttons
-    ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade
+    ./bench updates status|check|stub URL|stage|dry-run on|off|upgrade|requirement [TEXT|off]
     ./bench updates pill [available|downloading [F]|ready|installing|failed [swap] [WHY]|off] [v=VERSION]
                                        the sidebar's update pill forced into a state (its clicks are
                                        rehearsed, never real); pill click|later|unsnooze|notes [TEXT]|replay

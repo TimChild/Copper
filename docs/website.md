@@ -92,7 +92,9 @@ Recipe:
 1. `site-capture/launch.sh` downloads the latest release into `$COPPER_SHOOT`
    (default `/tmp/copper-shoot`), builds the `hidpi.m` shim (real 2× pixels and active-looking
    window controls), and starts it headless in probe world `sitepics` on MCP port 4196.
-   `./bench` needs the `bench` default on (`defaults write com.collinrijock.copper bench -bool true`).
+   `./bench` needs the `bench` default on in that world's own suite
+   (`defaults write com.officecommun.search.test.sitepics bench -bool true`; never the installed
+   Copper's `com.collinrijock.copper`).
 2. Set the world up with public pages only — never sign in to anything. The current captures use
    three spaces: Personal (google.com, Wikipedia "Patina", apple.com/mac,
    news.ycombinator.com), Work (w3.org, swift.org, webkit.org) and Reading (Wikipedia: Statue of

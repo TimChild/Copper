@@ -3,7 +3,12 @@
 # asked, the disk image people install it from and the ZIP the updater
 # fetches.
 #
-#   ./build.sh                 debug-free release build, ad-hoc signed: runs here
+#   ./build.sh                 debug-free release build, ad-hoc signed: runs here,
+#                                as the development app (com.collinrijock.copper.dev)
+#   COPPER_RELEASE=1 ./build.sh release app
+#                              the same, as Copper itself (com.collinrijock.copper):
+#                                what .github/workflows/release.yml builds and then
+#                                signs with Copper's release certificate
 #   ./build.sh release dmg     + build/Copper.dmg, build/Copper.zip and
 #                                build/appcast.json, signed with Developer ID
 #                                if there is one in the keychain
@@ -31,6 +36,16 @@
 # NOTES.md, next to this script, is what's new: newest release first, one
 # paragraph each. The first paragraph goes into the appcast, and from there
 # under the version line in Settings.
+#
+# Which app it is (docs/releasing.md). macOS files privacy grants (Full Disk
+# Access, Files & Folders, Automation), the defaults domain, WebKit's data
+# container and keychain access under the bundle id. A build from a worktree
+# that called itself com.collinrijock.copper overwrote the installed Copper's
+# grants and shared its cookies and settings, so only a release says it is
+# Copper: COPPER_RELEASE=1, or the dmg and ship steps, which only exist to
+# hand Copper out. Everything else is com.collinrijock.copper.dev, which Copper
+# runs as a test world of its own (Store.swift) and which leaves copper://
+# links to the installed app.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -45,6 +60,20 @@ BUILD="$(date +%Y%m%d%H%M)"
 # The oldest macOS this runs on — in the plist, and in the appcast so an
 # older Mac is not handed a build it can't open.
 MINIMUM="14.0"
+if [ "${COPPER_RELEASE:-}" = 1 ] || [ "$STEP" = dmg ] || [ "$STEP" = ship ]; then
+  BUNDLE_ID="com.collinrijock.copper"
+  # copper:// canvas links, from another app, go to the installed Copper only.
+  COPPER_SCHEME='
+    <dict>
+      <key>CFBundleURLName</key><string>Copper link</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>CFBundleURLSchemes</key>
+      <array><string>copper</string></array>
+    </dict>'
+else
+  BUNDLE_ID="com.collinrijock.copper.dev"
+  COPPER_SCHEME=""
+fi
 
 # Fork (canvas): the canvas page is built next door (Canvas/, bun + Vite) to
 # one self-contained file; a newer build of it replaces the copy the app
@@ -96,7 +125,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>$NAME</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>com.collinrijock.copper</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD</string>
@@ -113,13 +142,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>CFBundleURLName</key><string>Web address</string>
       <key>CFBundleURLSchemes</key>
       <array><string>http</string><string>https</string></array>
-    </dict>
-    <dict>
-      <key>CFBundleURLName</key><string>Copper link</string>
-      <key>CFBundleTypeRole</key><string>Viewer</string>
-      <key>CFBundleURLSchemes</key>
-      <array><string>copper</string></array>
-    </dict>
+    </dict>$COPPER_SCHEME
   </array>
   <key>CFBundleDocumentTypes</key>
   <array>
@@ -150,7 +173,9 @@ PLIST
 # Signing. A Developer ID certificate, when there is one, with the hardened
 # runtime Gatekeeper insists on for anything notarised; otherwise ad-hoc,
 # which is enough for the app to run on the machine that built it — and
-# which the updater refuses to swap anything in under.
+# which the updater refuses to swap anything in under. A release is signed
+# again afterwards, with Copper's own certificate and a designated requirement
+# that stays the same from release to release (release/package-app.sh).
 IDENTITY="${SEARCH_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
   | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"' || true)}"
 # Passkeys need an entitlement Apple grants to browsers on request, and a
@@ -173,7 +198,7 @@ else
   [ "$STEP" != "app" ] && echo "no Developer ID certificate found — the DMG will only open on this Mac" >&2
 fi
 
-echo "built: $APP ($VERSION, build $BUILD)"
+echo "built: $APP ($VERSION, build $BUILD, $BUNDLE_ID)"
 [ "$STEP" = "app" ] && exit 0
 
 # The disk image: the app beside a shortcut to Applications, on a white

@@ -32,7 +32,7 @@ curl -fsSL https://github.com/copper-browser/Copper/releases/latest/download/cop
 ```
 
 Both put `Copper.app` in `/Applications`, clear the download quarantine flag
-(Copper builds are ad-hoc signed, not notarized), link the `copper` command
+(Copper is signed with its own certificate, not notarized), link the `copper` command
 and open the app. The installer keeps your tab session if Copper was already
 installed. Downloading the zip by hand also works: move `Copper.app` to
 `/Applications` and run `xattr -cr /Applications/Copper.app` once.
@@ -55,7 +55,9 @@ Four short pages, each skippable:
 
 Copper checks its GitHub releases after launch and every six hours, downloads
 a newer build in the background and verifies it (checksum, bundle identity,
-code signature). Only then does a pill appear at the foot of the sidebar (or
+code signature, and that it is signed with Copper's own certificate — the same
+one every release has, which is why the permissions you give Copper survive
+updates). Only then does a pill appear at the foot of the sidebar (or
 beside the downloads button with tabs across the top): **Update Copper**, then
 **Restart to Update**. The restart backs up your tabs, swaps the new Copper in
 and relaunches in a few seconds. It never restarts without your click.

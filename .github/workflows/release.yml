@@ -22,21 +22,41 @@ name: release
 #                                              `copper crashes show N --symbolicate` (atos);
 #                                              nothing installs or downloads it on its own
 #
-# Builds are ad-hoc signed (no Developer ID, not notarized); the cask and the
-# installer clear the quarantine flag.
+# Signing (docs/releasing.md): every release is signed with Copper's own
+# certificate (release/copper-release-signing.cer; the p12 is the
+# COPPER_SIGNING_P12_BASE64 / COPPER_SIGNING_P12_PASSWORD secrets, imported into a
+# throwaway keychain on this runner and deleted after) and the explicit
+# designated requirement in release/designated-requirement.txt. The requirement
+# is the same for every release, so macOS keeps a person's grants (Full Disk
+# Access, Files & Folders, Automation) and keychain "Always Allow" across
+# updates, and Copper's updater refuses anything that doesn't satisfy it. Not a
+# Developer ID and not notarized: the cask and the installer still clear the
+# quarantine flag.
+#
+# publish=false (a dry run) builds, signs, checks and launches the release
+# exactly the same way and keeps the zip as this run's artifact. No tag, no
+# GitHub release, no asset upload — so nothing the updater, the installer or the
+# tap reads changes — and no step in that path is given a token:
+#
+#   gh workflow run release.yml -R copper-browser/Copper --ref <branch> -f publish=false
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref to build (branch, tag, or SHA)"
-        required: true
-        default: fork
+        description: "Git ref to build (branch, tag, or SHA); empty builds the branch this run was started from"
+        required: false
+        default: ""
         type: string
       prerelease:
         description: "Mark as a pre-release (not 'latest': the updater, installer and tap ignore it)"
         required: false
         default: false
+        type: boolean
+      publish:
+        description: "Publish: tag + GitHub release + assets. Off = a dry run: build, sign, check, keep the zip as this run's artifact"
+        required: false
+        default: true
         type: boolean
 
 permissions:
@@ -48,14 +68,23 @@ concurrency:
 
 jobs:
   release:
-    name: Build + publish (macos-15, arm64)
+    name: Build, sign + publish (macos-15, arm64)
     runs-on: macos-15
     timeout-minutes: 60
     steps:
+      - name: Publish or dry run
+        id: mode
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          # Only an explicit true publishes; anything else is a dry run.
+          if [ "$PUBLISH" = "true" ]; then echo "publish=true"; else echo "publish=false"; fi >> "$GITHUB_OUTPUT"
+          echo "publish input: '${PUBLISH}'"
+
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -82,19 +111,66 @@ jobs:
 
       - name: ./build.sh release app
         env:
-          # Keep build.sh's signing lookup from matching anything on a hosted
-          # runner; the bundle is ad-hoc signed by design.
+          # Copper's own bundle id; without it build.sh makes the development
+          # app (com.collinrijock.copper.dev).
+          COPPER_RELEASE: "1"
+          # build.sh's own signature is ad hoc; package-app.sh signs the release.
           SEARCH_SIGN_IDENTITY: ""
         run: |
           set -euo pipefail
           ./build.sh release app
           test -d build/Copper.app/Contents/MacOS
+          test "$(plutil -extract CFBundleIdentifier raw -o - build/Copper.app/Contents/Info.plist)" = com.collinrijock.copper
 
-      - name: Stamp version, re-sign ad hoc, zip
+      - name: Signing keychain (this runner only)
+        id: keychain
+        env:
+          P12_BASE64: ${{ secrets.COPPER_SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.COPPER_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$P12_BASE64" ] || [ -z "$P12_PASSWORD" ]; then
+            echo "::error::COPPER_SIGNING_P12_BASE64 / COPPER_SIGNING_P12_PASSWORD are not set. A release is never ad-hoc signed (docs/releasing.md)."
+            exit 1
+          fi
+          umask 077
+          keychain="${RUNNER_TEMP}/copper-signing.keychain-db"
+          p12="${RUNNER_TEMP}/copper-signing.p12"
+          pass="$(openssl rand -hex 24)"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$p12"
+          security create-keychain -p "$pass" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$pass" "$keychain"
+          security import "$p12" -k "$keychain" -f pkcs12 -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$p12"
+          # codesign may use the key without a prompt nobody could answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" "$keychain" >/dev/null
+          # On the search list too, so codesign can build the identity's chain.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "keychain=${keychain}" >> "$GITHUB_OUTPUT"
+          # The secret's certificate is the one release/ pins (hashes are public).
+          want="$(shasum -a 1 release/copper-release-signing.cer | cut -d' ' -f1)"
+          grep -q "certificate leaf = H\"${want}\"" release/designated-requirement.txt \
+            || { echo "::error::release/designated-requirement.txt does not name release/copper-release-signing.cer (${want})"; exit 1; }
+          identities="$(security find-identity -p codesigning "$keychain")"
+          case "$(printf '%s' "$identities" | tr 'A-F' 'a-f')" in
+            *"$want"*) ;;
+            *)
+              echo "::error::the signing secret does not hold the certificate release/ pins (${want}). Rotating? See docs/releasing.md."
+              printf '%s\n' "$identities" | sed 's/"[^"]*".*$//'
+              exit 1
+              ;;
+          esac
+          echo "identity=${want}" >> "$GITHUB_OUTPUT"
+          echo "signing identity ${want} (Copper Release Signing) in a keychain of this run only"
+
+      - name: Stamp version, sign, zip
         id: package
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           ZIP_NAME: ${{ steps.meta.outputs.zip_name }}
+          COPPER_SIGN_IDENTITY: ${{ steps.keychain.outputs.identity }}
+          COPPER_SIGN_KEYCHAIN: ${{ steps.keychain.outputs.keychain }}
         run: |
           set -euo pipefail
           out="${RUNNER_TEMP}/upload"
@@ -107,6 +183,76 @@ jobs:
           cp release/copper-install.sh "$out/copper-install.sh"
           echo "dir=${out}" >> "$GITHUB_OUTPUT"
           plutil -p build/Copper.app/Contents/Info.plist | grep -E 'CFBundle(ShortVersionString|Version|Identifier)'
+
+      - name: Delete the signing keychain
+        if: always() && steps.keychain.outputs.keychain != ''
+        env:
+          KEYCHAIN: ${{ steps.keychain.outputs.keychain }}
+        run: |
+          security delete-keychain "$KEYCHAIN" || true
+          rm -f "$KEYCHAIN" "${RUNNER_TEMP}/copper-signing.p12"
+          security list-keychains -d user
+
+      - name: Check the signature (the shipped zip)
+        env:
+          OUT: ${{ steps.package.outputs.dir }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          ZIP_NAME: ${{ steps.meta.outputs.zip_name }}
+        run: |
+          set -euo pipefail
+          req="$(tr -d '\n' < release/designated-requirement.txt)"
+          check="${RUNNER_TEMP}/check"
+          rm -rf "$check" && mkdir -p "$check"
+          ditto -x -k "$OUT/$ZIP_NAME" "$check"
+          app="$check/Copper.app"
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")" = com.collinrijock.copper
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = "$VERSION"
+          # The designated requirement macOS will file grants under: the same
+          # text for every release.
+          dr="$(codesign -d -r- "$app" 2>/dev/null | sed -n 's/^designated => //p')"
+          echo "designated => ${dr}"
+          [ "$dr" = "$req" ] || { echo "::error::designated requirement is '${dr}', expected '${req}'"; exit 1; }
+          # What an installed Copper from before signing checks (Updates.swift
+          # stage + reverify): integrity alone. The first signed update must pass it.
+          codesign --verify --deep --strict "$app"
+          # What every Copper from now on checks before it swaps.
+          codesign --verify --deep --strict -R="$req" "$app"
+          codesign -dvv "$app" 2>&1 | grep -E '^(Identifier|Format|CodeDirectory|Authority|Signature|TeamIdentifier|Runtime)' || true
+          entitlements="$(codesign -d --entitlements - "$app" 2>/dev/null || true)"
+          [ -z "$entitlements" ] || { echo "::error::entitlements appeared; releases carry none"; echo "$entitlements"; exit 1; }
+          echo "cdhash $(codesign -dvvv "$app" 2>&1 | sed -n 's/^CDHash=//p' | head -1)"
+
+      - name: Launch the shipped app (headless, this runner)
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A self-signed release must start like an ad-hoc one did: open the
+          # unzipped bundle headless in a test world and ask it its version.
+          app="${RUNNER_TEMP}/check/Copper.app"
+          world=release-check
+          port=4199
+          defaults write "com.officecommun.search.test.${world}" welcomed -bool true
+          open -n -g --stderr "${RUNNER_TEMP}/launch.log" \
+            --env SEARCH_PROBE="$world" --env SEARCH_HEADLESS=1 --env SEARCH_MCP_PORT="$port" "$app"
+          health=""
+          for _ in $(seq 1 90); do
+            health="$(curl -fsS --max-time 2 "http://127.0.0.1:${port}/health" 2>/dev/null || true)"
+            [ -n "$health" ] && break
+            sleep 1
+          done
+          pid="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+          [ -n "$pid" ] && kill "$pid" || true
+          if [ -z "$health" ]; then
+            echo "::error::the signed app did not answer /health on ${port} within 90 s"
+            cat "${RUNNER_TEMP}/launch.log" || true
+            exit 1
+          fi
+          echo "$health"
+          case "$health" in
+            *"$VERSION"*) ;;
+            *) echo "::error::/health does not report ${VERSION}"; exit 1 ;;
+          esac
 
       - name: Zip the dSYM
         env:
@@ -181,7 +327,19 @@ jobs:
           cat "$OUT/copper-version.json"
           ( cd "$OUT" && shasum -a 256 ./* )
 
+      # Publish off: the signed zip, its sha256, the manifest and the dSYM stay
+      # with this run as an artifact. No token, no tag, no release.
+      - name: Keep the build as this run's artifact (dry run)
+        if: steps.mode.outputs.publish != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: copper-${{ steps.meta.outputs.version }}-macos-arm64-dry-run
+          path: ${{ steps.package.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Create the GitHub release
+        if: steps.mode.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           OUT: ${{ steps.package.outputs.dir }}
@@ -209,7 +367,7 @@ jobs:
           curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/copper-install.sh | sh
           \`\`\`
 
-          or download \`${ZIP_NAME}\` below, unzip, move Copper.app to /Applications and run \`xattr -cr /Applications/Copper.app\` once (ad-hoc signed, not notarized).
+          or download \`${ZIP_NAME}\` below, unzip, move Copper.app to /Applications and run \`xattr -cr /Applications/Copper.app\` once (signed with Copper's own certificate, not notarized).
 
           macOS 14 Sonoma or later, Apple Silicon. Already installed? Copper updates itself — Settings › Updates.
 
@@ -232,6 +390,7 @@ jobs:
             ${dsym_zip:+"$dsym_zip"}
 
       - name: Verify the published bytes
+        if: steps.mode.outputs.publish == 'true'
         env:
           TAG: ${{ steps.meta.outputs.tag }}
           ZIP_NAME: ${{ steps.meta.outputs.zip_name }}
@@ -252,13 +411,21 @@ jobs:
           COMMIT: ${{ steps.meta.outputs.commit }}
           SHA256: ${{ steps.package.outputs.sha256 }}
           HAS_CLI: ${{ steps.package.outputs.has_cli }}
+          PUBLISH: ${{ steps.mode.outputs.publish }}
         run: |
           {
             echo "### Copper ${VERSION}"
             echo ""
-            echo "- release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+            if [ "$PUBLISH" = "true" ]; then
+              echo "- release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+            else
+              echo "- dry run: nothing published (no tag, no release); the signed zip is this run's artifact"
+            fi
             echo "- source: https://github.com/${GITHUB_REPOSITORY}/commit/${COMMIT}"
             echo "- sha256: \`${SHA256}\`"
+            echo "- signed: \`$(cat release/designated-requirement.txt 2>/dev/null)\`"
             echo "- CLI shim in bundle: \`${HAS_CLI}\`"
-            echo "- the tap (copper-browser/homebrew-copper) picks this up from copper-version.json on its next bump run"
+            if [ "$PUBLISH" = "true" ]; then
+              echo "- the tap (copper-browser/homebrew-copper) picks this up from copper-version.json on its next bump run"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

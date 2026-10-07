@@ -16,6 +16,10 @@ enum Store {
     /// remember a flag is not a safeguard.
     static var testing: Bool {
         if ProcessInfo.processInfo.environment["SEARCH_PROBE"] != nil { return true }
+        // Fork: only a release is the browser somebody uses. A development
+        // build (Fork.devBundle) or any other copy is a test run however it
+        // was started, so it never opens the installed Copper's folder.
+        if Bundle.main.bundleIdentifier != Fork.bundle { return true }
         return Bundle.main.executablePath?.contains("/.build/") == true
     }
 
@@ -29,6 +33,9 @@ enum Store {
         guard testing else { return nil }
         let asked = (ProcessInfo.processInfo.environment["SEARCH_PROBE"] ?? "").lowercased()
             .filter { ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" }
+        // Fork: a development build started without a world (a double-click,
+        // a plain `open`) gets one of its own, "Copper (dev)".
+        if asked.isEmpty, Bundle.main.bundleIdentifier == Fork.devBundle { return "dev" }
         return asked.isEmpty || asked == "1" || asked == "test" ? "test" : asked
     }()
 
@@ -59,7 +66,10 @@ enum Store {
     /// differ from stores made by identifier in how long extension workers
     /// are let live.
     static var ownContainer: Bool {
-        (Bundle.main.bundleIdentifier ?? "") != Fork.bundle
+        // Fork: every development build shares Fork.devBundle's container, so
+        // its worlds keep stores of their own inside it, as Copper's do.
+        let id = Bundle.main.bundleIdentifier ?? ""
+        return id != Fork.bundle && id != Fork.devBundle
     }
 
     /// The fixed identifiers of a test world's WebKit stores: 1 for websites,

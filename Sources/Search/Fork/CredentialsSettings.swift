@@ -651,9 +651,11 @@ struct AgentAccessCard: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
-                Switch(on: Binding(get: { allowed }, set: setAllowed))
+                // Its name handed in (not an outer label, which the
+                // switch's own `accessibilityLabel` would override).
+                Switch(on: Binding(get: { allowed }, set: setAllowed),
+                       label: "Share identity \(identity.name) with agents")
                     .disabled(shareAll)
-                    .accessibilityLabel("Share identity \(identity.name) with agents")
             }
             .padding(.horizontal, 2)
             .padding(.vertical, 8)
@@ -741,12 +743,11 @@ struct AgentAccessCard: View {
                 Switch(on: Binding(
                     get: { allowed },
                     set: setAllowed
-                ))
+                ), label: "Share \(title), \(credential.user.isEmpty ? "no username" : credential.user), with agents")
                 // A Bitwarden-side deny is a hard boundary, not merely a
                 // switch that ignores clicks. `.disabled` also gives it the
                 // same muted treatment as other unavailable controls.
                 .disabled(shareAll || denied)
-                .accessibilityLabel("Share \(title), \(credential.user.isEmpty ? "no username" : credential.user), with agents")
             }
             .padding(.horizontal, 2)
             .padding(.vertical, 8)

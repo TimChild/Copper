@@ -239,7 +239,6 @@ struct SplitStage: View {
     @State private var spill = PaneSpill.none
     @ObservedObject private var agent = Agent.shared
     @ObservedObject private var trace = Drive.shared
-    @ObservedObject private var flow = Flow.shared
 
     /// The stage, and the agent's pane beside it when it is open — the one
     /// conversation, where whatever drives the page (Jev, an agent on the
@@ -255,7 +254,6 @@ struct SplitStage: View {
             }
         }
         .animation(Motion.glide, value: agent.open)
-        .sheet(isPresented: $flow.open) { FlowSheet(browser: browser) }
     }
 
     /// The page area while something else has the wheel: the pill in the

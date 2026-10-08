@@ -10,8 +10,16 @@ enum FlowChromeTabs {
 
     /// Profile directories are the children of Chromium's user-data root.
     static func profiles(of source: Chromium.Source) -> [String] {
+        profiles(at: source.root)
+    }
+
+    /// The profile folders (children with a Preferences file) under `root`.
+    /// Chrome's own names win the order: Default first, then Profile 1, 2…
+    /// compared as numbers (Profile 10 after Profile 9). Chrome's guest and
+    /// profile-picker folders have Preferences too but hold nothing to move.
+    static func profiles(at root: URL) -> [String] {
         guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: source.root,
+            at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
@@ -20,14 +28,15 @@ enum FlowChromeTabs {
             guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
                 return nil
             }
+            guard !["Guest Profile", "System Profile"].contains(url.lastPathComponent) else { return nil }
             let preferences = url.appendingPathComponent("Preferences")
             guard FileManager.default.fileExists(atPath: preferences.path) else { return nil }
             return url.lastPathComponent
         }
         return names.sorted {
-            if $0 == "Default" { return true }
+            if $0 == "Default" { return $1 != "Default" }
             if $1 == "Default" { return false }
-            return $0 < $1
+            return $0.localizedStandardCompare($1) == .orderedAscending
         }
     }
 
@@ -40,10 +49,12 @@ enum FlowChromeTabs {
 
         var spaces: [FlowModel.Space] = []
         var readAny = false
+        var anyFiles = false
         for profile in profiles {
             let profileRoot = source.root.appendingPathComponent(profile, isDirectory: true)
             let sessions = profileRoot.appendingPathComponent("Sessions", isDirectory: true)
             let folder = containsSessionFiles(in: sessions) ? sessions : profileRoot
+            anyFiles = anyFiles || containsSessionFiles(in: folder)
             guard let result = try? parse(folder: folder, profile: profile, sourceName: source.name) else {
                 continue
             }
@@ -51,7 +62,12 @@ enum FlowChromeTabs {
             spaces.append(contentsOf: result.spaces)
         }
 
-        guard readAny else {
+        // No profile has a session file at all — a fresh Chrome, one never
+        // opened past its first window: no tabs open, which is none, not a
+        // failure ("couldn't read Chrome's open tabs" read like the locked
+        // folder all over again). Files that are there but unreadable still
+        // say so.
+        guard readAny || !anyFiles else {
             throw FlowModel.Trouble.unreadable("\(source.name)'s session files")
         }
         return spaces
@@ -223,19 +239,20 @@ enum FlowChromeTabs {
 
         var commands: [Command] = []
         var readAny = false
-        // Session_* owns window/tab state; Tabs_* owns navigation entries. The
-        // latest file of each kind is the complete current snapshot.
+        // Session_* is the open windows and tabs, navigations included — the
+        // newest one Chrome wrote. Tabs_* is a different thing: the
+        // recently-closed list (TabRestoreService). Its ids restart each
+        // launch, so replaying it here grafted closed tabs' pages onto open
+        // tabs with the same number. It is only noted, never merged.
         for file in sessionFiles {
             guard let data = copiedData(file), let parsed = parseCommands(data, kind: .session) else { continue }
             readAny = true
             commands.append(contentsOf: parsed)
             break
         }
-        for file in tabsFiles {
-            guard let data = copiedData(file), let parsed = parseCommands(data, kind: .tabs) else { continue }
-            readAny = true
-            commands.append(contentsOf: parsed)
-            break
+        if !readAny, let file = tabsFiles.first, copiedData(file).flatMap({ parseCommands($0, kind: .tabs) }) != nil {
+            // Readable, but only a closed-tabs list: nothing open to bring.
+            return ParseResult(spaces: [], readAny: true)
         }
         guard readAny else { return ParseResult(spaces: [], readAny: false) }
 
@@ -247,8 +264,14 @@ enum FlowChromeTabs {
         }
 
         let profileLabel = profileName(in: folder, profile: profile)
+        // The first profile ("Default") is the person's everyday one: its
+        // spaces wear Copper's shared jar, where a move's sign-ins land, as
+        // Arc's default-profile spaces do. Only another profile's spaces get
+        // a jar of their own (`Spaces.store(forProfile:)`).
+        let everyday = profile == nil || profile == "" || profile == "Default"
+        let worn = everyday ? nil : profile
         let baseName: String
-        if profile == nil || profile == "" || profile == "Default" {
+        if everyday {
             baseName = sourceName
         } else {
             baseName = "\(sourceName) · \(profileLabel ?? profile ?? sourceName)"
@@ -306,7 +329,7 @@ enum FlowChromeTabs {
                 name: windowNumber == 0 ? baseName : "\(baseName) \(windowNumber + 1)",
                 groups: modelGroups,
                 tabs: finalTabs,
-                profile: profile
+                profile: worn
             )
             // Windows are the import unit. A window whose pages are all
             // chrome:// (and therefore filtered) still remains a named space;

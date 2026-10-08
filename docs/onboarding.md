@@ -44,8 +44,8 @@ Four short pages, each skippable:
 1. Welcome.
 2. **Bring things over.** If another browser is on the Mac, Copper offers its
    passwords, bookmarks and history (**Bring them in**). If you plan to move
-   in from Arc or Chrome with Flow (step 2), you can skip this — Flow brings
-   all of that and more.
+   in from Arc or Chrome with Move in (step 2), you can skip this — Move in
+   brings all of that and more.
 3. **Two ways to hold it.** *Tab strip* (tabs across the top) or *Sidebar*.
    Change your mind any time with <kbd>⇧⌘S</kbd>.
 4. **Links from other apps.** Make Copper the default browser if you want
@@ -65,41 +65,61 @@ Settings › Updates has **Check now** and, if something fails, the reason and
 **Open log**. Plain `brew upgrade` leaves Copper alone because it updates
 itself; `brew upgrade --cask copper` still works if you want it.
 
-## 2. Move in from Arc or Chrome (Flow)
+## 2. Move in from Arc, Chrome or Safari (Flow)
 
-Open Flow any of these ways:
+Open Move in any of these ways:
 
 - **View › Move in from Another Browser…** (<kbd>⌥⇧⌘I</kbd>)
-- **Settings › General › Move in from another browser › Flow…** (Settings is
-  <kbd>⌘,</kbd>)
-- <kbd>⌘K</kbd>, then *Flow: move in from Chrome or Arc*
+- **Settings › General › Move in from another browser › Move in…** (Settings
+  is <kbd>⌘,</kbd>)
+- <kbd>⌘K</kbd>, then *Flow: move in from Chrome, Safari or Arc*
 
-Pick the browser. Chrome and Arc are the main sources; other Chromium browsers
-on the Mac (Dia, Brave, Edge, Vivaldi, Chromium) appear in the same picker.
-Copper counts what it found, then shows one switch per kind:
+Pick the browser. Chrome, Safari and Arc are the main sources; other
+Chromium-based browsers on this Mac appear in the same picker. Copper counts what it found,
+then shows one switch per kind:
 
 | Switch | What arrives |
 |---|---|
-| Open tabs, spaces and pins | Open tabs and windows, Arc spaces, pinned tabs and tab groups — as new Copper spaces whose tabs stay asleep until you visit them. A name that already exists gets ` (Arc)` or ` (Chrome)`. |
+| Tabs and windows (Arc: Tabs and spaces) | Open windows, Arc spaces, pinned tabs and tab groups, as Copper spaces whose tabs stay asleep until you visit them. A window with only new-tab pages makes no space. A name you already use gets the browser's name: ` (Arc)`, ` (Chrome)`. |
 | Bookmarks | The whole tree, folders and all. |
-| History | Every visited address from the profile (up to 20,000 places kept), so the address field completes from it. Importing twice merges, it does not duplicate. |
+| History | Every visited address from the profile (up to 20,000 places kept), so the address field completes from it. |
 | Passwords | Saved sign-ins, into your macOS keychain. |
-| Passkeys | Passkeys saved in Google Password Manager. |
-| Signed-in state | Cookies, so you stay signed in to sites. |
-| Local storage | What sites keep in the page — settings, drafts, workspaces. |
+| Passkeys | Passkeys saved in the browser's own password manager. |
+| Sign-ins | Cookies, so you stay signed in to sites. |
+| Site data | What sites keep in the page: settings, drafts, workspaces. |
 | Extensions | Chrome Web Store extensions, reinstalled in the background. |
 
-Press **Bring it all over**. For passwords, passkeys and signed-in state,
-macOS asks once for that browser's keychain key (*Chrome Safe Storage* /
-*Arc Safe Storage*) — say **Allow**. If you refuse, everything else still
-moves. Flow only reads the other browser's files; it never changes them.
+Press **Bring it all over**. For passwords, passkeys and sign-ins, macOS asks
+once to let Copper use the browser's saved passwords (*Chrome Safe Storage* /
+*Arc Safe Storage*); say **Allow**. If you refuse, everything else still
+moves. Move in only reads the other browser's files; it never changes them.
 
-**Chrome shows as locked?** Recent macOS keeps other apps' data private and
-does not always ask. Press **Choose folder…** on Chrome's card and pick
-`~/Library/Application Support/Google/Chrome`, or allow Copper under System
-Settings › Privacy & Security › App Data (or Files & Folders) and reopen Flow.
+When it is done, the sheet lists each kind with what arrived, or why nothing
+did, and stays up until you press **Done**, which takes you to the first space
+it made. After a Chrome move, **Open the Chrome guide** opens a short local
+canvas on where everything landed. Moving in again adds only what is new: no
+repeated spaces, tabs or bookmarks.
 
-Flow does not move Apple Passwords, iCloud tabs, passkeys stored in iCloud
+**Chrome shows "macOS needs your OK"?** macOS keeps Chrome's folder private
+and never asks on its own. Press **Allow in System Settings…** on Chrome's
+card: Privacy & Security › Files & Folders opens. Turn on Copper's switch for
+Chrome and come back to Copper; the card unlocks by itself. Or press **Use an
+export instead…** and drop the bookmarks file (Chrome: Bookmark manager ›
+Export bookmarks) or passwords file (Chrome: Password Manager › Settings ›
+Export passwords). A file needs no permission but brings no open tabs,
+history or sign-ins. Delete an exported passwords file afterwards.
+
+**Safari shows "macOS needs your OK"?** Safari's files are behind Full Disk
+Access. Press **Allow Full Disk Access…** on Safari's card, turn on Copper in
+Privacy & Security › Full Disk Access and come back (if the card still says
+it is locked, quit and reopen Copper). Or press **Use an export instead…**:
+in Safari, choose **File › Export Browsing Data to File…** and drop the zip on
+the sheet. The export brings bookmarks, the Reading List, history and
+passwords, but not open tabs; Full Disk Access brings open windows and tab
+groups too, but passwords only ever come from the export. Payment cards and
+Safari extensions stay in Safari. Delete the export afterwards.
+
+Move in does not move Apple Passwords, iCloud tabs, passkeys stored in iCloud
 Keychain, or a password manager's vault. For Apple Passwords, export a CSV
 from the Passwords app (**File › Export All Passwords**) and use
 **Settings › Passwords › Import…**; delete the CSV afterwards.

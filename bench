@@ -197,7 +197,65 @@
                                        waits and prints the report (also `flow status`)
     ./bench flow localstorage --source Arc --path OUT.json [--root DIR]
                                        Copper's own localStorage reader, as `arc-localstorage` JSON
-    ./bench flow open [--again]        open the Move in sheet (--again: past "Moved from Arc on …")
+    ./bench flow open [--again] [--via bench|command|menu|settings] [--window N]
+                                       open the Move in sheet through that door, on window N
+                                       (--again: past "Moved in from … on …"); asynchronous —
+                                       ask `flow state`
+    ./bench flow close                 close it (as the ✕ or Escape would)
+    ./bench flow state                 phase, selection, the sheet's size and the window it hangs
+                                       from, and how many sheets hang off any window
+    ./bench flow events [--clear] [--all]
+                                       what the sheet did: opens, presents, dismisses, refreshes,
+                                       scans (overlapping, scansPerOpen)
+    ./bench flow key escape|return|tab a real key press on the sheet
+    ./bench flow key cmd-w|cmd-k|cmd-comma…  a ⌘ shortcut with the sheet in front, in through the app
+                                       (its key monitor, then the menus), as a person would press it
+    ./bench flow pick --source Chrome  a source card clicked (its counts read in the background)
+    ./bench flow shot --path OUT.png   the sheet as drawn, in the app's appearance (never brought
+                                       to the front)
+    ./bench flow activate              what coming back to Copper does (re-check a locked source)
+    ./bench flow access --source Chrome [locked|clear]
+                                       what macOS says about each file a move reads; test run:
+                                       say it is locked (no folder touched), or clear that
+    ./bench flow allow                 the locked card's Allow in System Settings… (a test run
+                                       opens nothing and names the page)
+    ./bench flow passphrase --source Chrome --path PASS
+                                       test run: a test passphrase for an encrypted fixture; its
+                                       passwords/passkeys go to the in-memory stand-in, never
+                                       the keychain (no passphrase: a test run reads no secrets)
+    ./bench flow secrets [--clear]     test run: what the stand-in holds (password digests only)
+    ./bench flow export [--source Chrome] | back
+                                       the locked card's Use an export instead… / Back
+    ./bench flow file --path FILE [--source Chrome]
+                                       a dropped bookmarks .html or passwords .csv
+    ./bench flow guide                 the done screen's Open the Chrome guide (waits for it)
+    ./bench flow done | undo           the done screen's Done (lands on the first imported
+                                       space) / Undo the tabs
+    ./bench flow registry --source Arc which Copper space each of a source's spaces became
+    ./bench flow limit --only Chrome,Safari,Arc
+                                       test run: list only these sources (Safari is listed in a
+                                       probe only when named, and never read from this Mac)
+    ./bench flow root --source Safari --path DIR|none
+                                       test run: read a copy of Safari's files (Safari/ +
+                                       Container/) as if Copper had Full Disk Access
+    ./bench flow access --source Safari [locked|clear]
+                                       the copy's access, or say Safari is locked / clear it
+    ./bench flow scan|move --source Safari [--zip ZIP] [--only tabs,bookmarks,history,passwords]
+                                       test run: take Safari's export (a .zip, its folder, a
+                                       bookmarks .html or a passwords .csv) first, then count/move
+    ./bench flow file --source Safari --path ZIP
+                                       Safari's export dropped on its export pane (async;
+                                       ask `flow file-status`)
+    ./bench flow export --source Safari [--clear]
+                                       Safari's export pane / let go of the export
+    ./bench flow allow --source Safari the card's Allow Full Disk Access… (names the page; the
+                                       card then says what else it takes)
+    ./bench flow spaces                every space's loose tabs, as JSON
+    ./bench flow slow --seconds S      test run: pause S seconds after each step of a move
+    ./bench flow choose --only tabs,history
+                                       test run: set the sheet's switches without moving
+    ./bench flow limit --only Chrome,Arc
+                                       test run: list only these sources (no --only: all)
     ./bench history import arc|chrome [--root PATH] [--limit N]
                                        import all URL history from an isolated copy
     ./bench storage import PATH [--only ORIGIN] [--profile-store NAME]
@@ -527,12 +585,26 @@ def main(argv):
                 else: sys.exit(usage)
                 rest = rest[2:]
     elif verb == "flow":
-        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open")
+        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open|close|state|events|key|pick|shot|activate|limit|choose|access|allow|passphrase|secrets|export|back|file|file-status|guide|done|undo|registry|spaces|slow")
         request["op"] = args[0]
         rest = args[1:]
+        if args[0] == "key" and rest and not rest[0].startswith("--"):
+            request["key"] = rest[0]; rest = rest[1:]
+        if args[0] == "access" and rest and rest[-1] in ("locked", "clear"):
+            request["state"] = rest[-1]; rest = rest[:-1]
         i = 0
         while i < len(rest):
-            if rest[i] == "--source" and i + 1 < len(rest):
+            if rest[i] == "--via" and i + 1 < len(rest):
+                request["via"] = rest[i + 1]; i += 2
+            elif rest[i] == "--window" and i + 1 < len(rest):
+                request["window"] = int(rest[i + 1]); i += 2
+            elif rest[i] == "--seconds" and i + 1 < len(rest):
+                request["seconds"] = float(rest[i + 1]); i += 2
+            elif rest[i] == "--clear":
+                request["clear"] = True; i += 1
+            elif rest[i] == "--all":
+                request["all"] = True; i += 1
+            elif rest[i] == "--source" and i + 1 < len(rest):
                 request["source"] = rest[i + 1]; i += 2
             elif rest[i] == "--path" and i + 1 < len(rest):
                 request["path"] = rest[i + 1]; i += 2
@@ -542,6 +614,8 @@ def main(argv):
                 request["id"] = rest[i + 1]; i += 2
             elif rest[i] == "--root" and i + 1 < len(rest):
                 request["root"] = os.path.abspath(rest[i + 1]); i += 2
+            elif rest[i] == "--zip" and i + 1 < len(rest):
+                request["zip"] = os.path.abspath(rest[i + 1]); i += 2
             elif rest[i] == "--real":
                 request["real"] = True; i += 1
             elif rest[i] == "--again":
@@ -628,6 +702,20 @@ def main(argv):
     answer = ask(os.path.join(folder(world), "bench.sock"), request)
     if answer.get("error"):
         sys.exit("error: " + str(answer["error"]))
+    if verb == "flow" and request.get("op") == "guide" and answer.get("started"):
+        # The guide opens in Copper (a canvas page loads); ask until it has.
+        import time
+        for _ in range(60):
+            time.sleep(0.5)
+            answer = ask(os.path.join(folder(world), "bench.sock"), {"do": "flow", "op": "status"})
+            if answer.get("guide") in ("opened", "failed"): break
+    if verb == "flow" and request.get("op") == "file" and answer.get("started"):
+        # A file is read and merged off Copper's main thread; ask until done.
+        import time
+        while True:
+            time.sleep(0.1)
+            answer = ask(os.path.join(folder(world), "bench.sock"), {"do": "flow", "op": "file-status"})
+            if not answer.get("running"): break
     if verb == "flow" and request.get("op") == "move" and answer.get("started"):
         # Same for a move: it runs on in Copper (keychain prompt, minutes of
         # local storage), so poll its status and print the finished report.

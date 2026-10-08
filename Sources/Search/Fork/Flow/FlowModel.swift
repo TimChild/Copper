@@ -111,9 +111,17 @@ enum FlowModel {
         var passkeyCount = 0
         var bookmarkCount = 0
         var placeCount = 0
+        /// Saved passwords, counted without the key.
+        var loginCount = 0
         /// Free-text notes for the report ("3 windows", "7 spaces, 283 tabs",
         /// "Arc Safe Storage refused").
         var notes: [String] = []
+        /// Why no spaces could be read at all, in the summary's words
+        /// ("couldn't read Chrome's open tabs"); nil when they were read.
+        var tabsTrouble: String? = nil
+        /// Safari's own counts (Reading List, pins, cards, its extensions,
+        /// whether its files and an export were read); nil for Chrome or Arc.
+        var safari: FlowSafari.Look? = nil
 
         var tabCount: Int { spaces.reduce(0) { $0 + $1.tabs.count } }
         var groupCount: Int { spaces.reduce(0) { $0 + $1.groups.count } }

@@ -261,12 +261,38 @@ log show --last 30m --style compact --predicate 'subsystem == "com.apple.TCC"' \
 `CGWindowListCopyWindowInfo` filtered by the pid is the
 reliable window count (System Events needs Accessibility, and two processes are named Copper).
 
+### What a probe leaves alone
+
+A test run's own seams keep it away from what belongs to the person at the Mac:
+
+- **Their Safari.** A probe never looks at this Mac's own Safari: Move in lists Safari only
+  when a script names a copy (`flow root --source Safari`), and calls it locked otherwise
+  (`Fork/Flow/Flow.swift`, `FlowSafariSourceTests.aProbeNeverLooksAtThisMacsSafari`). The
+  guard is `SEARCH_PROBE` itself (`Flow.probe`): a dev build opened without it (the world
+  `dev`, a double-click) is not a probe, and looks at this Mac's Safari and Chrome folders like
+  any Copper, as the dev app.
+- **Their Chrome and Arc, if you point it elsewhere.** Chrome-family sources have no such
+  guard. Before opening Move in in a probe, set `flow limit` and `flow root` to fixtures or a
+  read-only copy, as every `docs/fixtures/flow-*.sh` script does; otherwise the dev app lists
+  this Mac's real folders and asks macOS for Chrome's ([flow.md](flow.md#test-runs)).
+- **The keychain.** A test run reads no browser's Safe Storage key: Chrome's secrets need
+  `flow passphrase` (a fixture's) and land in `FlowProbeSink`, never the keychain. Copper's own
+  passwords and passkeys go to a 0600 file in the world when the world asks for it
+  (`defaults write com.officecommun.search.test.<world> probe.keychain -string file`, before
+  launch; `ProbeKeychain`).
+- **Their clipboard, editor, default browser and update log.** Settings' Copy and Open stay in
+  the world, Make default is refused, and `update.log` is the world's own
+  ([settings.md](settings.md#what-a-test-run-does-differently)).
+
 ## What it cannot do
 
 - Run without a GUI login. The WindowServer is required; `LimitLoadToSessionType Aqua` says so.
 - Answer anything. Every dialog is "no": a site that needs `confirm()` to proceed, a file upload,
   camera/microphone, a self-signed certificate on a public host, HTTP basic auth, or a keychain
-  item that would prompt all fail closed. Passkeys that need Touch ID cannot be used.
+  item that would prompt all fail closed. Passkeys that need Touch ID cannot be used. The one
+  exception is Settings' own questions in a test run (Clear history, New token…, Delete space…):
+  they are held for `./bench settings confirm` instead of declined
+  ([settings.md](settings.md#questions-before-what-cant-be-undone)).
 - Be focused. The app is never active, so `document.hasFocus()` is false — the same as a
   windowed Copper behind other apps, which the tools already handle.
 - Zero windows *and* a painting page at once: `offscreen` has one ordered-in window outside every

@@ -81,7 +81,7 @@ An ad-hoc signature has no certificate, so its DR is `cdhash H"…"` — the has
 Every update was a new hash, and macOS treated it as a different app: grants silently stopped
 applying (tccd logs `Failed to match existing code requirement`) and the keychain asked again.
 That is why Move in could not read Chrome after an update even though Copper was switched on in
-System Settings.
+System Settings (the whole story: [plans/2026-10-07-move-in-and-settings.md](plans/2026-10-07-move-in-and-settings.md)).
 
 With the explicit requirement every release satisfies the same DR, so a grant made once keeps
 working through updates. The updater also holds every download to it
@@ -92,6 +92,10 @@ a test copy is held to its own identifier instead (it has no certificate to pin)
 `./bench --world W updates requirement TEXT|off` points a test world at another requirement.
 
 ### The first signed release
+
+**1.0.20261007.42** (#46) is the first release signed with the certificate; 1.0.20261007.38 is
+the last ad-hoc one. 1.0.20261008.46 is the first update from one signed release to another,
+and the first that keeps every grant.
 
 The last ad-hoc Copper updates to the first signed one through its own, older checks: the
 feed's SHA-256, the bundle id (`com.collinrijock.copper`, unchanged), the version and
@@ -168,3 +172,16 @@ first signed release did.
 4. A dry run (`-f publish=false`) must show the new requirement on the artifact before the first
    real release. Anyone who skipped the bridge release reinstalls once (curl installer or
    Homebrew).
+
+### Keeping the key
+
+The bridge in step 2 needs the old key: only a release signed with it can teach installed
+Coppers to accept a new certificate. So the `.p12` and its password are kept together, offline,
+outside any repository, beside the repository secrets; the secrets alone can't be read back out
+of GitHub. After a rotation, the new `.p12` and password replace the offline copy, and the
+working folder (`~/.config/copper-signing`) is emptied.
+
+If the key is lost (or leaks and must not sign again), there is no bridge: ship the switch
+(step 3) directly, and every installed Copper refuses it with *"isn't signed with Copper's
+release certificate"* and the download link. Everyone reinstalls once from the release page,
+the curl installer or the cask, and grants Copper's permissions again.

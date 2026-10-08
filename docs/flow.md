@@ -3,6 +3,37 @@
 Move in is Copper's one sheet for bringing your tabs, bookmarks, history,
 passwords and sign-ins over from Chrome, Safari or Arc. It reads the other
 browser's files on this Mac (or a file it exported) and never changes them.
+Why it is built the way it is — the live demo where it brought nothing and
+the sheet cycled — is in
+[plans/2026-10-07-move-in-and-settings.md](plans/2026-10-07-move-in-and-settings.md).
+
+## How it is built
+
+Everything is in `Sources/Search/Fork/Flow/`. Readers produce the shapes in
+`FlowModel.swift` and never touch Copper's state; only `Flow.swift` puts what
+they read into Copper.
+
+| File | What it holds |
+|---|---|
+| `Flow.swift` | `Flow.shared`: the sources (`FlowSource`), detection (`Flow.detect`), the scan, the move, the report, `present(from:via:)` and every `bench flow` verb |
+| `FlowState.swift` | the rules, apart from AppKit and SwiftUI so each can be tested: `FlowMachine` (what is picked, when to re-check), `FlowScanTicket` (only the newest scan for the selected source lands), `FlowEvents` (every open, present, dismiss, refresh and scan), `FlowAdopt` (moving in again), `FlowSummary` (one row per category) |
+| `FlowPresenter.swift` | the only owner of the sheet on screen (`FlowSheetWindow`, its size, ending it before quit) and `FlowKeys`, the ⌘ keys while it is up |
+| `FlowUI.swift` | `FlowSheet`, the sheet's content: header, a middle that scrolls, a pinned footer |
+| `FlowAccess.swift` | readable, locked or missing, from one real directory read; whether the app is installed (for "installed, never opened"); the System Settings deep links |
+| `FlowFiles.swift` | the export pane: a dropped or picked bookmarks HTML, passwords CSV or Safari zip |
+| `FlowSecrets.swift` | where passwords and passkeys go and where the browser's key comes from; `FlowKeychainSink` and, in a test run, `FlowProbeSink` |
+| `FlowChromeTabs.swift`, `FlowChromium.swift`, `FlowBookmarks.swift`, `FlowCookies.swift`, `FlowPasskeys.swift`, `FlowExtensions.swift`, `FlowExtensionState.swift`, `FlowLocalStorage.swift` | the Chrome-family readers (Arc and other Chromium browsers share them) |
+| `FlowArc.swift` | Arc's sidebar (`StorableSidebar.json`): spaces, pins, folders |
+| `FlowSafari.swift`, `FlowSafariFormats.swift` | Safari as a source; its plist, `History.db`, tabs database and export zip |
+| `FlowBookmarksHTML.swift` | the one bookmarks-HTML parser, for Chrome's export and Safari's |
+| `FlowBench.swift` | small helpers for `bench flow` answers |
+
+What a move leaves in the world's settings: `flow.spaces.<source>` (the
+registry, the source's key for a space → the Copper space it became),
+`flow.brought.<source>` (the addresses each of those spaces has brought), and
+`flow.movedAt` (one dictionary: when each source last moved in). In the first
+two, `<source>` is lower-case: `flow.spaces.chrome`, `flow.spaces.arc`,
+`flow.spaces.safari`.
 
 ## Opening it
 
@@ -303,6 +334,9 @@ on; the ones marked *test run* do nothing anywhere else.
 | `flow guide`, `flow done`, `flow undo` | the done screen's buttons |
 | `flow spaces`, `flow registry --source Arc`, `flow bookmarks` | what landed (each space with the profile jar it wears, `shared` or a profile folder) |
 | `flow slow --seconds S` | *test run*: pause after each step, to watch the moving view |
+| `flow file-status` | the export pane's last file: still reading, what it said, the bookmark count |
+| `flow bookmark-move --id ID` | *test run*: move a top-level bookmark to the end, as a person would, to prove ownership |
+| `flow localstorage --source S --path OUT.json [--root DIR]` | the localStorage reader alone, written as `arc-localstorage` JSON (reads only) |
 
 Probe seams (all only in a test run): a test passphrase replaces the
 keychain read, and what it unlocks — and Safari's or a file's passwords — goes
@@ -310,13 +344,27 @@ to the probe's stand-in (`FlowProbeSink`), never the keychain: the world's
 file keychain (`ProbeKeychain`, `probe.keychain file`) when it has one, so
 `bench passwords list` sees them and a second move knows them, else memory —
 without a passphrase, a test run reads no Chrome secrets and says so; a
-headless probe never looks at this Mac's own Safari (it is listed only when a
+probe (`SEARCH_PROBE`) never looks at this Mac's own Safari (it is listed only when a
 script names it, and is locked unless given a copy); `flow.installed` (a comma-separated list in the world's
 defaults) stands in for "is the app installed"; `flow access … locked` stands
 in for macOS's refusal.
 
-End-to-end scripts, each in a fresh headless world launched through
-LaunchServices, after `./build.sh`:
+Chrome, Arc and the other Chromium browsers have no such guard: a probe that
+opens Move in without `flow limit` and `flow root` lists this Mac's own
+folders, and asks macOS for Chrome's (as the dev app, so the installed
+Copper's grant is untouched, but the request is real). A dev build opened without
+`SEARCH_PROBE` (the world `dev`) is not a probe at all (`Flow.probe`) and
+looks at Safari's real files too. The scripts below point
+every source they move at a fixture with `flow root`, and the ones that open
+the sheet list only their fixtures with `flow limit`; do the same by hand.
+
+End-to-end scripts. Each makes a fresh headless world (launched through
+LaunchServices, its own port, removed at the end), reads only generated
+fixtures or the read-only copies you name, and never the keychain. Build
+first (`./build.sh`; the scripts use `jq`, `perl` and `python3`), then run
+from the repository root; each takes a path to the app (default
+`build/Copper.app`), prints one `ok` line per check and exits non-zero when a
+check fails:
 
 - `docs/fixtures/flow-sheet-e2e.sh` — one sheet with two windows, one size,
   every door, Escape and Return, ⌘ shortcuts waiting behind it and ⌘W closing
@@ -342,7 +390,18 @@ LaunchServices, after `./build.sh`:
   world, one space each, no duplicates.
 - `docs/fixtures/flow-bookmarks-e2e.sh`, `flow-canvas-e2e.sh`,
   `flow-extensions-e2e.sh` — bookmark merge and ownership, the Chrome guide
-  through its button, extensions kept on or off.
+  through its button, extensions kept on or off (`flow-extensions-e2e.sh` runs
+  `./build.sh` itself and takes no argument).
+- `docs/fixtures/flow-extensions-parser.sh` — no app needed: compiles the
+  extension reader with small stubs and checks the same copied fixture, for
+  when a full build can't run.
+
+The sheet's rules and the readers are also unit-tested (`swift test`, the
+command is in [settings.md](settings.md#checking-a-change)): `FlowStateTests`,
+`FlowMoveTests`, `FlowChromeTabsTests`, `FlowBookmarksMergeTests`,
+`FlowBookmarksHTMLTests`, `FlowSafariTests` and `FlowSafariSourceTests` in
+`Tests/SearchTests/`. Which of these catches which failure is listed in the
+plan record's regression guards.
 
 `./arc-import` remains for older installations and one-off recovery, but is
 superseded by Move in.

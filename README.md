@@ -29,7 +29,7 @@ It was built by a design studio that spends its whole day in a browser and was t
 - **An ad blocker that runs before the page.** Third-party trackers and ad networks are stopped at the network level, so there is nothing to render and nothing to slow down. On by default, off per site if something breaks.
 - **Video that follows you.** `⇧⌘P` lifts the video out of the page into a small window that stays above everything, including other apps.
 - **Passwords, in your keychain.** Copper offers to save a sign-in once it has actually worked, and offers your saved accounts under the field when you click it — the way Safari does, never filling anything on its own. Everything lives in the macOS keychain, encrypted by the system, readable only by Copper. Bring yours in from Chrome, Arc, Dia, Brave or Edge in one click; nothing leaves the Mac.
-- **Flow — move in from Chrome, Safari or Arc.** One button brings over open tabs, spaces, bookmarks, history, passwords, Google Password Manager passkeys, signed-in state and extensions (from Safari: open tabs and tab groups, bookmarks, the Reading List, history, and passwords from its export). Imported pages stay asleep until you visit them, and macOS asks once before handing over the other browser's key.
+- **Flow — move in from Chrome, Safari or Arc.** One button brings over open tabs, spaces, bookmarks, history, passwords, Google Password Manager passkeys, signed-in state and extensions (from Safari: open tabs and tab groups, bookmarks, the Reading List, history, and passwords from its export). Imported pages stay asleep until you visit them, and macOS asks once before handing over the other browser's key. Running it again adds only what is new, and when macOS keeps the other browser's folder private the sheet says how to let Copper in, or takes the browser's export instead ([docs/flow.md](docs/flow.md)).
 - **Light, dark, or the Mac's own.** The frame and the pages follow.
 - **Bookmarks, history, downloads** — each a panel, each searchable, each one keystroke away. A download shows a small door with a progress ring while it arrives and a popover with speed, time left, cancel, retry and Show in Finder — and nothing at all when there is nothing to show ([docs/downloads.md](docs/downloads.md)).
 - **Chrome extensions, without Chrome.** Paste a Chrome Web Store link in Settings › Extensions, or open the extension's page in Copper and press Add. It runs on WebKit's own extension engine — the one Safari uses — and where Chrome has APIs WebKit doesn't (bookmarks, history, downloads, side panel, offscreen documents, fonts, notifications, speech, OAuth sign-in), Copper fills them in itself. They live behind the puzzle button; pin the ones you use often. Building your own? Load its folder as an unpacked extension and press Reload after each change, as in Chrome's developer mode. macOS 15.4 or later.
@@ -135,6 +135,8 @@ Turn on **Settings › General › Let a script drive Copper** and the running a
 ```
 
 Bench tabs are never selected for you, never enter the session or the history, and go when the script says so. It is how this browser is tested while somebody is using it.
+
+Settings has checks of its own — every control named and reachable from the keyboard, every search entry landing on its row, every destructive question answerable by a script — in [docs/settings.md](docs/settings.md).
 
 ### Command line
 

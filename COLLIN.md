@@ -22,6 +22,7 @@ Full story: `docs/releasing.md`.
 - **Cut a release:** `gh workflow run release.yml -R copper-browser/Copper -f ref=fork`. **Dry run:** `--ref <branch> -f publish=false` builds, signs, checks and launches it, and keeps the zip as the run's artifact; nothing is published.
 - **Rotate the certificate** (expires 2036-10-04, or if the key leaks): `docs/releasing.md` › Rotating. It needs a bridge release that accepts both certificates, and costs one re-grant.
 - **`./build.sh` builds the dev app, `com.collinrijock.copper.dev`**: own permissions, settings, cookies and keychain identity, always a test world (`Copper (dev)` when no `SEARCH_PROBE`), no `copper://` scheme. It can't touch the Copper you use. `COPPER_RELEASE=1 ./build.sh release app` builds Copper itself, which only the release workflow needs.
+- **Move in and Settings after a live demo (October 2026):** what broke, what changed (#46, #48, #49) and which tests catch each failure if it comes back: `docs/plans/2026-10-07-move-in-and-settings.md`. How Settings is built and checked: `docs/settings.md`; Move in: `docs/flow.md`.
 
 ## Status
 

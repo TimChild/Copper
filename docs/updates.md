@@ -8,6 +8,36 @@ and the part after the swap: getting the new
 Copper running again, in the same world, every time — and about the instance lock that keeps
 agents' probe worlds from swallowing the real browser.
 
+## The signature check
+
+macOS keeps a person's permissions for Copper (Full Disk Access, Files & Folders, Automation,
+the keychain's Always Allow) against the app's designated requirement. Before 1.0.20261007.42
+releases were signed ad hoc, so each one's requirement was its own cdhash and every update
+looked like a new app: the grants were dropped while System Settings still showed Copper
+switched on. Releases are now signed with one certificate of Copper's own, and the updater makes
+sure every update keeps that true. Why and how releases are signed: [releasing.md](releasing.md).
+
+`Updates.requirement` is `Signing.requirement(forBundleID:)` (`Fork/Signing.swift`): for the
+release id, `identifier "com.collinrijock.copper" and certificate leaf = H"<release
+certificate's SHA-1>"`; for any other id (a development build, a test copy), `identifier
+"<that id>"`. The updater checks it twice:
+
+- **Staging** (`fetchAndStage`), after the checksum, identity, version and `codesign --verify
+  --deep --strict`. A bundle that doesn't satisfy it is not staged. Settings › Updates shows
+  "Copper X isn't signed with Copper's release certificate, so it won't replace this one.
+  Download it from github.com/copper-browser/Copper/releases instead.", and once per version
+  the window says "Copper X isn't signed as a Copper release — see Settings › Updates". The pill
+  is Retry Update, with the reason in its tooltip.
+- **Just before the swap** (`reverify`), on what is on disk now, in case the staged copy changed
+  since it was checked. A failure refuses the swap and leaves the running Copper as it is: "The
+  downloaded bundle's signature no longer verifies: it isn't signed with Copper's release
+  certificate." The pill turns to Retry Update.
+
+Both write a `does not satisfy <requirement>: <why>` line to `update.log`. A real refusal means
+the release was signed with the wrong key, or the download isn't a Copper release; never work
+around it on a person's Mac. Rehearse it in a test world with `updates requirement TEXT` (see
+*Testing it*). `SigningTests` checks that the release requirement pins the certificate.
+
 ## The update pill
 
 Arc's way of saying an update is waiting: not a dialog, a button you cannot miss in the place
@@ -90,7 +120,9 @@ nothing once it is gone; the waiter uses that.
 
 `Updates.relaunch` starts a small POSIX `sh` waiter (its own process group, so a launchd job's
 exit does not take it down) and quits. Every step is a dated `copper-update:` line in
-`~/Library/Logs/Copper/update.log`:
+`update.log`: `~/Library/Logs/Copper/update.log` for the installed Copper, the world's own folder
+for any named world, `dev` included (`Updates.logFile`), so a test run never writes into the
+real log:
 
 1. Wait (≤ 60 s) for the old pid to exit.
 2. **Ordinary launch** (Finder, Dock, `open`, a shell): wait (≤ 10 s, 0.1 s polls) until

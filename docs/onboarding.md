@@ -1,7 +1,7 @@
 # Getting started with Copper
 
 A guide for someone joining a team that uses Copper: install it, move in from
-Arc or Chrome, link it to your team's Copper Cloud, and use the agent. Every
+Arc, Chrome or Safari, link it to your team's Copper Cloud, and use the agent. Every
 menu name and shortcut below is the one in the app. Team-specific details —
 the instance address, who hands out link codes — come from your Copper Cloud
 administrator, not from this page.
@@ -44,7 +44,7 @@ Four short pages, each skippable:
 1. Welcome.
 2. **Bring things over.** If another browser is on the Mac, Copper offers its
    passwords, bookmarks and history (**Bring them in**). If you plan to move
-   in from Arc or Chrome with Move in (step 2), you can skip this — Move in
+   in from Arc, Chrome or Safari with Move in (step 2), you can skip this — Move in
    brings all of that and more.
 3. **Two ways to hold it.** *Tab strip* (tabs across the top) or *Sidebar*.
    Change your mind any time with <kbd>⇧⌘S</kbd>.
@@ -64,6 +64,13 @@ and relaunches in a few seconds. It never restarts without your click.
 Settings › Updates has **Check now** and, if something fails, the reason and
 **Open log**. Plain `brew upgrade` leaves Copper alone because it updates
 itself; `brew upgrade --cask copper` still works if you want it.
+
+If you installed Copper before version 1.0.20261007.42 (7 October 2026), the
+first update to it or later asks for your permissions one last time: turn
+Copper on again in System Settings › Privacy & Security › Full Disk Access and
+Files & Folders, and click **Always Allow** if the keychain asks. Earlier
+releases weren't signed with Copper's certificate, so macOS saw each update as
+a new app. From then on the permissions stay ([releasing.md](releasing.md)).
 
 ## 2. Move in from Arc, Chrome or Safari (Flow)
 
@@ -96,9 +103,12 @@ moves. Move in only reads the other browser's files; it never changes them.
 
 When it is done, the sheet lists each kind with what arrived, or why nothing
 did, and stays up until you press **Done**, which takes you to the first space
-it made. After a Chrome move, **Open the Chrome guide** opens a short local
-canvas on where everything landed. Moving in again adds only what is new: no
-repeated spaces, tabs or bookmarks.
+it brought over. After a Chrome move that brought tabs or bookmarks, **Open the
+Chrome guide** opens a short local canvas on where everything landed. Moving in
+again adds only what is new: no repeated spaces, tabs or bookmarks. **Undo**
+on the done screen takes back only what that move added. You can close the
+sheet while it moves; the move goes on, and the next time you open Move in it
+shows what came.
 
 **Chrome shows "macOS needs your OK"?** macOS keeps Chrome's folder private
 and never asks on its own. Press **Allow in System Settings…** on Chrome's
@@ -122,7 +132,11 @@ Safari extensions stay in Safari. Delete the export afterwards.
 Move in does not move Apple Passwords, iCloud tabs, passkeys stored in iCloud
 Keychain, or a password manager's vault. For Apple Passwords, export a CSV
 from the Passwords app (**File › Export All Passwords**) and use
-**Settings › Passwords › Import…**; delete the CSV afterwards.
+**Settings › Passwords › Import…**; delete the CSV afterwards. Import checks the
+file first and says exactly what it took, or what is wrong with the file.
+**Settings › Passwords › Export…** writes every password Copper keeps to a CSV
+after Touch ID; anyone with that file can read them, so delete it when you're
+done.
 
 ## 3. Copper Cloud: link, create your account, sync
 
@@ -327,6 +341,11 @@ Press **Test**.
 turn on Settings › Agents › Let agents drive this window, then run
 `copper setup phi` (or `claude`) again.
 
+**Move in can't read Chrome or Safari, but Copper is switched on in System
+Settings.** The switch can belong to an older, unsigned Copper (see *Updates
+are automatic*). Turn Copper off and on again in Privacy & Security › Files &
+Folders (Chrome) or Full Disk Access (Safari), then come back to Copper.
+
 **An update did not finish.** Settings › Updates shows the reason and **Open
 log** (`~/Library/Logs/Copper/update.log`). Re-running the curl installer is
 the manual path.
@@ -347,7 +366,10 @@ are in WebKit's store for the app. Copper sends no telemetry.
 ## Who to ask
 
 Your Copper Cloud administrator issues link codes and accounts. Bugs and
-ideas: [github.com/copper-browser/Copper/issues](https://github.com/copper-browser/Copper/issues).
+ideas: **Help › Send Feedback…** (or Settings › About) opens a new issue on
+[github.com/copper-browser/Copper/issues](https://github.com/copper-browser/Copper/issues)
+with your Copper version, build and macOS already filled in; nothing is sent
+until you file it.
 
 More detail: [cloud.md](cloud.md) · [flow.md](flow.md) ·
 [intelligence.md](intelligence.md) · [agents.md](agents.md) ·

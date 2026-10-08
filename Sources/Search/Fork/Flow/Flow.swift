@@ -112,6 +112,9 @@ final class Flow: ObservableObject {
         }
         /// Cookies in this world's website store after the move.
         var cookiesInStore = 0
+        /// Cookies set in a profile's own jar, by profile, for the spaces
+        /// that wear one.
+        var profileCookies: [String: Int] = [:]
         var tabs = 0
         var spaces = 0
         var groups = 0
@@ -293,6 +296,10 @@ final class Flow: ObservableObject {
     private var activation: NSObjectProtocol?
     /// Select this source when a refresh finds it readable (`apply`).
     private var preferNext: String?
+    /// A move finished while the sheet was closed ("You can close this; the
+    /// move keeps going"): the next open shows its summary instead of
+    /// starting over, so what came over is never only in the sidebar.
+    private var unseenDone = false
     /// When Safari wrote the export it was given, for its card.
     @Published private(set) var safariExportDate: Date?
 
@@ -323,8 +330,8 @@ final class Flow: ObservableObject {
     func present(from browser: Browser?, via door: Door) {
         log("open", door.rawValue)
         requester = browser ?? Windows.current
-        guard !open else { return }
-        if !moving {
+        guard !open else { return FlowPresenter.shared.raise() }
+        if !moving, !unseenDone {
             phase = .idle
             selected = nil
             previewed = nil
@@ -339,6 +346,7 @@ final class Flow: ObservableObject {
             preferNext = nil
             askedAccess = []
         }
+        unseenDone = false
         open = true
         refresh("open")
     }
@@ -609,6 +617,9 @@ final class Flow: ObservableObject {
         lastAdoption = nil
         selected = source
         exporting = nil
+        // Begun on the sheet (not by a script with it closed): if the person
+        // closes it before the end, the summary waits for them.
+        let watched = open
         let movedAt = Date()
         var report = Report()
         report.facts = FlowSummary.Facts(source: source.name)
@@ -723,12 +734,13 @@ final class Flow: ObservableObject {
         if let safari, choice.passwords, let csv = safari.passwordsCSV {
             await movePasswordsCSV(csv, source: source.name, report: &report, steps: &steps)
         } else if safari == nil, choice.passwords || choice.cookies || choice.passkeys {
-            await moveSecrets(source, reader: reader, choice: choice, report: &report, steps: &steps)
+            await moveSecrets(source, reader: reader, choice: choice, worn: profilesWorn(by: source, haul: haul),
+                              report: &report, steps: &steps)
         }
 
         if choice.localStorage {
             report.facts.storageChosen = true
-            await moveLocalStorage(source, haul: haul, report: &report, steps: &steps)
+            await moveLocalStorage(source, worn: profilesWorn(by: source, haul: haul), report: &report, steps: &steps)
             report.facts.storageSites = report.storageSites
             finish(.localStorage, report.facts, &steps)
         }
@@ -764,6 +776,10 @@ final class Flow: ObservableObject {
         // on it (`openGuide`), never opened over the summary on its own.
         phase = .done(report)
         log("done", report.summary.map(\.plain).joined(separator: " | "))
+        if watched, !open {
+            unseenDone = true
+            browser.announce("\(report.title) — open Move in to see what came")
+        }
     }
 
     /// A row of the moving view changed in place.
@@ -787,7 +803,7 @@ final class Flow: ObservableObject {
     /// One key read, then three reads that stand or fall on their own: a
     /// broken cookie jar no longer hides the passwords, and a key macOS
     /// refused is said once, against each thing it would have unlocked.
-    private func moveSecrets(_ source: FlowSource, reader: Chromium.Source, choice: FlowModel.Choice,
+    private func moveSecrets(_ source: FlowSource, reader: Chromium.Source, choice: FlowModel.Choice, worn: [String],
                              report: inout Report, steps: inout [FlowStep]) async {
         let seams = FlowSecrets.seams
         let passphrase = FlowSecrets.passphrases[source.name]
@@ -827,7 +843,13 @@ final class Flow: ObservableObject {
                     ? .success(Chromium.Found(logins: [], never: []))
                     : Result { try Chromium.read(reader, key: key) }
             }
-            if choice.cookies { legs.cookies = Result { try FlowCookies.read(reader, key: key, profiles: profiles) } }
+            if choice.cookies {
+                legs.cookies = Result { try FlowCookies.read(reader, key: key, profiles: profiles) }
+                // A profile a moved space wears: its own cookies, for its own jar.
+                for name in worn {
+                    if let own = try? FlowCookies.read(reader, key: key, profiles: [name]) { legs.worn.append((name, own)) }
+                }
+            }
             if choice.passkeys { legs.passkeys = Result { try FlowPasskeys.read(reader, key: key, profiles: profiles) } }
             return legs
         }.value
@@ -863,7 +885,9 @@ final class Flow: ObservableObject {
         switch legs.cookies {
         case .success(let cookies):
             // Awaited: the count is what WebKit took, not what was read.
-            let store = Store.websites.httpCookieStore
+            // The shared jar, by name: `Store.websites` is the jar of the
+            // space in front, which may be one of a profile's.
+            let store = StorageImport.sharedStore.httpCookieStore
             let before = await withCheckedContinuation { done in
                 store.getAllCookies { done.resume(returning: Set($0.map { "\($0.domain)\t\($0.name)\t\($0.path)\t\($0.value)" })) }
             }
@@ -875,6 +899,14 @@ final class Flow: ObservableObject {
             report.cookies = set
             report.cookiesInStore = await withCheckedContinuation { done in
                 store.getAllCookies { done.resume(returning: $0.count) }
+            }
+            // A space wearing a profile opens its pages in that profile's jar
+            // (`Spaces.store(forProfile:)`): its sign-ins go there too, or its
+            // tabs would open signed out.
+            for (name, own) in legs.worn where !own.isEmpty {
+                let set = await FlowCookies.install(own, into: Spaces.store(forProfile: name).httpCookieStore)
+                report.profileCookies[name] = set
+                NSLog("Copper: Flow set %d cookies in profile %@'s jar", set, name)
             }
         case .failure:
             report.facts.cookiesWhy = "couldn't read \(source.name)'s cookies"
@@ -896,6 +928,18 @@ final class Flow: ObservableObject {
     }
 
     private func browser(for report: Report) -> Browser? { browserForUndo }
+
+    /// The profiles whose own jars a move's sign-ins and site data also go
+    /// to: each of the source's profiles that a space from it wears — this
+    /// move's, and those an earlier move made that the person kept.
+    func profilesWorn(by source: FlowSource, haul: FlowModel.Haul) -> [String] {
+        var worn = Set(haul.spaces.compactMap(\.profile))
+        let made = Set(FlowAdopt.registry(for: source.name).values)
+        for space in Spaces.shared.all where made.contains(space.id) {
+            if let profile = space.profile { worn.insert(profile) }
+        }
+        return worn.filter { source.profiles.contains($0) }.sorted()
+    }
 
     /// Safari's passwords, from its export's CSV, through the one CSV module
     /// (`PasswordCSV`) into where a move's passwords go (`FlowSecrets.sink`):
@@ -937,6 +981,7 @@ final class Flow: ObservableObject {
     private struct SecretLegs {
         var logins: Result<Chromium.Found, Error>?
         var cookies: Result<[FlowModel.Cookie], Error>?
+        var worn: [(String, [FlowModel.Cookie])] = []
         var passkeys: Result<[FlowModel.Passkey], Error>?
     }
 
@@ -1029,14 +1074,13 @@ final class Flow: ObservableObject {
     /// Every profile's storage goes into the shared store (where a space with
     /// no profile looks); a profile that one of the moved spaces wears also
     /// gets its own into that profile's store.
-    private func moveLocalStorage(_ source: FlowSource, haul: FlowModel.Haul, report: inout Report, steps: inout [FlowStep]) async {
+    private func moveLocalStorage(_ source: FlowSource, worn: [String], report: inout Report, steps: inout [FlowStep]) async {
         mark(.localStorage, .working, "reading…", &steps)
         let root = source.root
         let found = await Task.detached(priority: .userInitiated) { FlowLocalStorage.read(root: root) }.value
         found.warnings.forEach { NSLog("Copper: Flow local storage: %@", $0) }
         var plan = [StorageImport.Target(label: "shared", store: StorageImport.sharedStore,
                                          data: found.merged, origins: found.merged.keys.sorted())]
-        let worn = Set(haul.spaces.compactMap(\.profile))
         for (name, origins) in found.profiles where worn.contains(name) && !origins.isEmpty {
             plan.append(StorageImport.Target(label: "profile:\(name)", store: Spaces.store(forProfile: name),
                                              data: origins, origins: origins.keys.sorted()))
@@ -1384,7 +1428,7 @@ final class Flow: ObservableObject {
                         "tabsSkipped": report.facts.tabsSkipped, "spacesMade": report.facts.spacesMade,
                         "spacesFilled": report.facts.spacesFilled, "pinsAdded": report.facts.pinsAdded,
                         "bookmarksNew": report.facts.bookmarksNew, "placesNew": report.facts.placesNew,
-                        "passwordsNew": report.facts.passwordsNew ?? -1, "cookiesInStore": report.cookiesInStore,
+                        "passwordsNew": report.facts.passwordsNew ?? -1, "cookiesInStore": report.cookiesInStore, "profileCookies": report.profileCookies,
                         "cookieSites": report.facts.cookieSites, "tabs": report.tabs, "spaces": report.spaces, "groups": report.groups,
                         "bookmarks": report.bookmarks, "places": report.places, "passwords": report.passwords, "cookies": report.cookies, "passkeys": report.passkeys, "extensions": report.extensions,
                         "localStorageSites": report.storageSites, "localStorageKeys": report.storageKeys, "localStorageKeysSet": report.storageKeysSet,
@@ -1464,6 +1508,12 @@ final class Flow: ObservableObject {
                     }]
         case "key":
             return FlowPresenter.shared.press(request["key"] as? String ?? "")
+        case "pick":
+            // A source card clicked: its counts read off the main actor, as
+            // the sheet does (`flow scan` answers at once instead).
+            guard let source = source(named: request["source"] as? String ?? "") else { return ["error": "no source"] }
+            scan(source)
+            return ["picked": source.name, "phase": phase.name]
         case "shot":
             guard let path = request["path"] as? String else { return ["error": "shot needs --path OUT.png"] }
             return FlowPresenter.shared.shot(to: path)
@@ -1611,6 +1661,7 @@ final class Flow: ObservableObject {
                     "spaces": spaces.all.map { space -> [String: Any] in
                         let row = spaces.row(space.id)
                         return ["id": space.id.uuidString, "name": space.name, "tabs": row.count,
+                                "profile": space.profile ?? "shared",
                                 "today": row.filter { !Sections.shared.isSaved($0) }.count,
                                 "urls": row.map { ($0.pending ?? $0.address)?.absoluteString ?? "" }]
                     }]

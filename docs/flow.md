@@ -21,10 +21,15 @@ animation.
   The content never sizes the sheet: a header, a middle that scrolls, and a
   footer pinned to the bottom. A new phase redraws the middle in place.
 - **Keys.** Escape closes it (so does ✕, read as "Close"). Return presses the
-  primary button in every state: Bring it all over, Move in again, Done. ⌘Q
-  quits with the sheet up.
+  primary button in every state: Bring it all over, Move in again, Done. ⌘W
+  closes the sheet, never the tab behind it; other ⌘ shortcuts (⌘T, ⌘K, ⌘L,
+  ⌘N, ⌘,) wait until it is closed (`FlowKeys`). ⌘Q, ⌘H, ⌘M and ⌘` still
+  work, and ⌘Q quits with the sheet up.
 - **Fresh each time.** Reopening shows the picker with every switch on, not
-  the last summary — unless a move is still running, which it shows.
+  the last summary — unless a move is still running, which it shows, or one
+  finished after its sheet was closed, whose summary waits for the next open
+  (with a line in the window when it lands). Asking for it in another window
+  while it is up brings its window forward.
 - **Nothing is read before it opens.** Listing another browser's folder is a
   request macOS records (and for Chrome's, refuses), so sources are looked
   for only when the sheet opens, off the main thread. The ⌘K history nudge
@@ -43,7 +48,8 @@ still appears. Each card is one of:
 | Installed, never opened | dimmed: "Open Chrome once, then come back." |
 | Not installed | not listed (Safari comes with macOS, so it is always listed) |
 
-When exactly one source can be read it is picked for you; otherwise you pick.
+When exactly one source can be read it is picked for you; otherwise you pick
+(the footer says "Choose a browser above to see what comes over" until you do).
 A selection is never switched under you, and only the newest read for the
 selected source lands. The list is re-checked when Copper comes back to the
 front — only while the sheet is up and a source is locked.
@@ -188,7 +194,10 @@ asks. The key is read once, off the main thread, and never written to disk;
 the keychain writes happen off the main thread too. Then each of the three is read on its own: a broken cookie jar costs only
 the sign-ins, and a refused key is said against each thing it would have
 unlocked. Cookies are installed into WebKit and awaited, so the count is what
-WebKit took, not what was read.
+WebKit took, not what was read. They go into Copper's shared jar — where the
+first profile's spaces (Chrome's `Default`, Arc's default profile) open their
+pages — and each other profile's own go into that profile's jar too, for the
+spaces that wear it (`Chrome · Work`), so neither opens signed out.
 
 ## Moving in again
 
@@ -229,6 +238,9 @@ check with what arrived, or a dash with why nothing did.
 - "Tabs: 3 tabs in 1 space — 2 already here"
 - "Tabs: 228 tabs (5 pinned) in 4 spaces — 3 empty spaces left out"
 - "Tabs: Chrome's last window had only new-tab pages"
+- "Tabs: Chrome had no open windows" (no session file at all — a fresh
+  profile); "couldn't read Chrome's open tabs" only when one is there and
+  can't be read
 - "Bookmarks: Chrome has none"
 - "Bookmarks: 7 bookmarks (3 from the Reading List)"
 - "History: nothing new — 44 places already here"
@@ -282,13 +294,14 @@ on; the ones marked *test run* do nothing anywhere else.
 | `flow activate` | what coming back to Copper does |
 | `flow open [--via settings\|command\|menu] [--window N] [--again]`, `flow close` | the sheet, through a door |
 | `flow state`, `flow events [--clear] [--all]` | phase, selection, the sheet's frame and host; every open, present, dismiss, refresh and scan, `overlapping`, `scansPerOpen` |
-| `flow key escape\|return\|tab`, `flow shot --path OUT.png` | a real key on the sheet; the sheet as drawn |
+| `flow key escape\|return\|tab\|cmd-KEY`, `flow shot --path OUT.png` | a real key on the sheet (`cmd-w`, `cmd-comma`: a ⌘ shortcut through the app's key handling); the sheet as drawn |
+| `flow pick --source S` | a source card clicked: its counts are read in the background, answers at once |
 | `flow scan`, `flow choose --only tabs,history`, `flow move --source S --only …`, `flow status` | read, set the switches, move (polled until done), the report |
 | `flow export`, `flow back`, `flow file --path FILE` | the export pane and a dropped file (polled until read) |
 | `flow passphrase --source Chrome --path PASS` | *test run*: a test passphrase for an encrypted fixture |
 | `flow secrets [--clear]` | *test run*: what the in-memory stand-in holds (password digests only) |
 | `flow guide`, `flow done`, `flow undo` | the done screen's buttons |
-| `flow spaces`, `flow registry --source Arc`, `flow bookmarks` | what landed |
+| `flow spaces`, `flow registry --source Arc`, `flow bookmarks` | what landed (each space with the profile jar it wears, `shared` or a profile folder) |
 | `flow slow --seconds S` | *test run*: pause after each step, to watch the moving view |
 
 Probe seams (all only in a test run): a test passphrase replaces the
@@ -306,15 +319,19 @@ End-to-end scripts, each in a fresh headless world launched through
 LaunchServices, after `./build.sh`:
 
 - `docs/fixtures/flow-sheet-e2e.sh` — one sheet with two windows, one size,
-  every door, Escape and Return, ⌘Q, nothing read at launch.
+  every door, Escape and Return, ⌘ shortcuts waiting behind it and ⌘W closing
+  it (not a tab), a move closed mid-way showing its summary next time, ⌘Q,
+  nothing read at launch.
 - `docs/fixtures/flow-move-e2e.sh [--chrome DIR] [--arc DIR] [--shots DIR]` —
   Chrome locked → card → export files → let in → move → summary → Done →
   reopen → move again adds nothing → Undo; Arc twice from a copy, every space
   shown and swept.
 - `docs/fixtures/flow-secrets-fixture.sh` — a synthetic encrypted profile:
   passwords, passkeys and cookies arrive in the stand-in with a test
-  passphrase, a second move adds none, a broken cookie jar costs only the
-  sign-ins; `--make DIR` writes the fixture only.
+  passphrase, a second move adds none, the first profile's space wears the
+  shared jar and a second profile's space gets its sign-ins in its own, a
+  broken cookie jar costs only the sign-ins; `--make DIR` writes the fixture
+  only.
 - `docs/fixtures/flow-sheet-shots.sh OUTDIR` — every state, light and dark, and
   the sheet's frame through a move.
 - `docs/fixtures/flow-safari-e2e.sh [--data DIR] [--shots DIR]` — Safari

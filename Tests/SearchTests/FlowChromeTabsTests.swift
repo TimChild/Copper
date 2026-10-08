@@ -46,11 +46,11 @@ private enum SNSS {
     }
 }
 
-private func profile(session: [String]?, closed: [String]?) throws -> URL {
+private func profile(session: [String]?, closed: [String]?, folder: String = "Default") throws -> URL {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("flow-tabs-\(UUID().uuidString)")
-    let sessions = root.appendingPathComponent("Default/Sessions", isDirectory: true)
+    let sessions = root.appendingPathComponent("\(folder)/Sessions", isDirectory: true)
     try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
-    try Data("{}".utf8).write(to: root.appendingPathComponent("Default/Preferences"))
+    try Data("{}".utf8).write(to: root.appendingPathComponent("\(folder)/Preferences"))
     if let session { try SNSS.session(session).write(to: sessions.appendingPathComponent("Session_13400000000000001")) }
     if let closed { try SNSS.closed(closed).write(to: sessions.appendingPathComponent("Tabs_13400000000000001")) }
     return root
@@ -74,6 +74,43 @@ struct FlowChromeTabsTests {
         let spaces = try FlowChromeTabs.read(sessionsFolder: root, profile: "Default")
         let urls = spaces.flatMap(\.tabs).map(\.url.absoluteString)
         #expect(urls == ["https://open.invalid/a", "https://open.invalid/b"])
+    }
+
+    @Test("The first profile's spaces wear the shared jar; another profile's wear its own")
+    func profileJar() throws {
+        let everyday = try profile(session: ["https://open.invalid/a"], closed: nil)
+        defer { try? FileManager.default.removeItem(at: everyday) }
+        let first = try FlowChromeTabs.read(sessionsFolder: everyday, profile: "Default")
+        #expect(first.map(\.name) == ["Chrome"])
+        #expect(first.map(\.profile) == [nil])
+        let work = try profile(session: ["https://open.invalid/b"], closed: nil, folder: "Profile 1")
+        defer { try? FileManager.default.removeItem(at: work) }
+        let other = try FlowChromeTabs.read(sessionsFolder: work, profile: "Profile 1")
+        #expect(other.map(\.profile) == ["Profile 1"])
+    }
+
+    @Test("A Chrome with no session file in any profile has none open; a session file it can't read still says so")
+    func noSessionFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("flow-fresh-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Default", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: folder.appendingPathComponent("Preferences"))
+        // `Chromium.Source` reads under Application Support: the same
+        // relative hop `FlowSource.readerSource` makes for a copied root.
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .standardizedFileURL.pathComponents.dropFirst()
+        let target = root.standardizedFileURL.pathComponents.dropFirst()
+        var common = 0
+        while common < support.count, common < target.count,
+              Array(support)[common] == Array(target)[common] { common += 1 }
+        let relative = (Array(repeating: "..", count: support.count - common) + target.dropFirst(common)).joined(separator: "/")
+        let source = Chromium.Source(name: "Chrome", folder: relative, service: "Chrome Safe Storage", account: "Chrome")
+        #expect(try FlowChromeTabs.read(source).isEmpty)
+        let sessions = folder.appendingPathComponent("Sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try Data("not a session".utf8).write(to: sessions.appendingPathComponent("Session_13400000000000001"))
+        #expect(throws: (any Error).self) { try FlowChromeTabs.read(source) }
     }
 
     @Test("Profiles come in Chrome's order: Default, then Profile 1, 2 … 10 as numbers; guest and picker left out")

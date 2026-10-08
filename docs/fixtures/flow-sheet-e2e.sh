@@ -158,6 +158,23 @@ EVENTS=$(B flow events)
 check "no dismiss while the page was rebuilt" '(.counts.dismiss // 0) == 0 and .counts.present == 1' "$EVENTS"
 ok "taking the page from under the sheet changes nothing"
 
+# ⌘ shortcuts typed on the sheet never reach the window behind it (they used
+# to: ⌘W closed the tab under the sheet, ⌘T and ⌘, opened things nobody could
+# see). ⌘T, ⌘K, ⌘L, ⌘N and ⌘, wait; ⌘W closes the sheet, not a tab.
+TABS0=$(B windows | jq '[.windows[].tabIDs | length] | add')
+WINS0=$(B windows | jq '.windows | length')
+for key in cmd-t cmd-k cmd-l cmd-n cmd-comma; do B flow key "$key" >/dev/null; done
+sleep 0.4
+check "⌘ shortcuts leave the sheet up" '.showing and .attachedSheets == 1' "$(B flow state)"
+check "nothing opened behind the sheet" '.settings == false and .launching == false' "$(B probe)"
+[ "$(B windows | jq '.windows | length')" = "$WINS0" ] || fail "⌘N behind the sheet opened a window"
+B flow key cmd-w >/dev/null
+until_state '(.showing | not) and .open == false' >/dev/null
+[ "$(B windows | jq '[.windows[].tabIDs | length] | add')" = "$TABS0" ] || fail "⌘W on the sheet closed a tab"
+ok "⌘T ⌘K ⌘L ⌘N ⌘, wait behind the sheet; ⌘W closes the sheet, not a tab"
+B flow open --via bench --window 1 >/dev/null
+until_state '.showing and .phase == "preview"' >/dev/null
+
 # Return presses the primary button: a tabs-only move from the fixture.
 B flow choose --only tabs >/dev/null
 B flow key return >/dev/null
@@ -180,15 +197,41 @@ ok "reopen after done shows the picker with every switch on"
 B flow key escape >/dev/null
 until_state '.showing | not' >/dev/null
 
+# A move the person closes the sheet on keeps going, and its summary waits
+# for the next open — not the picker, as if nothing had happened. Done then
+# starts fresh.
+B flow slow --seconds 1 >/dev/null
+B flow open --via command >/dev/null
+until_state '.showing and .phase == "preview"' >/dev/null
+B flow choose --only tabs >/dev/null
+B flow key return >/dev/null   # Move in again
+B flow key return >/dev/null   # Bring it all over
+until_state '.phase == "moving"' >/dev/null
+B flow key cmd-w >/dev/null
+until_state '(.showing | not) and .phase == "done"' >/dev/null
+B flow slow --seconds 0 >/dev/null
+B flow open --via command >/dev/null
+check "a move closed mid-way shows its summary next time" '.phase == "done"' "$(until_state '.showing')"
+B flow done >/dev/null
+until_state '.showing | not' >/dev/null
+B flow open --via command >/dev/null
+until_state '.showing and .phase != "done"' >/dev/null
+B flow key escape >/dev/null
+until_state '.showing | not' >/dev/null
+ok "closed mid-move: the move finished, its summary waited for the next open, Done started fresh"
+
 # Two windows' worth of sheets never happened at any point.
 check "never two at once (whole run)" '.overlapping == false' "$(B flow events --all)"
 
 # Nothing at launch reached another browser's protected folder.
 # tccd logs the request (AUTHREQ_CTX, by message id) and who made it
 # (AUTHREQ_ATTRIBUTION, same id): count App Data requests made by this pid.
-if command -v log >/dev/null; then
+# The build's own bundle id (a dev build's is com.collinrijock.copper.dev):
+# a hard-coded one never matched, and the check passed whatever happened.
+BUNDLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist" 2>/dev/null || :)
+if command -v log >/dev/null && [ -n "$BUNDLE" ]; then
   HITS=$(log show --style compact --start "$LAUNCHED" --predicate 'process == "tccd"' 2>/dev/null | awk \
-    -v want="accessing={TCCDProcess: identifier=com.collinrijock.copper, pid=$PID," '
+    -v want="accessing={TCCDProcess: identifier=$BUNDLE, pid=$PID," '
     /AUTHREQ_CTX/ && /AppDataDetailed/ { if (match($0, /msgID=[0-9.]+/)) ids[substr($0, RSTART, RLENGTH)] = 1 }
     /AUTHREQ_ATTRIBUTION/ && index($0, want) { if (match($0, /msgID=[0-9.]+/)) { id = substr($0, RSTART, RLENGTH); if (id in ids) n++ } }
     END { print n + 0 }')

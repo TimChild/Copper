@@ -208,6 +208,9 @@
                                        what the sheet did: opens, presents, dismisses, refreshes,
                                        scans (overlapping, scansPerOpen)
     ./bench flow key escape|return|tab a real key press on the sheet
+    ./bench flow key cmd-w|cmd-k|cmd-comma…  a ⌘ shortcut with the sheet in front, in through the app
+                                       (its key monitor, then the menus), as a person would press it
+    ./bench flow pick --source Chrome  a source card clicked (its counts read in the background)
     ./bench flow shot --path OUT.png   the sheet as drawn, in the app's appearance (never brought
                                        to the front)
     ./bench flow activate              what coming back to Copper does (re-check a locked source)
@@ -582,7 +585,7 @@ def main(argv):
                 else: sys.exit(usage)
                 rest = rest[2:]
     elif verb == "flow":
-        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open|close|state|events|key|shot|activate|limit|choose|access|allow|passphrase|secrets|export|back|file|file-status|guide|done|undo|registry|spaces|slow")
+        if not args: sys.exit("usage: bench flow sources|root|scan|bookmarks|bookmark-move|move|status|localstorage|open|close|state|events|key|pick|shot|activate|limit|choose|access|allow|passphrase|secrets|export|back|file|file-status|guide|done|undo|registry|spaces|slow")
         request["op"] = args[0]
         rest = args[1:]
         if args[0] == "key" and rest and not rest[0].startswith("--"):

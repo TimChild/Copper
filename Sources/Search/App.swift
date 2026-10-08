@@ -741,6 +741,10 @@ struct ContentView: View {
         // it, and ⌃⇧D is the agent pane's while it is open (Fork/Voice/VoiceKeys.swift).
         if VoiceKeys.take(event) { return true }
 
+        // Fork (flow): while Move in is up, a key typed on it is the sheet's —
+        // ⌘W closes it, the window's other ⌘ shortcuts wait (Fork/Flow/FlowPresenter.swift).
+        if let taken = FlowKeys.take(event) { return taken }
+
         // Fork (new-tab-launcher): while the ⌘T card is up, Escape, ⇧/⌥
         // Return and ⌘1–9 are its own.
         if browser.launching, Launcher.key(event, in: browser) { return true }

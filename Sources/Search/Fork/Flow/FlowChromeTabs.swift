@@ -49,10 +49,12 @@ enum FlowChromeTabs {
 
         var spaces: [FlowModel.Space] = []
         var readAny = false
+        var anyFiles = false
         for profile in profiles {
             let profileRoot = source.root.appendingPathComponent(profile, isDirectory: true)
             let sessions = profileRoot.appendingPathComponent("Sessions", isDirectory: true)
             let folder = containsSessionFiles(in: sessions) ? sessions : profileRoot
+            anyFiles = anyFiles || containsSessionFiles(in: folder)
             guard let result = try? parse(folder: folder, profile: profile, sourceName: source.name) else {
                 continue
             }
@@ -60,7 +62,12 @@ enum FlowChromeTabs {
             spaces.append(contentsOf: result.spaces)
         }
 
-        guard readAny else {
+        // No profile has a session file at all — a fresh Chrome, one never
+        // opened past its first window: no tabs open, which is none, not a
+        // failure ("couldn't read Chrome's open tabs" read like the locked
+        // folder all over again). Files that are there but unreadable still
+        // say so.
+        guard readAny || !anyFiles else {
             throw FlowModel.Trouble.unreadable("\(source.name)'s session files")
         }
         return spaces
@@ -257,8 +264,14 @@ enum FlowChromeTabs {
         }
 
         let profileLabel = profileName(in: folder, profile: profile)
+        // The first profile ("Default") is the person's everyday one: its
+        // spaces wear Copper's shared jar, where a move's sign-ins land, as
+        // Arc's default-profile spaces do. Only another profile's spaces get
+        // a jar of their own (`Spaces.store(forProfile:)`).
+        let everyday = profile == nil || profile == "" || profile == "Default"
+        let worn = everyday ? nil : profile
         let baseName: String
-        if profile == nil || profile == "" || profile == "Default" {
+        if everyday {
             baseName = sourceName
         } else {
             baseName = "\(sourceName) · \(profileLabel ?? profile ?? sourceName)"
@@ -316,7 +329,7 @@ enum FlowChromeTabs {
                 name: windowNumber == 0 ? baseName : "\(baseName) \(windowNumber + 1)",
                 groups: modelGroups,
                 tabs: finalTabs,
-                profile: profile
+                profile: worn
             )
             // Windows are the import unit. A window whose pages are all
             // chrome:// (and therefore filtered) still remains a named space;

@@ -121,6 +121,18 @@ final class FlowPresenter: NSObject {
         flow.log("present", "window \(window.windowNumber) \(Int(size.width))×\(Int(size.height))")
     }
 
+    /// Asked for again while it is up — ⌘K or the menu in another window:
+    /// the window it hangs from comes forward, so the person sees the sheet
+    /// rather than nothing happening.
+    func raise() {
+        guard let sheet, let host else { return }
+        Flow.shared.log("present-skipped", "already up on window \(host.windowNumber)")
+        if NSApp.keyWindow !== sheet {
+            host.makeKeyAndOrderFront(nil)
+            sheet.makeKey()
+        }
+    }
+
     private func dismiss(_ flow: Flow) {
         guard let panel = sheet else { return }
         sheet = nil
@@ -232,8 +244,28 @@ final class FlowPresenter: NSObject {
     /// Escape, Return, Tab. Goes through the window as a press would.
     func press(_ key: String) -> [String: Any] {
         guard let sheet else { return ["error": "the sheet is not up"] }
+        // `cmd-w`, `cmd-k`, `cmd-t`, `cmd-comma`…: a ⌘ shortcut typed with
+        // the sheet in front, handed in where a real press comes in
+        // (NSApp.sendEvent: the app's key monitor, then the menus), so what
+        // it does behind the sheet is what a person would get.
+        if key.lowercased().hasPrefix("cmd-") {
+            let name = String(key.lowercased().dropFirst(4))
+            let character = name == "comma" ? "," : name
+            guard character.count == 1, let first = character.first else { return ["error": "cmd- takes one key: cmd-w, cmd-k, cmd-comma…"] }
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                guard let event = NSEvent.keyEvent(
+                    with: type, location: .zero, modifierFlags: [.command],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: sheet.windowNumber, context: nil,
+                    characters: character, charactersIgnoringModifiers: character,
+                    isARepeat: false, keyCode: first == "," ? 43 : Bench.keyCode(for: first)
+                ) else { continue }
+                NSApp.sendEvent(event)
+            }
+            return ["pressed": key]
+        }
         let table: [String: (UInt16, String)] = ["escape": (53, "\u{1B}"), "return": (36, "\r"), "tab": (48, "\t")]
-        guard let (code, characters) = table[key.lowercased()] else { return ["error": "key is escape, return or tab"] }
+        guard let (code, characters) = table[key.lowercased()] else { return ["error": "key is escape, return, tab or cmd-KEY"] }
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             guard let event = NSEvent.keyEvent(
                 with: type, location: .zero, modifierFlags: [],
@@ -265,3 +297,33 @@ final class FlowSheetWindow: NSWindow {
     }
 }
 
+
+/// The keyboard while Move in is up (`App.swift` `take()` asks first). The
+/// sheet covers its window, so the window's shortcuts wait: ⌘W closes the
+/// sheet, as it closes Settings, and the rest — ⌘T, ⌘K, ⌘L, ⌘N, ⌘, … — do
+/// nothing, rather than closing a tab or opening a launcher behind the sheet
+/// where nobody sees it. ⌘Q, ⌘H, ⌘M, ⌘` and editing (⌘C, ⌘V, ⌘X, ⌘A, ⌘Z)
+/// stay the system's; a key without ⌘ (Escape, Return, Tab, Space) is the
+/// sheet's own and goes to it untouched.
+@MainActor
+enum FlowKeys {
+    static let passed: Set<String> = ["q", "h", "m", "`", "~", "c", "v", "x", "a", "z"]
+
+    /// nil: not typed on the sheet. true: taken here. false: the sheet's or
+    /// the system's — hand it on as it is.
+    static func take(_ event: NSEvent) -> Bool? {
+        guard event.type == .keyDown, let sheet = FlowPresenter.shared.sheetWindow,
+              event.window === sheet || (event.window == nil && NSApp.keyWindow === sheet) else { return nil }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.command) else { return false }
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if key == "w", flags.isDisjoint(with: [.option, .control]) {
+            Flow.shared.log("key", "⌘W closes the sheet")
+            Flow.shared.close()
+            return true
+        }
+        if passed.contains(key) { return false }
+        Flow.shared.log("key", "⌘\(key) waits behind the sheet")
+        return true
+    }
+}

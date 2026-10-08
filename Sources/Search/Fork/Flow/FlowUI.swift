@@ -611,6 +611,13 @@ struct FlowSheet: View {
                     }
                 } else {
                     HStack {
+                        // Two or more to choose from and none picked yet: the
+                        // cards are the choice, so say so rather than leave a
+                        // dimmed list and a button that does nothing.
+                        if flow.selected == nil, flow.sources.contains(where: { $0.readable && !$0.showsLocked }) {
+                            Text("Choose a browser above to see what comes over")
+                                .font(.system(size: 12.5)).foregroundStyle(Palette.muted)
+                        }
                         Spacer()
                         primary("Bring it all over", disabled: !flow.canMove) {
                             guard let source = flow.selected else { return }

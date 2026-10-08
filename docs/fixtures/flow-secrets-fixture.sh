@@ -213,6 +213,21 @@ check "second move: no line is a ✓" '[.summary[] | startswith("—")] | all' "
 printf '%s\n' "$SECOND" | jq -r '.summary[]' | sed 's/^/     /'
 ok "second move: nothing new, and the summary says so"
 
+# The first profile's spaces wear the shared jar, where the sign-ins land;
+# another profile's spaces wear a jar of their own, and its sign-ins go there
+# too — or its tabs would open signed out.
+check "first profile's space wears the shared jar" '[.spaces[] | select(.name == "Chrome") | .profile] == ["shared"]' "$(B flow spaces)"
+cp -R "$TEMP/fixture/Chrome/Default" "$TEMP/fixture/Chrome/Profile 1"
+printf '{"profile":{"name":"Work"}}\n' > "$TEMP/fixture/Chrome/Profile 1/Preferences"
+B flow root --source Chrome --path "$TEMP/fixture/Chrome" >/dev/null
+FOURTH=$(B flow move --source Chrome --only tabs,cookies 2>/dev/null)
+check "second profile: its space is made" '.spacesMade == 1' "$FOURTH"
+check "second profile: its space wears its own jar" '[.spaces[] | select(.name == "Chrome · Work") | .profile] == ["Profile 1"]' "$(B flow spaces)"
+check "second profile: its sign-ins are in its jar" '.profileCookies["Profile 1"] == 3 and (.profileCookies | has("Default") | not)' "$FOURTH"
+rm -rf "$TEMP/fixture/Chrome/Profile 1"
+B flow root --source Chrome --path "$TEMP/fixture/Chrome" >/dev/null
+ok "the first profile's space wears the shared jar; another profile's space and its sign-ins share a jar of its own"
+
 # A broken cookie jar costs only the signed-in state.
 B flow secrets --clear >/dev/null
 printf 'not a database' > "$TEMP/fixture/Chrome/Default/Cookies"

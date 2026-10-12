@@ -3,7 +3,7 @@
  * board and the ops share, and an undo manager scoped to `shapes`.
  */
 import * as Y from 'yjs'
-import { readColumns, readNoteChecklist, readPicks, readRows } from './checklist'
+import { readColumns, readNoteChecklist, readNotes, readPicks, readRows } from './checklist'
 import { VIEW_CHECKLIST } from './checklist-text'
 import { SIDES, type Point, type Side } from './geometry'
 import { textSplice } from './text-diff'
@@ -44,8 +44,8 @@ export type ShapeProps = Partial<Omit<Shape, 'id' | 'type'>>
 export type ShapeInput = { type: ShapeType; id?: string } & ShapeProps
 
 const TEXT_KEYS = new Set(['text'])
-/** Read-side only: a checklist's picks live under their own `pick:<rowId>` keys (`checklist.ts`). */
-const DERIVED_KEYS = new Set(['picks'])
+/** Read-side only: a checklist's picks and comments live under their own keys, or in its text (`checklist.ts`). */
+const DERIVED_KEYS = new Set(['picks', 'notes'])
 /** A note in the checklist view reads its title and rows from its text: never stored as props. */
 const NOTE_DERIVED = new Set(['title', 'rows'])
 const ROUNDED = new Set(['x', 'y', 'w', 'h'])
@@ -147,6 +147,7 @@ export function readShape(id: string, m: unknown): Shape | null {
     shape.columns = list.columns
     shape.rows = list.rows
     shape.picks = list.picks
+    shape.notes = list.notes
   }
   if (type === 'checklist') {
     const columns = readColumns(m.get('columns'))
@@ -154,6 +155,7 @@ export function readShape(id: string, m: unknown): Shape | null {
     shape.columns = columns
     shape.rows = rows
     shape.picks = readPicks(m, rows, columns)
+    shape.notes = readNotes(m, rows)
   }
   return shape
 }

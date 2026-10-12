@@ -132,6 +132,16 @@ row left empty is dropped. While the card is hovered or selected, *Add row* and 
 under it; a selected card shows × on a row to remove it. The height follows the rows (only the
 side edges resize).
 
+**Row comments.** Any row can carry a comment — why a pick, a caveat, a link — as long as it needs
+to be. A row without one shows a comment button at the end of its label only on hover or keyboard
+focus; a row with one shows a single muted line of it under the row, cut with an ellipsis, so a
+long comment never takes over the card. A click on that line or the button opens it under the row:
+a field that grows to eight lines and then scrolls in itself, with who last wrote it and when. The
+same button, Escape or a click elsewhere closes it. Open or closed is each viewer's own (never
+stored or shared). While one is open the card keeps the height it had and its rows scroll inside
+it, so the stored size never changes and nothing spills past the card; it settles to its rows when
+the comment closes. Everyone sees the words as they are typed.
+
 **Stored as a note**, so every Copper shows it: a `sticky` with `view: "checklist"` whose text is
 the list, in the markdown any note draws as task boxes —
 
@@ -140,6 +150,8 @@ the list, in the markdown any note draws as task boxes —
 - [ ] Ann
 - [x] Ada Lovelace
 - [x] Bob · No
+  > Back from Lisbon on the 4th;
+  > can do the week after.
 ```
 
 The first `#`/`##`/`###` heading is the title and each `- [ ]` / `- [x]` line a row. `columns` is a
@@ -149,21 +161,31 @@ only its own line (box and suffix) through the note's `Y.Text`, so ticks on diff
 old and new clients at the same moment all stick. Who picked and when are kept beside it
 (`who:<label>` on the shape) and shown only while they agree with the text. Copper
 1.0.20261006.28 and older draw the same shape as a note with clickable task boxes; their ticks
-show on the card and the card's on the note. Model and rules: `Canvas/src/canvas/checklist.ts`
+show on the card and the card's on the note. A row's comment is the indented `>` lines right under
+its task line (a blank comment line is a bare `  >`; no comment, no lines): it moves with its row
+when rows are picked, renamed or reordered, goes when the row is removed, is never read as a row or
+a title, and an older Copper shows it as a quote under the item. Writing it changes only the
+characters of its own lines, so comments on different rows — or different lines of one — from two
+Coppers at once both stick; a first comment goes in after the row's line break, so a pick or a
+rename of the same row at the same moment stays on the row's line. Who last wrote it and when sit
+beside it (`noteBy:<label>`) and follow a rename. Model and rules: `Canvas/src/canvas/checklist.ts`
 and `checklist-text.ts`.
 
-Agents add one with `{type:'checklist', title, columns?, rows:['Ann', …], picks?:{'Ann':'Yes'}}`
-and update `picks` by row label (`null` clears), `rows`, `columns` and `title` (each an edit of the
+Agents add one with `{type:'checklist', title, columns?, rows:['Ann', …], picks?:{'Ann':'Yes'},
+notes?:{'Ann':'Back at 6'}}` and update `picks` and `notes` by row label (`null` clears), `rows`
+(each kept row keeps its pick and comment by label), `columns` and `title` (each an edit of the
 text). `{op:'update', id, patch:{view:'checklist', columns?:[…]}}` turns a note that already holds
 a heading and a task list into a card in place — the text, and so its ticks, untouched;
 `view: null` makes it a plain note again. `canvas_read` gives `view`, `title`, `columns`,
-`rows:[{label, pick, by?, at?}]`, `tally` and the `text`. `./bench --world W canvas checklist
+`rows:[{label, pick, by?, at?, note?, noteBy?, noteAt?}]` (`note` only for a row with a comment, cut
+at 500 characters unless `full`), `tally` and the `text`. `./bench --world W canvas checklist
 [SHAPE]` reads them and `canvas check SHAPE COL ROW…` clicks a box with real mouse input
 (`CanvasChecklistBench.swift`).
 
 The first cut stored a checklist as its own `type: "checklist"` (picks under `pick:<rowId>`);
 copper-cloud 0.6.0's REST `/ops` still makes those, and this page still draws, clicks and
-updates them. Older Coppers don't draw that type at all.
+updates them; their row comments sit under `note:<rowId>` (`{text, by, byId, at}`), and a row that
+goes takes its comment. Older Coppers don't draw that type at all.
 
 ## Live web frames
 

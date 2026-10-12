@@ -48,6 +48,20 @@ export interface ChecklistRow {
   label: string
 }
 
+/**
+ * checklist: a row's comment. On a note, the words are quote lines under the
+ * row's task line (`checklist-text.ts`) and who wrote them sits beside it
+ * (`noteBy:<label>`); on a legacy card, all of it under `note:<rowId>`.
+ */
+export interface ChecklistNote {
+  text: string
+  /** Who last wrote it: name and id ('' when unknown). */
+  by: string
+  byId: string
+  /** Epoch ms; 0 when unknown. */
+  at: number
+}
+
 /** checklist: a row's pick, stored under its own `pick:<rowId>` key (`checklist.ts`). */
 export interface ChecklistPick {
   /** The column's label. */
@@ -107,12 +121,14 @@ export interface Shape {
   view?: 'checklist'
   /**
    * checklist (and a sticky in the checklist view): 1–4 column labels, its rows,
-   * and each row's pick by row id. On a note, `title`, `rows` and `picks` are
-   * read from the text; only `columns` is stored.
+   * and each row's pick by row id. On a note, `title`, `rows`, `picks` and
+   * `notes` are read from the text; only `columns` is stored.
    */
   columns?: string[]
   rows?: ChecklistRow[]
   picks?: Readonly<Record<string, ChecklistPick>>
+  /** checklist: each row's comment by row id, for rows that have one (read-side only). */
+  notes?: Readonly<Record<string, ChecklistNote>>
 }
 
 /** Default size per type; arrows and images size themselves. */

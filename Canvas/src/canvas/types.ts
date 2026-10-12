@@ -8,7 +8,9 @@
  *   `Y.Text` (concurrent typing merges); a plain string is read too.
  * - `agents: Y.Map<agentId, AgentPresence>` — plain objects, replaced whole.
  * - `meta: Y.Map` — `name`, `createdBy`.
- * - `comments` (optional, unused by this page).
+ * - `comments: Y.Map<threadId, Y.Map>` — comment threads anchored to shapes
+ *   (`comments.ts`); kept apart from `shapes` and out of undo.
+ * - `chat: Y.Array` — a shared canvas's chat (`chat/model.ts`).
  */
 import type { Point, Side } from './geometry'
 

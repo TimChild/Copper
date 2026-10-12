@@ -26,6 +26,11 @@
  *   {op:"delete", id}                                          // arrows ending on it go too
  *   {op:"connect", from:id, to:id, label?, color?, fromSide?, toSide?}
  *   {op:"clear"}
+ *
+ * Comment threads (`canvas/comments.ts`), attributed to `as`:
+ *   {op:"comment", on:shapeId, text, id?}                    // a new thread on a shape; ids[i] is the thread's id
+ *   {op:"reply", thread, text}                               // add onto a thread (a resolved one opens again)
+ *   {op:"resolve", thread, resolved?:true|false}             // resolve (default) or reopen
  */
 import { arrowBox, arrowPath } from './canvas/arrows'
 import { AGENT, bareId, readEndpoint, type CanvasStore, type ShapeInput, type ShapeProps } from './canvas/doc'
@@ -66,6 +71,7 @@ import {
   writeTitle,
 } from './canvas/checklist-text'
 import { liveAgents, readAgents } from './canvas/agents'
+import { cleanCommentText, isShown, shapeLabel, type CommentAuthor } from './canvas/comments'
 import { center, containsBox, boxesOverlap, SIDES, type Box, type Point, type Side } from './canvas/geometry'
 import { MIN_SIZE, isResizable, minSizeOf } from './canvas/resize'
 import { LIVE_SIZE, frameUrl } from './canvas/frames'
@@ -787,6 +793,63 @@ function opConnect(op: Record<string, unknown>, ctx: OpsContext, as: Actor | nul
   return { id: newId, anchor: anchorOf(ctx, newId) }
 }
 
+// ---- comment threads ---------------------------------------------------------
+
+const authorOf = (as: Actor | null): CommentAuthor => ({ name: as?.name ?? 'Agent', id: as?.id ?? 'agent' })
+
+const threadRef = (v: unknown): string => {
+  if (typeof v !== 'string' || !v.trim()) return fail('`thread` must be a thread id (from canvas_read comments)')
+  const t = v.trim()
+  return t.startsWith('comment:') ? t.slice(8) : t
+}
+
+function opComment(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): { id: string; anchor: Point } {
+  const on = op.on ?? op.shape ?? op.anchor
+  if (typeof on !== 'string' || !on.trim()) fail('`comment` needs `on`: the id of the shape to comment on')
+  const shape = ctx.store.live(bareId((on as string).trim()))
+  if (!shape) fail(`no shape ${on as string}`)
+  let id: string | undefined
+  if (op.id !== undefined) {
+    if (typeof op.id !== 'string' || !ID.test(op.id)) fail('`id` must be 1–64 of A–Z a–z 0–9 _ - : .')
+    if (ctx.store.comments.map.has(op.id as string)) fail(`a comment thread with id ${op.id as string} already exists`)
+    id = op.id as string
+  }
+  const text = commentText(op.text)
+  const threadId = ctx.store.comments.create(shape!.id, text, authorOf(as), { id, anchorName: shapeLabel(shape!), origin: AGENT })
+  return { id: threadId, anchor: anchorOf(ctx, shape!.id) }
+}
+
+function commentText(raw: unknown): string {
+  try {
+    return cleanCommentText(raw)
+  } catch (e) {
+    return fail(messageOf(e))
+  }
+}
+
+function needThread(ctx: OpsContext, ref: unknown) {
+  const id = threadRef(ref)
+  const t = ctx.store.comments.get(id)
+  if (!t || !isShown(t)) return fail(`no comment thread ${id}`)
+  return t
+}
+
+function opReply(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): string {
+  const t = needThread(ctx, op.thread ?? op.id)
+  const text = commentText(op.text)
+  const shape = ctx.store.live(t.anchor)
+  ctx.store.comments.reply(t.id, text, authorOf(as), { origin: AGENT, anchorName: shape ? shapeLabel(shape) : undefined })
+  return t.id
+}
+
+function opResolve(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): string {
+  const t = needThread(ctx, op.thread ?? op.id)
+  const resolved = op.resolved ?? true
+  if (typeof resolved !== 'boolean') fail('`resolved` must be true or false')
+  ctx.store.comments.setResolved(t.id, resolved as boolean, authorOf(as), { origin: AGENT })
+  return t.id
+}
+
 export interface ApplyOutcome extends ApplyResult {
   /** Where the agent's cursor should rest: the last thing it touched. */
   anchor: Point | null
@@ -853,8 +916,21 @@ export function applyOps(ctx: OpsContext, raw: unknown): ApplyOutcome {
           case 'clear':
             ctx.store.clear(AGENT)
             break
+          case 'comment': {
+            const r = opComment(o, ctx, as)
+            id = r.id
+            result.anchor = r.anchor
+            break
+          }
+          case 'reply':
+          case 'resolve': {
+            id = o.op === 'reply' ? opReply(o, ctx, as) : opResolve(o, ctx, as)
+            const anchor = ctx.store.comments.get(id)?.anchor
+            if (anchor && ctx.store.live(anchor)) result.anchor = anchorOf(ctx, anchor)
+            break
+          }
           default:
-            fail(`unknown op ${JSON.stringify(o.op ?? null)} (add, update, move, resize, delete, connect, clear)`)
+            fail(`unknown op ${JSON.stringify(o.op ?? null)} (add, update, move, resize, delete, connect, clear, comment, reply, resolve)`)
         }
         result.ids.push(id)
         result.applied++
@@ -927,10 +1003,24 @@ export interface ShapeSummary {
   frame?: string
 }
 
+/** One comment thread as an agent reads it: deleted messages left out, texts clipped unless `full`. */
+export interface CommentSummary {
+  id: string
+  /** The shape it is on. */
+  anchor: string
+  /** Set when that shape has been deleted (the thread stays). */
+  anchorDeleted?: true
+  resolved: boolean
+  resolvedBy?: string
+  messages: { id: string; by: string; at: number; text: string; edited?: true }[]
+}
+
 export interface CanvasRead {
   canvas: { id: string; name: string; kind: string }
   viewport?: { x: number; y: number; w: number; h: number; zoom: number }
   shapes: ShapeSummary[]
+  /** Comment threads, oldest first; with `ids`/`types`/`inView`, only those on the shapes returned. */
+  comments: CommentSummary[]
   agents: (Omit<CanvasAgent, 'cursor'> & { cursor: Point | null })[]
   selection: string[]
   count: number
@@ -1056,9 +1146,27 @@ export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead 
   }
   out.sort((a, b) => a.y - b.y || a.x - b.x || (a.id < b.id ? -1 : 1))
   const now = ctx.now ?? Date.now()
+  const filtered = !!(ids || types || (opts.inView && ctx.viewport))
+  const returned = new Set(out.map(s => s.id))
+  const comments: CommentSummary[] = []
+  for (const t of ctx.store.comments.getThreads()) {
+    if (!isShown(t) || (filtered && !returned.has(t.anchor))) continue
+    const c: CommentSummary = {
+      id: t.id,
+      anchor: t.anchor,
+      resolved: t.resolved,
+      messages: t.messages
+        .filter(m => !m.deleted)
+        .map(m => ({ id: m.id, by: m.by, at: m.at, text: clip(m.text, full), ...(m.editedAt ? { edited: true as const } : {}) })),
+    }
+    if (!byId.has(t.anchor)) c.anchorDeleted = true
+    if (t.resolved && t.resolvedBy) c.resolvedBy = t.resolvedBy
+    comments.push(c)
+  }
   const read: CanvasRead = {
     canvas: ctx.canvas,
     shapes: out,
+    comments,
     agents: liveAgents(readAgents(ctx.store.agents), now),
     selection: [...ctx.selection],
     count: all.length,

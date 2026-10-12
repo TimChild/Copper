@@ -58,6 +58,8 @@ extension Browser {
         let candidates = (Windows.all.flatMap(\.tabs) + Spaces.shared.parkedTabs).filter { seen.insert($0.id).inserted }
         let idle = candidates
             .filter { now.timeIntervalSince($0.touched) >= wait && awake(because: $0) == nil }
+            // Fork (space-keepalive): a space's own tab waits for memory pressure.
+            .filter { given != nil || !Spaces.shared.remembered($0.id) }
             .sorted { $0.touched < $1.touched }
         for tab in idle { self.sleep(tab) }
     }

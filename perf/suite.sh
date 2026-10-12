@@ -2,7 +2,8 @@
 # suite.sh LABEL APP — the whole set against one build, into perf/results/LABEL/:
 # launch ×5, every space ×2, a fresh tab ×6 (lightspeed) and ×4 (GitHub), ⌘R ×5 and ×4.
 set -u
-LABEL=$1; APP=$2
+LABEL=$1
+APP=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")   # absolute: the suite runs from perf/
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=$HERE/results/$LABEL; mkdir -p "$OUT"
 cd "$HERE"

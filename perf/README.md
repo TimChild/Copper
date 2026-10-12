@@ -32,11 +32,11 @@ Medians, `origin/fork` 7c2038f + `Pace` against the perf branch, same suite, bac
 | | before | after |
 |---|---|---|
 | restored page painted, foreground launch (local page) | 459 ms | 423 ms |
-| main-thread time, first 20 s of a launch | 450 ms | 367 ms |
-| first switches after launch landing on a page still loading | 5 of 6 | 1 of 6 |
-| ⌘R, first paint — lightspeed.exowatt.com | 488 ms | 209 ms |
-| ⌘R, first paint — GitHub repository page | 672 ms | 412 ms |
-| main-thread time during one page load (⌘T → address → Return) | 456–511 ms | 415–422 ms |
+| main-thread time, first 20 s of a launch | 450 ms | 353–367 ms |
+| first switches after launch landing on a page still loading | 5 of 6 | 1 of 6 (a site that never stops loading) |
+| ⌘R, first paint — lightspeed.exowatt.com (over the VPN; noisy) | 488 ms (342–1302) | 255 ms (180–668) |
+| ⌘R, first paint — GitHub repository page | 672 ms (244–1720) | 341 ms (163–456) |
+| main-thread time during one page load (⌘T → address → Return) | 456–511 ms | 407–448 ms |
 
 Where a launch's time goes now (warm, ms from process start): AppKit and SwiftUI up to `Browser.init` ~75, WebKit's first use and the files ~45, the restore of 264 tabs ~45, the first web view built and its process launched ~60, the scene to the first body ~60, the first layout ~55, the first frame committed ~45. The restored page's request waits for the end of that first run-loop pass (`page.ask`), because WebKit asks the navigation delegate on the main thread.
 

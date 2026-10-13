@@ -92,7 +92,7 @@ enum Passkeys {
         var response = {
           clientDataJSON: bytes(result.clientDataJSON),
           attestationObject: bytes(result.attestationObject),
-          getTransports: function () { return ['internal', 'hybrid']; },
+          getTransports: function () { return ['internal']; },
           getAuthenticatorData: function () { return bytes(result.authenticatorData); },
           getPublicKey: function () { return result.publicKey ? bytes(result.publicKey) : null; },
           getPublicKeyAlgorithm: function () { return -7; },
@@ -126,7 +126,9 @@ enum Passkeys {
         payload.origin = location.origin;
         try { payload.topOrigin = top.location.origin; } catch (_) { payload.topOrigin = location.origin; }
         payload.crossOrigin = window !== top;
-        payload.rpId = p.rp || location.hostname;
+        // Creation uses rp.id; assertion uses rpId. Falling back to the
+        // sign-in host despite an explicit parent RP loses its credentials.
+        payload.rpId = (kind === 'create' ? p.rp && p.rp.id : p.rpId) || location.hostname;
         payload.mediation = options.mediation || '';
         var message = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.copperPasskeys;
         if (!message) return Promise.reject(domError('NotSupportedError', 'Copper passkeys are unavailable'));

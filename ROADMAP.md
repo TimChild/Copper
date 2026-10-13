@@ -16,7 +16,7 @@ don't build it twice.
 - [ ] **⌘1–⌘9 reach the right tab**, pinned ones included, on every keyboard layout. *(X, several)*
 - [ ] **Dragging tabs to reorder them** in the row across the top. *(X)*
 - [ ] **A double-click on the title bar fills the screen** from anywhere along the top, in both layouts. *(X)*
-- [ ] **Passkeys on some sign-ins** (Google's "Use your passkey"). They work on a fresh install of 1.0; waiting on details. *([#10](https://github.com/driceroland/Search/issues/10), X)*
+- [ ] **Passkeys on some sign-ins** (Google's "Use your passkey"). The page bridge's parent-domain mismatch is fixed and covered by synthetic tests ([passkey checks](docs/passkeys.md#regression-checks)); live Google sign-in still needs validation on a signed release. *([#10](https://github.com/driceroland/Search/issues/10), X)*
 - [ ] **Google sign-in reloads in a loop** with the iCloud Passwords extension installed. *([#2](https://github.com/driceroland/Search/issues/2))*
 - [ ] README: the size reads 2 MB in one place and 5 MB in another; 1.0 is 2.9 MB.
 

@@ -38,6 +38,10 @@ Medians, `origin/fork` 7c2038f + `Pace` against the perf branch, same suite, bac
 | ⌘R, first paint — GitHub repository page | 672 ms (244–1720) | 341 ms (163–456) |
 | main-thread time during one page load (⌘T → address → Return) | 456–511 ms | 407–448 ms |
 
+Restored tabs (`perf.py seed` with `PERF_ACTIVE=URL`, the tab's own Navigation Timing, 4 launches each, base vs the cache-first branch): lightspeed.exowatt.com document 447–691 ms from the network → 4–6 ms from the cache, first paint 767–1141 → 113–163 ms; GitHub repository page document 739–1255 → 10–12 ms, first paint 719–1332 → 212–259 ms.
+
+An animated space froze every launch for 5–6 s on 13 October (base, branch and the installed release alike): `sample` put the main thread in `WebPageProxy::maybeInitializeSandboxExtensionHandle` → `_sandbox_extension_issue` for the backdrop's file URL. With the scene served from `copper-scene://`, no launch pass over 200 ms after the first.
+
 Where a launch's time goes now (warm, ms from process start): AppKit and SwiftUI up to `Browser.init` ~75, WebKit's first use and the files ~45, the restore of 264 tabs ~45, the first web view built and its process launched ~60, the scene to the first body ~60, the first layout ~55, the first frame committed ~45. The restored page's request waits for the end of that first run-loop pass (`page.ask`), because WebKit asks the navigation delegate on the main thread.
 
 A space switch costs ~100 ms of main-thread time, nearly all SwiftUI making the ~44 new rows of the column it lands on (row bodies themselves are cheap; the 158-row space costs ~10 ms more to lay out than a 12-row one). The menu bar's rebuilds were ~1 ms.

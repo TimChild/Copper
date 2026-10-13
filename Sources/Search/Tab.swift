@@ -732,6 +732,7 @@ final class Tab: ObservableObject, Identifiable {
         address = url
         title = ""
         failure = nil
+        fromCache = false
         reading = 0
         lastY = 0
         reader = false
@@ -771,8 +772,18 @@ final class Tab: ObservableObject, Identifiable {
         address = url
         self.title = title
         pending = url
+        fromCache = true
         adoptIcon()
     }
+
+    /// Fork (perf): a tab brought back (a session, a move-in, the cloud) loads
+    /// its document the way Safari and Chrome bring a session back — from the
+    /// disk cache when it is there, without asking the server first, and from
+    /// the network when it isn't. The files the page loads with it follow their
+    /// own cache rules, as on any load, and ⌘R asks the server as ever. A
+    /// restored lightspeed.exowatt.com tab had its document in 5 ms instead of
+    /// 450–690 ms and drew at ~150 ms instead of ~900 (perf/README.md).
+    private var fromCache = false
 
     /// True for a tab that has a place and an address but is holding no page —
     /// brought back from the last session, or put down with ⌘W while pinned.
@@ -961,13 +972,15 @@ final class Tab: ObservableObject, Identifiable {
         cancelRecovery()
         let generation = recoveryGeneration
         let view = web
+        let policy: URLRequest.CachePolicy = fromCache ? .returnCacheDataElseLoad : .useProtocolCachePolicy
+        fromCache = false
         let load = { [weak self, weak view] in
             guard let self, let view, self.built === view,
                   self.recoveryGeneration == generation, self.pending == nil else { return }
             self.attachmentWait?.cancel()
             self.attachmentWait = nil
             view.onStage = nil
-            if let state { view.interactionState = state } else { view.load(URLRequest(url: url)) }
+            if let state { view.interactionState = state } else { view.load(URLRequest(url: url, cachePolicy: policy)) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak view] in
                 guard let self, let view, self.built === view,
                       self.recoveryGeneration == generation, self.address == url, self.pending == nil else { return }

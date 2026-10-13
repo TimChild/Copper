@@ -75,7 +75,8 @@ def seed(world):
     if entries:
         target = entries[0]
         target["active"] = True
-        target["url"] = "http://127.0.0.1:8799/index.html"
+        # PERF_ACTIVE=URL restores a real page instead (cache tests).
+        target["url"] = os.environ.get("PERF_ACTIVE", "http://127.0.0.1:8799/index.html")
         target["title"] = "Perf page"
     json.dump(shape, open(path, "w"))
     suite = f"com.officecommun.search.test.{world}"

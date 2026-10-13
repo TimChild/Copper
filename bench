@@ -12,6 +12,7 @@
     ./bench go ID URL                  send a bench tab somewhere else
     ./bench wait ID [SECONDS]          until the page has loaded
     ./bench sleep ID                   put a tab to sleep now, or say what keeps it awake
+    ./bench sleep sweep                the idle sweep now: the budget, the pages loaded, the tabs it chose
     ./bench select ID                  bring a tab to the front — --test runs only
     ./bench resize W H [STEPS]         take the window to W×H in steps, like a drag — --test runs only
     ./bench key ID TEXT [--app] [--hold] press keys on a tab as real key events — --test runs only;

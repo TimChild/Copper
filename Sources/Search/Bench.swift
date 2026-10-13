@@ -361,6 +361,16 @@ final class Bench {
             wait(for: tab, until: limit, answer)
 
         case "sleep":
+            // Fork (perf): `sleep sweep` runs the idle sweep now and says what
+            // it chose, against the budget.
+            if request["id"] as? String == "sweep" {
+                var seen = Set<Tab.ID>()
+                let loaded = (Windows.all.flatMap(\.tabs) + Spaces.shared.parkedTabs)
+                    .filter { seen.insert($0.id).inserted && $0.built != nil && !$0.asleep }.count
+                let chosen = browser.sleepIdle()
+                answer(["budget": Browser.awakeBudget, "loaded": loaded, "chosen": chosen.map(Bench.short)])
+                return
+            }
             // Now rather than after half an hour, but past every other check
             // a tab has to clear — the answer says which one kept it awake.
             guard let tab = find(request, in: browser) else { answer(missing(request)); return }

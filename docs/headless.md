@@ -189,9 +189,12 @@ launchctl bootout gui/$(id -u)/com.example.copper          # stop (SIGTERM → c
 
 LaunchServices sends a Dock click or a plain `open Copper.app` to whichever running instance it
 picks — with an agent's headless probe alive, often the probe. A probe (a named test world, or a
-headless run outside the main world) no longer swallows it: it never shows or activates itself,
-and hands the reopen to the main world — activating it when its instance lock is held, launching
-it (`open -n`, a clean environment) when not. A headless Copper that *is* the main world (the
+headless run outside the main world) no longer swallows it: it never shows itself, and hands the
+reopen to the main world — a reopen event and the activation LaunchServices gave the probe when
+its instance lock is held, launching it (`open -n`, a clean environment) and handing the
+activation over once it is up when not. LaunchServices also promotes the accessory probe to an
+ordinary app as it routes the click there; the probe takes its accessory policy back at once, so
+there is never a second Copper in the Dock or ⌘-Tab. A headless Copper that *is* the main world (the
 launchd recipe above) handles a reopen as before. One process per world is enforced by a kernel
 lock (`instance.lock`), so neither a reopen nor an update relaunch can start a second one.
 Details: docs/updates.md.

@@ -125,9 +125,17 @@ extension Instance {
             send(url, to: pid, activate: target.environment == nil)
             return true
         }
-        Updates.note("link relay in \(Store.folder.lastPathComponent): \(url.absoluteString) — launching the \(target.name) world")
-        launch(target)
-        deliver(url, to: target, tries: 0)
+        // A launch already on its way (an earlier link, a Dock click) gets
+        // this address too rather than a second launch.
+        if !launching {
+            Updates.note("link relay in \(Store.folder.lastPathComponent): \(url.absoluteString) — launching the \(target.name) world")
+            launch(target)
+        } else {
+            Updates.note("link relay in \(Store.folder.lastPathComponent): \(url.absoluteString) — the \(target.name) world is already on its way")
+        }
+        // An address queues on the far side until the window is up
+        // (`Links.waiting`), so sending as soon as the lock is held is fine.
+        whenRunning(target) { pid in send(url, to: pid, activate: target.environment == nil) }
         return true
     }
 
@@ -136,22 +144,6 @@ extension Instance {
     /// its environment.
     @MainActor private static func runningMain(_ target: Target) -> pid_t? {
         isRunning(worldFolder: target.folder) ?? (target.environment == nil ? unlockedMainInstance() : nil)
-    }
-
-    /// Waits for a world just launched to hold its lock and write its pid,
-    /// then sends. Every 100 ms, for twenty seconds at most — a cold start
-    /// on a slow disk is a few of those; an address queues on the far side
-    /// until the window is up (`Links.waiting`), so early is fine.
-    @MainActor private static func deliver(_ url: URL, to target: Target, tries: Int) {
-        if let pid = isRunning(worldFolder: target.folder), pid > 0 {
-            send(url, to: pid, activate: target.environment == nil)
-            return
-        }
-        guard tries < 200 else {
-            Updates.note("link relay: the \(target.name) world never came up; \(url.absoluteString) dropped")
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { deliver(url, to: target, tries: tries + 1) }
     }
 
     /// The address as a `GetURL` Apple Event to exactly that process — what
@@ -169,9 +161,6 @@ extension Instance {
             Updates.note("link relay: sending to pid \(pid) failed: \(error.localizedDescription)")
             return
         }
-        guard activate, let running = NSRunningApplication(processIdentifier: pid) else { return }
-        if !running.activate(from: .current, options: [.activateAllWindows]) {
-            running.activate(options: [.activateAllWindows])
-        }
+        if activate { handFocus(to: pid) }
     }
 }

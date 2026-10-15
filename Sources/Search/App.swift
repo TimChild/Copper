@@ -829,8 +829,9 @@ struct ContentView: View {
             return true
         }
 
-        // A shortcut an extension registered — ⌥⇧D, ⌃⇧Y — before ours, since
-        // none of ours use those.
+        // A shortcut an extension registered — ⌥⇧D, ⌃⇧Y — before ours, unless
+        // a menu of ours carries the same key (⌘E is the agent's, whatever an
+        // extension's manifest suggests; Extensions.take).
         if #available(macOS 15.4, *), !flags.intersection([.command, .option, .control]).isEmpty,
            Extensions.shared.take(event) {
             return true

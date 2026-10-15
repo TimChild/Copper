@@ -828,12 +828,37 @@ final class Extensions: NSObject, ObservableObject {
         return URL(string: path, relativeTo: context.baseURL)?.absoluteURL
     }
 
-    /// A keystroke an extension registered for.
+    /// A keystroke an extension registered for — unless it is one of
+    /// Copper's own. Extensions hear a key before the app's shortcuts do, and
+    /// a manifest may suggest any key at all: Claude's suggests ⌘E for its
+    /// side panel, which took the agent pane's key from everyone who had it
+    /// installed, and the pane never opened. A key one of Copper's menus
+    /// carries stays Copper's, as a browser's own shortcuts do in Chrome.
     func take(_ event: NSEvent) -> Bool {
+        guard !Extensions.ownKey(event) else { return false }
         for context in contexts.values where context.command(for: event) != nil {
             return context.performCommand(for: event)
         }
         return false
+    }
+
+    /// True when an item in the app's menus answers to this keystroke,
+    /// enabled or not — a key Copper uses only some of the time is still its.
+    static func ownKey(_ event: NSEvent) -> Bool { ownKey(event, in: NSApp.mainMenu) }
+
+    static func ownKey(_ event: NSEvent, in menu: NSMenu?) -> Bool {
+        guard let menu, let typed = event.charactersIgnoringModifiers?.lowercased(), !typed.isEmpty else { return false }
+        let modifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        let flags = event.modifierFlags.intersection(modifiers)
+        return menu.items.contains { item in
+            if let submenu = item.submenu { return ownKey(event, in: submenu) }
+            let key = item.keyEquivalent
+            guard !key.isEmpty, key.lowercased() == typed else { return false }
+            // "E" with ⌘ is ⇧⌘E: AppKit reads a capital as the shift.
+            var mask = item.keyEquivalentModifierMask.intersection(modifiers)
+            if key != key.lowercased() { mask.insert(.shift) }
+            return mask == flags
+        }
     }
 
     /// Right-click items an extension added, for the page's menu.

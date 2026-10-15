@@ -101,17 +101,125 @@ enum Instance {
         // its environment instead (no SEARCH_PROBE), so a reopen never starts
         // a second browser on the same profile.
         if let pid = isRunning(worldFolder: target.folder) ?? (target.environment == nil ? unlockedMainInstance() : nil) {
-            if pid > 0, let running = NSRunningApplication(processIdentifier: pid) {
-                if !running.activate(from: .current, options: [.activateAllWindows]) {
-                    running.activate(options: [.activateAllWindows])
-                }
+            Updates.note("probe reopen in \(Store.folder.lastPathComponent): handed to the \(target.name) world pid \(pid)")
+            // A reopen, not just an activation: a main Copper whose windows
+            // were all closed brings one back instead of coming forward
+            // with nothing on screen.
+            if pid > 0 {
+                sendReopen(to: pid)
+                if target.environment == nil { handFocus(to: pid) }
             }
-            Updates.note("probe reopen in \(Store.folder.lastPathComponent): activated \(target.name) world pid \(pid)")
             return true
         }
 
+        // A second click while the first one's launch is still coming up
+        // waits for that launch rather than starting another.
+        if launching {
+            Updates.note("probe reopen in \(Store.folder.lastPathComponent): the \(target.name) world is already on its way")
+            return true
+        }
         launch(target)
+        whenRunning(target) { pid in
+            if target.environment == nil { handFocus(to: pid) }
+        }
         return true
+    }
+
+    // MARK: - the person's focus, handed on
+
+    /// A Dock click, an `open` or a link that LaunchServices routed to a
+    /// probe arrives with the activation the person meant for Copper. It is
+    /// passed on with `activate(from: .current)` — macOS's cooperative
+    /// hand-off, which only works while this process is still the active
+    /// one; asked for from a background process, macOS may simply refuse,
+    /// and the main Copper stays behind whatever was in front. So:
+    ///
+    /// - this probe active: handed over now;
+    /// - not yet (the Apple Event got here before its activation did): held
+    ///   for the activation, which Headless.swift reports through
+    ///   `activationArrived`, for at most a second — then asked for anyway;
+    /// - the main Copper still launching: `whenRunning` waits for its lock,
+    ///   and Headless keeps the activation meanwhile (`handingOff`).
+    @MainActor private static var waitingForActivation: (pid: pid_t, until: Date)?
+    /// A launch of the main world is under way (`whenRunning`).
+    @MainActor private static var launchingUntil: Date?
+
+    @MainActor static var launching: Bool { (launchingUntil ?? .distantPast) > Date() }
+
+    /// Whether a hand-off still needs this probe's activation.
+    @MainActor static var handingOff: Bool {
+        launching || (waitingForActivation.map { $0.until > Date() } ?? false)
+    }
+
+    /// Brings the main Copper (`pid`) to the front, from this probe.
+    @MainActor static func handFocus(to pid: pid_t) {
+        guard let running = NSRunningApplication(processIdentifier: pid), !running.isActive else { return }
+        guard NSApp.isActive else {
+            let until = Date().addingTimeInterval(1)
+            waitingForActivation = (pid, until)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                guard let waiting = waitingForActivation, waiting.pid == pid, waiting.until == until else { return }
+                waitingForActivation = nil
+                // No activation came with it (an `open -g`, a link opened
+                // in the background): ask, and let macOS decide.
+                NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
+            }
+            return
+        }
+        waitingForActivation = nil
+        if !running.activate(from: .current, options: [.activateAllWindows]) {
+            running.activate(options: [.activateAllWindows])
+            Updates.note("probe hand-off: cooperative activation of pid \(pid) refused; asked instead")
+        }
+    }
+
+    /// Headless.swift, on this probe's activation: true when it was passed
+    /// straight on to a main Copper that was waiting for it.
+    @MainActor static func activationArrived() -> Bool {
+        guard let waiting = waitingForActivation, waiting.until > Date() else { return false }
+        handFocus(to: waiting.pid)
+        return true
+    }
+
+    /// Runs `then` once the target world holds its lock — every 100 ms, for
+    /// twenty seconds at most: a cold start on a slow disk is a few of
+    /// those. Gives up with a line in update.log, and lets go of an
+    /// activation it was holding for the launch.
+    @MainActor static func whenRunning(_ target: Target, tries: Int = 0, then: @escaping (pid_t) -> Void) {
+        if tries == 0 { launchingUntil = Date().addingTimeInterval(20) }
+        if let pid = isRunning(worldFolder: target.folder), pid > 0 {
+            launchingUntil = nil
+            then(pid)
+            // Whatever activation this headless probe kept for the launch
+            // and did not pass on (a test seam's world takes none) goes back.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if Headless.on, NSApp.isActive, !handingOff { NSApp.deactivate() }
+            }
+            return
+        }
+        guard tries < 200 else {
+            launchingUntil = nil
+            Updates.note("probe hand-off: the \(target.name) world never came up")
+            if Headless.on, NSApp.isActive { NSApp.deactivate() }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { whenRunning(target, tries: tries + 1, then: then) }
+    }
+
+    /// The reopen event LaunchServices itself would send, aimed at exactly
+    /// that process — so LaunchServices gets no second say in which Copper
+    /// it reaches.
+    @MainActor private static func sendReopen(to pid: pid_t) {
+        let event = NSAppleEventDescriptor(
+            eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEReopenApplication),
+            targetDescriptor: NSAppleEventDescriptor(processIdentifier: pid),
+            returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID)
+        )
+        do {
+            _ = try event.sendEvent(options: [.noReply], timeout: 5)
+        } catch {
+            Updates.note("probe reopen: sending a reopen to pid \(pid) failed: \(error.localizedDescription)")
+        }
     }
 
     /// `open -n` of the target's bundle — a new instance, never a reopen

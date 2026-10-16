@@ -23,6 +23,8 @@ import {
 import { controller } from '../../controller'
 import { hueOf } from '../colors'
 import { FRAME } from '../doc'
+import { drawnWidth, imageBucket } from '../lod'
+import { POSTER_SETTLE_MS } from '../posters'
 import {
   BAR_H,
   FRAME_ALLOW,
@@ -36,8 +38,8 @@ import {
   type FrameEvent,
 } from '../frames'
 import type { Shape } from '../types'
-import { useBoard } from './context'
-import { hostLabel, place } from './Shapes'
+import { useBoard, useExactZoomRef, type FrameHandle } from './context'
+import { hostLabel, place, useThumbSrc } from './Shapes'
 import { cn } from './ui'
 
 export interface FrameUser {
@@ -64,6 +66,16 @@ const SILENT_MS = 1500
  * keeps loading under the card, and a late report takes the card away.
  */
 const NO_LOAD_MS = 10000
+/** A fresh iframe stays under its poster this long after it says it loaded (its first paint), or this long at most. */
+const REVEAL_MS = 450
+const REVEAL_MAX_MS = 4000
+/** How often a live frame looks whether its poster is due. */
+const POSTER_TICK_MS = 2500
+/** The view must have been still this long for a poster (the rect would be stale otherwise). */
+const POSTER_STILL_MS = 400
+/** A picture this fresh is not retaken before an unload; nor is a good one traded for one this small (CSS px). */
+const POSTER_FRESH_MS = 5000
+const POSTER_MIN_RETAKE_PX = 240
 
 interface Props {
   shape: Shape
@@ -73,7 +85,10 @@ interface Props {
   mounted: boolean
   /** A board gesture is under way: the page must not take the pointer. */
   busy: boolean
-  zoom: number
+  /** The board's zoom in LOD steps (`canvas/lod.ts`): what is laid out by it; screen-constant sizes use `--z`. */
+  lodZoom: number
+  /** Device pixel ratio, for the size of the poster drawn. */
+  dpr: number
   /** Other people using this frame right now. */
   users: readonly FrameUser[]
   onDeactivate: () => void
@@ -150,7 +165,7 @@ function Page({
   )
 }
 
-export const WebFrame = memo(function WebFrame({ shape, selected, active, mounted, busy, zoom, users, onDeactivate, onLive }: Props) {
+export const WebFrame = memo(function WebFrame({ shape, selected, active, mounted, busy, lodZoom, dpr, users, onDeactivate, onLive }: Props) {
   const board = useBoard()
   const url = frameUrl(shape.url) ?? ''
   const host = hostLabel(url || shape.url || '')
@@ -163,8 +178,18 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
   const [loading, setLoading] = useState(true)
   const [trouble, setTrouble] = useState<Trouble | null>(null)
   const [epoch, setEpoch] = useState(0)
+  /** A fresh iframe has painted: the poster over it can go under it. */
+  const [revealed, setRevealed] = useState(false)
+  const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const revealSoon = useCallback(() => {
+    if (revealTimer.current) return
+    revealTimer.current = setTimeout(() => {
+      revealTimer.current = null
+      setRevealed(true)
+    }, REVEAL_MS)
+  }, [])
   const [address, setAddress] = useState<string | null>(null)
-  const timing = useRef({ lastReport: 0, loadMark: 0, quietUntil: 0, chromeUntil: 0, silent: 0 as ReturnType<typeof setTimeout> | 0 })
+  const timing = useRef({ lastReport: 0, loadMark: 0, quietUntil: 0, chromeUntil: 0, silent: 0 as ReturnType<typeof setTimeout> | 0, pageAt: 0 })
   const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latest = useRef({ active, onDeactivate, readOnly: board.readOnly })
   useEffect(() => {
@@ -232,6 +257,8 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
         setTrouble(null)
         setLoading(false)
         setPage({ title: e.title, icon: e.icon })
+        t.pageAt = t.lastReport
+        revealSoon()
         const moved = nav.report(e.url)
         const may = mayWrite({ active: latest.current.active, readOnly: latest.current.readOnly, now: t.lastReport, ...t })
         if (may) write(e.url, e.title, e.icon, moved)
@@ -247,7 +274,7 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
           }
         }
       }),
-    [name, nav, write, board.store, shape.id]
+    [name, nav, write, board.store, shape.id, revealSoon]
   )
 
   // Someone else moved it (or an agent, or undo): follow, quietly.
@@ -278,6 +305,8 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
     const t = timing.current
     const since = t.loadMark
     t.loadMark = performance.now()
+    t.pageAt = t.loadMark
+    revealSoon()
     setLoading(false)
     if (t.silent) clearTimeout(t.silent)
     t.silent = setTimeout(() => {
@@ -286,7 +315,7 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
       if (!controller.frames.reports) return
       if (t.lastReport < since) setTrouble('refused')
     }, SILENT_MS)
-  }, [])
+  }, [revealSoon])
 
   useEffect(() => {
     if (active) frame.current?.focus()
@@ -359,28 +388,108 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
 
   const title = page?.title || shape.title.trim() || host
   const icon = page?.icon ?? shape.favicon
-  const screenW = shape.w * zoom
-  const roomy = screenW >= 520
+  const roomy = shape.w * lodZoom >= 520
+  /** The bar is a few px tall on screen: its buttons are dots nobody can hit, and costly to paint. */
+  const tiny = BAR_H * lodZoom < 6 && !active
   // Slow is not refused: a frame still loading stays under its card.
   const showPage = mounted && !!url && (!trouble || trouble === 'timeout')
   const ring = active ? 'var(--accent)' : users[0]?.color
   const lead = users[0]
 
+  // ---- the poster: the site's last picture, where it has no page (canvas/posters.ts) ----
+  const posters = controller.posters
+  const subscribePoster = useCallback((fn: () => void) => posters.cache.subscribe(shape.id, fn), [posters, shape.id])
+  const navUrl = nav.current
+  const poster = useSyncExternalStore(subscribePoster, () => posters.cache.peek(shape.id, navUrl))
+  // The frame moved on: its old picture goes.
+  useEffect(() => void posters.cache.get(shape.id, navUrl), [posters, shape.id, navUrl])
+  const bodyH = Math.max(1, shape.h - BAR_H)
+  const posterBucket = poster ? imageBucket(drawnWidth(shape.w, bodyH, poster.w, poster.h, 'cover'), poster.w, lodZoom, dpr) : null
+  const posterSrc = useThumbSrc(poster?.src ?? '', posterBucket)
+  if (!showPage && revealed) setRevealed(false)
+  const exactZoom = useExactZoomRef()
+  useEffect(() => {
+    if (!showPage) return
+    const max = setTimeout(() => setRevealed(true), REVEAL_MAX_MS)
+    return () => {
+      clearTimeout(max)
+      if (revealTimer.current) clearTimeout(revealTimer.current)
+      revealTimer.current = null
+    }
+  }, [showPage, epoch])
+
+  /** The iframe's box in the board's viewport, when all of it shows and nothing lies on it; else null. */
+  const posterRect = (): DOMRect | null => {
+    const el = frame.current
+    if (!el || document.visibilityState !== 'visible') return null
+    const r = el.getBoundingClientRect()
+    if (r.width < 48 || r.height < 32) return null
+    const app = el.closest('[role="application"]')?.getBoundingClientRect()
+    if (!app || r.left < app.left || r.top < app.top || r.right > app.right || r.bottom > app.bottom) return null
+    const body = el.closest('[data-part="web-body"]')
+    if (!body || body.matches(':hover')) return null
+    // The tool bar, a panel, a popover, another shape: whatever is on top would be in the picture.
+    for (const fx of [0.03, 0.5, 0.97])
+      for (const fy of [0.03, 0.5, 0.97]) {
+        const hit = document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy)
+        if (!hit || !body.contains(hit)) return null
+      }
+    return r
+  }
+  /** Ask the host for a picture now, if the page has settled and is all on screen. */
+  const askPoster = (why: 'tick' | 'unload'): Promise<boolean> | null => {
+    const t = timing.current
+    const now = performance.now()
+    if (!showPage || !frame.current || loading || trouble || !revealed) return null
+    if (!t.pageAt || now - t.pageAt < POSTER_SETTLE_MS || now - board.motion.lastMove < POSTER_STILL_MS) return null
+    const have = posters.cache.peek(shape.id, navUrl)
+    if (why === 'tick' && !posters.due(shape.id, now)) return null
+    if (why === 'unload' && (posters.silent || (have && Date.now() - have.at < POSTER_FRESH_MS))) return null
+    const rect = posterRect()
+    if (!rect || (why === 'unload' && have && rect.width < POSTER_MIN_RETAKE_PX)) return null
+    return posters.ask({ name, id: shape.id, url: navUrl, alias: shape.url, rect: { x: rect.left, y: rect.top, w: rect.width, h: rect.height } }, now)
+  }
+  const askRef = useRef(askPoster)
+  useEffect(() => {
+    askRef.current = askPoster
+  })
+  // While live: one picture once it has settled, then one every 30 s at most.
+  useEffect(() => {
+    if (!showPage) return
+    const tick = () => void askRef.current('tick')
+    const first = setTimeout(tick, POSTER_SETTLE_MS + 200)
+    const every = setInterval(tick, POSTER_TICK_MS)
+    return () => {
+      clearTimeout(first)
+      clearInterval(every)
+    }
+  }, [showPage, epoch])
+  // The board asks before it takes the page away.
+  useEffect(() => {
+    const handle: FrameHandle = { beforeUnload: () => askRef.current('unload') }
+    board.frameHandles.set(shape.id, handle)
+    return () => {
+      if (board.frameHandles.get(shape.id) === handle) board.frameHandles.delete(shape.id)
+    }
+  }, [board.frameHandles, shape.id])
+
   return (
     <div
+      // A ring or a user's badge keeps its size on screen through a zoom: this frame follows the exact zoom.
+      ref={ring || lead ? exactZoom : undefined}
       data-id={shape.id}
       data-kind="link"
       data-live="1"
       className="group absolute left-0 top-0 flex flex-col overflow-visible rounded-[12px]"
       style={{
         ...place(shape),
-        boxShadow: ring ? `0 0 0 ${(active ? 2.5 : 3) / zoom}px ${ring}, var(--shadow-note)` : 'var(--shadow-note)',
+        boxShadow: ring ? `0 0 0 calc(${active ? 2.5 : 3}px / var(--zx, var(--z, 1))) ${ring}, var(--shadow-note)` : 'var(--shadow-note)',
       }}
     >
       {lead && (
         <div
           className="pointer-events-none absolute right-0 top-0 z-10 flex origin-bottom-right items-center gap-1 whitespace-nowrap rounded-full px-2 py-[3px] text-[11.5px] font-semibold text-white shadow-1"
-          style={{ backgroundColor: lead.color, translate: `0 calc(-100% - ${6 / zoom}px)`, scale: String(1 / zoom) }}
+          style={{ backgroundColor: lead.color, translate: '0 calc(-100% - 6px / var(--zx, var(--z, 1)))', scale: 'calc(1 / var(--zx, var(--z, 1)))' }}
           data-testid="frame-user"
         >
           <MousePointerClick className="h-3 w-3" aria-hidden="true" />
@@ -403,9 +512,11 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
               </BarButton>
             </>
           )}
-          <BarButton label="Reload" onClick={reload}>
-            {loading && showPage ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
-          </BarButton>
+          {!tiny && (
+            <BarButton label="Reload" onClick={reload}>
+              {loading && showPage ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
+            </BarButton>
+          )}
           <div className="mx-1 flex min-w-0 flex-1 items-center gap-2">
             <Favicon src={icon} host={host} size={16} />
             {active ? (
@@ -456,26 +567,43 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
               Sign in
             </button>
           )}
-          <BarButton label="Open in a tab" onClick={() => board.openUrl(nav.current || shape.url || '')}>
-            <ExternalLink className="h-3.5 w-3.5" />
-          </BarButton>
-          {!board.readOnly && (
+          {!tiny && (
+            <BarButton label="Open in a tab" onClick={() => board.openUrl(nav.current || shape.url || '')}>
+              <ExternalLink className="h-3.5 w-3.5" />
+            </BarButton>
+          )}
+          {!board.readOnly && !tiny && (
             <BarButton label="Show as card" onClick={() => onLive(shape.id, false)}>
               <RectangleHorizontal className="h-3.5 w-3.5" />
             </BarButton>
           )}
         </div>
         <div data-part="web-body" className="relative min-h-0 flex-1 bg-surface-2">
+          {/*
+            Over a fresh page until it has painted; then hidden under it (a
+            page with no background of its own must not show it), and shown
+            again in the same commit that takes the page away: no flash.
+          */}
+          {poster && (
+            <img
+              src={posterSrc}
+              alt=""
+              draggable={false}
+              data-part="web-poster"
+              className="pointer-events-none absolute inset-0 h-full w-full object-cover object-top"
+              style={showPage ? (revealed ? { visibility: 'hidden' } : { zIndex: 1 }) : undefined}
+            />
+          )}
           {showPage ? (
             <Page key={epoch} name={name} initial={nav.current} frameRef={frame} busy={busy || !active} onLoad={onLoad} />
-          ) : trouble ? null : (
-            <Placeholder title={title} host={host} icon={icon} zoom={zoom} />
+          ) : trouble || poster ? null : (
+            <Placeholder title={title} host={host} icon={icon} zoom={lodZoom} />
           )}
           {trouble && (
             <Refused
               host={host}
               trouble={trouble}
-              zoom={zoom}
+              zoom={lodZoom}
               onOpen={() => board.openUrl(nav.current || shape.url || '')}
               onRetry={retry}
               onCard={board.readOnly ? undefined : () => onLive(shape.id, false)}
@@ -487,7 +615,7 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
                   <span
                     className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#1d1d1f]/85 px-3 py-1.5 text-[12px] font-semibold text-white shadow-2"
-                    style={{ scale: String(1 / zoom) }}
+                    style={{ scale: 'calc(1 / var(--z, 1))' }}
                   >
                     <MousePointerClick className="h-3.5 w-3.5" aria-hidden="true" />
                     {selected ? 'Click to use' : 'Double-click to use'}
@@ -503,12 +631,18 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
 })
 
 /** A live frame without its iframe (zoomed out, off screen, over budget): what it is. */
+/**
+ * Grown to stay readable however far out the board is (it is the only thing
+ * there to read), by the LOD zoom: in steps, never every frame of a zoom —
+ * re-rasterising forty cards' text at a new size each frame is what made
+ * zooming a wall of frames stutter.
+ */
+const readable = (zoom: number, most: number) => String(Math.round(Math.min(most, Math.max(1, 1 / zoom)) * 100) / 100)
+
 function Placeholder({ title, host, icon, zoom }: { title: string; host: string; icon?: string; zoom: number }) {
-  // Readable however far out the board is: it is the only thing there to read.
-  const k = Math.min(3, Math.max(1, 1 / zoom))
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 overflow-hidden p-6 text-center">
-      <div style={{ scale: String(k) }} className="flex flex-col items-center gap-2">
+      <div style={{ scale: readable(zoom, 3) }} className="flex flex-col items-center gap-2">
         <Favicon src={icon} host={host} size={36} />
         <p className="line-clamp-2 max-w-[420px] text-[15px] font-semibold leading-snug text-ink">{title}</p>
         <p className="text-[12.5px] text-ink-3">{host} · live</p>
@@ -538,10 +672,9 @@ function Refused({
       : trouble === 'timeout'
         ? 'It hasn’t loaded: the address may be wrong, or the site is slow.'
         : 'Or it didn’t load. In a tab it works as usual, signed in as you.'
-  const k = Math.min(2.5, Math.max(1, 1 / zoom))
   return (
     <div data-testid="frame-refused" className="absolute inset-0 z-[1] flex items-center justify-center bg-surface p-6 text-center">
-      <div className="flex max-w-[360px] flex-col items-center gap-2" style={{ scale: String(k) }}>
+      <div className="flex max-w-[360px] flex-col items-center gap-2" style={{ scale: readable(zoom, 2.5) }}>
         <ShieldAlert className="h-7 w-7 text-ink-3" aria-hidden="true" />
         <p className="text-[14.5px] font-semibold text-ink">
           {trouble === 'refused' ? `${host} doesn’t allow embedding` : `${host} can’t be shown here`}

@@ -3,15 +3,16 @@
  * cards (DOM) and arrows (one SVG layer, with labels as DOM). Each view is
  * memoised on its plain shape, so a change re-renders only what changed.
  */
-import { memo, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject } from 'react'
 import { ChevronsDown, ChevronsUp, ExternalLink, Globe } from 'lucide-react'
 import type { ArrowPath } from '../arrows'
 import { hueOf, inkOn, paperOf, strokeOf } from '../colors'
 import { countRender } from '../debug'
 import { toggleTask } from '../markdown-lite'
 import { STICKY_PAD_Y, growFor, overflows } from '../overflow'
+import { requestThumb, thumbs } from '../thumbs'
 import { STICKY_FONT, TEXT_FONT, isNamedColor, type Shape } from '../types'
-import { useBoard } from './context'
+import { useBoard, useExactZoomRef } from './context'
 import { MarkdownLite } from './MarkdownLite'
 import { TextEditor } from './TextEditor'
 import { cn, useMountFocus } from './ui'
@@ -213,15 +214,44 @@ export const TextView = memo(function TextView({ shape, editing }: ViewProps) {
   )
 })
 
-/** Frame label size: constant on screen when zoomed out, scaling with the board when zoomed in. */
-const labelSize = (zoom: number) => 13 / Math.min(1, zoom)
+/**
+ * Frame label size: constant on screen when zoomed out, scaling with the
+ * board when zoomed in, with no render. The font size follows the layer's
+ * `--z` (the zoom the view last settled at); through a zoom gesture a
+ * `scale` from the exact zoom (`--zx`, kept by the board's `ZoomVars`)
+ * makes up the difference, so the text is not laid out again every frame.
+ */
+const LABEL_FONT = 'calc(13px / min(1, var(--z, 1)))'
+const LABEL_SCALE = 'calc(min(1, var(--z, 1)) / min(1, var(--zx, var(--z, 1))))'
+const LABEL_MAX_W = 'calc(100% * min(1, var(--zx, var(--z, 1))) / min(1, var(--z, 1)))'
+
+/**
+ * An image's source to draw: a downscaled copy (`thumbs.ts`) when `bucket`
+ * asks for one and it is ready (or a bigger copy is), else the source itself
+ * — or, with `wait`, nothing ('') until the copy is ready, so a zoomed-out
+ * board never decodes its pictures at full size (a copy that can't be made
+ * falls back to the source).
+ */
+export function useThumbSrc(src: string, bucket: number | null, wait = false): string {
+  const subscribe = useCallback((fn: () => void) => thumbs.subscribe(src, fn), [src])
+  const thumb = useSyncExternalStore(subscribe, () => (bucket && src ? thumbs.best(src, bucket) : null))
+  const failed = useSyncExternalStore(subscribe, () => !!src && thumbs.failed(src))
+  // A source already showing keeps showing while a smaller copy is made (zooming out from it).
+  const [shown, setShown] = useState<string | null>(null)
+  useEffect(() => {
+    if (bucket && src && !thumbs.best(src, bucket)) requestThumb(src, bucket)
+  }, [src, bucket])
+  const out = thumb ?? (wait && bucket && !failed && shown !== src ? '' : src)
+  if (out === src && shown !== src && src) setShown(src)
+  return out
+}
 
 export const FrameView = memo(function FrameView({
   shape,
   editing,
   selected,
-  zoom,
-}: ViewProps & { selected: boolean; zoom: number }) {
+  imageBucket,
+}: ViewProps & { selected: boolean; imageBucket: number | null }) {
   const board = useBoard()
   const fill =
     shape.color === 'white' || shape.color === 'gray'
@@ -229,13 +259,24 @@ export const FrameView = memo(function FrameView({
       : isNamedColor(shape.color)
         ? `color-mix(in srgb, ${paperOf(shape.color)} 62%, transparent)`
         : `color-mix(in srgb, ${shape.color} 22%, transparent)`
-  const font = labelSize(zoom)
+  const imageSrc = useThumbSrc(shape.image?.src ?? '', imageBucket, true)
+  const { readOnly } = board
+  const exactZoom = useExactZoomRef()
   return (
     <div data-id={shape.id} data-kind="frame" className="absolute left-0 top-0" style={place(shape)}>
       <div
+        ref={exactZoom}
         data-part="frame-title"
-        className="absolute left-0 flex max-w-full items-end"
-        style={{ bottom: '100%', height: font * 2, fontSize: font, paddingBottom: font * 0.35 }}
+        className="absolute left-0 flex items-end"
+        style={{
+          bottom: '100%',
+          height: '2em',
+          fontSize: LABEL_FONT,
+          paddingBottom: '0.35em',
+          maxWidth: LABEL_MAX_W,
+          scale: LABEL_SCALE,
+          transformOrigin: '0 100%',
+        }}
       >
         {editing ? (
           <InlineField
@@ -258,15 +299,17 @@ export const FrameView = memo(function FrameView({
         className={cn('absolute inset-0 overflow-hidden rounded-[10px] border', selected ? 'border-transparent' : 'border-line-2')}
         style={{ background: fill }}
       >
-        {shape.image && (
+        {shape.image && imageSrc && (
           <img
-            src={shape.image.src}
+            src={imageSrc}
             alt={shape.title.trim() || 'Image in frame'}
             draggable={false}
+            loading="lazy"
+            decoding="async"
             className="pointer-events-none h-full w-full object-contain"
           />
         )}
-        {!shape.image && selected && !board.readOnly && (
+        {!shape.image && selected && !readOnly && (
           <p className="pointer-events-none flex h-full items-center justify-center text-[13px] text-ink-4">
             Drop or paste an image
           </p>
@@ -276,21 +319,27 @@ export const FrameView = memo(function FrameView({
   )
 })
 
-export const ImageView = memo(function ImageView({ shape }: { shape: Shape }) {
-  const [failed, setFailed] = useState(false)
+export const ImageView = memo(function ImageView({ shape, bucket, low }: { shape: Shape; bucket: number | null; low: boolean }) {
+  const [failed, setFailed] = useState<string | null>(null)
+  const own = shape.src ?? ''
+  const src = useThumbSrc(own, bucket, true)
   return (
     <div
       data-id={shape.id}
       data-kind="image"
-      className="absolute left-0 top-0 overflow-hidden rounded-[6px] bg-surface-2 shadow-note"
+      className={cn('absolute left-0 top-0 overflow-hidden rounded-[6px] bg-surface-2', !low && 'shadow-note')}
       style={place(shape)}
     >
-      {shape.src && !failed ? (
+      {own && !src ? null : own && failed !== own ? (
         <img
-          src={shape.src}
+          src={src}
           alt=""
           draggable={false}
-          onError={() => setFailed(true)}
+          loading="lazy"
+          decoding="async"
+          onError={() => {
+            if (src === own) setFailed(own)
+          }}
           className="pointer-events-none h-full w-full object-cover"
         />
       ) : (
@@ -389,40 +438,28 @@ function head(path: ArrowPath, size: number): string {
 
 const arrowStroke = (s: Shape) => (s.color === 'gray' ? 'var(--stroke-gray)' : strokeOf(s.color))
 
-export const ArrowLayer = memo(function ArrowLayer({
-  arrows,
-  selected,
-  zoom,
-}: {
-  arrows: readonly DrawnArrow[]
-  selected: ReadonlySet<string>
-  zoom: number
-}) {
-  const width = 2
-  const hit = Math.max(14, 14 / zoom)
+/** Widths that stay the same on screen, from the layer's `--z`: a zoom re-renders no arrow. */
+const HIT_WIDTH = 'max(14px, calc(14px / var(--z, 1)))'
+const HALO_WIDTH = 'calc(2px + 6px / var(--z, 1))'
+
+const ArrowView = memo(function ArrowView({ shape, path, on }: { shape: Shape; path: ArrowPath; on: boolean }) {
+  const stroke = arrowStroke(shape)
+  return (
+    <g data-id={shape.id} data-kind="arrow">
+      <path d={path.d} fill="none" stroke="transparent" style={{ strokeWidth: HIT_WIDTH, pointerEvents: 'stroke' }} />
+      {on && <path d={path.d} fill="none" stroke="var(--accent)" strokeOpacity={0.28} strokeLinecap="round" style={{ strokeWidth: HALO_WIDTH }} />}
+      <path d={path.d} fill="none" stroke={stroke} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      <path d={head(path, 11)} fill={stroke} stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" style={{ pointerEvents: 'fill' }} />
+    </g>
+  )
+})
+
+export const ArrowLayer = memo(function ArrowLayer({ arrows, selected }: { arrows: readonly DrawnArrow[]; selected: ReadonlySet<string> }) {
   return (
     <svg className="pointer-events-none absolute left-0 top-0 overflow-visible" width={1} height={1} aria-hidden="true">
-      {arrows.map(({ shape, path }) => {
-        const on = selected.has(shape.id)
-        const stroke = arrowStroke(shape)
-        return (
-          <g key={shape.id} data-id={shape.id} data-kind="arrow">
-            <path d={path.d} fill="none" stroke="transparent" strokeWidth={hit} style={{ pointerEvents: 'stroke' }} />
-            {on && (
-              <path
-                d={path.d}
-                fill="none"
-                stroke="var(--accent)"
-                strokeOpacity={0.28}
-                strokeWidth={width + 6 / zoom}
-                strokeLinecap="round"
-              />
-            )}
-            <path d={path.d} fill="none" stroke={stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" />
-            <path d={head(path, 11)} fill={stroke} stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" style={{ pointerEvents: 'fill' }} />
-          </g>
-        )
-      })}
+      {arrows.map(({ shape, path }) => (
+        <ArrowView key={shape.id} shape={shape} path={path} on={selected.has(shape.id)} />
+      ))}
     </svg>
   )
 })

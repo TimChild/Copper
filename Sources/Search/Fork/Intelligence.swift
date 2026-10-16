@@ -75,7 +75,9 @@ final class Intelligence: ObservableObject {
         /// What Jev mode shows Jev beside the element table, by default:
         /// off, screenshot, marks or box (Tools.Ultrafast.Vision). A run
         /// can say otherwise. Pictures are a TypeSafe preview.
-        var jevVision = "off"
+        var jevVision = "auto"
+        /// Jev mode's Fast mode: Strategy.shipped (on) or the classic loop.
+        var jevFast = true
 
         init() {}
 
@@ -108,6 +110,7 @@ final class Intelligence: ObservableObject {
             routerModels = decodedRouter
             textModel = try c.decodeIfPresent(String.self, forKey: .textModel) ?? fresh.textModel
             jevVision = try c.decodeIfPresent(String.self, forKey: .jevVision) ?? fresh.jevVision
+            jevFast = try c.decodeIfPresent(Bool.self, forKey: .jevFast) ?? fresh.jevFast
             migrateModelNames()
         }
 
@@ -333,7 +336,7 @@ final class Intelligence: ObservableObject {
     var status: [String: Any] {
         let effective = self.effective
         var out: [String: Any] = ["jevReady": jevReady, "routerReady": routerReady, "routerURL": effective.routerURL,
-         "routerModel": keys.routerModel, "jevModel": effective.jevModel, "jevVision": keys.jevVision,
+         "routerModel": keys.routerModel, "jevModel": effective.jevModel, "jevVision": keys.jevVision, "jevFast": keys.jevFast,
          "lane": effective.lane.rawValue, "laneSource": laneSource, "localLane": keys.lane.rawValue,
          "tier": tier.rawValue, "model": modelName,
          "modelReady": modelReady, "claudeReady": claudeReady,
@@ -531,11 +534,19 @@ final class Intelligence: ObservableObject {
             take("routerURL") { next.routerURL = $0 }
             take("textModel") { next.textModel = $0 }
             if let raw = params["jevVision"] {
-                guard let text = raw as? String, let mode = Tools.Ultrafast.Vision.parse(text) else {
+                guard let text = raw as? String, let mode = Tools.Ultrafast.Vision.parse(text), Tools.Ultrafast.Vision.offered.contains(mode) else {
                     return ["error": "jevVision must be off, screenshot, marks or box"]
                 }
                 next.jevVision = mode.rawValue
                 applied.append("jevVision")
+            }
+            if let raw = params["jevFast"] {
+                let text = (raw as? String)?.lowercased()
+                guard let on = (raw as? Bool) ?? (text.map { ["on", "true", "1", "yes"].contains($0) ? true : ["off", "false", "0", "no"].contains($0) ? false : nil } ?? nil) else {
+                    return ["error": "jevFast must be on or off"]
+                }
+                next.jevFast = on
+                applied.append("jevFast")
             }
             if let raw = params["jevModel"] {
                 guard let text = raw as? String else { return ["error": "jevModel must be a string"] }
@@ -562,7 +573,7 @@ final class Intelligence: ObservableObject {
             }
             if let problem { return ["error": problem] }
             guard !applied.isEmpty else {
-                return ["error": "set needs at least one of lane, tier, jevKey, jevModel, jevVision, routerKey, routerURL, routerModel, haikuModel, sonnetModel, opusModel, textModel"]
+                return ["error": "set needs at least one of lane, tier, jevKey, jevModel, jevVision, jevFast, routerKey, routerURL, routerModel, haikuModel, sonnetModel, opusModel, textModel"]
             }
             keys = next
             var out = status

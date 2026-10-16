@@ -79,3 +79,15 @@ A pass is Jev's DONE on the target article with no TYPE_TEXT along the way. `wal
 | `box` | jev-1.14.0 | 14/20 | 3,288 ms | 321 | 5,134 |
 
 Text only is the fastest and as reliable as any picture mode; a picture costs about 2,200 tokens and 160–210 ms more per decision; every box landed on an element (22/22) but the box arm ended BLOCKED most often and was slowest. Full read: `docs/plans/2026-10-16-jev-vision.md`; runs: `perf/results/wikigame.jsonl`.
+
+## The UI bench: the fastest way to run Jev (October 2026)
+
+`perf/uibench.py` drives a made-up admin app (`perf/uibench/app.html`, served by `perf/uibench/server.py` on :8777) through `jev_run`: sign in, settings, a modal with a custom listbox, a wizard, a table of identical buttons, icon-only buttons, and two click drills for actions per minute. The app's own server records what happened, so a pass is the app's verdict. Arms are named presets of `strategy` / `vision` / `model` (see the file); `default` sends nothing, so it measures whatever this Copper ships.
+
+```sh
+python3 perf/uibench/server.py &
+python3 perf/uibench.py --world "Copper (dev)" --port 4124 --arms classic,turbo,hybrid,default --rounds 3
+python3 perf/uibench.py --summary perf/results/uibench-hybrid.jsonl
+```
+
+The shipped default (Fast mode + Auto vision) passed 24/24 at 1.9 s a task median and ~145 actions a minute; the original loop passed 15/24 at 4.3 s and ~93. Text-only turbo is fastest where every control has a name and fails where none does; the numbered picture fixes that for ~0.6 s a task, so Auto sends it only on ambiguous reads. Full table: `docs/plans/2026-10-16-jev-vision.md`.

@@ -128,14 +128,18 @@ class Copper:
 
 
 def parse_arm(spec):
-    vision, _, model = spec.partition(":")
+    # vision[:model][@strategy]; no @ is the classic loop (as measured first),
+    # @default sends no strategy (this Copper's own default)
+    spec_, _, strategy = spec.partition("@")
+    vision, _, model = spec_.partition(":")
     vision = vision.strip().lower() or "off"
-    if vision not in ("off", "screenshot", "marks", "box"):
-        sys.exit(f"arm {spec!r}: vision must be off, screenshot, marks or box")
+    if vision not in ("auto", "off", "screenshot", "marks", "box", "pixels"):
+        sys.exit(f"arm {spec!r}: vision must be auto, off, screenshot, marks, box or pixels")
     model = model.strip()
     if vision == "box" and not model:
         model = "jev-1.14.0"
-    return {"name": spec.strip(), "vision": vision, "model": model}
+    strategy = strategy.strip() or "classic"
+    return {"name": spec.strip(), "vision": vision, "model": model, "strategy": None if strategy == "default" else strategy}
 
 
 def play(copper, game, arm, max_steps, verbose=True):
@@ -145,6 +149,8 @@ def play(copper, game, arm, max_steps, verbose=True):
             "maxSteps": max_steps, "elements": False, "vision": arm["vision"]}
     if arm["model"]:
         args["model"] = arm["model"]
+    if arm.get("strategy"):
+        args["strategy"] = arm["strategy"]
     begun = time.time()
     text = None
     error = None

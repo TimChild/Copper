@@ -18,7 +18,7 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper open URL [--focus]` / `copper go URL` | Open a background tab of your own (the user's tab stays put) / navigate your tab. |
 | `copper use [ID]` / `copper show [ID]` | Make a tab yours without touching the user's view / and switch their window to it. |
 | `copper --tab ID COMMAND` | Run one command in another tab. |
-| `copper run "GOAL" [--url URL] [--new-tab [--focus]] [--vision off\|screenshot\|marks\|box] [--model jev-1.14.0] [--json-run]` | Let Jev complete a multi-step goal; `--vision` sends a picture of the page too (preview), `--json-run` returns the run as one JSON object. |
+| `copper run "GOAL" [--url URL] [--new-tab [--focus]] [--vision off\|screenshot\|marks\|box\|pixels] [--model jev-1.14.0] [--strategy turbo] [--json-run]` | Let Jev complete a multi-step goal; quote every value the goal needs (`"maya@acme.test"`) so `--strategy turbo` can type it without a text model; `--vision` sends a picture of the page too (preview), `--json-run` returns the run as one JSON object. |
 | `copper observe [-n N]` | Fast indexed read of the visible page. |
 | `copper extract "INSTRUCTION" [--full]` | Return a structured page read. |
 | `copper snapshot` / `copper text` / `copper find TEXT` | Read the page. |

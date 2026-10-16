@@ -616,8 +616,13 @@ private struct AgentsJevSection: View {
                 }
                 .settingsAnchor("agents.textmodel")
                 Rule()
-                Line("What Jev sees", "Beside the element table: nothing more (text only), a picture of the page, the picture with each element's number drawn on it, or the picture with Jev 1.14 pointing at the target by where it is (Box). Pictures are a TypeSafe preview; text is still the fastest.") {
-                    Segmented(options: Tools.Ultrafast.Vision.allCases.map { ($0, $0.title) }, selection: jevVision)
+                Line("Fast mode", "Jev types the values your goal quotes without asking a model, fills a whole form in one go, and waits only as long as the page does — about twice the actions a minute. The pointer still glides when the tab is in front of you. Off runs the original loop.") {
+                    Switch(on: $brain.keys.jevFast)
+                }
+                .settingsAnchor("agents.jevfast")
+                Rule()
+                Line("What Jev sees", "Auto sends Jev the element table, and a picture of the page with each element's number drawn on it only when the table can't tell controls apart — icon-only buttons, rows of identical ones. Or always text, always a picture, the numbered picture, or the picture with Jev 1.14 pointing at the target (Box). Pictures are a TypeSafe preview.") {
+                    Segmented(options: Tools.Ultrafast.Vision.offered.map { ($0, $0.title) }, selection: jevVision)
                 }
                 .settingsAnchor("agents.jevvision")
                 if !mcp.jevNote.isEmpty {

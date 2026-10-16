@@ -237,12 +237,15 @@ enum CLI {
                     arguments["maxSteps"] = number
                 case "--no-elements": arguments["elements"] = false
                 case "--vision":
-                    guard let value = next(&args, &i), ["off", "screenshot", "marks", "box"].contains(value.lowercased()) else { return bad("run --vision needs off, screenshot, marks or box") }
+                    guard let value = next(&args, &i), ["off", "screenshot", "marks", "box", "pixels"].contains(value.lowercased()) else { return bad("run --vision needs off, screenshot, marks, box or pixels") }
                     arguments["vision"] = value.lowercased()
                 case "--model":
                     guard let value = next(&args, &i), !value.isEmpty else { return bad("run --model needs a Jev model name (jev-latest, jev-preview, jev-1.14.0)") }
                     arguments["model"] = value
                 case "--json-run": arguments["json"] = true
+                case "--strategy":
+                    guard let value = next(&args, &i), Tools.Ultrafast.Strategy.parse(value) != nil else { return bad("run --strategy takes classic, fast, literal, burst, lean, paste, watch, turbo, llm or llm=<model>, comma-separated") }
+                    arguments["strategy"] = value
                 default:
                     if args[i].hasPrefix("-") { return bad("unknown run option: \(args[i])") }
                     goal.append(args[i])
@@ -771,7 +774,7 @@ enum CLI {
         case "set":
             let flags = ["--jev": "jevKey", "--router-key": "routerKey", "--router-url": "routerURL",
                          "--router-model": "routerModel", "--text-model": "textModel",
-                         "--jev-model": "jevModel", "--jev-vision": "jevVision",
+                         "--jev-model": "jevModel", "--jev-vision": "jevVision", "--jev-fast": "jevFast",
                          "--lane": "lane", "--model": "tier", "--haiku-model": "haikuModel",
                          "--sonnet-model": "sonnetModel", "--opus-model": "opusModel"]
             var i = 0
@@ -788,7 +791,7 @@ enum CLI {
                 i += 1
             }
             guard params.count > 1 else {
-                error("intelligence set needs at least one of --lane, --model, --haiku-model, --sonnet-model, --opus-model, --jev, --jev-model, --jev-vision, --router-key, --router-url, --router-model, --text-model")
+                error("intelligence set needs at least one of --lane, --model, --haiku-model, --sonnet-model, --opus-model, --jev, --jev-model, --jev-vision, --jev-fast, --router-key, --router-url, --router-model, --text-model")
                 return 2
             }
         default:
@@ -834,7 +837,7 @@ enum CLI {
       refresh                    ask the linked Copper Cloud for its keys again now
       set [--lane key|claude] [--model haiku|sonnet|opus]
           [--haiku-model M] [--sonnet-model M] [--opus-model M]
-          [--jev KEY] [--jev-model M] [--jev-vision off|screenshot|marks|box]
+          [--jev KEY] [--jev-model M] [--jev-vision auto|off|screenshot|marks|box] [--jev-fast on|off]
           [--router-key KEY] [--router-url URL] [--router-model M] [--text-model M]
                                  write into intelligence.json (0600) through the running app;
                                  a value of - is read from stdin, keeping keys out of `ps`
@@ -1564,7 +1567,8 @@ enum CLI {
                                                 fill a shared Bitwarden or 1Password card, identity, or field
       observe [--no-text] [-n N]                fast Jev observation
       run "GOAL…" [--url URL] [--new-tab [--focus]] [--max N] [--no-elements]
-                 [--vision off|screenshot|marks|box] [--model jev-1.14.0] [--json-run]
+                 [--vision off|screenshot|marks|box|pixels] [--model jev-1.14.0]
+                 [--strategy fast,literal,burst,lean,paste,watch|turbo|llm=haiku] [--json-run]
       step "GOAL…"                              supervise one Jev decision
       extract "INSTRUCTION…" [--full] [--schema JSON]
       snapshot [--interactive] [-n N] [--selector CSS]

@@ -18,7 +18,7 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper open URL [--focus]` / `copper go URL` | Open a background tab of your own (the user's tab stays put) / navigate your tab. |
 | `copper use [ID]` / `copper show [ID]` | Make a tab yours without touching the user's view / and switch their window to it. |
 | `copper --tab ID COMMAND` | Run one command in another tab. |
-| `copper run "GOAL" [--url URL] [--new-tab [--focus]]` | Let Jev complete a multi-step goal. |
+| `copper run "GOAL" [--url URL] [--new-tab [--focus]] [--vision off\|screenshot\|marks\|box\|pixels] [--model jev-1.14.0] [--strategy turbo] [--json-run]` | Let Jev complete a multi-step goal; quote every value the goal needs (`"maya@acme.test"`) so `--strategy turbo` can type it without a text model; `--vision` sends a picture of the page too (preview), `--json-run` returns the run as one JSON object. |
 | `copper observe [-n N]` | Fast indexed read of the visible page. |
 | `copper extract "INSTRUCTION" [--full]` | Return a structured page read. |
 | `copper snapshot` / `copper text` / `copper find TEXT` | Read the page. |
@@ -34,7 +34,7 @@ created. Enable **Settings › Agents › Let agents drive this window** once.
 | `copper link --app SELECTOR grants\|grant @bot\|revoke [@bot]` | Inspect or change grants. |
 | `copper link --app SELECTOR calls` | Recent calls through that app. |
 | `copper intelligence [status]` | Model readiness as JSON: `{jevReady, routerReady, routerURL, routerModel, jevModel, lane, tier, model, modelReady, claudeReady, claudeAccount}` — never a key. |
-| `copper intelligence set [--lane key|claude] [--model haiku|sonnet|opus] [--haiku-model M] [--sonnet-model M] [--opus-model M] [--jev K] [--router-key K] [--router-url U] [--router-model M] [--text-model M]` | Write model settings and keys into `intelligence.json` (0600) through the running app; a value of `-` is read from stdin. |
+| `copper intelligence set [--lane key|claude] [--model haiku|sonnet|opus] [--haiku-model M] [--sonnet-model M] [--opus-model M] [--jev K] [--jev-model M] [--jev-vision off\|screenshot\|marks\|box] [--router-key K] [--router-url U] [--router-model M] [--text-model M]` | Write model settings and keys into `intelligence.json` (0600) through the running app; a value of `-` is read from stdin. |
 | `copper intelligence reload` | Re-read `intelligence.json` (same as `kill -HUP` on the app). |
 | `copper claude status|signin|paste -|signout|cancel` | Sign in with a Claude account through OAuth in a Copper tab, paste a callback code from stdin, or report/sign out/cancel; output never contains a token. |
 | `copper bitwarden [status]` | The Bitwarden vault as JSON: `{ok, cli, cliVersion, state, email, server, lastSync, agentAccess, stayUnlocked, counts}` — never a password, key or session. |

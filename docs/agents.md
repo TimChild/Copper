@@ -165,7 +165,7 @@ first:
 
 | tool | does |
 |---|---|
-| `jev_run` | `goal` (+ `url`, `newTab`, `focus`, `tab`, `maxSteps`, `elements`) — runs [browser-use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in your tab (`newTab`: a new background one) until DONE, BLOCKED or the budget (60 actions, 120 decisions, 3 minutes); answers with the trace, the page, and the indexed element table |
+| `jev_run` | `goal` (+ `url`, `newTab`, `focus`, `tab`, `maxSteps`, `elements`, `vision`, `model`, `json`) — runs [browser-use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in your tab (`newTab`: a new background one) until DONE, BLOCKED or the budget (60 actions, 120 decisions, 3 minutes); answers with the trace, the page, and the indexed element table |
 | `jev_step` | one decision and its action; same `goal` continues the session |
 | `jev_observe` | what Jev sees: `[3] combobox  Where to? · London` for every visible control, plus the visible text |
 | `jev_extract` | `instruction` (+ `schema`, `full`) — one JSON object drawn from the page by the text model: values, not a tree |
@@ -190,6 +190,74 @@ claim; the tool says so and the agent is told to check.
 chat with your agent — endpoint, token, how to add the server, what it can
 do. There is one for the Playwright-shaped tools and one for Jev mode.
 `./bench agent jev on|off`.
+
+### What Jev sees
+
+By default (*Auto*) Jev gets the element table and the visible text, and a
+picture only when the table can't tell the controls apart: a control with no
+name of its own (an icon button, a colour swatch), three or more with the
+same role and name (a table of *Approve* buttons), or a page the last move
+did not change. Then the picture is the numbered one (`marks`). TypeSafe's Jev also takes
+pictures (a preview behind their `TypeSafe-Danger-Zone-Images` header;
+docs.typesafe.ai/images), and Jev 1.14 has a Box question that answers with
+where something is in a picture. Settings › Agents › Jev mode › *What Jev
+sees* sets this Mac's default (`jevVision` in `intelligence.json`; `copper
+intelligence set --jev-vision …`), and a run can say otherwise with
+`jev_run` / `jev_step`'s `vision` and `model`:
+
+| `vision` | what rides beside the table |
+|---|---|
+| `auto` | the default: `off`, or `marks` when the read is ambiguous (above) |
+| `off` | nothing more |
+| `screenshot` | a JPEG of the viewport at 1× in the state (`page.screenshot`), so the choice heads can see layout and icons |
+| `marks` | the same picture with every element's index drawn in a tag at the element's top-left corner, the same numbering as the table (set-of-marks) |
+| `box` | the picture, and one Box question in place of the target heads: where is the control to act on. The box's centre is mapped onto the observed element under it (the smallest, when they nest; else the nearest within 24 px); when it lands on none, the text head is asked as a second request and the miss is counted. Needs `jev-1.14.0` (`model` defaults to it for a box) |
+
+A picture costs a few thousand input tokens and 50–200 ms more per
+decision, and TypeSafe says their models are less accurate on pictures than
+on text — which is why `auto` sends one only where text alone fails. The trace's cost line says what Jev took (ms, tokens), what the
+pictures took and how the boxes did; `json: true` on `jev_run` returns the
+run as one object (`status`, `elapsed_ms`, `totals`, one entry per step with
+`jev_ms`, `input_tokens`, `box_hit`, and the page it ended on) for a
+harness. `SEARCH_JEV_SHOTS=<folder>` keeps every picture sent, to look at.
+Model output never becomes a coordinate: a box is only ever mapped onto an
+element this code observed, and the freshness and occlusion checks run
+before the click as they always did. `perf/wikigame.py` plays ten Wikipedia
+games one way of seeing at a time and tables the arms (perf/README.md).
+
+### Faster runs (`strategy`)
+
+Settings › Agents › Jev mode › *Fast mode* (on by default; `jevFast` in
+`intelligence.json`, `copper intelligence set --jev-fast on|off`) runs
+`turbo` with the pointer glide kept for a tab that is on screen; off runs
+`classic`, the original loop. `jev_run` / `jev_step` take `strategy`,
+comma-separated speed-ups that can be measured one at a time against the
+classic loop (`perf/uibench.py`):
+
+| word | what changes |
+|---|---|
+| `fast` | no cosmetic pointer glide before a click (it cost 120–320 ms a click); the trail still draws |
+| `literal` | each value the goal quotes (`"maya@northwind.test"`) becomes one Jev question in the same request — *which field holds this?* — and a TYPE_TEXT types the value Jev matched to that field. No text-model call; a field no quoted value fits still asks the text model |
+| `burst` | `literal`, and every other value Jev matched surely (≥ 60%) is typed in the same breath, before the next read: a sign-in form is one decision, not three |
+| `lean` | the state Jev reads is trimmed (page text to 1,200 characters, five recent actions) |
+| `paste` | a field's value is set in one go (native setter, input and change events) instead of a key event per character |
+| `watch` | WAIT ends when the page changes (a MutationObserver, capped at 1.5 s) instead of after 100 ms |
+| `turbo` | all of the above |
+| `watched` | like `fast`, but the glide stays when the tab is on the user's screen (Fast mode is `turbo` + `watched`) |
+| `classic` | none of them: the original loop |
+| `llm`, `llm=<model>` | a small LLM decides instead of Jev: one chat call returns the operation, the target and any text (the comparison for *is Jev the fastest decider?*) |
+
+`vision: pixels` is the picture-only loop: no element table, the operation
+question and one Box (*where to act*), and the click goes to the box's centre
+as a real click at that point. It is the one mode where model output becomes a
+coordinate, so Settings does not offer it, and it refuses to type into a
+password field (the table leaves those out on purpose; SIGN_IN fills saved
+accounts). In `box` mode the box picks the observed element it overlaps most
+(intersection over union), then the one under its centre.
+
+Every step in the `json: true` trace says where its time went — `observe_ms`,
+`decide_ms` (Jev's `jev_ms` inside it), `text_ms`, `act_ms`, `settle_ms` — and
+`burst: true` marks a field typed without a decision of its own.
 
 ## Who is driving — the pill, the ring, the timeline
 

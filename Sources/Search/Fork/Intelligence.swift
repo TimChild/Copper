@@ -72,6 +72,12 @@ final class Intelligence: ObservableObject {
         /// The small model Jev mode asks to write field values (TYPE_TEXT).
         /// Empty means the router model; a small fast one is the point.
         var textModel = ""
+        /// What Jev mode shows Jev beside the element table, by default:
+        /// off, screenshot, marks or box (Tools.Ultrafast.Vision). A run
+        /// can say otherwise. Pictures are a TypeSafe preview.
+        var jevVision = "auto"
+        /// Jev mode's Fast mode: Strategy.shipped (on) or the classic loop.
+        var jevFast = true
 
         init() {}
 
@@ -103,6 +109,8 @@ final class Intelligence: ObservableObject {
             }
             routerModels = decodedRouter
             textModel = try c.decodeIfPresent(String.self, forKey: .textModel) ?? fresh.textModel
+            jevVision = try c.decodeIfPresent(String.self, forKey: .jevVision) ?? fresh.jevVision
+            jevFast = try c.decodeIfPresent(Bool.self, forKey: .jevFast) ?? fresh.jevFast
             migrateModelNames()
         }
 
@@ -328,7 +336,7 @@ final class Intelligence: ObservableObject {
     var status: [String: Any] {
         let effective = self.effective
         var out: [String: Any] = ["jevReady": jevReady, "routerReady": routerReady, "routerURL": effective.routerURL,
-         "routerModel": keys.routerModel, "jevModel": effective.jevModel,
+         "routerModel": keys.routerModel, "jevModel": effective.jevModel, "jevVision": keys.jevVision, "jevFast": keys.jevFast,
          "lane": effective.lane.rawValue, "laneSource": laneSource, "localLane": keys.lane.rawValue,
          "tier": tier.rawValue, "model": modelName,
          "modelReady": modelReady, "claudeReady": claudeReady,
@@ -525,6 +533,27 @@ final class Intelligence: ObservableObject {
             take("routerKey") { next.routerKey = $0 }
             take("routerURL") { next.routerURL = $0 }
             take("textModel") { next.textModel = $0 }
+            if let raw = params["jevVision"] {
+                guard let text = raw as? String, let mode = Tools.Ultrafast.Vision.parse(text), Tools.Ultrafast.Vision.offered.contains(mode) else {
+                    return ["error": "jevVision must be off, screenshot, marks or box"]
+                }
+                next.jevVision = mode.rawValue
+                applied.append("jevVision")
+            }
+            if let raw = params["jevFast"] {
+                let text = (raw as? String)?.lowercased()
+                guard let on = (raw as? Bool) ?? (text.map { ["on", "true", "1", "yes"].contains($0) ? true : ["off", "false", "0", "no"].contains($0) ? false : nil } ?? nil) else {
+                    return ["error": "jevFast must be on or off"]
+                }
+                next.jevFast = on
+                applied.append("jevFast")
+            }
+            if let raw = params["jevModel"] {
+                guard let text = raw as? String else { return ["error": "jevModel must be a string"] }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                next.jevModel = trimmed.isEmpty ? Keys().jevModel : trimmed
+                applied.append("jevModel")
+            }
             take("routerModel") {
                 next.routerModel = Intelligence.gatewayName($0)
                 next.routerModels[next.tier.rawValue] = Intelligence.gatewayName($0)
@@ -544,7 +573,7 @@ final class Intelligence: ObservableObject {
             }
             if let problem { return ["error": problem] }
             guard !applied.isEmpty else {
-                return ["error": "set needs at least one of lane, tier, jevKey, routerKey, routerURL, routerModel, haikuModel, sonnetModel, opusModel, textModel"]
+                return ["error": "set needs at least one of lane, tier, jevKey, jevModel, jevVision, jevFast, routerKey, routerURL, routerModel, haikuModel, sonnetModel, opusModel, textModel"]
             }
             keys = next
             var out = status
@@ -579,12 +608,37 @@ enum Jev {
         let probabilities: [String: Double]
     }
 
+    /// A Box answer (Jev 1.14, images on): four edges as fractions of the
+    /// image, (0, 0) top-left to (1, 1) bottom-right, and how sure.
+    struct Box {
+        let top: Double
+        let bottom: Double
+        let left: Double
+        let right: Double
+        let confidence: Double
+        var centerX: Double { (left + right) / 2 }
+        var centerY: Double { (top + bottom) / 2 }
+    }
+
     struct Answer {
         var choices: [String: Choice] = [:]
         var nouls: [String: Double] = [:]
         var scores: [String: Double] = [:]
+        var boxes: [String: Box] = [:]
         var latencyMs: Double = 0
         var inputTokens = 0
+        /// The versioned model that answered (`jev-1.14.0`), when the API says.
+        var model = ""
+    }
+
+    /// An image for the request's `assets` map: a JPEG or PNG, base64, under
+    /// a reference string that is written wherever the picture belongs
+    /// (docs.typesafe.ai/images). Every asset must be referenced somewhere.
+    struct Asset {
+        let reference: String
+        let data: Data
+        let format: String // "jpg" | "png"
+        var json: [String: Any] { ["type": "image", "format": format, "data_base64": data.base64EncodedString()] }
     }
 
     struct Failure: LocalizedError {
@@ -607,7 +661,11 @@ enum Jev {
 
     /// Ask, with a hard budget. Anything but a clean 200 with `answers`
     /// throws; the caller decides whether to fail open to the router.
-    static func ask(state: Any, questions: [String: Any], keys: Intelligence.Keys, timeout: TimeInterval = 4) async throws -> Answer {
+    /// `assets` attaches images (and turns on TypeSafe's images header, which
+    /// Box questions need too); `model` overrides the configured one for this
+    /// call — `jev-1.14.0` for a Box, say, while the default stays `jev-latest`.
+    static func ask(state: Any, questions: [String: Any], keys: Intelligence.Keys, timeout: TimeInterval = 4,
+                    assets: [Asset] = [], model override: String? = nil) async throws -> Answer {
         guard !keys.jevKey.isEmpty else { throw Failure(kind: "not_configured", detail: "No Jev key — Settings › Intelligence") }
         guard let url = URL(string: keys.jevEndpoint) else { throw Failure(kind: "bad_endpoint", detail: keys.jevEndpoint) }
         var request = URLRequest(url: url, timeoutInterval: timeout)
@@ -615,7 +673,20 @@ enum Jev {
         request.setValue("Bearer \(keys.jevKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("copper/\(Fork.version)", forHTTPHeaderField: "User-Agent")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["model": keys.jevModel, "state": state, "questions": questions])
+        let model = (override ?? "").trimmingCharacters(in: .whitespaces)
+        var body: [String: Any] = ["model": model.isEmpty ? keys.jevModel : model, "state": state, "questions": questions]
+        let usesBox = questions.values.contains { (($0 as? [String: Any])?["type"] as? String) == "box" }
+        if !assets.isEmpty || usesBox {
+            // Images and Box are off by default on TypeSafe's side; this
+            // header turns them on for this one request.
+            request.setValue("true", forHTTPHeaderField: "TypeSafe-Danger-Zone-Images")
+        }
+        if !assets.isEmpty {
+            var map: [String: Any] = [:]
+            for asset in assets { map[asset.reference] = asset.json }
+            body["assets"] = map
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let started = Date()
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -630,9 +701,15 @@ enum Jev {
 
         var out = Answer(latencyMs: latency)
         if let usage = payload["usage"] as? [String: Any] { out.inputTokens = (usage["input_tokens"] as? Int) ?? 0 }
+        out.model = payload["model"] as? String ?? ""
         for (name, raw) in answers {
             guard let a = raw as? [String: Any] else { continue }
-            if let picked = a["choice"] as? String {
+            if let box = a["box"] as? [String: Any],
+               let top = (box["top"] as? NSNumber)?.doubleValue, let bottom = (box["bottom"] as? NSNumber)?.doubleValue,
+               let left = (box["left"] as? NSNumber)?.doubleValue, let right = (box["right"] as? NSNumber)?.doubleValue {
+                out.boxes[name] = Box(top: top, bottom: bottom, left: left, right: right,
+                                      confidence: (a["confidence"] as? NSNumber)?.doubleValue ?? 0)
+            } else if let picked = a["choice"] as? String {
                 var probabilities: [String: Double] = [:]
                 for (k, v) in (a["probabilities"] as? [String: Any]) ?? [:] { probabilities[k] = (v as? NSNumber)?.doubleValue ?? 0 }
                 out.choices[name] = Choice(key: picked, confidence: (a["confidence"] as? NSNumber)?.doubleValue ?? 0, probabilities: probabilities)

@@ -580,6 +580,12 @@ private struct AgentsJevSection: View {
     @ObservedObject var brain = Intelligence.shared
     @ObservedObject var check = IntelligenceCheck.shared
 
+    /// The saved word as a mode, and back; an unknown word reads as off.
+    private var jevVision: Binding<Tools.Ultrafast.Vision> {
+        Binding(get: { Tools.Ultrafast.Vision.parse(brain.keys.jevVision) ?? .off },
+                set: { brain.keys.jevVision = $0.rawValue })
+    }
+
     var body: some View {
         SettingsSection("Jev mode — ultrafast") {
             Line("Let the agent hand Copper a goal", "Adds jev_run, jev_step, jev_observe and jev_extract. Jev picks the next click or key about every 200 ms and Copper does it in this window, until the goal is done — seconds, not a round trip per step.") {
@@ -609,6 +615,16 @@ private struct AgentsJevSection: View {
                     }
                 }
                 .settingsAnchor("agents.textmodel")
+                Rule()
+                Line("Fast mode", "Jev types the values your goal quotes without asking a model, fills a whole form in one go, and waits only as long as the page does — about twice the actions a minute. The pointer still glides when the tab is in front of you. Off runs the original loop.") {
+                    Switch(on: $brain.keys.jevFast)
+                }
+                .settingsAnchor("agents.jevfast")
+                Rule()
+                Line("What Jev sees", "Auto sends Jev the element table, and a picture of the page with each element's number drawn on it only when the table can't tell controls apart — icon-only buttons, rows of identical ones. Or always text, always a picture, the numbered picture, or the picture with Jev 1.14 pointing at the target (Box). Pictures are a TypeSafe preview.") {
+                    Segmented(options: Tools.Ultrafast.Vision.offered.map { ($0, $0.title) }, selection: jevVision)
+                }
+                .settingsAnchor("agents.jevvision")
                 if !mcp.jevNote.isEmpty {
                     Rule()
                     Line("Last run", mcp.jevNote) { EmptyView() }

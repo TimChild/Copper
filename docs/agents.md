@@ -165,7 +165,7 @@ first:
 
 | tool | does |
 |---|---|
-| `jev_run` | `goal` (+ `url`, `newTab`, `focus`, `tab`, `maxSteps`, `elements`) — runs [browser-use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in your tab (`newTab`: a new background one) until DONE, BLOCKED or the budget (60 actions, 120 decisions, 3 minutes); answers with the trace, the page, and the indexed element table |
+| `jev_run` | `goal` (+ `url`, `newTab`, `focus`, `tab`, `maxSteps`, `elements`, `vision`, `model`, `json`) — runs [browser-use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in your tab (`newTab`: a new background one) until DONE, BLOCKED or the budget (60 actions, 120 decisions, 3 minutes); answers with the trace, the page, and the indexed element table |
 | `jev_step` | one decision and its action; same `goal` continues the session |
 | `jev_observe` | what Jev sees: `[3] combobox  Where to? · London` for every visible control, plus the visible text |
 | `jev_extract` | `instruction` (+ `schema`, `full`) — one JSON object drawn from the page by the text model: values, not a tree |
@@ -190,6 +190,37 @@ claim; the tool says so and the agent is told to check.
 chat with your agent — endpoint, token, how to add the server, what it can
 do. There is one for the Playwright-shaped tools and one for Jev mode.
 `./bench agent jev on|off`.
+
+### What Jev sees
+
+By default Jev gets the element table and the visible text, and nothing
+else — the original loop, and still the fastest. TypeSafe's Jev also takes
+pictures (a preview behind their `TypeSafe-Danger-Zone-Images` header;
+docs.typesafe.ai/images), and Jev 1.14 has a Box question that answers with
+where something is in a picture. Settings › Agents › Jev mode › *What Jev
+sees* sets this Mac's default (`jevVision` in `intelligence.json`; `copper
+intelligence set --jev-vision …`), and a run can say otherwise with
+`jev_run` / `jev_step`'s `vision` and `model`:
+
+| `vision` | what rides beside the table |
+|---|---|
+| `off` | nothing more |
+| `screenshot` | a JPEG of the viewport at 1× in the state (`page.screenshot`), so the choice heads can see layout and icons |
+| `marks` | the same picture with every element's index drawn in a tag at the element's top-left corner, the same numbering as the table (set-of-marks) |
+| `box` | the picture, and one Box question in place of the target heads: where is the control to act on. The box's centre is mapped onto the observed element under it (the smallest, when they nest; else the nearest within 24 px); when it lands on none, the text head is asked as a second request and the miss is counted. Needs `jev-1.14.0` (`model` defaults to it for a box) |
+
+A picture costs a few thousand input tokens and a few hundred milliseconds
+more per decision; the text-only loop is faster and TypeSafe says their
+models are less accurate on pictures than on text, so `off` stays the
+default. The trace's cost line says what Jev took (ms, tokens), what the
+pictures took and how the boxes did; `json: true` on `jev_run` returns the
+run as one object (`status`, `elapsed_ms`, `totals`, one entry per step with
+`jev_ms`, `input_tokens`, `box_hit`, and the page it ended on) for a
+harness. `SEARCH_JEV_SHOTS=<folder>` keeps every picture sent, to look at.
+Model output never becomes a coordinate: a box is only ever mapped onto an
+element this code observed, and the freshness and occlusion checks run
+before the click as they always did. `perf/wikigame.py` plays ten Wikipedia
+games one way of seeing at a time and tables the arms (perf/README.md).
 
 ## Who is driving — the pill, the ring, the timeline
 

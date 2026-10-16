@@ -14,7 +14,9 @@ import os
 // The card is CommandPalette's; this decides what goes in it and what picking
 // a row does. Browser keeps the flat list of rows (so the arrow keys, Return
 // and the pointer work the way they already do) and asks here for it on every
-// keystroke. The two slow sources — Google's completions and a ranking of all
+// keystroke. The rows come in sections, always in the same order — open tabs,
+// history, bookmarks, canvases, commands, then the search — and Tab and ⇧Tab
+// jump between them (Fork/CardSections). The two slow sources — Google's completions and a ranking of all
 // of history — are worked out away from the keystroke and handed back through
 // `Browser.relaunch` when they land.
 
@@ -23,8 +25,8 @@ final class Launcher: ObservableObject {
     static let shared = Launcher()
 
     /// The titled groups: the row a heading sits above, and what it says.
-    /// The first row — what Return does — needs no heading.
-    @Published private(set) var headings: [Int: String] = [:]
+    /// Kept in `CardSections`, which the card draws them from.
+    var headings: [Int: String] { CardSections.shared.headings }
 
     /// What Return does to a row, and the two other things it can do.
     enum How: String { case open, background, split }
@@ -88,7 +90,7 @@ final class Launcher: ObservableObject {
         asked = ""
         lastCompletions = []
         visited = ("", [])
-        headings = [:]
+        CardSections.shared.show([:])
         shelved = nil
         standing = nil
     }
@@ -109,87 +111,86 @@ final class Launcher: ObservableObject {
         return assemble(query, in: browser)
     }
 
-    /// Everything that has landed so far, laid out for `query`.
+    /// Everything that has landed so far, laid out for `query`, in the card's
+    /// fixed order (Fork/CardSections): open tabs, history, bookmarks,
+    /// canvases, commands, and the search last. Return takes the first row —
+    /// the best place you already know — and only asks Google when nothing
+    /// you know answers. An address typed in full is the exception: it leads
+    /// the card, under no heading, so Return still goes straight there.
     private func assemble(_ query: String, in browser: Browser) -> [Suggestion] {
-        var groups: [(String, [Suggestion])] = []
+        var sections: [CardSection: [Suggestion]] = [:]
         var seen = Set<String>()
         func keep(_ row: Suggestion) -> Bool { seen.insert(Launcher.canonical(row.url)).inserted }
 
         let top = Launcher.top(query, in: browser)
+        let address = top.kind != .search
         let needle = query.lowercased()
+        // "/" asks for the browser's own commands, and only for them: the
+        // places that happen to have "/split" in their path are not the answer.
+        let commanding = needle.hasPrefix("/")
         // Readied once for the tabs, the bookmarks and history's stand-ins.
-        let probe = Needle(needle)
+        let probe = commanding ? nil : Needle(needle)
         // Open tabs are claimed first: "github.com" typed with GitHub open
         // should still offer the switch, not only a second copy.
         // Every match is claimed, the rows are built for the few shown.
+        // This space's first, then the ones parked in others, each wearing
+        // its space so you know a switch is coming.
         var open: [Suggestion] = []
         for match in tabs(matching: probe, in: browser) where seen.insert(match.canonical).inserted {
             if open.count < Cap.tabs, let row = Launcher.row(for: match.tab, current: match.current, browser: browser) { open.append(row) }
         }
+        sections[.tabs] = open
+        // What Return does with the words themselves is claimed before
+        // history, so a visit to the same address is not offered twice.
         _ = keep(top)
 
-        // Google's completions — the ones for this query if they are in, the
-        // last ones that still carry on from it if not.
-        let words = completions[needle] ?? lastCompletions.filter { $0.lowercased().hasPrefix(needle) }
-        var searches: [Suggestion] = []
-        for phrase in words where phrase.lowercased() != needle {
-            guard let url = Google.url(for: phrase) else { continue }
-            var row = Suggestion(key: phrase, title: Google.name, url: url, kind: .search)
-            row.hint = "Search \(Google.name)"
-            guard keep(row) else { continue }
-            searches.append(row)
-            if searches.count == Cap.suggestions { break }
-        }
-        groups.append(("\(Google.name) Suggestions", searches))
-
-        // Open tabs: this space's first, then the ones parked in others, each
-        // wearing its space so you know a switch is coming.
-        groups.append(("Switch to Tab", open))
-
-        // Fork (canvas): canvases by name — "canvas" alone, all of them.
-        var boards: [Suggestion] = []
-        for row in CanvasTabs.offers(for: query) where keep(row) {
-            boards.append(row)
-            if boards.count == 3 { break }
-        }
-        groups.append(("Canvases", boards))
-
         // History, ranked away from the keystroke. Until this query's ranking
-        // is in, the last one's rows that still match stand in for it.
-        let hits = visited.query == needle ? visited.rows
-            : visited.rows.filter { probe?.score(key: $0.key, title: $0.title.lowercased()) != nil }
-        // A site's untitled front door is the credit its deeper pages give
-        // it; beside one of those pages it is the same answer said twice.
-        let titledHosts = Set(hits.filter { !$0.title.isEmpty }.compactMap { URL(string: $0.url)?.host() })
-        var been: [Suggestion] = []
-        for hit in hits {
-            guard let url = URL(string: hit.url) else { continue }
-            if hit.title.isEmpty, !hit.key.contains("/"), let host = url.host(), titledHosts.contains(host) { continue }
-            var row = Suggestion(key: hit.title.isEmpty ? hit.key : hit.title, title: hit.key, url: url, kind: .visited)
-            row.detail = Launcher.host(url, besides: row.key)
-            row.hint = pageHint(browser)
-            guard keep(row) else { continue }
-            been.append(row)
-            if been.count == Cap.history { break }
-        }
-        groups.append(("History", been))
+        // is in, the last one's rows that still match stand in for it, so the
+        // section does not blink out and back on every letter.
+        if let probe {
+            let hits = visited.query == needle ? visited.rows
+                : visited.rows.filter { probe.score(key: $0.key, title: $0.title.lowercased()) != nil }
+            // A site's untitled front door is the credit its deeper pages give
+            // it; beside one of those pages it is the same answer said twice.
+            let titledHosts = Set(hits.filter { !$0.title.isEmpty }.compactMap { URL(string: $0.url)?.host() })
+            var been: [Suggestion] = []
+            for hit in hits {
+                guard let url = URL(string: hit.url) else { continue }
+                if hit.title.isEmpty, !hit.key.contains("/"), let host = url.host(), titledHosts.contains(host) { continue }
+                var row = Suggestion(key: hit.title.isEmpty ? hit.key : hit.title, title: hit.key, url: url, kind: .visited)
+                row.detail = Launcher.host(url, besides: row.key)
+                row.hint = pageHint(browser)
+                guard keep(row) else { continue }
+                been.append(row)
+                if been.count == Cap.history { break }
+            }
+            sections[.history] = been
 
-        var marks: [Suggestion] = []
-        for mark in shelf(browser) {
-            guard probe?.score(key: mark.address, title: mark.lowered) != nil else { continue }
-            let (title, url) = (mark.title, mark.url)
-            var row = Suggestion(key: title.isEmpty ? Address.pretty(url) : title, title: Address.pretty(url), url: url, kind: .bookmark)
-            row.detail = Launcher.host(url, besides: row.key)
-            row.hint = pageHint(browser)
-            guard keep(row) else { continue }
-            marks.append(row)
-            if marks.count == Cap.bookmarks { break }
-        }
-        groups.append(("Bookmarks", marks))
+            var marks: [Suggestion] = []
+            for mark in shelf(browser) {
+                guard probe.score(key: mark.address, title: mark.lowered) != nil else { continue }
+                let (title, url) = (mark.title, mark.url)
+                var row = Suggestion(key: title.isEmpty ? Address.pretty(url) : title, title: Address.pretty(url), url: url, kind: .bookmark)
+                row.detail = Launcher.host(url, besides: row.key)
+                row.hint = pageHint(browser)
+                guard keep(row) else { continue }
+                marks.append(row)
+                if marks.count == Cap.bookmarks { break }
+            }
+            sections[.bookmarks] = marks
 
-        // The browser's own commands, last and few: ⌘T is for going
-        // somewhere, and ⌘K is where commands live. "/" asks for them first.
-        let commandNeedle = needle.hasPrefix("/") ? String(needle.dropFirst()) : needle
+            // Fork (canvas): canvases by name — "canvas" alone, all of them.
+            var boards: [Suggestion] = []
+            for row in CanvasTabs.offers(for: query) where keep(row) {
+                boards.append(row)
+                if boards.count == 3 { break }
+            }
+            sections[.canvases] = boards
+        }
+
+        // The browser's own commands, few: ⌘T is for going somewhere, and
+        // ⌘K is where commands live. "/" asks for them alone.
+        let commandNeedle = commanding ? String(needle.dropFirst()) : needle
         var doing: [Suggestion] = []
         if !commandNeedle.isEmpty {
             for command in CommandBar.commands(browser) where command.name.lowercased().contains(commandNeedle) {
@@ -200,28 +201,55 @@ final class Launcher: ObservableObject {
                 if doing.count == Cap.commands { break }
             }
         }
-        if needle.hasPrefix("/") { groups.insert(("Commands", doing), at: 0) } else { groups.append(("Commands", doing)) }
+        sections[.commands] = doing
 
-        return lay(top: [top], groups)
+        // The search, last: the words as a Google search, then what Google
+        // thinks you are typing — the ones for this query if they are in, the
+        // last ones that still carry on from it if not. Google answers after
+        // everything else; at the foot of the card its rows land without
+        // pushing anything you were reading.
+        var searches: [Suggestion] = []
+        if address, !needle.contains("://"), let url = Google.url(for: query) {
+            // An address can still be words you meant to look up: "node.js".
+            // One pasted with its scheme is not.
+            var row = Suggestion(key: "Search \(Google.name) for “\(query)”", title: Google.name, url: url, kind: .search)
+            row.hint = pageHint(browser)
+            if keep(row) { searches.append(row) }
+        }
+        let words = completions[needle] ?? lastCompletions.filter { $0.lowercased().hasPrefix(needle) }
+        var phrases = 0
+        for phrase in words where phrase.lowercased() != needle {
+            guard let url = Google.url(for: phrase) else { continue }
+            var row = Suggestion(key: phrase, title: Google.name, url: url, kind: .search)
+            row.hint = "Search \(Google.name)"
+            guard keep(row) else { continue }
+            searches.append(row)
+            phrases += 1
+            if phrases == Cap.suggestions { break }
+        }
+        sections[.search] = searches
+
+        let laid = Launcher.layout(top: top, sections)
+        CardSections.shared.show(laid.headings)
+        return laid.rows
     }
 
-    /// Rows in order, and where each titled group begins.
-    private func lay(top: [Suggestion], _ groups: [(String, [Suggestion])]) -> [Suggestion] {
-        var rows = top
-        var marks: [Int: String] = [:]
-        for (title, members) in groups where !members.isEmpty {
-            marks[rows.count] = title
-            rows.append(contentsOf: members)
-        }
-        headings = marks
-        return rows
+    /// Where the row for the words themselves goes. A search is the first
+    /// row of the Search section, below everything you already know; an
+    /// address typed in full leads the card under no heading, so Return goes
+    /// to it as it always has (Tests/SearchTests/CardSectionsTests).
+    nonisolated static func layout(top: Suggestion, _ sections: [CardSection: [Suggestion]]) -> (rows: [Suggestion], headings: [Int: String]) {
+        guard top.kind == .search else { return CardSections.lay(lead: [top], sections: sections) }
+        var sections = sections
+        sections[.search] = [top] + (sections[.search] ?? [])
+        return CardSections.lay(sections: sections)
     }
 
     /// The first row: what Return does with the words as they stand.
     static func top(_ query: String, in browser: Browser) -> Suggestion {
         if let url = Address.url(from: query) {
             // Fork (canvas): a canvas address reads as its name.
-            var row = Suggestion(key: "Open \(CanvasLinks.label(url) ?? Address.pretty(url))", title: "", url: url, kind: .known)
+            var row = Suggestion(key: "Open \(CanvasLinks.label(url) ?? Launcher.spoken(url))", title: "", url: url, kind: .known)
             row.hint = pageHint(browser)
             return row
         }
@@ -229,6 +257,16 @@ final class Launcher: ObservableObject {
                              url: Google.url(for: query) ?? URL(string: "https://www.google.com")!, kind: .search)
         row.hint = pageHint(browser)
         return row
+    }
+
+    /// An address as the row says it: `Address.pretty`, with the port kept —
+    /// "Open localhost:3000", not "Open localhost", is where Return goes.
+    nonisolated static func spoken(_ url: URL) -> String {
+        let pretty = Address.pretty(url)
+        guard let port = url.port, let full = url.host() else { return pretty }
+        let host = full.hasPrefix("www.") ? String(full.dropFirst(4)) : full
+        guard pretty.hasPrefix(host) else { return pretty }
+        return host + ":\(port)" + pretty.dropFirst(host.count)
     }
 
     /// Said on the right of a row that opens a page. A blank tab under the
@@ -242,8 +280,9 @@ final class Launcher: ObservableObject {
     // MARK: - the empty card
 
     /// Nothing typed: the tabs you were just on, most recent first — the
-    /// same order Control-Tab walks — so ⌘T, ↓, Return goes back one and each
-    /// further ↓ goes back one more. Then the tabs you closed.
+    /// same order Control-Tab walks — with the first of them highlighted, so
+    /// ⌘T, Return goes back one and each ↓ before it goes back one more.
+    /// Then the tabs you closed, a Tab away.
     private func resting(in browser: Browser) -> [Suggestion] {
         let here = Dictionary(browser.tabs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let parked = Dictionary(Spaces.shared.parkedTabs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -277,7 +316,9 @@ final class Launcher: ObservableObject {
             row.hint = "Reopen"
             return row
         }
-        return lay(top: [], [("Recent Tabs", recent), ("Recently Closed", Array(closed))])
+        let laid = CardSections.lay([(title: "Recent Tabs", rows: recent), (title: "Recently Closed", rows: Array(closed))])
+        CardSections.shared.show(laid.headings)
+        return laid.rows
     }
 
     // MARK: - open tabs
@@ -743,6 +784,10 @@ final class Launcher: ObservableObject {
         let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
         let settle = request["settle"] as? Double ?? 0.8
         DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [self] in
+            // `--keys "⇥⇧⇥↓"`: pressed in the card's field once it has settled
+            // (Fork/CardSections.press), the highlight after each reported.
+            let openedOn = browser.picked ?? -1
+            let pressed = (request["keys"] as? String).map { CardSections.press($0, in: browser) }
             var groups: [[String: Any]] = []
             var current: [String: Any] = ["heading": "", "rows": [[String: Any]]()]
             for (index, row) in browser.offers.enumerated() {
@@ -758,6 +803,7 @@ final class Launcher: ObservableObject {
             }
             if !((current["rows"] as? [Any])?.isEmpty ?? true) { groups.append(current) }
             var out: [String: Any] = ["groups": groups, "picked": browser.picked ?? -1, "milliseconds": milliseconds,
+                                      "openedOn": openedOn, "keys": pressed?.steps ?? [], "keysVia": pressed?.via ?? "",
                                       "suggestAsks": sent, "suggestCancelled": dropped, "launching": browser.launching]
             let before = browser.tabs.count
             if request["go"] as? Bool == true {

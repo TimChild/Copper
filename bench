@@ -342,10 +342,14 @@
                                        (with more than one space), while over a page it navigates
                                        the pane under the pointer
     ./bench bar TEXT [--go]          what ⌘K offers for TEXT; --go takes the first row
-    ./bench newtab [TEXT] [--go [--pick N] [--how open|background|split]] [--keep] [--settle S] [--json]
-                                       what ⌘T's card offers for TEXT, by group, after S seconds (0.8) for
-                                       Google's completions and history; --go takes the picked row (or row N);
-                                       --keep leaves the card up for `window`
+    ./bench summon [TEXT] [--keys KEYS]
+                                       ⌘K left open on TEXT (for `window`), its rows by section; with --keys and
+                                       the bar already up on TEXT, KEYS pressed in its field (⇥ ⇧⇥ ↑ ↓ → ↩)
+    ./bench newtab [TEXT] [--keys KEYS] [--go [--pick N] [--how open|background|split]] [--keep] [--settle S] [--json]
+                                       what ⌘T's card offers for TEXT, by section, after S seconds (0.8) for
+                                       Google's completions and history; --keys presses KEYS in the field
+                                       first (⇥ Tab, ⇧⇥ Shift-Tab, ↑ ↓ →, ↩ Return); --go takes the picked row (or
+                                       row N); --keep leaves the card up for `window`
     ./bench newtab TEXT --type [--every S] [--settle S]
                                        ⌘T, then TEXT a letter every S seconds (0.08): main-thread busy time,
                                        the longest stretch without a frame, and when the word's history landed
@@ -486,6 +490,11 @@ def main(argv):
         request["text"] = args[0] if args else ""
         request["go"] = "--go" in args
     elif verb == "summon":
+        if "--keys" in args:
+            at = args.index("--keys")
+            if at + 1 >= len(args): sys.exit("usage: bench summon [TEXT] [--keys KEYS]")
+            request["keys"] = args[at + 1]
+            args = args[:at] + args[at + 2:]
         request["text"] = args[0] if args else ""
     elif verb == "tabs":
         if len(args) > 1 or (args and args[0] not in ("clear", "undo")):
@@ -503,6 +512,8 @@ def main(argv):
                 request["settle"] = float(args[i + 1]); i += 2
             elif args[i] == "--every" and i + 1 < len(args):
                 request["every"] = float(args[i + 1]); i += 2
+            elif args[i] == "--keys" and i + 1 < len(args):
+                request["keys"] = args[i + 1]; i += 2
             elif args[i] in flags:
                 request[args[i][2:]] = True; i += 1
             else:
@@ -805,6 +816,9 @@ def main(argv):
             print(json.dumps(answer, ensure_ascii=False, indent=2))
             return 0
         picked = answer.get("picked", -1)
+        if answer.get("keys"):
+            print(f"opened on {answer.get('openedOn')}; keys via {answer.get('keysVia')}: "
+                  + "  ".join(f"{k['key']}→{k['picked']}" for k in answer["keys"]))
         for g in answer.get("groups", []):
             if g.get("heading"): print(f"— {g['heading']}")
             for r in g.get("rows", []):
@@ -816,6 +830,7 @@ def main(argv):
         print(f"tabs: {answer.get('tabsBefore')} → {answer.get('tabsAfter')}  active: {answer.get('active', {}).get('title', '')}  space: {answer.get('space', '')}")
     elif verb == "bar":
         for o in answer.get("offers", []):
+            if o.get("heading"): print(f"— {o['heading']}")
             badge = f"  {o['badge']}" if o.get("badge") else ""
             print(f"{o['kind']:9} {o['key']}  {o['title']}{badge}")
         if answer.get("completion"):

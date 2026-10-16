@@ -331,6 +331,16 @@ struct AddressField: NSViewRepresentable {
             editor.selectedRange = NSRange(location: start, length: length - start)
         }
 
+        /// Fork (developer-shortcuts): the completion on offer into the field,
+        /// the caret after it.
+        @MainActor private func take(into control: NSControl, _ textView: NSTextView) {
+            guard browser.acceptCompletion() else { return }
+            let text = literal ? browser.typed : browser.completed
+            synced = text
+            control.stringValue = text
+            textView.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+        }
+
         func control(
             _ control: NSControl,
             textView: NSTextView,
@@ -346,17 +356,29 @@ struct AddressField: NSViewRepresentable {
             case #selector(NSResponder.moveUp(_:)):
                 browser.walk(-1)
                 return true
+            // Fork (cmdt-sections): on ⌘T's and ⌘K's card, Tab and ⇧Tab jump
+            // to the next and previous section (Fork/CardSections), and → at
+            // the end of what you typed takes the completion Tab used to.
+            case #selector(NSResponder.insertTab(_:)) where browser.summoning:
+                browser.jumpSection(1)
+                return true
+            case #selector(NSResponder.insertBacktab(_:)) where browser.summoning:
+                browser.jumpSection(-1)
+                return true
+            case #selector(NSResponder.moveRight(_:)) where browser.summoning,
+                 #selector(NSResponder.scrollToEndOfDocument(_:)) where browser.summoning,
+                 #selector(NSResponder.moveToEndOfDocument(_:)) where browser.summoning:
+                let caret = textView.selectedRange()
+                guard !textView.hasMarkedText(), caret.length == 0,
+                      caret.location == (textView.string as NSString).length else { return false }
+                take(into: control, textView)
+                return true
             // Fork (developer-shortcuts): Tab takes what the field is
             // offering and leaves the caret after it — no page opens, no tab
             // changes. With nothing on offer, Tab and ⇧Tab do nothing here
             // rather than throw the keyboard somewhere unexpected.
             case #selector(NSResponder.insertTab(_:)):
-                if browser.acceptCompletion() {
-                    let text = literal ? browser.typed : browser.completed
-                    synced = text
-                    control.stringValue = text
-                    textView.selectedRange = NSRange(location: (text as NSString).length, length: 0)
-                }
+                take(into: control, textView)
                 return true
             case #selector(NSResponder.insertBacktab(_:)):
                 return true

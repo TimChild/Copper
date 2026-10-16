@@ -134,7 +134,8 @@ enum CLI {
         }
         let name = ((request["params"] as? [String: Any])?["name"] as? String) ?? ""
         // A delete by site pages through the whole cloud history.
-        let timeout: TimeInterval = name == "jev_run" ? 240 : (name == "cloud_history_delete" ? 600 : 60)
+        // A canvas tool waits up to a minute for a big board's page to come up (CanvasHost.readyBound).
+        let timeout: TimeInterval = name == "jev_run" ? 240 : (name == "cloud_history_delete" ? 600 : name.hasPrefix("canvas_") ? 120 : 60)
         guard let response = post(request, config: config, timeout: timeout) else { return 2 }
         return render(response, spec: spec, json: json)
     }

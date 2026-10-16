@@ -248,7 +248,7 @@ describe('applyOps as a whole', () => {
     const r = run([{ op: 'paint' }, 7])
     expect(r.errors.map(e => e.index)).toEqual([0, 1])
     expect(applyOps(ctx, 'garbage').errors[0]).toMatchObject({ index: -1 })
-    expect(applyOps(ctx, { ops: new Array(501).fill({ op: 'clear' }) }).errors[0]!.error).toMatch(/at most 500/)
+    expect(applyOps(ctx, { ops: new Array(1001).fill({ op: 'clear' }) }).errors[0]!.error).toMatch(/at most 1000/)
   })
 
   it('reports where the agent should rest', () => {

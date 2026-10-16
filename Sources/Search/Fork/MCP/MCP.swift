@@ -599,8 +599,14 @@ final class MCP: ObservableObject {
 // MARK: - one connection
 
 /// Reads HTTP/1.1 requests off one socket, one after another, and writes
-/// the replies. Small on purpose: the requests are a few kilobytes of JSON
-/// from a client on this machine.
+/// the replies. Small on purpose: the requests are JSON from a client on this
+/// machine (a canvas_apply with pictures in it can be megabytes).
+///
+/// Replies go out in the order their requests came in, whatever order the
+/// calls finish in — a client that pipelines two requests on one socket
+/// gets each answer against the right one — and a client that shuts its
+/// side after sending (EOF) still gets every answer it is owed before the
+/// socket closes.
 final class Connection {
     let id: ObjectIdentifier
     private let connection: NWConnection
@@ -608,6 +614,13 @@ final class Connection {
     private let handle: (HTTPRequest, @escaping (HTTPResponse) -> Void) -> Void
     private let gone: (ObjectIdentifier) -> Void
     private var closed = false
+    /// Requests taken, the next reply to write, and replies done early.
+    private var taken = 0
+    private var written = 0
+    private var ready: [Int: (HTTPResponse, Bool)] = [:]
+    /// The client sent EOF: close once the replies owed are out.
+    private var peerDone = false
+    static let maxRequest = 32_000_000
 
     init(_ connection: NWConnection, handle: @escaping (HTTPRequest, @escaping (HTTPResponse) -> Void) -> Void, gone: @escaping (ObjectIdentifier) -> Void) {
         self.connection = connection
@@ -631,12 +644,19 @@ final class Connection {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [weak self] data, _, complete, error in
             guard let self, !self.closed else { return }
             if let data { self.buffer.append(data) }
-            if self.buffer.count > 8_000_000 {
-                self.write(HTTPResponse(status: 413, json: ["error": "request too large"]), thenClose: true)
+            if self.buffer.count > Connection.maxRequest {
+                let n = self.taken
+                self.taken += 1
+                self.reply(n, HTTPResponse(status: 413, json: ["error": "request too large"]), thenClose: true)
                 return
             }
             self.drain()
-            if complete || error != nil { self.close(); return }
+            if error != nil { self.close(); return }
+            if complete {
+                self.peerDone = true
+                if self.written == self.taken { self.close() }
+                return
+            }
             self.read()
         }
     }
@@ -645,17 +665,26 @@ final class Connection {
     private func drain() {
         while let request = HTTPRequest.take(from: &buffer) {
             let wantsClose = request.headers["connection"]?.lowercased() == "close"
+            let n = taken
+            taken += 1
             handle(request) { [weak self] response in
-                self?.write(response, thenClose: wantsClose)
+                self?.reply(n, response, thenClose: wantsClose)
             }
         }
     }
 
-    private func write(_ response: HTTPResponse, thenClose: Bool) {
+    /// Reply `n` is done: written now if every one before it is out, else kept until they are.
+    private func reply(_ n: Int, _ response: HTTPResponse, thenClose: Bool) {
         guard !closed else { return }
-        connection.send(content: response.bytes, completion: .contentProcessed { [weak self] _ in
-            if thenClose { self?.close() }
-        })
+        ready[n] = (response, thenClose)
+        while let (next, close) = ready.removeValue(forKey: written) {
+            written += 1
+            let last = close || (peerDone && written == taken)
+            connection.send(content: next.bytes, completion: .contentProcessed { [weak self] _ in
+                if last { self?.close() }
+            })
+            if close { break }
+        }
     }
 
     func close() {

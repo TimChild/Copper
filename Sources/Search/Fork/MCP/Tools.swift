@@ -237,8 +237,8 @@ enum Tools {
         case "browser_tabs": return try await tabs(args, in: browser)
         case "browser_close":
             let tab = try current(browser)
-            close(tab)
-            return [.text("Closed. \(tabList(browser))")]
+            let said = close(tab)
+            return [.text("\(said) \(tabList(browser))")]
         case "browser_resize":
             guard let w = args["width"] as? NSNumber, let h = args["height"] as? NSNumber else { throw Failure(text: "width and height") }
             guard let window = Windows.window(of: browser) ?? Links.window ?? NSApp.windows.first(where: { $0.isVisible }) else { throw Failure(text: "no window") }
@@ -466,11 +466,16 @@ enum Tools {
         return tab
     }
 
-    /// Close a tab wherever it is, and let go of it.
+    /// Close a tab wherever it is, and let go of it. A Saved tab is put
+    /// down, as ⌘W does it — still in Saved, its page let go — and the
+    /// answer says so.
     @MainActor
-    static func close(_ tab: Tab) {
+    @discardableResult
+    static func close(_ tab: Tab) -> String {
         Backstage.shared.release(tab.id)
-        AgentTabs.owner(of: tab).close(tab)
+        let owner = AgentTabs.owner(of: tab)
+        owner.close(tab)
+        return owner.tabs.contains { $0.id == tab.id } ? "Closed — it is a Saved tab, so it stays in Saved, unloaded." : "Closed."
     }
 
     @MainActor
@@ -527,8 +532,8 @@ enum Tools {
             let note = focus || pane ? "Opened and shown to the user." : "Opened in the background — the user's tab did not change; your calls now land on it."
             return [.text("\(note) {tab \(AgentTabs.short(tab))}\n\(pageLine(tab))\n\n\(tabList(browser))")]
         case "close":
-            close(try pick())
-            return [.text("Closed. \(tabList(browser))")]
+            let said = close(try pick())
+            return [.text("\(said) \(tabList(browser))")]
         case "select":
             let tab = try pick(orScreen: true)
             AgentTabs.bind(tab)

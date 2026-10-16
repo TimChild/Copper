@@ -20,6 +20,13 @@ struct SideBar: View {
     @ObservedObject private var downloads = Downloads.shared
     @ObservedObject private var clearTabs = ClearTabs.shared
     @ObservedObject private var flights = Flights.shared // Fork (trails)
+    @ObservedObject private var drag: SideDrag // Fork (saved-drag): the row in the hand, and where it would land
+
+    init(browser: Browser, prefs: Preferences) { // Fork (saved-drag): picks up this window's drag
+        self.browser = browser
+        self.prefs = prefs
+        _drag = ObservedObject(wrappedValue: SideDrag.of(browser))
+    }
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var still
@@ -305,7 +312,9 @@ struct SideBar: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: SideBar.gap) {
                     SpaceHeader(browser: browser)
-                    rows(kept, homeless: true)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SavedDrop.space)) } action: { SideDrag.of(browser).header = $0 } // Fork (saved-drag)
+                    if drag.slot { SavedDropSlot(drag: drag, tint: tint) } // Fork (saved-drag): an empty Saved block's drop target
+                    rows(kept, homeless: true, block: .saved)
                     if !today.isEmpty {
                         if clearCount > 0 {
                             ClearTabsDivider(browser: browser, tint: tint, count: clearCount)
@@ -314,14 +323,24 @@ struct SideBar: View {
                         }
                     }
                     newTab
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SavedDrop.space)) } action: { SideDrag.of(browser).seam = $0 } // Fork (saved-drag)
+                    TodayDropGap(drag: drag, tint: tint) // Fork (saved-drag): a Saved row on its way out lands here
                     // Fork (trails): with the flight on, Today is drawn as
                     // trails (Fork/Trails/); off, exactly as before.
                     if flights.trails {
                         TrailsColumn(browser: browser, prefs: prefs, tint: tint, pill: pill, tabs: today.map(\.tab))
                     } else {
-                        rows(today)
+                        rows(today, block: .today)
                     }
                 }
+                // Fork (saved-drag): one space for every frame a drop is
+                // worked out from, a folder lit for a drop onto it, the card
+                // in the hand, and the column's drop target for a trail's
+                // page (Fork/SavedDrop.swift).
+                .coordinateSpace(name: SavedDrop.space)
+                .overlay(alignment: .topLeading) { SavedDropMark(drag: drag, tint: tint) }
+                .overlay(alignment: .topLeading) { SideDragCard(drag: drag, browser: browser, tint: tint) }
+                .onDrop(of: [Trails.dragType], delegate: SavedTrailDrop(browser: browser, drag: drag))
                 .padding(.horizontal, SideBar.inset)
                 .padding(.top, 2)
                 .padding(.bottom, 12)
@@ -368,9 +387,10 @@ struct SideBar: View {
 
     /// One block's rows, drawn by the groups' view so each run wears its
     /// header and the drag knows about groups; `only` keeps it to this block.
-    /// A row pulled a clear step out of its block crosses the seam: up out of
-    /// Today saves it, down out of Saved lets it go.
-    private func rows(_ list: [(index: Int, tab: Tab)], homeless: Bool = false) -> some View {
+    /// A row carried over the other block crosses the seam where a room
+    /// opens for it: up into Saved saves it there, down into Today lets it
+    /// go (Fork/SavedDrop.swift).
+    private func rows(_ list: [(index: Int, tab: Tab)], homeless: Bool = false, block: SavedDrop.Block) -> some View {
         GroupedRows(
             browser: browser,
             prefs: prefs,
@@ -379,11 +399,7 @@ struct SideBar: View {
             only: Set(list.map(\.tab.id)),
             homeless: homeless,
             offset: list.first?.index ?? 0,
-            crossed: { tab, way in
-                let wanted = way < 0
-                guard sections.isSaved(tab) != wanted else { return }
-                withAnimation(Motion.settle) { sections.set(tab, saved: wanted, in: browser) }
-            },
+            block: block,
             holding: { rowHeld = $0 }
         )
     }
@@ -570,7 +586,10 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
     let pill: Namespace.ID
     let close: () -> Void
 
-    @State private var hovering = false
+    @State private var pointing = false
+    @ObservedObject private var benchHover = SideRowHover.shared // Fork (saved-close): `bench sections hover ID`
+    /// Under the pointer — or, for a picture, under the bench's.
+    private var hovering: Bool { pointing || benchHover.forced == tab.id }
     @State private var shake: CGFloat = 0
     @ObservedObject private var heat = Heat.shared
 
@@ -655,7 +674,7 @@ struct SideRow: View { // Fork: was private; GroupedRows draws it
         .modifier(OneClick(double: false) {
             if live { browser.beginTabEdit(tab) } else { browser.select(tab) }
         })
-        .onHover { hovering = $0 }
+        .onHover { pointing = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
         .modifier(CanvasTabRow(tab: tab)) // Fork (canvas): a canvas's rename field hangs from its row
         // The wheel button over a row closes it, as in Arc and Chrome. SwiftUI

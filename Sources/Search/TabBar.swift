@@ -59,7 +59,7 @@ struct TabBar: View {
                                         width: width(in: geo.size.width),
                                         room: geo.size.width - Metrics.lights - 12,
                                         pill: pill,
-                                        close: { browser.close(tab) }
+                                        close: { Sections.shared.remove(tab, in: browser) } // Fork (saved-close): the pill's cross takes a Saved tab out; ⌘W puts it down
                                     )
                                     // The row reflows around it while the pill itself keeps
                                     // up with the hand: what it has travelled, less the

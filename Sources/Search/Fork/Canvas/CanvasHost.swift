@@ -1163,7 +1163,7 @@ final class CanvasHost {
             for tab in browser.tabs where (tab.pending ?? tab.address).flatMap(CanvasLinks.id(from:)) == id {
                 // A favourite is only put down by Close; it has to come out.
                 if tab.pin != nil { browser.unpin(tab) }
-                browser.close(tab)
+                Sections.shared.closeForGood(tab, in: browser) // a Saved row is only put down by a close (Fork/Sections.swift)
             }
         }
         for tab in Spaces.shared.parkedTabs where (tab.pending ?? tab.address).flatMap(CanvasLinks.id(from:)) == id {

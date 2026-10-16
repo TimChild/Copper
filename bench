@@ -186,6 +186,20 @@
                                        the sidebar's Saved and Today blocks: counts per space,
                                        move a tab across the seam, run the archive sweep now
                                        (with HOURS, against that age instead of the setting)
+    ./bench sections close ID|remove ID|reopen
+                                       ⌘W on a row through Browser.close (a Saved row is put down, not
+                                       closed), the row's cross (a Saved row leaves Saved), ⌘⇧T
+    ./bench sections check             close vs remove on a Saved row end to end: session, cloud doc and
+                                       merge, Reopen into Saved — test worlds; prints failures
+    ./bench sections seed [empty]      test worlds: real rows, asleep — four Saved (two in a folder) and
+                                       three Today; `empty`: Today only
+    ./bench sections drag ID DY [STEPS] [hold]|release|target|hover ID|off|click ID [cross]|picture PATH [EXTRA]
+                                       real mouse events on the row: picked up, moved DY points (− is up),
+                                       let go (or held, for a picture of where it would land); target says
+                                       where; picture is the window as a PNG, nothing brought forward
+    ./bench sections drop ID Y [hold]|drop end
+                                       a trail's page let go over the column at Y (its own space), as
+                                       Trails' system drag hands it to the column's drop target
     ./bench flight [trails on|off | tide 6h|12h|24h|never]
                                        Labs flights (Settings › Labs): list them, or flip one in this world
     ./bench trails [open URL [FROM]|type ID WORDS|backdate N HOURS|glance N|off|toggle N|
@@ -837,6 +851,13 @@ def main(argv):
             print(f"{'●' if s['current'] else ' '} {s['index']}  {s['name']}{icon}  ({s['tabs']} tabs, {s['profile']}, {s.get('colour', '')})")
             if s.get("theme") and s["theme"] != "hue": print(f"      theme {s['theme']}")
     elif verb == "sections":
+        if "failures" in answer:
+            fails = answer["failures"]
+            print("sections check: " + ("ok" if not fails else f"{len(fails)} failure(s)"))
+            for f in fails: print("  ✗ " + f)
+            return 1 if fails else 0
+        for k in ("drop", "seeded", "released", "held"):
+            if k in answer: print(f"{k}: {answer[k]}")
         if "archived" in answer:
             print(f"archived {answer['archived']} tab(s)")
             if not answer["archived"]:
@@ -849,6 +870,9 @@ def main(argv):
             print(f"{'●' if s['current'] else ' '} {s['name']:22} {s['saved']:4} saved  {s['today']:4} today")
         for t in answer.get("today", []):
             print(f"    {t['id']}  {t['seen']}h  {t['title'] or '—'}")
+        if answer.get("saved"): print("saved, in order (z = put down / asleep):")
+        for t in answer.get("saved", []):
+            print(f"  {'●' if t.get('live') else ' '} {t['id']}  {'z' if t.get('asleep') else ' '}  {t['title'] or '—'}" + (f"  [{t['group']}]" if t.get('group') else ""))
     elif verb == "trails" and "trails" in answer:
         for k in ("error", "opened", "draft", "sending"):
             if k in answer: print(f"{k}: {answer[k]}")

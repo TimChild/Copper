@@ -95,6 +95,7 @@ final class Sections: ObservableObject {
     func note(_ id: Tab.ID?) {
         guard let id else { return }
         seen[id] = Date()
+        down.remove(id)
     }
 
     /// Save a row or let it go. Saving parks it at the end of the Saved run;
@@ -113,6 +114,125 @@ final class Sections: ObservableObject {
         let kept = browser.tabs.filter { $0.pin == nil && isSaved($0) }.count
         browser.move(tab, to: browser.pinnedCount + max(0, on ? kept - 1 : kept))
         reveal = on ? tab.id : nil
+    }
+
+    /// Let go over Saved (Fork/SavedDrop.swift): saved, at that place, in
+    /// that folder. Unlike `set`, the column does not scroll to it — it is
+    /// already where the pointer is.
+    func place(_ tab: Tab, at spot: SavedDrop.Spot, in browser: Browser) {
+        guard tab.pin == nil, !tab.isBlank else { return }
+        saved.insert(tab.id)
+        seen[tab.id] = seen[tab.id] ?? Date()
+        let groups = Groups.shared
+        func inFolder(_ id: Tab.ID, _ folder: UUID) -> Bool {
+            guard let mine = groups.membership[id] else { return false }
+            guard mine != folder else { return true }
+            guard let outer = groups.group(folder), let inner = groups.group(mine) else { return false }
+            return Folders.below(inner.name, outer.name)
+        }
+        // The folder first, so the session written by the move has it.
+        if let folder = spot.group, groups.group(folder) != nil {
+            groups.restore(tab, group: folder)
+            if case .into = spot.anchor, groups.group(folder)?.collapsed == true { groups.toggleCollapsed(folder) }
+        } else if groups.membership[tab.id] != nil {
+            groups.remove(tab)
+        }
+        let row = browser.tabs.map { (id: $0.id, pinned: $0.pin != nil, saved: isSaved($0)) }
+        let index = SavedDrop.index(for: spot.anchor, moving: tab.id, row: row, inFolder: inFolder)
+        browser.move(tab, to: min(index, browser.tabs.count - 1))
+        reveal = nil
+    }
+
+    // MARK: - closing a Saved row (Arc's rule)
+
+    // Closing a Saved tab — ⌘W, Close Tab in the File menu, the wheel button,
+    // an agent's close, Close Other Tabs, a window's last tab — never takes it
+    // out of Saved: `Browser.close` asks `putsDown` first and, for a Saved
+    // row, lets its page go (`Tab.rest`, as ⌘W on a favourite does) and moves
+    // on. The row keeps its place, its title and its mark. Only `remove` —
+    // the cross on the row, Close Tab on its menu, Close Tabs in Group, a
+    // kept tab deleted on another Mac, a deleted canvas — takes it out, and
+    // Reopen Closed Tab brings it back into Saved where it was.
+
+    /// Rows the close in progress takes out for good.
+    private var forGood: Set<Tab.ID> = []
+    /// Saved rows put down by a close and not looked at since. A close
+    /// never lands on one: they are closed, as far as ⌘W is concerned.
+    private var down: Set<Tab.ID> = []
+    /// Where each removed Saved row stood, by the Reopen Closed Tab entry it
+    /// left (`Browser.Ghost.id`).
+    private var removed: [UUID: Removed] = [:]
+
+    struct Removed: Equatable {
+        var group: UUID?
+    }
+
+    /// Whether `Browser.close` should put this tab down rather than close it.
+    func putsDown(_ tab: Tab) -> Bool {
+        tab.pin == nil && !tab.isBlank && isSaved(tab) && !forGood.contains(tab.id)
+    }
+
+    /// Said by `Browser.close` once it has put the row down.
+    func wentDown(_ tab: Tab) { down.insert(tab.id) }
+
+    /// Put down and still asleep: looked at again (or woken by anything),
+    /// it is an open row like any other.
+    func isDown(_ tab: Tab) -> Bool { down.contains(tab.id) && tab.asleep }
+
+    /// Where a close of `tab` lands, as a close would — the neighbour on the
+    /// right, else on the left, one no other window is showing first — among
+    /// the rows that are still open. Nil when none is.
+    func landing(after tab: Tab, in browser: Browser) -> Tab? {
+        guard let index = browser.tabs.firstIndex(where: { $0.id == tab.id }) else { return nil }
+        let rest = browser.tabs.filter { $0.id != tab.id }
+        let order = Array(index..<rest.count) + Array(stride(from: index - 1, through: 0, by: -1))
+        let open = order.map { rest[$0] }.filter { !isDown($0) }
+        return open.first { !Spaces.shared.shown($0, outside: browser) } ?? open.first
+    }
+
+    /// Every other row is a Saved tab already put down: `tab` is the last
+    /// open one, and closing it is closing a window's last tab.
+    func lastOpen(_ tab: Tab, in browser: Browser) -> Bool {
+        let others = browser.tabs.filter { $0.id != tab.id }
+        return !others.isEmpty && others.allSatisfy { isDown($0) }
+    }
+
+    /// Closed for good, Saved or not, with no way back into Saved — the
+    /// ordinary close's Reopen Closed Tab entry is all it leaves.
+    func closeForGood(_ tab: Tab, in browser: Browser) {
+        forGood.insert(tab.id)
+        defer { forGood.remove(tab.id) }
+        browser.close(tab)
+        down.remove(tab.id)
+    }
+
+    /// The cross on a row: a Today row closes as it always has; a Saved row
+    /// leaves Saved and closes, and Reopen Closed Tab puts it back.
+    func remove(_ tab: Tab, in browser: Browser) {
+        let place = tab.pin == nil && isSaved(tab) ? Removed(group: Groups.shared.membership[tab.id]) : nil
+        let before = Set(browser.ghosts.map(\.id))
+        closeForGood(tab, in: browser)
+        guard let place, let ghost = browser.ghosts.last(where: { !before.contains($0.id) }) else { return }
+        remember(place, for: ghost.id, keeping: Set(browser.ghosts.map(\.id)))
+    }
+
+    /// The Saved place a Reopen Closed Tab entry stands for. Entries the
+    /// browser no longer lists are let go.
+    func remember(_ place: Removed, for ghost: UUID, keeping alive: Set<UUID>) {
+        removed = removed.filter { alive.contains($0.key) }
+        removed[ghost] = place
+    }
+
+    func removedPlace(_ ghost: UUID) -> Removed? { removed[ghost] }
+
+    /// Reopen Closed Tab has put `tab` back where the entry said; a removed
+    /// Saved row comes back saved, in its folder if that is still there.
+    /// Before the column next draws, so it never counts as a new Today row.
+    func reopened(_ ghost: UUID, as tab: Tab) {
+        guard let place = removed.removeValue(forKey: ghost) else { return }
+        saved.insert(tab.id)
+        seen[tab.id] = Date()
+        Groups.shared.restore(tab, group: place.group)
     }
 
     /// A row that has just appeared: it is today's, it has been seen now,
@@ -171,6 +291,7 @@ final class Sections: ObservableObject {
     func forget(_ id: Tab.ID) {
         saved.remove(id)
         seen[id] = nil
+        down.remove(id)
     }
 
     func clear() {
@@ -197,6 +318,84 @@ final class Sections: ObservableObject {
         case "unsave":
             guard let tab = find(arg) else { return ["error": "no tab \(arg)"] }
             set(tab, saved: false, in: browser)
+        case "drag":
+            // drag ID DY [STEPS] [hold] [post|window|view]: the row picked up
+            // and moved DY points (negative is up) by real mouse events
+            // (Fork/SideHand.swift). Answers at once; the drag takes `ms`.
+            let words = arg.split(separator: " ").map(String.init)
+            guard words.count >= 2, let tab = find(words[0]), let dy = Double(words[1]) else {
+                return ["error": "sections drag ID DY [STEPS] [hold]"]
+            }
+            let steps = words.count > 2 ? Int(words[2]) ?? 12 : 12
+            SideHand.how = words.first { ["post", "window", "view"].contains($0) } ?? "view"
+            note = SideHand.drag(tab, dy: dy, steps: steps, hold: words.contains("hold"), in: browser)
+        case "click":
+            // click ID [cross]: a real click on the row, or on its cross.
+            let words = arg.split(separator: " ").map(String.init)
+            guard let tab = find(words.first ?? "") else { return ["error": "no tab \(arg)"] }
+            note = SideHand.click(tab, cross: words.contains("cross"), in: browser)
+        case "hover":
+            // hover ID | hover off: the pointer onto the row's middle, so its
+            // cross shows, or away from every row.
+            note = SideHand.hover(arg == "off" ? nil : find(arg), in: browser)
+        case "release":
+            note = SideHand.release(in: browser)
+        case "picture":
+            // picture PATH [EXTRA]: the window to a PNG without bringing it
+            // forward, cut to the column and EXTRA points of the page.
+            let words = arg.split(separator: " ").map(String.init)
+            guard let path = words.first else { return ["error": "sections picture PATH [EXTRA]"] }
+            note = SideHand.picture(to: path, extra: words.count > 1 ? CGFloat(Double(words[1]) ?? 0) : 0, in: browser)
+        case "target":
+            // Where the row in the hand would land now, and the frames it is
+            // worked out from.
+            let drag = SideDrag.of(browser)
+            let layout = drag.layout(in: browser)
+            note["drop"] = SavedDrop.describe(drag.target)
+            note["layout"] = ["top": layout.top, "bottom": layout.bottom, "seamTop": layout.seamTop, "seamBottom": layout.seamBottom,
+                              "lines": layout.lines.map { ["top": $0.top, "bottom": $0.bottom, "depth": $0.depth] }]
+            // Every loose row's middle, in the column's space: for working out a DY.
+            note["rows"] = Dictionary(uniqueKeysWithValues: browser.tabs.filter { $0.pin == nil }.compactMap { tab in
+                drag.rows[tab.id].map { (String(tab.id.uuidString.prefix(8)).lowercased(), $0.midY) }
+            })
+        case "drop":
+            // drop ID Y [hold]: a trail's page let go over the column at Y (the
+            // column's space) — what Trails' system drag hands the column's
+            // drop target, through the same model; `hold` stops before the
+            // drop, with the gap open, and `drop end` puts it away.
+            let drag = SideDrag.of(browser)
+            let words = arg.split(separator: " ").map(String.init)
+            if words.first == "end" { drag.end(); break }
+            guard words.count >= 2, let tab = find(words[0]), let y = Double(words[1]) else { return ["error": "sections drop ID Y [hold]"] }
+            drag.carry(nil, from: .today, in: browser)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            drag.move(to: y, in: browser)
+            note["drop"] = SavedDrop.describe(drag.target)
+            if !words.contains("hold") {
+                let target = drag.target
+                drag.end()
+                if let target, case .saved = target { withAnimation(Motion.settle) { drag.drop(tab, at: target, in: browser) } }
+            }
+        case "close":
+            // ⌘W on the row, through `Browser.close` itself.
+            guard let tab = find(arg) else { return ["error": "no tab \(arg)"] }
+            browser.close(tab)
+        case "remove":
+            // The cross on the row (and Close Tab on its menu).
+            guard let tab = find(arg) else { return ["error": "no tab \(arg)"] }
+            remove(tab, in: browser)
+        case "reopen":
+            browser.reopen()
+        case "seed":
+            // Test worlds: real rows (not the bench's) asleep, as a session
+            // brings them back — four Saved, two of them in a folder, and
+            // three in Today. `seed empty`: Today only.
+            guard Store.testing else { return ["error": "only in a test run"] }
+            note["seeded"] = seed(empty: arg == "empty", in: browser)
+        case "check":
+            // Close against remove on a Saved row, end to end on real objects.
+            guard Store.testing else { return ["error": "only in a test run"] }
+            note["failures"] = SavedChecks.run(in: browser)
         case "archive":
             // A bare `archive` runs the sweep the clock would have run; an
             // age in hours runs it against that instead, for a test that
@@ -243,7 +442,53 @@ final class Sections: ObservableObject {
             ["id": String(tab.id.uuidString.prefix(8)).lowercased(), "title": tab.title,
              "seen": Int(Date().timeIntervalSince(lastSeen(tab)) / 3600)]
         }
+        // The Saved block of the row on screen, in order: what a drag or a
+        // close did to it, readable without a picture.
+        note["saved"] = browser.tabs.filter { $0.pin == nil && isSaved($0) }.map { tab -> [String: Any] in
+            ["id": String(tab.id.uuidString.prefix(8)).lowercased(), "title": tab.title, "asleep": tab.asleep,
+             "live": tab.id == browser.activeID,
+             "group": Groups.shared.membership[tab.id].flatMap { Groups.shared.group($0)?.name } ?? ""]
+        }
         return note
+    }
+
+    /// Rows for a test world to look at: brought back asleep, the way a
+    /// session restores them, with real addresses and titles.
+    private func seed(empty: Bool, in browser: Browser) -> [String] {
+        let kept: [(String, String, String?)] = empty ? [] : [
+            ("https://mail.google.com/mail/u/0/", "Inbox — Gmail", nil),
+            ("https://calendar.google.com/", "Google Calendar", nil),
+            ("https://github.com/copper-browser/Copper", "copper-browser/Copper", "Work"),
+            ("https://linear.app/", "Linear", "Work"),
+        ]
+        let today: [(String, String)] = [
+            ("https://news.ycombinator.com/", "Hacker News"),
+            ("https://en.wikipedia.org/wiki/Copper", "Copper — Wikipedia"),
+            ("https://www.apple.com/", "Apple"),
+        ]
+        var made: [String] = []
+        func add(_ url: String, _ title: String, saved on: Bool) -> Tab? {
+            guard let address = URL(string: url) else { return nil }
+            let tab = Tab()
+            browser.prepare(tab)
+            tab.restore(url: address, title: title)
+            restore(tab, saved: on, seen: Date().timeIntervalSince1970)
+            made.append(String(tab.id.uuidString.prefix(8)).lowercased())
+            return tab
+        }
+        var row = browser.tabs
+        let top = browser.pinnedCount + browser.tabs.filter { $0.pin == nil && isSaved($0) }.count
+        var savedTabs: [Tab] = []
+        for (url, title, folder) in kept {
+            guard let tab = add(url, title, saved: true) else { continue }
+            savedTabs.append(tab)
+            if let folder { Groups.shared.restore(tab, group: Groups.shared.create(named: folder, hue: nil).id) }
+        }
+        row.insert(contentsOf: savedTabs, at: top)
+        row.insert(contentsOf: today.compactMap { add($0.0, $0.1, saved: false) }, at: top + savedTabs.count)
+        browser.tabs = row
+        Marks.warm(browser.tabs)
+        return made
     }
 
     /// How old the oldest Today row is, in hours — so a sweep that took

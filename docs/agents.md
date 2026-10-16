@@ -154,8 +154,9 @@ agent on|off|rotate`.
 `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot` read and
 draw on the user's whiteboards (`copper://canvas/<id>` tabs) — the same tools for every client and
 for ⌘E, each write attributed to the agent that made it. `canvas_share_link` makes (or reuses) a
-canvas's invite link; `canvas_join` opens one, the way clicking it would. Read before you write.
-See [canvas.md](canvas.md).
+canvas's invite link; `canvas_join` opens one, the way clicking it would. Read before you write;
+a big canvas reads a page at a time — `overview: true` first, then a `frame` or `region`, or follow
+`next` as `cursor` ([Reading a big canvas](canvas.md#reading-a-big-canvas)). See [canvas.md](canvas.md).
 
 ## Jev mode — hand over a goal
 

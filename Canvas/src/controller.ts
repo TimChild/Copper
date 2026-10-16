@@ -31,7 +31,8 @@ import type { Me } from './canvas/types'
 import { FrameBus, parseFrameEvent } from './canvas/frames'
 import { PosterBroker } from './canvas/posters'
 import { hostLog, postToHost } from './host-bridge'
-import { applyOps, readCanvas, type ApplyResult, type CanvasRead, type OpsContext } from './ops'
+import { applyOps, readBoard, type ApplyResult, type CanvasRead, type OpsContext } from './ops'
+import type { CanvasOverview } from './read-pages'
 
 export const VERSION = '1.0.0'
 
@@ -578,10 +579,10 @@ export class Controller {
     return result
   }
 
-  read(raw: unknown): CanvasRead {
+  read(raw: unknown): CanvasRead | CanvasOverview {
     const s = this.need()
     const name = (s.store.meta.get('name') as string | undefined) || s.cfg.name
-    return readCanvas(
+    return readBoard(
       {
         store: s.store,
         canvas: { id: s.cfg.docId, name: s.cfg.name || name, kind: s.cfg.kind },

@@ -34,6 +34,24 @@ describe('findFreeSpot', () => {
   })
 })
 
+describe('findFreeSpot with a search hint', () => {
+  it('lands each shape of a run exactly where a search from the middle would', () => {
+    const crowd: { x: number; y: number; w: number; h: number }[] = []
+    for (let i = -12; i <= 12; i++) for (let j = -12; j <= 12; j++) if ((i * 7 + j * 3) % 5) crowd.push({ x: i * 230 - 100, y: j * 230 - 100, w: 200, h: 200 })
+    const plain = [...crowd]
+    const hinted = [...crowd]
+    const hint = { ring: 0 }
+    for (let n = 0; n < 60; n++) {
+      const a = findFreeSpot(plain, size, { x: 0, y: 0 }, { gap: 24, step: 32 })
+      const b = findFreeSpot(hinted, size, { x: 0, y: 0 }, { gap: 24, step: 32 }, hint)
+      expect(b).toEqual(a)
+      plain.push({ ...a, ...size })
+      hinted.push({ ...b, ...size })
+    }
+    expect(hint.ring).toBeGreaterThan(1)
+  })
+})
+
 describe('gridSlots', () => {
   it('lays boxes in rows', () => {
     expect(gridSlots({ x: 0, y: 0 }, { w: 10, h: 10 }, 3, 2, 5)).toEqual([

@@ -96,10 +96,21 @@ export function createChatApi(hub: ChatHub): CopperChatApi {
   }
 }
 
+/** The read's options as an object (a JSON string parsed), or null. */
+function optionsOf(opts: unknown): Record<string, unknown> | null {
+  try {
+    const o = typeof opts === 'string' ? (opts.trim() ? JSON.parse(opts) : {}) : opts
+    return isObject(o) ? o : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The page's API with chat merged in: the chat entries, and `read` with the
  * last 50 messages under `chat` on a canvas that has chat (texts cut at 500
- * characters unless `full`).
+ * characters unless `full`) — 10 on the first page of a paged read, none on
+ * later pages or an overview.
  */
 export function withChat<T extends { read(opts?: unknown): string }>(api: T, hub: ChatHub): T & CopperChatApi {
   const base = api.read.bind(api)
@@ -109,14 +120,13 @@ export function withChat<T extends { read(opts?: unknown): string }>(api: T, hub
     try {
       const parsed = JSON.parse(out) as Record<string, unknown>
       if (parsed.error) return out
-      let full = false
-      try {
-        const o = typeof opts === 'string' ? (opts.trim() ? JSON.parse(opts) : {}) : opts
-        full = isObject(o) && o.full === true
-      } catch {
-        full = false
-      }
-      parsed.chat = hub.read(50).map(m => (full || m.text.length <= 500 ? m : { ...m, text: `${m.text.slice(0, 499)}…` }))
+      const given = optionsOf(opts)
+      const full = given?.full === true
+      // A big board's read comes in pages (read-pages.ts): the chat rides on the first one only, and
+      // there only its last ten messages, so the page stays near its size; an overview has none.
+      if (parsed.overview === true || given?.cursor) return out
+      const last = parsed.next ? 10 : 50
+      parsed.chat = hub.read(last).map(m => (full || m.text.length <= 500 ? m : { ...m, text: `${m.text.slice(0, 499)}…` }))
       return JSON.stringify(parsed)
     } catch {
       return out

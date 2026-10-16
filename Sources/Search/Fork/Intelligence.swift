@@ -535,7 +535,7 @@ final class Intelligence: ObservableObject {
             take("textModel") { next.textModel = $0 }
             if let raw = params["jevVision"] {
                 guard let text = raw as? String, let mode = Tools.Ultrafast.Vision.parse(text), Tools.Ultrafast.Vision.offered.contains(mode) else {
-                    return ["error": "jevVision must be off, screenshot, marks or box"]
+                    return ["error": "jevVision must be auto, off, screenshot, marks or box"]
                 }
                 next.jevVision = mode.rawValue
                 applied.append("jevVision")

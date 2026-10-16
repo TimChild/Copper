@@ -237,7 +237,7 @@ enum CLI {
                     arguments["maxSteps"] = number
                 case "--no-elements": arguments["elements"] = false
                 case "--vision":
-                    guard let value = next(&args, &i), ["off", "screenshot", "marks", "box", "pixels"].contains(value.lowercased()) else { return bad("run --vision needs off, screenshot, marks, box or pixels") }
+                    guard let value = next(&args, &i), ["auto", "off", "screenshot", "marks", "box", "pixels"].contains(value.lowercased()) else { return bad("run --vision needs auto, off, screenshot, marks, box or pixels") }
                     arguments["vision"] = value.lowercased()
                 case "--model":
                     guard let value = next(&args, &i), !value.isEmpty else { return bad("run --model needs a Jev model name (jev-latest, jev-preview, jev-1.14.0)") }

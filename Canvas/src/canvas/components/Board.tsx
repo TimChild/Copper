@@ -40,12 +40,15 @@ import {
   type Side,
   type View,
 } from '../geometry'
-import { countRender } from '../debug'
+import { countCommit, countRender } from '../debug'
 import { gridBackground } from '../grid'
 import { growFor } from '../overflow'
 import { imageFile, imageFromFile, imageFromUrl, imageSizeFor, isUrlText, looksLikeImageUrl, urlFrom } from '../images'
 import { MIN_SIZE, isResizable, minSizeOf, resizeBox, resizeBoxKeepAspect, type Handle } from '../resize'
-import { LIVE_SIZE, framesToMount, frameUrl } from '../frames'
+import { LIVE_SETTLE_MS, LIVE_SIZE, frameUrl, planLiveFrames, type LiveEntry } from '../frames'
+import { admit, arrowsToDraw, nextCull, shapesToMount } from '../culling'
+import { nextLodZoom } from '../lod'
+import { POSTER_HOLD_MS } from '../posters'
 import { COMMENT_REF, arrowLabelBox, revealView, type SearchResult } from '../search'
 import { isShown, type CommentAuthor } from '../comments'
 import { statusView } from '../status'
@@ -71,7 +74,7 @@ import {
   type Tool,
   type Toast,
 } from './Chrome'
-import { BoardContext, type BoardActions, type EditField } from './context'
+import { BoardContext, ViewMotion, ZoomVars, type BoardActions, type EditField, type FrameHandle } from './context'
 import {
   AgentCursors,
   AnchorDots,
@@ -99,12 +102,12 @@ import {
   type CommentFocus,
   type MenuItem,
 } from './Comments'
-import { ArrowLabel, ArrowLayer, FrameView, ImageView, LinkView, StickyView, TextView, type DrawnArrow } from './Shapes'
-import { ChecklistView, checklistEditField } from './Checklist'
+import type { DrawnArrow } from './Shapes'
+import { checklistEditField } from './Checklist'
 import { checklistText, isChecklist } from '../checklist'
-import { TimelineView } from './Timeline'
 import { TIMELINE_SIZE, isTimeline, neededHeight, newTimelineText } from '../timeline'
-import { WebFrame, type FrameUser } from './WebFrame'
+import type { FrameUser } from './WebFrame'
+import { ShapeLayer } from './ShapeLayer'
 import { MOD, cn } from './ui'
 
 type Gesture =
@@ -143,8 +146,13 @@ const SEND_MS = 50
 /** Screen px the tool bar takes at the bottom (its panel and margin). */
 const TOOLBAR_PX = 68
 const DOUBLE_MS = 350
-/** The layer stays promoted until the view has rested this long. */
-const SETTLE_MS = 150
+/**
+ * The view has settled once it has rested this long: the layer is no longer
+ * promoted, the cull rect and the LOD zoom catch up, new live frames mount.
+ */
+const SETTLE_MS = LIVE_SETTLE_MS
+/** Selected shapes stay mounted off screen, up to this many (⌘A on a huge board needn't mount it all). */
+const PIN_SELECTED_MAX = 64
 /** How long a released laser stroke stays in awareness (its hold and fade, and a margin). */
 const LASER_LINGER_MS = 3200
 /** Laser cursor: a small glowing dot. */
@@ -154,8 +162,6 @@ const LASER_CURSOR = `url("data:image/svg+xml;utf8,${encodeURIComponent(
 
 const isTextField = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.isContentEditable || el.closest('input, textarea, select') !== null)
-
-const NO_USERS: readonly FrameUser[] = []
 
 /** A checklist as plain text for the clipboard: its title, then each row, its pick and its comment. */
 const copyChecklist = (s: Shape | undefined) => (s ? checklistText(s.title, s.rows ?? [], s.picks ?? {}, s.columns ?? [], s.notes ?? {}, s.assignees ?? {}) : '')
@@ -400,21 +406,38 @@ export function Board({ session }: { session: Session }) {
 
   // While the view moves the layer is promoted (will-change), so a pan or zoom
   // composites instead of repainting every note; it settles back once the
-  // view has rested, so text is drawn crisp at the new zoom.
-  const settled = useRef(true)
+  // view has rested, so text is drawn crisp at the new zoom. Settling also
+  // lets the cull rect, the LOD zoom and the live frames catch up.
+  const firstView = useRef(true)
+  const settledRef = useRef(true)
+  const [settled, setSettled] = useState(true)
+  /** When the view last moved: read by live frames (a poster needs a still view), never rendered on. */
+  const [motion] = useState(() => new ViewMotion())
+  const [zoomVars] = useState(() => new ZoomVars())
   useLayoutEffect(() => {
+    zoomVars.set(view.z)
     const el = layer.current
     if (!el) return
-    if (settled.current) {
-      settled.current = false
+    if (firstView.current) {
+      firstView.current = false
       return
     }
+    motion.moved()
     el.style.willChange = 'transform'
+    if (settledRef.current) {
+      settledRef.current = false
+      setSettled(false)
+    }
     const timer = setTimeout(() => {
       el.style.willChange = ''
+      settledRef.current = true
+      setSettled(true)
     }, SETTLE_MS)
     return () => clearTimeout(timer)
-  }, [view])
+  }, [view, motion, zoomVars])
+  /** The zoom the layer's `--z` says: the one the view last settled at (see ZoomVars). */
+  const [restZoom, setRestZoom] = useState(view.z)
+  if (settled && restZoom !== view.z) setRestZoom(view.z)
 
   const fitAll = useCallback(() => {
     const boxes = [...live.list.filter(s => s.type !== 'arrow'), ...live.arrows.map(a => arrowBox(a.path))]
@@ -450,6 +473,14 @@ export function Board({ session }: { session: Session }) {
   useEffect(() => {
     controller.attachBoard({ zoomTo: ids => zoomRef.current(ids) })
     return () => controller.attachBoard(null)
+  }, [])
+  // For measuring: how long each render took to commit (`debug.ts`).
+  useLayoutEffect(() => countCommit())
+  // For measuring: when the doc's first board is on screen (performance marks, `canvas:*`).
+  useEffect(() => {
+    performance.mark?.('canvas:board')
+    const raf = requestAnimationFrame(() => performance.mark?.('canvas:painted'))
+    return () => cancelAnimationFrame(raf)
   }, [])
 
   // ---- undo state -------------------------------------------------------------
@@ -674,9 +705,24 @@ export function Board({ session }: { session: Session }) {
     [endEdit, readOnly]
   )
 
+  /** Live frames' handles (posters before an unload), by shape id. */
+  const [frameHandles] = useState(() => new Map<string, FrameHandle>())
   const actions = useMemo<BoardActions>(
-    () => ({ store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky, editPart }),
-    [store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky, editPart]
+    () => ({
+      store,
+      me,
+      readOnly,
+      openUrl,
+      endEdit,
+      sibling,
+      autoHeight,
+      growSticky,
+      editPart,
+      frameHandles,
+      motion,
+      zoomVars,
+    }),
+    [store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky, editPart, frameHandles, motion, zoomVars]
   )
 
   // ---- acting on the selection ------------------------------------------------
@@ -1765,36 +1811,108 @@ export function Board({ session }: { session: Session }) {
 
   // ---- what to draw -----------------------------------------------------------------
 
-  const vis = useMemo(() => {
-    const b = visibleWorld(view, size.w || 1, size.h || 1)
-    const m = 300 / view.z
-    return { x: b.x - m, y: b.y - m, w: b.w + m * 2, h: b.h + m * 2 }
-  }, [view, size])
-  const onScreen = (s: Shape) => boxesOverlap(vis, s) || selection.has(s.id) || editing?.id === s.id
-  const frames = live.list.filter(s => s.type === 'frame' && onScreen(s))
-  const boxes = live.list.filter(s => s.type !== 'frame' && s.type !== 'arrow' && onScreen(s))
-  const arrows = live.arrows.filter(
-    a => a.shape.id !== reEnding && (boxesOverlap(vis, arrowBox(a.path)) || selection.has(a.shape.id))
-  )
   const editId = editing?.id ?? null
 
-  // Which live frames get a real iframe: on screen, big enough to read, a few at most.
-  const [mountedFrames, setMountedFrames] = useState<ReadonlySet<string>>(() => new Set())
-  const liveFrames = boxes.filter(s => s.type === 'link' && s.live)
-  const wantMounted = framesToMount(liveFrames, {
-    visible: visibleWorld(view, size.w || 1, size.h || 1),
-    zoom: view.z,
-    active: activeId,
-    mounted: mountedFrames,
-  })
-  if (wantMounted.size !== mountedFrames.size || [...wantMounted].some(id => !mountedFrames.has(id))) setMountedFrames(wantMounted)
-  const frameUsers = new Map<string, FrameUser[]>()
-  for (const p of peers) {
-    if (!p.frame) continue
-    const list = frameUsers.get(p.frame) ?? []
-    list.push({ clientId: p.clientId, name: p.name, color: p.color })
-    frameUsers.set(p.frame, list)
-  }
+  // The LOD zoom (canvas/lod.ts): follows the view in steps, exact once it settles.
+  const [lodZoom, setLodZoom] = useState(view.z)
+  const lodNext = nextLodZoom(lodZoom, view.z, settled)
+  if (lodNext !== lodZoom) setLodZoom(lodNext)
+  const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
+
+  // Which live frames have their page (canvas/frames.ts): the one in use; on
+  // screen and big enough to read, a few at most, made once the view has
+  // settled; kept a while after they stop being wanted; pictured (a poster)
+  // before the page goes when they are still on screen.
+  const liveLinks = useMemo(() => live.list.filter(s => s.type === 'link' && s.live), [live])
+  const liveState = useRef<Map<string, LiveEntry>>(new Map())
+  const [liveSet, setLiveSet] = useState<ReadonlySet<string>>(() => new Set())
+  const [liveTick, setLiveTick] = useState(0)
+  /** Frames whose page stays a moment for its picture (`waiting`), or has had it (`done`). */
+  const holds = useRef(new Map<string, 'waiting' | 'done'>())
+  useEffect(() => {
+    const now = performance.now()
+    const { w, h } = sizeRef.current
+    const waiting = new Set([...holds.current].filter(([, st]) => st === 'waiting').map(([id]) => id))
+    const plan = planLiveFrames(liveLinks, {
+      visible: visibleWorld(viewRef.current, w || 1, h || 1),
+      zoom: viewRef.current.z,
+      active: activeId,
+      pinned: waiting,
+      settled,
+      now,
+      prev: liveState.current,
+    })
+    for (const id of plan.dropped) {
+      if (holds.current.get(id) === 'done') {
+        holds.current.delete(id)
+        continue
+      }
+      const wait = frameHandles.get(id)?.beforeUnload()
+      if (!wait) continue
+      holds.current.set(id, 'waiting')
+      plan.mounted.set(id, liveState.current.get(id) ?? { since: now, lastWanted: now })
+      const done = () => {
+        if (holds.current.get(id) !== 'waiting') return
+        holds.current.set(id, 'done')
+        setLiveTick(t => t + 1)
+      }
+      void Promise.race([wait, new Promise(resolve => setTimeout(resolve, POSTER_HOLD_MS))]).then(done, done)
+    }
+    // A frame wanted again keeps its page: whatever hold it had is over.
+    for (const id of plan.mounted.keys()) if (holds.current.get(id) === 'done') holds.current.delete(id)
+    liveState.current = plan.mounted
+    const ids = [...plan.mounted.keys()]
+    setLiveSet(prev => (prev.size === ids.length && ids.every(id => prev.has(id)) ? prev : new Set(ids)))
+    if (plan.next === null) return
+    const timer = setTimeout(() => setLiveTick(t => t + 1), Math.max(50, plan.next - now + 20))
+    return () => clearTimeout(timer)
+  }, [liveLinks, activeId, settled, liveTick, frameHandles, size.w, size.h])
+
+  const frameUsers = useMemo(() => {
+    const out = new Map<string, FrameUser[]>()
+    for (const p of peers) {
+      if (!p.frame) continue
+      const list = out.get(p.frame) ?? []
+      list.push({ clientId: p.clientId, name: p.name, color: p.color })
+      out.set(p.frame, list)
+    }
+    return out
+  }, [peers])
+
+  // What is mounted (canvas/culling.ts): what meets the cull rect, which
+  // catches up with the view in batches (and on settle), plus what must stay.
+  const visibleNow = visibleWorld(view, size.w || 1, size.h || 1)
+  const [cull, setCull] = useState<Box | null>(null)
+  const cullBox = nextCull(cull, visibleNow, settled)
+  if (cullBox !== cull) setCull(cullBox)
+  const menuId = menu?.id ?? null
+  const pinned = useMemo(() => {
+    const out = new Set<string>(selectionList.length <= PIN_SELECTED_MAX ? selectionList : [])
+    for (const id of [editId, activeId, focusAnchor, menuId]) if (id) out.add(id)
+    for (const id of liveSet) out.add(id)
+    return out
+  }, [selectionList, editId, activeId, focusAnchor, menuId, liveSet])
+  const target = useMemo(() => shapesToMount(live.list, cullBox, pinned), [live, cullBox, pinned])
+  // While the view moves, what a re-cull takes in comes MOUNT_CHUNK at a time
+  // (nearest the middle first), a frame apart: a zoom out mounts the ring it
+  // reveals over a few frames, not in one long one. `held` is what may show
+  // without waiting; null once the view has settled (then all of it does).
+  const [held, setHeld] = useState<ReadonlySet<string> | null>(null)
+  if (settled && held) setHeld(null)
+  else if (!settled && !held) setHeld(new Set(target.map(s => s.id)))
+  const mounted = useMemo(() => admit(target, held, pinned, cullBox), [target, held, pinned, cullBox])
+  useEffect(() => {
+    if (!held || !mounted.some(s => !held.has(s.id))) return
+    const raf = requestAnimationFrame(() => setHeld(prev => (prev ? new Set([...prev, ...mounted.map(s => s.id)]) : prev)))
+    return () => cancelAnimationFrame(raf)
+  }, [held, mounted])
+  const frames = useMemo(() => mounted.filter(s => s.type === 'frame'), [mounted])
+  const boxes = useMemo(() => mounted.filter(s => s.type !== 'frame'), [mounted])
+  const arrows = useMemo(() => {
+    const ids = new Set(mounted.map(s => s.id))
+    const all = reEnding ? live.arrows.filter(a => a.shape.id !== reEnding) : live.arrows
+    return arrowsToDraw(all, cullBox, a => arrowBox(a.path), ids, pinned)
+  }, [mounted, live, reEnding, cullBox, pinned])
 
   const single = selected.length === 1 ? selected[0]! : null
   const busy = !!(drag || draft || frameDraft || panning)
@@ -1906,48 +2024,24 @@ export function Board({ session }: { session: Session }) {
         <div
           ref={layer}
           className="absolute left-0 top-0 origin-top-left"
-          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})`, '--z': view.z } as CSSProperties}
+          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})`, '--z': restZoom } as CSSProperties}
         >
-          {frames.map(s => (
-            <FrameView key={s.id} shape={s} editing={editId === s.id} selected={selection.has(s.id)} zoom={view.z} />
-          ))}
-          {boxes.map(s =>
-            isTimeline(s) ? (
-              <TimelineView key={s.id} shape={s} editing={editId === s.id ? (editing?.field ?? null) : null} selected={selection.has(s.id)} />
-            ) : s.type === 'sticky' && !isChecklist(s) ? (
-              <StickyView key={s.id} shape={s} editing={editId === s.id} />
-            ) : s.type === 'text' ? (
-              <TextView key={s.id} shape={s} editing={editId === s.id} />
-            ) : s.type === 'image' ? (
-              <ImageView key={s.id} shape={s} />
-            ) : isChecklist(s) ? (
-              <ChecklistView
-                key={s.id}
-                shape={s}
-                editing={editId === s.id ? (editing?.field ?? null) : null}
-                selected={selection.has(s.id)}
-              />
-            ) : s.live ? (
-              <WebFrame
-                key={s.id}
-                shape={s}
-                selected={selection.has(s.id)}
-                active={activeId === s.id}
-                mounted={wantMounted.has(s.id)}
-                busy={frameBusy}
-                zoom={view.z}
-                users={frameUsers.get(s.id) ?? NO_USERS}
-                onDeactivate={deactivate}
-                onLive={setLive}
-              />
-            ) : (
-              <LinkView key={s.id} shape={s} selected={selection.has(s.id)} />
-            )
-          )}
-          <ArrowLayer arrows={arrows} selected={selection} zoom={view.z} />
-          {arrows.map(({ shape, path }) => (
-            <ArrowLabel key={shape.id} shape={shape} path={path} editing={editId === shape.id} selected={selection.has(shape.id)} />
-          ))}
+          <ShapeLayer
+            frames={frames}
+            boxes={boxes}
+            arrows={arrows}
+            selection={selection}
+            editId={editId}
+            editField={editing?.field ?? null}
+            activeId={activeId}
+            live={liveSet}
+            busy={frameBusy}
+            lodZoom={lodZoom}
+            dpr={dpr}
+            frameUsers={frameUsers}
+            onDeactivate={deactivate}
+            onLive={setLive}
+          />
 
           {peerSelections.map(({ peer, boxes: b }) => (
             <SelectionOutlines key={peer.clientId} boxes={b} group={null} zoom={view.z} color={peer.color} dashed />

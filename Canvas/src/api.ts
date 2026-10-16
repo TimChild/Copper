@@ -36,6 +36,8 @@ export interface CopperCanvasApi {
   frameEvent(event: unknown): boolean
   /** `{reports: true}`: the host reports every frame's loads, so silence means it didn't load. */
   frameHost(cfg: unknown): void
+  /** The host's picture of a live frame (`canvas/posters.ts`): `data:image/jpeg;base64,…`, or null. True when it was asked for. */
+  framePoster(name: unknown, dataUrl: unknown): boolean
   exportState(): string
   /**
    * Bring an Easels board onto this canvas: `{doc: base64, files: {fileId: dataURL}, title?}`
@@ -122,6 +124,7 @@ export function createApi(c: Controller = controller): CopperCanvasApi {
     theme: guard('theme', (mode: string) => void setTheme(mode), undefined),
     frameEvent: guard('frameEvent', (event: unknown) => c.frameEvent(event), false),
     frameHost: guard('frameHost', (cfg: unknown) => c.frameHost(cfg), undefined),
+    framePoster: guard('framePoster', (name: unknown, dataUrl: unknown) => c.framePoster(name, dataUrl), false),
     exportState: guard('exportState', () => c.exportState(), ''),
     importLegacy: async (payload: unknown): Promise<ImportResult> => {
       try {

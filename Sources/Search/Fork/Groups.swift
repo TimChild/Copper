@@ -220,10 +220,11 @@ final class Groups: ObservableObject {
         save()
     }
 
-    /// Every tab in it closes, and then the group.
+    /// Every tab in it closes, and then the group. On purpose, from the
+    /// folder's menu: they leave Saved rather than being put down.
     func closeAll(_ id: UUID, in browser: Browser) {
         for tab in members(of: id, in: browser) where browser.tabs.contains(where: { $0.id == tab.id }) {
-            browser.close(tab)
+            Sections.shared.remove(tab, in: browser)
         }
         dissolve(id)
     }

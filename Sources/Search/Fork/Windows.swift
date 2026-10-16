@@ -270,11 +270,12 @@ extension Browser {
     /// over (Spaces.claim) and the other window says where it went.
     func landing(after index: Int) -> Tab {
         let at = min(index, tabs.count - 1)
-        let near = tabs[at]
-        guard Spaces.shared.shown(near, outside: self) else { return near }
-        // The free tab nearest the gap, right first.
-        let order = (at..<tabs.count).map { $0 } + stride(from: at - 1, through: 0, by: -1).map { $0 }
-        return order.map { tabs[$0] }.first { !Spaces.shared.shown($0, outside: self) } ?? near
+        // Nearest the gap, right first — passing over Saved rows a close has
+        // just put down (Fork/Sections.swift), unless nothing else is left.
+        let order = ((at..<tabs.count).map { $0 } + stride(from: at - 1, through: 0, by: -1).map { $0 }).map { tabs[$0] }
+        let open = order.filter { !Sections.shared.isDown($0) }
+        let pool = open.isEmpty ? order : open
+        return pool.first { !Spaces.shared.shown($0, outside: self) } ?? pool[0]
     }
 
     /// The most recently looked-at of `pool`, preferring one no other window

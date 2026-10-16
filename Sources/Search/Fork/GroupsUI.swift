@@ -22,9 +22,10 @@ struct GroupedRows: View {
     /// Where this block starts in the whole loose list, so a drag inside it
     /// moves the tab to the right place in the row and not to the row's top.
     var offset = 0
-    /// A row let go a clear step past the block's top (-1) or bottom (+1):
-    /// the sidebar reads that as crossing the seam between Saved and Today.
-    var crossed: ((Tab, Int) -> Void)? = nil
+    /// Which of the sidebar's two blocks this is. A row picked up in one is
+    /// over the other as soon as the pointer is (Fork/SavedDrop.swift), and
+    /// let go there it crosses the seam, at the place that opened for it.
+    var block: SavedDrop.Block? = nil
     /// Told when a row is picked up and put down, so the column knows not
     /// to scroll out from under the hand.
     var holding: ((Bool) -> Void)? = nil
@@ -32,6 +33,8 @@ struct GroupedRows: View {
     @State private var dragging: Tab.ID?
     @State private var from = 0
     @State private var travel: CGFloat = 0
+
+    private var drag: SideDrag { SideDrag.of(browser) }
 
     static let row: CGFloat = 37
     static let gap: CGFloat = 4
@@ -60,11 +63,18 @@ struct GroupedRows: View {
             ForEach(rows) { row in
                 switch row {
                 case .head(let group, let count, _, let depth, let label):
+                    if block == .saved { SavedDropGap(drag: drag, anchor: .beforeFolder(group.id), tint: tint) }
                     GroupHead(browser: browser, group: group, count: count, label: label, tint: tint)
                         .padding(.leading, CGFloat(depth) * Folders.step)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SavedDrop.space)) } action: { frame in
+                            if block == .saved { drag.heads[group.id] = frame }
+                        }
+                    // Onto the folder: its first place opens under it, open or shut.
+                    if block == .saved { SavedDropGap(drag: drag, anchor: .into(group.id), tint: tint) }
                 case .tab(let tab, let index, let group, let depth):
                     let step = GroupedRows.row + GroupedRows.gap
                     let held = dragging == tab.id
+                    if block == .saved { SavedDropGap(drag: drag, anchor: .before(tab.id), tint: tint) }
                     VStack(spacing: GroupedRows.gap) {
                         SideRow(
                             browser: browser,
@@ -72,9 +82,16 @@ struct GroupedRows: View {
                             live: tab.id == browser.activeID,
                             tint: tint,
                             pill: pill,
-                            close: { browser.close(tab) }
+                            // Fork (saved-close): the cross (and Close Tab on the
+                            // row's menu) is the one close that takes a Saved row
+                            // out of Saved; ⌘W only puts it down.
+                            close: { Sections.shared.remove(tab, in: browser) }
                         )
                         .padding(.leading, CGFloat(depth) * Folders.step)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { SideHand.frames[tab.id] = $0 }
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SavedDrop.space)) } action: { frame in
+                            if dragging != tab.id { drag.rows[tab.id] = frame }
+                        }
                         // A hair of the folder's colour down the middle of
                         // its header's glyph, under the rows it holds. The
                         // step in is what says they are inside it; this
@@ -89,14 +106,29 @@ struct GroupedRows: View {
                             }
                         }
                     }
+                    // In the hand, the row is a card lifted off the column: it
+                    // passes over other rows, and its title must stay its own.
+                    .background {
+                        if held { SideDragCardGround(tint: tint).padding(.leading, CGFloat(depth) * Folders.step) }
+                    }
+                    // Over the other block its card is drawn by the column
+                    // (SideDragCard) and its own place here is left empty.
+                    .modifier(SideDragHidden(drag: drag, held: held))
                     .offset(y: held ? travel - CGFloat(index - from) * step : 0)
                     .zIndex(held ? 1 : 0)
                     .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
                     .gesture(reorder(tab: tab, index: index, step: step))
+                    if block == .saved { SavedDropGap(drag: drag, anchor: .after(tab.id), tint: tint) }
                 }
             }
+            if block == .saved { SavedDropGap(drag: drag, anchor: .end, tint: tint) }
         }
         .coordinateSpace(name: "rows")
+        // The Saved block's own frame: where it ends, for a row on its way
+        // down out of it, whatever is in the hand.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SavedDrop.space)) } action: { frame in
+            if block == .saved { drag.saved = frame }
+        }
         .onChange(of: browser.tabs.map(\.id)) { _, _ in
             groups.prune(keeping: browser.tabs + Spaces.shared.parkedTabs)
         }
@@ -107,17 +139,23 @@ struct GroupedRows: View {
         group.hue.map { Color(hue: $0, saturation: 0.55, brightness: 0.75) } ?? tint.dot
     }
 
-    /// Upstream's reorder, unchanged but for the drop: a row let go inside
-    /// another group's run joins it, and one dragged clear of its own leaves.
+    /// Upstream's reorder, unchanged inside the block but for the drop: a
+    /// row let go inside another group's run joins it, and one dragged clear
+    /// of its own leaves. With the pointer over the other block it stops
+    /// reordering here and a row's room opens where it would land there
+    /// (Fork/SavedDrop.swift); let go, it goes there.
     private func reorder(tab: Tab, index: Int, step: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 5, coordinateSpace: .named("rows"))
+        DragGesture(minimumDistance: 5, coordinateSpace: .named(SavedDrop.space))
             .onChanged { value in
                 if dragging != tab.id {
                     dragging = tab.id
                     from = index
                     holding?(true)
+                    if let block { drag.carry(tab.id, from: block, at: value.startLocation.y, in: browser) }
                 }
                 travel = value.translation.height
+                drag.move(to: value.location.y, in: browser)
+                guard drag.target == nil else { return }
                 let moved = Int((travel / step).rounded())
                 let target = min(max(0, from + moved), loose.count - 1)
                 if target != index {
@@ -127,17 +165,18 @@ struct GroupedRows: View {
                 }
             }
             .onEnded { _ in
-                // A whole row past the block's own end, not just over its
-                // last line: the seam is crossed on purpose or not at all.
-                let wanted = from + Int((travel / step).rounded())
+                let target = drag.target
+                drag.end()
                 withAnimation(Motion.settle) {
                     dragging = nil
                     travel = 0
                 }
                 holding?(false)
-                if wanted < -1 { crossed?(tab, -1) }
-                else if wanted > loose.count { crossed?(tab, 1) }
-                else { groups.settle(tab, in: browser) }
+                if let target {
+                    withAnimation(Motion.settle) { drag.drop(tab, at: target, in: browser) }
+                } else {
+                    groups.settle(tab, in: browser)
+                }
             }
     }
 }

@@ -87,10 +87,7 @@ enum Headless {
             reason: "Copper headless: serving agents"
         )
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            // LaunchServices activates an app it opens; hand focus straight
-            // back to whoever had it.
-            log("activated by the system — deactivating")
-            MainActor.assumeIsolated { NSApp.deactivate() }
+            MainActor.assumeIsolated { becameActive() }
         }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { for window in NSApp.windows { Parking.park(window) } }
@@ -115,6 +112,34 @@ enum Headless {
 
     private static var awake: NSObjectProtocol?
     private static var terminate: DispatchSourceSignal?
+
+    /// LaunchServices activated this process: a Dock click, a plain `open`
+    /// or a link it routed here because this headless Copper shares the
+    /// installed one's bundle id. On the way it promoted the process from
+    /// accessory to an ordinary app ("changing application type to
+    /// Foreground from UIElement"), which leaves a second Copper icon in
+    /// the Dock and in ⌘-Tab for the rest of the run, and binds the Dock's
+    /// Copper tile to this process, so every later click lands here too.
+    /// The policy is taken back at once.
+    ///
+    /// The activation itself belongs to the main Copper the reopen or link
+    /// is being handed to (Instance.swift `handFocus`): it can only be
+    /// passed on while this process still holds it, so it is never thrown
+    /// away while a hand-off is under way. Otherwise it goes straight back —
+    /// after a moment, because the Apple Event that starts a hand-off can
+    /// arrive just behind the activation that came with it.
+    @MainActor private static func becameActive() {
+        if NSApp.activationPolicy() != .accessory {
+            NSApp.setActivationPolicy(.accessory)
+            log("made a Dock app by the system — back to accessory")
+        }
+        if Instance.activationArrived() { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            guard NSApp.isActive, !Instance.handingOff else { return }
+            log("activated by the system — deactivating")
+            NSApp.deactivate()
+        }
+    }
 
     @MainActor private static func readAgentDefaults() {
         let object = (try? Data(contentsOf: MCP.file))

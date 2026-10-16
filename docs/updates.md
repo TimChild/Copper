@@ -180,12 +180,28 @@ A Dock click or a plain `open Copper.app` goes to whichever instance LaunchServi
 (`Store.world != nil` or headless) of Copper's own bundle id it never shows or activates
 itself; it hands the reopen to the main world (`~/Library/Application Support/Copper`):
 
-- held lock → activate that pid;
+- held lock → send that pid a reopen Apple event (so a Copper whose windows were all closed
+  brings one back) and hand it the activation;
 - no lock but a running instance of the bundle without `SEARCH_PROBE` in its environment (a
-  main Copper from before the lock existed) → activate it, never a second browser on the same
+  main Copper from before the lock existed) → the same, never a second browser on the same
   profile;
 - otherwise → launch it from the installed Copper (`/Applications`, then `~/Applications`, then
-  this bundle) with `open -n`.
+  this bundle) with `open -n`, wait for it to hold its lock, then hand it the activation. A second
+  click (or link) while that launch is coming up waits for it instead of launching again.
+
+**The activation is handed, not asked for.** Under macOS's cooperative activation an app can
+bring another forward only while it is the active app itself (`activate(from: .current)`); a
+request from a background process may simply be refused, and the main Copper stays behind
+whatever was in front. LaunchServices makes the probe the active app along with the reopen or
+link, so the probe keeps that activation until the main Copper can take it (`Instance.handFocus`;
+Headless's own "deactivate" waits while a hand-off is under way). When the Apple event arrives
+before the activation, the hand-off waits up to a second for it, then asks anyway.
+
+**A headless probe stays out of the Dock.** On the way, LaunchServices promotes an accessory
+probe to an ordinary app ("changing application type to Foreground from UIElement"), which left a
+second Copper icon in the Dock and ⌘-Tab for the rest of the probe's life, and bound the Dock's
+Copper tile to the probe so later clicks went there too. `Headless` takes the accessory policy
+back on every activation (`made a Dock app by the system — back to accessory` in its log).
 
 LaunchServices hands the caller's whole environment to the app it launches — `open` and
 `NSWorkspace.openApplication` alike, with or without `OpenConfiguration.environment` (checked

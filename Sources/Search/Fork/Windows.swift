@@ -61,6 +61,26 @@ enum Windows {
     /// room parked off every screen (SpaceWarm), so the click did nothing
     /// anyone could see; and with the first window gone for good there was
     /// nothing to order front at all.
+    /// A browser window someone could be looking at: ordered in, not in
+    /// the Dock, and on a screen. The rooms Copper parks far off every
+    /// display to warm pages in (SpaceWarm, Backstage) are windows too, and
+    /// macOS counts them when it tells the app whether a window is visible —
+    /// so with every browser window closed the Dock click used to arrive as
+    /// "a window is showing" and nothing happened.
+    static var anyShowing: Bool {
+        let kept = all.compactMap { window(of: $0) } + [Links.window].compactMap { $0 }
+        return kept.contains { window in
+            window.isVisible && !window.isMiniaturized && NSScreen.screens.contains { $0.frame.intersects(window.frame) }
+        }
+    }
+
+    /// The Dock menu's New Window: a new window beside the ones showing, or
+    /// — with none showing — the closed one back first, the way a Dock click does.
+    static func newWindowFromDock() {
+        if anyShowing { newWindow() } else { reopenFromDock() }
+        NSApp.activate()
+    }
+
     static func reopenFromDock() {
         let kept = all.compactMap { window(of: $0) } + [Links.window].compactMap { $0 }
         if let docked = kept.first(where: \.isMiniaturized) {
@@ -381,6 +401,9 @@ extension Windows {
     /// (a tab in window N); `windows key N`; `windows space N INDEX`; `windows
     /// select N TAB`; `windows closetab N TAB` (⌘W); `windows close N` (the red button);
     /// `windows dock` is the Dock icon clicked with no window on screen;
+    /// `windows dockmenu` is the Dock menu's New Window; `windows showing`
+    /// says whether a browser window is on screen (and how many windows
+    /// macOS calls visible, rooms included);
     /// `windows saved` is windows.json as held; `windows quit` is ⌘Q.
     static func bench(_ request: [String: Any]) -> [String: Any] {
         let op = request["op"] as? String ?? ""
@@ -391,6 +414,8 @@ extension Windows {
         switch op {
         case "new": newWindow()
         case "dock": reopenFromDock()
+        case "dockmenu": newWindowFromDock()
+        case "showing": return ["showing": anyShowing, "nsVisible": NSApp.windows.filter(\.isVisible).count]
         case "open":
             guard let browser = pick(), bits.count > 1, let url = URL(string: bits[1]) else { return ["error": "open N URL"] }
             _ = browser.open(url, foreground: true)

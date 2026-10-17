@@ -79,8 +79,21 @@ final class Links: NSObject, NSApplicationDelegate {
     /// window does by default.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if Instance.reopenFromProbe(hasVisibleWindows: flag) { return false }
-        if !flag { Windows.reopenFromDock() } // Fork: windows — a browser window back, or a new one (Fork/Windows.swift)
+        if !flag || !Windows.anyShowing { Windows.reopenFromDock() } // Fork: windows — a browser window back, or a new one; parked rooms don't count as showing (Fork/Windows.swift)
         return true
+    }
+
+    /// Fork: windows — the Dock icon's menu offers New Window (Fork/Windows.swift).
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "New Window", action: #selector(dockNewWindow), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func dockNewWindow() {
+        MainActor.assumeIsolated { Windows.newWindowFromDock() }
     }
 
     /// The browser, once it has a window. Anything that came earlier is

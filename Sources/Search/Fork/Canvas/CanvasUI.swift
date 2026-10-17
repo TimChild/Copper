@@ -26,8 +26,47 @@ final class CanvasUI: ObservableObject {
     @Published var popoverOpen = false {
         didSet {
             if popoverOpen, !oldValue { Canvases.shared.refreshSoon() }
-            if !popoverOpen { mode = .list; note = nil }
+            if !popoverOpen { mode = .list; note = nil; doorWindow = nil }
         }
+    }
+
+    /// The window whose door the card hangs from — one card, in one window.
+    /// Every window's door used to be bound to `popoverOpen` itself, so with
+    /// two windows open both presented the card; a press in one was a press
+    /// outside the other, whose transient popover closed on it and took the
+    /// flag — and the card under the pointer — down before the release
+    /// reached the row. The card closed and nothing opened: no canvas could be
+    /// opened from the door while a second window was open. Nil: the window
+    /// in front (a card opened by ⌘K, a menu, the bench).
+    @Published private(set) var doorWindow: ObjectIdentifier?
+
+    /// Whether `browser`'s door is the one showing the card.
+    func showsDoor(in browser: Browser) -> Bool {
+        popoverOpen && (doorWindow ?? ObjectIdentifier(Windows.current)) == ObjectIdentifier(browser)
+    }
+
+    /// The card, from `browser`'s door (the one in front when nil); it leaves
+    /// any other window's door.
+    func openDoor(in browser: Browser?) {
+        doorWindow = ObjectIdentifier(browser ?? Windows.current)
+        popoverOpen = true
+    }
+
+    /// `browser`'s door pressed: its card closes if it is the one up, else
+    /// opens there.
+    func toggleDoor(in browser: Browser) {
+        if showsDoor(in: browser) { popoverOpen = false } else { openDoor(in: browser) }
+    }
+
+    /// What `browser`'s door hands its popover: shown only there, and a
+    /// dismissal there (Escape, a click outside it) closes only its own card.
+    func door(in browser: Browser) -> Binding<Bool> {
+        Binding(
+            get: { self.showsDoor(in: browser) },
+            set: { open in
+                if open { self.openDoor(in: browser) } else if self.showsDoor(in: browser) { self.popoverOpen = false }
+            }
+        )
     }
     @Published var mode: Mode = .list {
         didSet {
@@ -85,13 +124,13 @@ final class CanvasUI: ObservableObject {
     /// with no sidebar to hang it from, an untitled canvas straight away.
     func openShare(_ id: String, in browser: Browser? = nil) {
         guard Canvases.shared.entry(id) != nil else { return }
-        popoverOpen = true
+        openDoor(in: browser)
         mode = .share(id)
     }
 
     func newCanvas(in browser: Browser) {
         if browser.prefs.sidebar, !browser.folded {
-            popoverOpen = true
+            openDoor(in: browser)
             mode = .new
         } else {
             Task {
@@ -128,7 +167,7 @@ struct CanvasDoor: View {
     var body: some View {
         Door(icon: "scribble.variable", help: help,
              size: 28, ink: tint.ink, glow: tint.hover, glyph: 14) {
-            ui.popoverOpen.toggle()
+            ui.toggleDoor(in: browser)
         }
         .overlay(alignment: .topTrailing) {
             if others > 0 || waiting > 0 || mentioned > 0 {
@@ -139,7 +178,7 @@ struct CanvasDoor: View {
             }
         }
         .accessibilityLabel(mentioned > 0 ? "Canvas, \(mentioned) mention\(mentioned == 1 ? "" : "s") of you" : waiting > 0 ? "Canvas, \(waiting) invitation\(waiting == 1 ? "" : "s")" : "Canvas")
-        .popover(isPresented: $ui.popoverOpen, arrowEdge: .top) {
+        .popover(isPresented: ui.door(in: browser), arrowEdge: .top) {
             CanvasPopover(browser: browser)
         }
         .animation(Motion.quick, value: others)
@@ -179,6 +218,10 @@ struct CanvasPopover: View {
         }
         .frame(width: 320)
         .background(Palette.ground, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        // The bench's hand on a row (`canvas ui click`, DoorHand): where the
+        // card sits in its popover's window, and the rows within it.
+        .coordinateSpace(name: DoorHand.space)
+        .background(DoorHand.Probe(browser: browser))
         .animation(Motion.settle, value: ui.mode)
     }
 
@@ -487,6 +530,7 @@ struct CanvasRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(DoorHand.space)) } action: { DoorHand.rows[entry.id] = $0 }
         .onHover { hovering = $0 }
         .help(entry.name)
         .accessibilityLabel(accessibility)

@@ -110,6 +110,19 @@ enum SideHand {
                 "active": NSApp.isActive, "key": window.isKeyWindow]
     }
 
+    /// A press and a release at `point` (window base coordinates) in any of
+    /// the app's windows — a popover's too (DoorHand) — sent the way `how`
+    /// says. Answers with what was under the pointer.
+    static func tap(at point: NSPoint, in window: NSWindow) -> [String: Any] {
+        acceptFirstMouse()
+        let hit = (window.contentView?.superview ?? window.contentView)?.hitTest(point).map { "\(type(of: $0))" } ?? ""
+        send(.leftMouseDown, at: point, in: window)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            MainActor.assumeIsolated { send(.leftMouseUp, at: point, in: window) }
+        }
+        return ["at": ["x": point.x, "y": point.y], "how": how, "hit": hit, "window": window.windowNumber]
+    }
+
     /// A click on the row's middle — or, with `cross`, on its cross, which
     /// answers only while the row is under the pointer (`hover` first).
     static func click(_ tab: Tab, cross: Bool = false, in browser: Browser) -> [String: Any] {

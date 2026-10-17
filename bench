@@ -29,6 +29,8 @@
     ./bench shot ID [PATH] [WIDTH]     a PNG of the page → its path
     ./bench close ID | all             only tabs the bench opened
     ./bench probe                      the window's own state: panels, modal, windows
+    ./bench stage                      every window's stage: the active tab, what the stage holds, where
+                                       the active tab's view is and whether it can be seen (visible)
     ./bench pace [reset]               launch milestones (ms since the process started) and the main
                                        thread since the last reset: busy, longest pass, passes over 16 ms
     ./bench extensions                 installed extensions, loaded or not, with their warnings
@@ -140,6 +142,12 @@
     ./bench canvas rename ID -> NAME|delete ID|leave ID|members ID
                                        what a canvas row's menu does (ID is an id or a name)
     ./bench canvas ui open|close|mode list|new|rename ID|invite ID|members ID|delete ID|picture PATH [dark]
+    ./bench canvas ui open [w=N]        the door's card, from window N's door (0 = first)
+    ./bench canvas ui click NAME [w=N] [post|window|view]
+                                       a real click on that canvas's row in the door's card of window N
+    ./bench canvas stagecheck          test worlds: with two windows open the door shows one card and a
+                                       real click on a canvas with no tab opens it on that stage; a canvas
+                                       and a page an agent holds backstage, picked by you, are on your stage
                                        the sidebar's Canvas card; picture draws it off screen, whole
     ./bench canvas new | tabs [ID] | menu [press] | flush ID
                                        a canvas tab: new makes a local one and opens it the way ⌘K's
@@ -728,7 +736,7 @@ def main(argv):
         request["id"] = args[0]
         if verb == "pin" and len(args) == 2: request["letter"] = args[1]
         if verb == "reorder": request["index"] = int(args[1])
-    elif verb not in ("tabs", "probe", "extensions"):
+    elif verb not in ("tabs", "probe", "extensions", "stage"):
         sys.exit(f"unknown command “{verb}” — see bench help")
 
     answer = ask(os.path.join(folder(world), "bench.sock"), request)

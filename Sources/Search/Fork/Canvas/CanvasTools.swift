@@ -374,6 +374,9 @@ enum CanvasTools {
                     answer(content(try await call("canvas_apply", args, in: browser)))
                 case "create":
                     answer(content(try await call("canvas_create", ["name": arg], in: browser)))
+                case "stagecheck":
+                    // The door with two windows open, and held tabs picked by you (StageBench.swift).
+                    DoorHand.check(in: browser, answer: answer)
                 case "invites":
                     // The invites waiting for this account, and the pill's.
                     await Canvases.shared.refresh()
@@ -501,6 +504,18 @@ enum CanvasTools {
                     let ui = CanvasUI.shared
                     switch words.first ?? "open" {
                     case "close": ui.popoverOpen = false
+                    case "click":
+                        // `ui click NAME [w=N] [post|window|view]`: a real click on the
+                        // canvas's row in window N's door card (StageBench.swift).
+                        let rest = words.dropFirst()
+                        let at = rest.first { $0.hasPrefix("w=") }.flatMap { Int($0.dropFirst(2)) } ?? 0
+                        SideHand.how = rest.first { ["post", "window", "view"].contains($0) } ?? "post"
+                        let name = rest.filter { !$0.hasPrefix("w=") && !["post", "window", "view"].contains($0) }.joined(separator: " ")
+                        guard let entry = Canvases.shared.find(name) else { answer(["error": "no canvas \(name)"]); return }
+                        let windows = Windows.all
+                        guard windows.indices.contains(at) else { answer(["error": "no window \(at)"]); return }
+                        answer(DoorHand.click(entry, in: windows[at]))
+                        return
                     case "mode":
                         let id = words.count > 2 ? Canvases.shared.find(words[2...].joined(separator: " "))?.id ?? words[2] : ""
                         switch words.count > 1 ? words[1] : "list" {
@@ -551,7 +566,11 @@ enum CanvasTools {
                         try png.write(to: URL(fileURLWithPath: words[1]))
                         answer(["path": words[1]])
                         return
-                    default: ui.popoverOpen = true
+                    default:
+                        // `ui open [w=N]`: the card from window N's door, as its button opens it.
+                        let at = words.first { $0.hasPrefix("w=") }.flatMap { Int($0.dropFirst(2)) }
+                        let windows = Windows.all
+                        ui.openDoor(in: at.flatMap { windows.indices.contains($0) ? windows[$0] : nil } ?? browser)
                     }
                     answer(["popover": ui.popoverOpen, "mode": "\(ui.mode)"])
                 default:

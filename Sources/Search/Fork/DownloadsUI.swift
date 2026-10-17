@@ -40,7 +40,7 @@ struct DownloadsDoor: View {
 
     var body: some View {
         Button {
-            downloads.popoverOpen.toggle()
+            downloads.toggleDoor(in: browser)
             if downloads.popoverOpen { downloads.seen() }
         } label: {
             ZStack(alignment: .topTrailing) {
@@ -68,14 +68,14 @@ struct DownloadsDoor: View {
             }
             .background(
                 RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                    .fill(hovering || downloads.popoverOpen ? Palette.hover : .clear)
+                    .fill(hovering || downloads.showsDoor(in: browser) ? Palette.hover : .clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(help)
-        .popover(isPresented: $downloads.popoverOpen, arrowEdge: arrowEdge) {
+        .popover(isPresented: downloads.door(in: browser), arrowEdge: arrowEdge) {
             DownloadsPopover(browser: browser, downloads: downloads)
         }
         .animation(Motion.quick, value: hovering)

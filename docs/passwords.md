@@ -209,8 +209,15 @@ session key or vault value. Exit codes: 0 `ok`, 1 `ok: false`, 2 usage or Copper
 unreachable.
 
 `bw` itself is found in this order: `SEARCH_BW_PATH` (the daemon points its
-LaunchAgent at the CLI it installed), `/opt/homebrew/bin/bw`,
-`/usr/local/bin/bw`, then `$PATH`.
+LaunchAgent at the CLI it installed), `~/.local/bin/bw`, `/opt/homebrew/bin/bw`,
+`/usr/local/bin/bw`, the places Node version managers put a global
+`npm install -g @bitwarden/cli` (`~/.volta/bin`, `~/.nvm/versions/node/*/bin`
+newest first, `~/.npm-global/bin`, `~/.bun/bin`, pnpm, asdf and mise shims),
+then `$PATH`, then the person's own shell (`$SHELL -ilc 'command -v bw'`, off
+the main thread, three seconds at most). Copper opened from the Dock or
+relaunched by its updater has launchd's PATH, not the terminal's, so a `bw`
+only the shell could find used to read as *missing* after an update — and
+with it every two-step code.
 
 **What is stored where:**
 

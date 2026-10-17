@@ -166,14 +166,29 @@ final class Bitwarden: ObservableObject {
         // can say "Unlock Bitwarden…" from the first sign-in box, not only
         // after Settings has been opened.
         if Self.installed {
-            restorePersistedSession()
-            // The CLI is Node, and the vault is decoded here on the main
-            // thread: at launch both wait for the restored page to draw.
+            arrive()
+        } else {
+            // Not where a GUI app can see it: ask the person's own shell, off
+            // the main thread, and pick the vault up as if found at launch.
             Launch.shared.whenSettled {
-                Task {
-                    await self.refreshStatus()
-                    await self.refreshCacheIfPossible()
+                Task.detached(priority: .utility) {
+                    guard Self.probeShell() != nil else { return }
+                    await MainActor.run { self.arrive() }
                 }
+            }
+        }
+    }
+
+    /// `bw` is here: the session kept from last time, then status and vault.
+    private func arrive() {
+        if case .missing = state { state = .unauthenticated }
+        restorePersistedSession()
+        // The CLI is Node, and the vault is decoded here on the main
+        // thread: at launch both wait for the restored page to draw.
+        Launch.shared.whenSettled {
+            Task {
+                await self.refreshStatus()
+                await self.refreshCacheIfPossible()
             }
         }
     }
@@ -184,38 +199,106 @@ final class Bitwarden: ObservableObject {
 
     /// Where `bw` is, first match wins: `SEARCH_BW_PATH` (the daemon points
     /// its LaunchAgent at the CLI it installed), a CLI an external installer
-    /// placed at `~/.local/bin/bw`, then Homebrew's, then `$PATH`.
+    /// placed at `~/.local/bin/bw`, Homebrew's, the places Node version
+    /// managers put a global `npm install -g @bitwarden/cli` (Volta, nvm,
+    /// npm's own prefix, Bun, pnpm, asdf, mise), then `$PATH`, then the
+    /// person's own login shell.
+    ///
+    /// Copper started from the Dock, or relaunched by its updater, gets
+    /// launchd's PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), not the shell's, so
+    /// a `bw` the shell finds through Volta's shims was "missing" after an
+    /// update — and with it every two-step code. The answer is kept for the
+    /// run (a miss for a minute, so installing `bw` later is noticed).
     nonisolated static var executableURL: URL? {
+        if let known = Found.shared.answer() { return known }
+        // The shell is asked only off the main thread (probeShell).
+        let url = discoverExecutable(shell: !Thread.isMainThread)
+        Found.shared.keep(url)
+        return url
+    }
+
+    /// The whole search, the person's shell included; for a background task.
+    nonisolated static func probeShell() -> URL? {
+        let url = discoverExecutable(shell: true)
+        Found.shared.keep(url)
+        return url
+    }
+
+    private final class Found: @unchecked Sendable {
+        static let shared = Found()
+        private let lock = NSLock()
+        private var url: URL?
+        private var missedAt: Date?
+        /// `.some(nil)` for a recent miss, nil when there is nothing to go on.
+        func answer() -> URL?? {
+            lock.lock(); defer { lock.unlock() }
+            if let url, FileManager.default.isExecutableFile(atPath: url.path) { return .some(url) }
+            if let missedAt, Date().timeIntervalSince(missedAt) < 60 { return .some(nil) }
+            return nil
+        }
+        func keep(_ found: URL?) {
+            lock.lock(); defer { lock.unlock() }
+            url = found
+            missedAt = found == nil ? Date() : nil
+        }
+    }
+
+    /// The places a CLI installed with Node's version managers lives, newest
+    /// Node first for nvm.
+    nonisolated static func managedLocations(home: URL) -> [String] {
+        let files = FileManager.default
+        var paths = [
+            ".local/bin/bw", ".volta/bin/bw", ".npm-global/bin/bw", ".npm/bin/bw", ".bun/bin/bw",
+            "Library/pnpm/bw", ".local/share/pnpm/bw", ".asdf/shims/bw", ".local/share/mise/shims/bw",
+        ].map { home.appendingPathComponent($0).path }
+        let nvm = home.appendingPathComponent(".nvm/versions/node")
+        if let versions = try? files.contentsOfDirectory(atPath: nvm.path) {
+            let newest = versions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            paths += newest.map { nvm.appendingPathComponent($0).appendingPathComponent("bin/bw").path }
+        }
+        return paths
+    }
+
+    nonisolated private static func discoverExecutable(shell askShell: Bool) -> URL? {
         let files = FileManager.default
         if let raw = ProcessInfo.processInfo.environment["SEARCH_BW_PATH"]?
             .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             let path = (raw as NSString).expandingTildeInPath
             if files.isExecutableFile(atPath: path) { return URL(fileURLWithPath: path) }
         }
-        let external = files.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/bin/bw", isDirectory: false).path
-        for path in [external, "/opt/homebrew/bin/bw", "/usr/local/bin/bw"]
-        where files.isExecutableFile(atPath: path) {
+        let home = files.homeDirectoryForCurrentUser
+        let fixed = [home.appendingPathComponent(".local/bin/bw").path, "/opt/homebrew/bin/bw", "/usr/local/bin/bw"]
+        for path in fixed + managedLocations(home: home) where files.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
+        if let path = lookUp(["/usr/bin/which", "bw"]) { return URL(fileURLWithPath: path) }
+        // Last, the person's own shell, as their terminal starts it (login
+        // and interactive, so .zshrc's PATH counts), capped at three seconds.
+        guard askShell else { return nil }
+        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { ["/bin/zsh", "/bin/bash", "/opt/homebrew/bin/fish"].contains($0) ? $0 : nil } ?? "/bin/zsh"
+        if let path = lookUp([shell, "-ilc", "command -v bw"], timeout: 3) { return URL(fileURLWithPath: path) }
+        return nil
+    }
 
+    /// The last line of a command's output that is an executable `bw`.
+    nonisolated static func lookUp(_ command: [String], timeout: TimeInterval = 2) -> String? {
         let process = Process()
         let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["bw"]
+        process.executableURL = URL(fileURLWithPath: command[0])
+        process.arguments = Array(command.dropFirst())
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
+        do { try process.run() } catch { return nil }
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline { usleep(20_000) }
+        if process.isRunning { process.terminate(); return nil }
+        let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        for line in text.split(whereSeparator: \.isNewline).reversed() {
+            let path = line.trimmingCharacters(in: .whitespaces)
+            if path.hasPrefix("/"), path.hasSuffix("/bw"), FileManager.default.isExecutableFile(atPath: path) { return path }
         }
-        guard process.terminationStatus == 0 else { return nil }
-        let path = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !path.isEmpty, files.isExecutableFile(atPath: path) else { return nil }
-        return URL(fileURLWithPath: path)
+        return nil
     }
 
     var appDataURL: URL {

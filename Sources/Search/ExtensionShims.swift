@@ -37,7 +37,7 @@ enum ExtensionShims {
     /// every script and page an extension ships.
     static let stamp = ".search-shim"
     static let version: String = {
-        SHA256.hash(data: Data(script.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined() + (Store.testing ? "-test" : "")
+        SHA256.hash(data: Data((script + Passkeys.extensionPrelude).utf8)).prefix(8).map { String(format: "%02x", $0) }.joined() + (Store.testing ? "-test" : "")
     }()
 
     static func prepare(_ folder: URL) throws {
@@ -99,12 +99,18 @@ enum ExtensionShims {
             manifest["background"] = background
         }
 
-        // Content scripts too — there only the sendMessage mend applies.
+        // Content scripts too — there only the sendMessage mend applies. A
+        // MAIN-world one also carries Copper's WebAuthn authenticator first.
+        // Fork (passkeys-hooks): Fork/Passkeys/Passkeys.swift extensionPrelude
         if let entries = manifest["content_scripts"] as? [[String: Any]] {
+            try Passkeys.extensionPrelude.write(to: folder.appendingPathComponent(Passkeys.extensionFile), atomically: true, encoding: .utf8)
             manifest["content_scripts"] = entries.map { entry -> [String: Any] in
                 var entry = entry
-                if var js = entry["js"] as? [String], js.first != file {
-                    js.insert(file, at: 0)
+                if var js = entry["js"] as? [String] {
+                    if js.first != file { js.insert(file, at: 0) }
+                    if (entry["world"] as? String)?.uppercased() == "MAIN", !js.contains(Passkeys.extensionFile) {
+                        js.insert(Passkeys.extensionFile, at: 1)
+                    }
                     entry["js"] = js
                 }
                 return entry

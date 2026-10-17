@@ -10,6 +10,7 @@ is what gets posted as the update. What is planned but not done yet lives
 in [ROADMAP.md](ROADMAP.md).
 
 ## Unreleased
+- **Passkeys work beside 1Password and other WebAuthn extensions.** WebKit runs an extension's MAIN-world content scripts before the tab's own, so 1Password's passkey hook bound WebKit's unentitled `navigator.credentials` as its fallback: when 1Password declined (locked, no matching passkey) the request hit WebKit and failed at once — Google's "Use your passkey" went straight to *Something went wrong*. Copper now carries its authenticator at the head of every MAIN-world content script an extension ships, so the extension wraps Copper; a declined request falls through to Copper's Touch ID sign-in, and one the extension handles never reaches Copper. Copper also keeps WebKit's `PublicKeyCredential` (an extension's conditional-autofill hooks on it survive), answers with credentials that are real `PublicKeyCredential` / `AuthenticatorAssertionResponse` instances, and no longer re-takes `navigator.credentials` from a hook installed after it. ([docs/passkeys.md](docs/passkeys.md))
 
 ### Added
 

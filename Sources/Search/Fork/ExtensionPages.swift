@@ -77,6 +77,27 @@ enum ExtensionPages {
 
     // MARK: - the tabs extensions see
 
+    /// Whether each page view was built with the extension controller,
+    /// asked once per view (`configuration` is a copy each time it's read).
+    private static let served = NSMapTable<WKWebView, NSNumber>.weakToStrongObjects()
+
+    /// A tab's page as extensions may be handed it: only a view built with
+    /// Copper's extension controller. Every space's tab is listed (`every`),
+    /// so a canvas (its own configuration), an easel or any view made from a
+    /// configuration without the controller reached WebKit too — and WebKit
+    /// refused each one, logging "web view … returned by
+    /// webViewForWebExtensionContext: is not configured with a
+    /// WKWebExtensionController" dozens of times a second while 1Password's
+    /// worker walked the tabs. Such a tab is still a tab extensions see, as a
+    /// chrome:// page is in Chrome, but without a page to reach into.
+    static func view(of tab: Tab?) -> WKWebView? {
+        guard #available(macOS 15.4, *), let web = tab?.built else { return nil }
+        if let known = served.object(forKey: web) { return known.boolValue ? web : nil }
+        let ok = web.configuration.webExtensionController === Extensions.shared.controller
+        served.setObject(NSNumber(value: ok), forKey: web)
+        return ok ? web : nil
+    }
+
     /// Every tab in every space, pins first, then each space's row in the
     /// order the spaces are in — not just the space on screen. A tab in
     /// another space is still open, its page still running its content

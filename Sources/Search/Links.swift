@@ -79,9 +79,7 @@ final class Links: NSObject, NSApplicationDelegate {
     /// window does by default.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if Instance.reopenFromProbe(hasVisibleWindows: flag) { return false }
-        if !flag, let window = NSApp.windows.first(where: { $0.contentView != nil }) {
-            window.makeKeyAndOrderFront(nil)
-        }
+        if !flag { Windows.reopenFromDock() } // Fork: windows — a browser window back, or a new one (Fork/Windows.swift)
         return true
     }
 

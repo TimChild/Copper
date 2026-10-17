@@ -927,6 +927,18 @@ final class CanvasHost {
         }
     }
 
+    /// `settled`'s answer as words when it timed out with something pending, else nil.
+    static func pendingText(_ answer: [String: Any]?) -> String? {
+        guard let answer, answer["settled"] as? Bool == false else { return nil }
+        let pending = answer["pending"] as? [String: Any] ?? [:]
+        let images = (pending["images"] as? NSNumber)?.intValue ?? 0
+        let frames = (pending["frames"] as? NSNumber)?.intValue ?? 0
+        var parts: [String] = []
+        if images > 0 { parts.append(images == 1 ? "1 image" : "\(images) images") }
+        if frames > 0 { parts.append(frames == 1 ? "1 web frame" : "\(frames) web frames") }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
     /// Decoded from a JSON string, or taken as it is when the page answered with an object.
     private static func object(_ value: Any?) -> [String: Any]? {
         if let object = value as? [String: Any] { return object }
@@ -1004,15 +1016,29 @@ final class CanvasHost {
         return value
     }
 
-    /// The board as it looks, for an agent that wants to see it.
-    func picture() async throws -> Data {
+    /// What a screenshot waits for, at most: the page's pictures and live frames in view (`copperCanvas.settled`).
+    static let settleMs = 2500
+
+    /// The board as it looks, for an agent that wants to see it, and — when
+    /// the page's pictures were still coming in after `settleMs` — what was
+    /// still pending ("3 images, 1 web frame").
+    func picture() async throws -> (data: Data, pending: String?) {
         try await onPage(retry: true) {
             guard let web = tab?.built else { throw Failure(text: "the canvas page isn't loaded") }
             guard web.window != nil, web.bounds.width >= 1, web.bounds.height >= 1 else {
                 throw Failure(text: "the canvas tab has nowhere to be drawn (no window)")
             }
+            // `ready` comes as soon as the doc is applied: a cold board's pictures
+            // decode after it. Wait (bounded by the page) for those on screen;
+            // an older page without `settled` is taken as it is.
+            let raw = try? await call("""
+                const c = window.copperCanvas;
+                if (!c || typeof c.settled !== 'function') return null;
+                return JSON.stringify(await c.settled(ms));
+                """, ["ms": CanvasHost.settleMs])
+            let pending = CanvasHost.pendingText(CanvasHost.object(raw))
             do {
-                return try await Tools.Page.screenshot(web, rect: nil, fullPage: false, jpeg: false)
+                return (try await Tools.Page.screenshot(web, rect: nil, fullPage: false, jpeg: false), pending)
             } catch let failure as Tools.Page.Failure {
                 throw Failure(text: "couldn't take the canvas's picture: \(failure.text)")
             }

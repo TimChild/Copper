@@ -73,3 +73,14 @@ import WebKit
     buffer.append(Data("\":22222}".utf8))
     #expect(HTTPRequest.take(from: &buffer)?.body == Data("{\"b\":22222}".utf8))
 }
+
+// canvas_screenshot waits for the page's pictures (`copperCanvas.settled`) and
+// says what was still coming in when it gave up waiting.
+@MainActor @Test func canvasScreenshotNamesWhatWasStillPending() {
+    #expect(CanvasHost.pendingText(nil) == nil)
+    #expect(CanvasHost.pendingText(["settled": true, "pending": ["images": 0, "frames": 0]]) == nil)
+    #expect(CanvasHost.pendingText(["settled": false, "pending": ["images": 0, "frames": 0]]) == nil)
+    #expect(CanvasHost.pendingText(["settled": false, "pending": ["images": 3, "frames": 1]]) == "3 images, 1 web frame")
+    #expect(CanvasHost.pendingText(["settled": false, "pending": ["images": 1, "frames": 2]]) == "1 image, 2 web frames")
+    #expect(CanvasHost.settleMs == 2500)
+}

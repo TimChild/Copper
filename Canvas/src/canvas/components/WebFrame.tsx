@@ -490,6 +490,8 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
       data-id={shape.id}
       data-kind="link"
       data-live="1"
+      // Its page is still loading with no poster over it: blank (`settle.ts`: a screenshot waits for it).
+      data-pending={showPage && loading && !poster && !trouble ? 'frame' : undefined}
       className="group absolute left-0 top-0 flex flex-col overflow-visible rounded-[12px]"
       style={{
         ...place(shape),

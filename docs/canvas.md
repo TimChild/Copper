@@ -672,7 +672,7 @@ peer are hidden on expiry too. Human collaborators and the shapes' author attrib
 | `canvas_invite` | `id`, `email` | — (cloud only; Personal and local canvases refuse with a reason) |
 | `canvas_share_link` | `id` | `{link, webLink}` — makes the canvas's invite link once, then reuses it |
 | `canvas_join` | `link` | opens a `copper://canvas/join/...` or `https://<cloud>/join/...` link in this window, as if it had been clicked |
-| `canvas_screenshot` | `id?` | PNG of the canvas tab |
+| `canvas_screenshot` | `id?` | PNG of the canvas tab, taken once the pictures and live frames on screen have come in (`copperCanvas.settled`, 2.5 s at most; the text line names what was still loading) |
 
 `id?` omitted means the canvas tab in front, else Personal. Every schema also takes `reason`.
 Each call leaves its one line in `Tools.summary` — *220 operations applied on Roadmap*, *Read 7

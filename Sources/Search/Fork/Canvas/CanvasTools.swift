@@ -222,9 +222,11 @@ enum CanvasTools {
         case "canvas_screenshot":
             let entry = try resolve(args, in: browser)
             let host = try await open(entry, in: browser, foreground: false)
-            let data = try await host.picture()
+            let shot = try await host.picture()
             Tools.summary?.line = "Screenshot of \(entry.name)"
-            return [.image(data, mime: "image/png"), .text("Canvas · \(entry.name)")]
+            // Taken after the pictures on screen came in (2.5 s at most); if some hadn't, it says so.
+            let line = shot.pending.map { "Canvas · \(entry.name) — still loading when taken: \($0)" } ?? "Canvas · \(entry.name)"
+            return [.image(shot.data, mime: "image/png"), .text(line)]
 
         case CanvasChat.toolName:
             return try await CanvasChat.runTool(args, in: browser)

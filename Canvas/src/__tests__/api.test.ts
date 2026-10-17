@@ -18,6 +18,10 @@ afterEach(() => {
 })
 
 describe('window.copperCanvas', () => {
+  it('settled() resolves with no board to wait for, and never rejects', async () => {
+    await expect(api.settled(50)).resolves.toMatchObject({ settled: true, pending: { images: 0, frames: 0 } })
+  })
+
   it('has a version and answers apply/read with JSON strings', () => {
     expect(typeof api.version).toBe('string')
     expect(JSON.parse(api.apply('[]'))).toMatchObject({ applied: 0, errors: [{ error: expect.stringMatching(/init/) }] })

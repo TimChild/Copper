@@ -296,6 +296,8 @@ export const FrameView = memo(function FrameView({
       </div>
       <div
         data-part="frame-body"
+        // Its picture's small copy is still being made (`settle.ts`: a screenshot waits for it).
+        data-pending={shape.image?.src && !imageSrc ? 'image' : undefined}
         className={cn('absolute inset-0 overflow-hidden rounded-[10px] border', selected ? 'border-transparent' : 'border-line-2')}
         style={{ background: fill }}
       >
@@ -327,6 +329,7 @@ export const ImageView = memo(function ImageView({ shape, bucket, low }: { shape
     <div
       data-id={shape.id}
       data-kind="image"
+      data-pending={own && !src ? 'image' : undefined}
       className={cn('absolute left-0 top-0 overflow-hidden rounded-[6px] bg-surface-2', !low && 'shadow-note')}
       style={place(shape)}
     >

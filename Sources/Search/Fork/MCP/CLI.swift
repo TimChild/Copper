@@ -1495,8 +1495,13 @@ enum CLI {
                     let path = imagePath(for: spec, mime: mime, index: index)
                     do {
                         let file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-                        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-                        try data.write(to: file)
+                        try OffMainWrite.writeBlocking(data, to: file) { data, file in
+                            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                            try data.write(to: file)
+                        }
+                    } catch let timedOut as OffMainWrite.TimedOut {
+                        error(timedOut.description)
+                        return 2
                     } catch let writeError {
                         _ = writeError
                         error("could not write screenshot to \(path)")

@@ -189,8 +189,12 @@ enum Ultrafast {
         if let folder = ProcessInfo.processInfo.environment["SEARCH_JEV_SHOTS"], !folder.isEmpty {
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
             let url = URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent("\(stamp)-\(vision.rawValue).jpg")
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: url)
+            // Fire and forget, off the main thread: a guarded folder can
+            // hang open() on a privacy prompt (OffMainWrite.swift).
+            DispatchQueue.global(qos: .utility).async {
+                try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: url)
+            }
         }
         return Shot(data: data, width: width, height: height, scale: scale, reference: reference,
                     ms: Date().timeIntervalSince(started) * 1000)

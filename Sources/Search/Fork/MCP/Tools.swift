@@ -396,8 +396,19 @@ enum Tools {
             var rect: CGRect?
             if let ref = args["ref"] as? String { rect = try await Page.prepare(web, Locator(ref: ref)) }
             let data = try await Page.screenshot(web, rect: rect, fullPage: full, jpeg: jpeg)
-            if let path = args["filename"] as? String { try? data.write(to: URL(fileURLWithPath: (path as NSString).expandingTildeInPath)) }
-            return [.image(data, mime: jpeg ? "image/jpeg" : "image/png"), .text(pageLine(tab))]
+            var note = ""
+            if let path = args["filename"] as? String {
+                // Off the main thread, bounded: a guarded or removable volume
+                // can hang open() on a privacy prompt (OffMainWrite.swift).
+                do {
+                    try await OffMainWrite.write(data, to: URL(fileURLWithPath: (path as NSString).expandingTildeInPath))
+                } catch let timedOut as OffMainWrite.TimedOut {
+                    throw Failure(text: timedOut.description)
+                } catch {
+                    note = "Couldn't save to \(path): \(error.localizedDescription). "
+                }
+            }
+            return [.image(data, mime: jpeg ? "image/jpeg" : "image/png"), .text(note + pageLine(tab))]
         case "browser_evaluate":
             guard let function = args["function"] as? String else { throw Failure(text: "function required") }
             let script: String

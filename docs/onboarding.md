@@ -307,6 +307,11 @@ Integrate with 1Password CLI first). Without the app, sign in with the account
 password, or paste a service account token on a Mac nobody sits at. Fills,
 codes, addresses and cards then come from 1Password too, and **Save new
 passwords to › 1Password** routes new saves there (docs/passwords.md).
+Passkeys kept in 1Password come through the 1Password browser extension,
+which signs in separately: Settings › Extensions › 1Password › Details ›
+**Sign In…** (email, Secret Key, password), or **Use the 1Password App…**
+to have 1Password allow Copper so the extension unlocks with Touch ID
+(docs/passwords.md, The 1Password extension).
 
 **Agents and passwords.** Agents never receive a password. They can only ask
 Copper to fill a saved sign-in you allowed under **Settings › Passwords ›

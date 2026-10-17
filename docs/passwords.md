@@ -233,9 +233,10 @@ way, agents never receive the secret itself (next section).
 
 ## 1Password
 
-Copper reads 1Password through the official CLI, `op` 2.x — the browser
-extension route is closed to Copper (1Password's desktop link checks the
-browser's code signature, and Copper's is its own certificate, not a Developer ID). Install it first:
+Copper reads 1Password through the official CLI, `op` 2.x. The 1Password
+browser extension works in Copper too, as a separate route — see
+[The 1Password extension](#the-1password-extension); passkeys stored in
+1Password need the extension. For Copper's own filling, install the CLI first:
 
 ```sh
 brew install 1password-cli
@@ -308,6 +309,50 @@ first vault the account may create items in).
 named `Agents` or a `copper-agent` tag allows, a `copper-agent: deny` field
 always denies. `browser_sign_in`, `browser_autofill`, `copper signin|autofill`
 and Jev's `SIGN_IN` / `AUTOFILL_*` fill in-process and return status only.
+
+### The 1Password extension
+
+The extension (Chrome Web Store id `aeblfdkhhhdcdjpifhhbdiojplfjncoa`) has to
+be signed in before it fills or offers passkeys — until then its WebAuthn hook
+turns every passkey request down, which Google reports as "Something went
+wrong". Copper's own `op` connection doesn't sign the extension in; they are
+two different clients. Settings › Extensions › 1Password › Details has a
+**1Password** section with both ways in:
+
+- **Sign In…** (works today). Opens
+  `https://my.1password.com/signin?auth-only=1`, the page the extension's own
+  Start setup › Sign in opens. Enter email, Secret Key and account password
+  there (or the account's single sign-on). The page hands the account to the
+  extension's content script (a `B5SignInSucceeded` event, then
+  `runtime.sendMessage("sign-in-succeeded")`), the extension's worker signs in
+  with 1Password's servers, closes the tab, and from then on unlocks with the
+  account password in its own popup. `docs/fixtures/onepassword-e2e.sh` checks
+  every hop up to 1Password's servers with a made-up account.
+- **Use the 1Password App…** (Touch ID through the app; needs a release build
+  in /Applications). 1Password's native host, `1Password-BrowserSupport`,
+  checks the browser that started it. A browser it knows connects at once.
+  For any other signed browser in /Applications it waits for a *partner
+  browser authorization* (its log in
+  `~/Library/Group Containers/2BUA8C4S2C.com.1password/…/logs/BrowserSupport/`:
+  `Verifying browser "/Applications/Copper.app/…"` then `waiting for potential
+  partner browser authorization from B5X`). The extension sends that request
+  only from its welcome page, and only for browsers on its own list, which
+  doesn't include Copper. So the request was never sent, and the extension never
+  connected. The button sends the extension's own `authorize-browser` message.
+  BrowserSupport passes it to the 1Password app, which asks in its own window
+  whether to allow the browser and remembers the answer (*accepted trusted
+  browser authorization* in 1Password's log). That prompt needs 1Password
+  unlocked with Touch ID — the app refuses it for an account unlocked with
+  single sign-on — and *Connect with 1Password in the browser* on in
+  1Password › Settings › Browser. A build signed ad hoc (`./build.sh` with no
+  certificate, any test world) is turned away earlier: BrowserSupport logs
+  `parent browser was not valid` / `UnsupportedBrowser`. Copper never changes
+  1Password's files or settings; the answer is the person's, in 1Password.
+
+Native messaging reads the hosts Chrome reads (`NativeMessagingHosts` under
+Chrome, Chromium, Edge, Brave and Arc). A test world can point it at a
+folder of its own with `SEARCH_NATIVE_HOSTS=<folder>`, so a probe talks to a
+stand-in host instead of the apps on the Mac.
 
 ## Agent access
 

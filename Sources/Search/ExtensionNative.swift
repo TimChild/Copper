@@ -23,6 +23,11 @@ enum ExtensionNative {
 
     /// Where Chromium browsers look, per user and for the whole Mac.
     private static var folders: [URL] {
+        // Fork (native-host-folder): a test world may name its own folder, so
+        // a probe talks to a stand-in host rather than the apps on this Mac.
+        if Store.testing, let own = ProcessInfo.processInfo.environment["SEARCH_NATIVE_HOSTS"], !own.isEmpty {
+            return [URL(fileURLWithPath: own, isDirectory: true)]
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser
         let support = home.appendingPathComponent("Library/Application Support")
         return [

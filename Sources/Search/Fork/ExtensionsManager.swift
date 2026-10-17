@@ -512,6 +512,7 @@ private struct ExtensionDetails: View {
                     }
                 }
             }
+            if OnePasswordExtension.ids.contains(item.id), context != nil, item.enabled { onePassword }
             sites
             permissions
             if let commands = context?.commands, !commands.isEmpty { shortcuts(commands) }
@@ -551,6 +552,38 @@ private struct ExtensionDetails: View {
             .font(.system(size: 11.5))
             .foregroundStyle(Palette.muted)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: 1Password
+
+    /// Its two ways in (`OnePasswordExtension`): signed in by itself, or
+    /// through the 1Password app once the app allows Copper.
+    @ObservedObject private var onePasswordLink = OnePasswordExtension.shared
+
+    private var onePassword: some View {
+        section("1Password") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Pill("Sign In…", filled: true) { manager.close(); OnePasswordExtension.shared.signIn(in: browser) }
+                    note("Email, Secret Key and password on 1Password's own page — the extension then unlocks with your password.")
+                }
+                HStack(spacing: 8) {
+                    Pill(onePasswordLink.asking == .asking ? "Waiting for 1Password…" : "Use the 1Password App…") {
+                        OnePasswordExtension.shared.connect(item.id)
+                    }
+                    .disabled(onePasswordLink.asking == .asking)
+                    note(onePasswordAppLine)
+                }
+            }
+        }
+    }
+
+    private var onePasswordAppLine: String {
+        switch onePasswordLink.asking {
+        case .idle, .asking: return "Touch ID through the app. 1Password asks in its own window whether to allow \(Fork.name)."
+        case .allowed: return "1Password allowed \(Fork.name). The extension connects to the app from now on."
+        case .refused(let why): return why
+        }
     }
 
     // MARK: site access
@@ -1012,6 +1045,7 @@ extension ExtensionManager {
             return ["asking": "Remove “\(item.name)”?"]
         case "answer":
             guard ExtensionRemoval.answer(arg == "remove") else { return ["error": "no sheet is up"] }
+        case "onepassword": return OnePasswordExtension.shared.bench(words, in: browser)
         case "status", "list": break
         default: return ["error": "unknown ext-manager op \(op)"]
         }

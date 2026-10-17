@@ -994,7 +994,7 @@ final class ExtensionTab: NSObject, WKWebExtensionTab {
         return owner.visibleTabs.firstIndex { $0.id == tab.id } ?? NSNotFound
     }
 
-    func webView(for context: WKWebExtensionContext) -> WKWebView? { tab?.built }
+    func webView(for context: WKWebExtensionContext) -> WKWebView? { ExtensionPages.view(of: tab) } // Fork (extension-pages)
     func title(for context: WKWebExtensionContext) -> String? { tab?.title }
     func url(for context: WKWebExtensionContext) -> URL? { tab?.address }
     func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !(tab?.loading ?? false) }

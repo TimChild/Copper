@@ -19,13 +19,34 @@ enum Passkeys {
         FormRelay.passkeysOffered && !Preferences.entitledToPasskeys
     }
 
+    /// Prepended to every MAIN-world content script an extension ships (by
+    /// `ExtensionShims.prepare`). WebKit injects extension content scripts
+    /// before the tab's own user scripts, so a hook like 1Password's
+    /// webauthn-listeners.js otherwise binds WebKit's unentitled
+    /// `navigator.credentials` as its fallback and a declined request never
+    /// reaches Copper. Riding inside the extension's own script is the only
+    /// order WebKit guarantees. The tab registers the message handler only
+    /// while Copper is the authenticator, so its absence keeps this inert.
+    static let extensionFile = "search-passkeys.js"
+    static var extensionPrelude: String {
+        "/* Copper: WebAuthn authenticator before this extension's hooks (Fork/Passkeys/Passkeys.swift) */\n"
+            + "if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(name)) {\n"
+            + script + "\n}\n"
+    }
+
     static let script = #"""
     (function () {
       if (window.__copperPasskeys) return;
       window.__copperPasskeys = true;
 
-      var originalCreate = navigator.credentials && navigator.credentials.create;
-      var originalGet = navigator.credentials && navigator.credentials.get;
+      // The fallback for non-WebAuthn requests is WebKit's own method when it
+      // can be found: a hook that hands its slot over (below) and then calls
+      // navigator.credentials.get itself must not loop back through Copper.
+      var credentialsPrototype = navigator.credentials && Object.getPrototypeOf(navigator.credentials);
+      var originalCreate = credentialsPrototype && native(credentialsPrototype.create)
+        ? credentialsPrototype.create : navigator.credentials && navigator.credentials.create;
+      var originalGet = credentialsPrototype && native(credentialsPrototype.get)
+        ? credentialsPrototype.get : navigator.credentials && navigator.credentials.get;
       var te = new TextEncoder();
       var td = new TextDecoder();
 
@@ -71,25 +92,34 @@ enum Passkeys {
         var name = result && result.error ? result.error : 'NotAllowedError';
         throw domError(name, result && result.message);
       }
-      function publicCredential(id, response, extensions) {
-        var item = Object.create(PublicKeyCredential.prototype);
-        Object.defineProperties(item, {
-          id: { value: id, enumerable: true },
-          rawId: { value: bytes(id), enumerable: true },
-          type: { value: 'public-key', enumerable: true },
-          response: { value: response, enumerable: true },
-          authenticatorAttachment: { value: 'platform', enumerable: true }
+      // Credentials and responses inherit from the page's own WebAuthn
+      // classes (WebKit's when it exposes them), so `instanceof
+      // PublicKeyCredential` / `AuthenticatorAssertionResponse` checks pass
+      // for Copper's answers and for an extension's alike. Values are own
+      // properties: the native prototypes' getters only read WebKit's slots.
+      function shaped(prototype, fields) {
+        var item = Object.create(prototype), props = {};
+        Object.keys(fields).forEach(function (key) {
+          props[key] = { value: fields[key], enumerable: typeof fields[key] !== 'function', configurable: true, writable: true };
         });
-        item.getClientExtensionResults = function () { return extensions || {}; };
-        item.toJSON = function () {
-          return { id: item.id, rawId: b64(item.rawId), type: item.type,
-                   response: response && response.toJSON ? response.toJSON() : {},
-                   authenticatorAttachment: item.authenticatorAttachment };
-        };
+        Object.defineProperties(item, props);
+        return item;
+      }
+      function publicCredential(id, response, extensions) {
+        var item = shaped(Classes.PublicKeyCredential.prototype, {
+          id: id, rawId: bytes(id), type: 'public-key', response: response, authenticatorAttachment: 'platform',
+          getClientExtensionResults: function () { return extensions || {}; },
+          toJSON: function () {
+            return { id: item.id, rawId: b64(item.rawId), type: item.type,
+                     response: response && response.toJSON ? response.toJSON() : {},
+                     authenticatorAttachment: item.authenticatorAttachment,
+                     clientExtensionResults: extensions || {} };
+          }
+        });
         return item;
       }
       function attestation(result, requested) {
-        var response = {
+        var response = shaped(Classes.AuthenticatorAttestationResponse.prototype, {
           clientDataJSON: bytes(result.clientDataJSON),
           attestationObject: bytes(result.attestationObject),
           getTransports: function () { return ['internal']; },
@@ -97,15 +127,17 @@ enum Passkeys {
           getPublicKey: function () { return result.publicKey ? bytes(result.publicKey) : null; },
           getPublicKeyAlgorithm: function () { return -7; },
           toJSON: function () {
-            return { clientDataJSON: b64(this.clientDataJSON), attestationObject: b64(this.attestationObject) };
+            return { clientDataJSON: b64(this.clientDataJSON), attestationObject: b64(this.attestationObject),
+                     transports: ['internal'], authenticatorData: result.authenticatorData,
+                     publicKey: result.publicKey || null, publicKeyAlgorithm: -7 };
           }
-        };
+        });
         var extensions = requested && requested.extensions && requested.extensions.credProps
           ? { credProps: { rk: true } } : {};
         return publicCredential(result.id, response, extensions);
       }
       function assertion(result) {
-        var response = {
+        var response = shaped(Classes.AuthenticatorAssertionResponse.prototype, {
           clientDataJSON: bytes(result.clientDataJSON),
           authenticatorData: bytes(result.authenticatorData),
           signature: bytes(result.signature),
@@ -114,7 +146,7 @@ enum Passkeys {
             return { clientDataJSON: b64(this.clientDataJSON), authenticatorData: b64(this.authenticatorData),
                      signature: b64(this.signature), userHandle: this.userHandle ? b64(this.userHandle) : null };
           }
-        };
+        });
         return publicCredential(result.id, response, result.extensions || {});
       }
       function call(kind, options) {
@@ -147,34 +179,84 @@ enum Passkeys {
         return reply;
       }
 
-      function PublicKeyCredential() {}
-      PublicKeyCredential.prototype = {};
-      Object.defineProperty(PublicKeyCredential.prototype, 'constructor', { value: PublicKeyCredential });
-      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = function () { return Promise.resolve(true); };
-      PublicKeyCredential.isConditionalMediationAvailable = function () { return Promise.resolve(false); };
-      PublicKeyCredential.getClientCapabilities = function () { return Promise.resolve({
-        userVerifyingPlatformAuthenticator: true, conditionalGet: false, hybridTransport: false,
-        passkeyPlatformAuthenticator: true, relatedOrigins: false, signalAllAcceptedCredentials: false,
-        userVerifyingPlatformAuthenticatorAvailable: true
-      }); };
-      PublicKeyCredential.parseCreationOptionsFromJSON = function (value) {
-        var out = Object.assign({}, value || {});
-        if (out.challenge) out.challenge = bytes(out.challenge);
-        if (out.user) out.user = Object.assign({}, out.user, { id: bytes(out.user.id) });
-        if (out.excludeCredentials) out.excludeCredentials = out.excludeCredentials.map(function (c) {
-          return Object.assign({}, c, { id: bytes(c.id) });
-        });
-        return out;
+      // WebKit's classes stay in place when it has them: replacing
+      // window.PublicKeyCredential would drop any hook an extension already
+      // put on it. Only a page without WebAuthn classes gets stand-ins.
+      var Classes = (function () {
+        function stand(name, parent) {
+          var make = function () { throw new TypeError('Illegal constructor'); };
+          make.prototype = Object.create(parent ? parent.prototype : Object.prototype);
+          Object.defineProperty(make.prototype, 'constructor', { value: make, configurable: true, writable: true });
+          Object.defineProperty(make.prototype, Symbol.toStringTag, { value: name, configurable: true });
+          Object.defineProperty(make, 'name', { value: name });
+          return make;
+        }
+        function have(name, parent) {
+          var existing = window[name];
+          if (typeof existing === 'function' && existing.prototype) return existing;
+          var made = stand(name, parent);
+          try { Object.defineProperty(window, name, { value: made, configurable: true, writable: true }); } catch (_) {}
+          return made;
+        }
+        var Credential = have('Credential');
+        var Response = have('AuthenticatorResponse');
+        return {
+          PublicKeyCredential: have('PublicKeyCredential', Credential),
+          AuthenticatorAttestationResponse: have('AuthenticatorAttestationResponse', Response),
+          AuthenticatorAssertionResponse: have('AuthenticatorAssertionResponse', Response)
+        };
+      })();
+      var statics = {
+        isUserVerifyingPlatformAuthenticatorAvailable: function () { return Promise.resolve(true); },
+        isConditionalMediationAvailable: function () { return Promise.resolve(false); },
+        getClientCapabilities: function () { return Promise.resolve({
+          userVerifyingPlatformAuthenticator: true, conditionalGet: false, hybridTransport: false,
+          passkeyPlatformAuthenticator: true, relatedOrigins: false, signalAllAcceptedCredentials: false,
+          userVerifyingPlatformAuthenticatorAvailable: true
+        }); },
+        parseCreationOptionsFromJSON: function (value) {
+          var out = Object.assign({}, value || {});
+          if (out.challenge) out.challenge = bytes(out.challenge);
+          if (out.user) out.user = Object.assign({}, out.user, { id: bytes(out.user.id) });
+          if (out.excludeCredentials) out.excludeCredentials = out.excludeCredentials.map(function (c) {
+            return Object.assign({}, c, { id: bytes(c.id) });
+          });
+          return out;
+        },
+        parseRequestOptionsFromJSON: function (value) {
+          var out = Object.assign({}, value || {});
+          if (out.challenge) out.challenge = bytes(out.challenge);
+          if (out.allowCredentials) out.allowCredentials = out.allowCredentials.map(function (c) {
+            return Object.assign({}, c, { id: bytes(c.id) });
+          });
+          return out;
+        }
       };
-      PublicKeyCredential.parseRequestOptionsFromJSON = function (value) {
-        var out = Object.assign({}, value || {});
-        if (out.challenge) out.challenge = bytes(out.challenge);
-        if (out.allowCredentials) out.allowCredentials = out.allowCredentials.map(function (c) {
-          return Object.assign({}, c, { id: bytes(c.id) });
+
+      // Copper sits underneath whatever wraps the API after it. A hook that
+      // got here first (a script Copper could not precede) keeps precedence:
+      // Copper takes a setter it offers, and otherwise leaves it alone —
+      // replacing it would answer requests the hook meant to handle.
+      function native(fn) {
+        try { return typeof fn === 'function' && /\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(fn)); }
+        catch (_) { return false; }
+      }
+      // Native (or absent) → Copper's; an accessor with a setter → offered
+      // through it, so the hook decides; anything else is a hook's and stays.
+      function place(target, name, value, first, also) {
+        var own = Object.getOwnPropertyDescriptor(target, name);
+        if (own && own.get) {
+          if (first && own.set) { try { target[name] = value; } catch (_) {} }
+          return;
+        }
+        var current = target[name];
+        if (current === value || (current !== undefined && !native(current))) return;
+        [target, also].forEach(function (where) {
+          if (!where) return;
+          try { Object.defineProperty(where, name, { value: value, configurable: true, writable: true }); } catch (_) {}
         });
-        return out;
-      };
-      window.PublicKeyCredential = PublicKeyCredential;
+      }
+      Object.keys(statics).forEach(function (key) { place(Classes.PublicKeyCredential, key, statics[key], true); });
 
       if (navigator.credentials) {
         var create = function (options) {
@@ -185,21 +267,15 @@ enum Passkeys {
           var result = call('get', options);
           return result || originalGet.call(navigator.credentials, options);
         };
-        function installCredentials() {
-          var credentials = navigator.credentials;
-          var prototype = Object.getPrototypeOf(credentials);
-          try {
-            Object.defineProperty(credentials, 'create', { value: create, configurable: true, writable: true });
-            Object.defineProperty(credentials, 'get', { value: get, configurable: true, writable: true });
-          } catch (_) {}
-          try {
-            Object.defineProperty(prototype, 'create', { value: create, configurable: true, writable: true });
-            Object.defineProperty(prototype, 'get', { value: get, configurable: true, writable: true });
-          } catch (_) {}
-        }
-        installCredentials();
-        if (window.queueMicrotask) queueMicrotask(installCredentials);
-        setTimeout(installCredentials, 0);
+        var installCredentials = function (first) {
+          var credentials = navigator.credentials, prototype = Object.getPrototypeOf(credentials);
+          place(credentials, 'create', create, first, prototype);
+          place(credentials, 'get', get, first, prototype);
+        };
+        installCredentials(true);
+        // Restore only a reverted native method; never a later wrapper.
+        if (window.queueMicrotask) queueMicrotask(function () { installCredentials(false); });
+        setTimeout(function () { installCredentials(false); }, 0);
       }
     })();
     """#

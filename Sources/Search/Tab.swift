@@ -241,6 +241,9 @@ final class Tab: ObservableObject, Identifiable {
     private let veils_ = VeilRelay()
     private let forms = FormRelay()
     private let passkeys = PasskeyRelay()
+    /// Whether `copperPasskeys` is registered: an extension's MAIN-world
+    /// copy of the authenticator installs only when it is (Fork: passkeys-hooks).
+    private var passkeysListening = false
     private let images = ImageRelay()
     private let shop = StoreRelay()
     private let ears = AudioWatch()
@@ -364,7 +367,8 @@ final class Tab: ObservableObject, Identifiable {
         controller.add(images, name: ImageRelay.name)
         controller.add(shop, name: StoreRelay.name)
         controller.add(forms, name: FormRelay.name)
-        controller.addScriptMessageHandler(passkeys, contentWorld: .page, name: Passkeys.name)
+        passkeysListening = false
+        listenForPasskeys(controller) // Fork (passkeys-hooks): only while Copper is the authenticator
         Shield.shared.protect(controller)
         CanvasHost.dress(web) // Fork (canvas-hooks): a board keeps only what it uses — no pinch, no swipe, no web-page handlers (Fork/Canvas/CanvasLean)
         built = web
@@ -448,6 +452,7 @@ final class Tab: ObservableObject, Identifiable {
         if CanvasHost.arm(built) { return } // Fork (canvas-hooks): a board gets one small script, not every page's
         let controller = built.configuration.userContentController
         controller.removeAllUserScripts()
+        listenForPasskeys(controller) // Fork (passkeys-hooks): follows Settings › Passwords
         controller.addUserScript(
             WKUserScript(source: ScrollRelay.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         )
@@ -488,6 +493,17 @@ final class Tab: ObservableObject, Identifiable {
         controller.addUserScript(
             WKUserScript(source: Veiling.style(css), injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
+    }
+
+    /// Fork (passkeys-hooks): the handler is the gate for the copy of the
+    /// authenticator that rides in extensions' MAIN-world scripts, so it is
+    /// registered exactly while `Passkeys.active`. Changed only when that
+    /// flips, so a ceremony in flight keeps its reply channel.
+    private func listenForPasskeys(_ controller: WKUserContentController) {
+        guard passkeysListening != Passkeys.active else { return }
+        controller.removeScriptMessageHandler(forName: Passkeys.name, contentWorld: .page)
+        if Passkeys.active { controller.addScriptMessageHandler(passkeys, contentWorld: .page, name: Passkeys.name) }
+        passkeysListening = Passkeys.active
     }
 
     /// The same stylesheet, for the page that is already up.
@@ -1197,6 +1213,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.removeScriptMessageHandler(forName: ImageRelay.name)
         controller.removeScriptMessageHandler(forName: StoreRelay.name)
         controller.removeAllUserScripts()
+        passkeysListening = false
         web.onPull = nil
         web.onTouch = nil
         web.stopLoading()

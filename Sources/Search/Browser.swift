@@ -1312,6 +1312,24 @@ final class Browser: NSObject, ObservableObject {
     func close(_ tab: Tab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         signedInWith[tab.id] = nil
+
+        // Fork (saved-close): a Saved tab is put down, as Arc does it — the
+        // row keeps its place, its page is let go, and you land where a
+        // close would land you. Only its cross takes it out of Saved
+        // (Sections.remove). Fork/Sections.swift.
+        if Sections.shared.putsDown(tab) {
+            guard !Spaces.shared.shown(tab, outside: self) else { return }
+            if floating == tab.id { land() }
+            let wasActive = activeID == tab.id
+            tab.rest()
+            Sections.shared.wentDown(tab)
+            if wasActive {
+                if let next = Sections.shared.landing(after: tab, in: self) { select(next) } else { newTab() }
+            }
+            writeSession(now: true)
+            return
+        }
+
         if tab.pin == nil { CanvasHost.forget(tab) } // Fork (canvas): its room closes with it
 
         // A tab whose page is out in the little window takes the window with
@@ -1340,6 +1358,20 @@ final class Browser: NSObject, ObservableObject {
                 newTab()
             }
             writeSession(now: true)
+            return
+        }
+
+        // Fork (saved-close): the rest of the row is Saved tabs already put
+        // down — this is the last open tab, and the rule below holds as if
+        // it were alone, the put-down rows kept.
+        if tabs.count > 1, Sections.shared.lastOpen(tab, in: self) {
+            if tab.isBlank { (Windows.window(of: self) ?? NSApp.keyWindow)?.performClose(nil); return }
+            remember(tab, at: index)
+            tab.close()
+            tabs.remove(at: index)
+            Recent.shared.prune(tabs)
+            newTab()
+            rememberSession()
             return
         }
 
@@ -1418,6 +1450,7 @@ final class Browser: NSObject, ObservableObject {
         prepare(tab)
         leaving()
         tabs.insert(tab, at: min(ghost.index, tabs.count))
+        Sections.shared.reopened(ghost.id, as: tab) // Fork (saved-close): a removed Saved row comes back into Saved
         activeID = tab.id
         editing = false
         typed = ""
@@ -1870,16 +1903,27 @@ final class Browser: NSObject, ObservableObject {
 
     /// Fork (new-tab-launcher): rows that arrived after the keystroke that
     /// asked for them — Google's completions, history ranked off the main
-    /// thread. The row you had walked to stays the row you are on, by what it
-    /// is rather than where it was.
+    /// thread. The row you had walked (or Tabbed) to stays the row you are
+    /// on, by what it is rather than where it was; left alone, the highlight
+    /// stays on the first row — the best answer now in. (Fork/CardSections)
     func relaunch(_ rows: [OmniboxSuggestion]) {
         guard launching else { return }
         let was = picked.flatMap { offers.indices.contains($0) ? offers[$0].url : nil }
         let index = picked
         offers = rows
         ending = completion(in: rows)
-        if let index, index > 0, let was { picked = rows.firstIndex { $0.url == was } ?? min(index, rows.count - 1) }
-        else { picked = rows.isEmpty ? nil : index }
+        if rows.isEmpty { picked = nil }
+        else if walked { picked = was.flatMap { url in rows.firstIndex { $0.url == url } } ?? index.map { min($0, rows.count - 1) } }
+        else { picked = CardSections.first(count: rows.count) }
+    }
+
+    /// Fork (cmdt-sections): Tab and ⇧Tab on ⌘T's and ⌘K's card — the first
+    /// row of the next or previous section, round the end. The field keeps
+    /// the keyboard; nothing is typed and nothing opens.
+    func jumpSection(_ step: Int) {
+        guard summoning, !offers.isEmpty else { return }
+        walked = true
+        picked = CardSections.jump(from: picked, by: step, count: offers.count, headings: CardSections.shared.headings)
     }
 
     private func guess() {
@@ -1887,9 +1931,9 @@ final class Browser: NSObject, ObservableObject {
         if launching {
             offers = Launcher.shared.rows(for: typed, in: self)
             ending = completion(in: offers)
-            // A question is answered by its first row; the empty card is a
-            // list to walk down, and Return on nothing picked does nothing.
-            picked = offers.isEmpty || typed.trimmingCharacters(in: .whitespaces).isEmpty ? nil : 0
+            // The first row of the first section, typed or not: the best
+            // open tab or place, or the search when nothing else answers.
+            picked = CardSections.first(count: offers.count)
             return
         }
         guard !summoning else {

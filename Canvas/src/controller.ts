@@ -29,8 +29,10 @@ import { parseHostStatus, sameHostStatus, type HostStatus, type SyncStatus } fro
 import { createPresenceReporter, hostPresence, readPresence } from './canvas/presence'
 import type { Me } from './canvas/types'
 import { FrameBus, parseFrameEvent } from './canvas/frames'
+import { PosterBroker } from './canvas/posters'
 import { hostLog, postToHost } from './host-bridge'
-import { applyOps, readCanvas, type ApplyResult, type CanvasRead, type OpsContext } from './ops'
+import { applyOps, readBoard, type ApplyResult, type CanvasRead, type OpsContext } from './ops'
+import type { CanvasOverview } from './read-pages'
 
 export const VERSION = '1.0.0'
 
@@ -284,6 +286,8 @@ export class Controller {
   private share: ShareConfig | null = null
   /** Live frames' reports from the host, to the view that owns each frame. */
   readonly frames = new FrameBus()
+  /** Pictures of live frames' sites, asked of the host (`canvas/posters.ts`). */
+  readonly posters = new PosterBroker(msg => postToHost(msg), sniffImageSize)
   /** Who checklist `assignees` resolve against, and whom to tell (chat/index.ts wires the chat hub in). */
   opsHooks: Pick<OpsContext, 'people' | 'onAssigned'> = {}
 
@@ -303,6 +307,7 @@ export class Controller {
   // ---- lifecycle ---------------------------------------------------------------
 
   init(raw: unknown): { ok: true; docId: string } {
+    performance.mark?.('canvas:init')
     const cfg = parseInit(raw)
     this.session?.destroy()
     this.selection = []
@@ -366,6 +371,15 @@ export class Controller {
   frameEvent(raw: unknown): boolean {
     const e = parseFrameEvent(raw)
     return e ? this.frames.emit(e) : false
+  }
+
+  /** `copperCanvas.framePoster(name, dataUrl | null)`: the host's picture of a frame. */
+  framePoster(name: unknown, data: unknown): boolean {
+    if (name && typeof name === 'object' && !Array.isArray(name)) {
+      const o = name as Record<string, unknown>
+      return this.posters.answer(o.name, o.dataUrl ?? o.data ?? null)
+    }
+    return this.posters.answer(name, data)
   }
 
   frameHost(raw: unknown) {
@@ -565,10 +579,10 @@ export class Controller {
     return result
   }
 
-  read(raw: unknown): CanvasRead {
+  read(raw: unknown): CanvasRead | CanvasOverview {
     const s = this.need()
     const name = (s.store.meta.get('name') as string | undefined) || s.cfg.name
-    return readCanvas(
+    return readBoard(
       {
         store: s.store,
         canvas: { id: s.cfg.docId, name: s.cfg.name || name, kind: s.cfg.kind },

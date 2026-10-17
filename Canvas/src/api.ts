@@ -9,6 +9,7 @@ import { hostLog } from './host-bridge'
 import { setTheme } from './theme'
 import { chat } from './canvas/chat'
 import { withChat } from './canvas/chat/api'
+import { settled, type Settled } from './canvas/settle'
 
 export interface CopperCanvasApi {
   readonly version: string
@@ -36,7 +37,16 @@ export interface CopperCanvasApi {
   frameEvent(event: unknown): boolean
   /** `{reports: true}`: the host reports every frame's loads, so silence means it didn't load. */
   frameHost(cfg: unknown): void
+  /** The host's picture of a live frame (`canvas/posters.ts`): `data:image/jpeg;base64,…`, or null. True when it was asked for. */
+  framePoster(name: unknown, dataUrl: unknown): boolean
   exportState(): string
+  /**
+   * Resolves once what is on screen is drawn — pictures in the view decoded,
+   * live frames in the view loaded or showing their poster/card — plus two
+   * animation frames, or after `timeoutMs` (default 2500, 0–10000) with
+   * `settled: false` and what was pending (`canvas/settle.ts`). Never rejects.
+   */
+  settled(timeoutMs?: unknown): Promise<Settled>
   /**
    * Bring an Easels board onto this canvas: `{doc: base64, files: {fileId: dataURL}, title?}`
    * (or that as JSON). Resolves `{imported, skipped, error?, already?}`; never rejects.
@@ -122,7 +132,16 @@ export function createApi(c: Controller = controller): CopperCanvasApi {
     theme: guard('theme', (mode: string) => void setTheme(mode), undefined),
     frameEvent: guard('frameEvent', (event: unknown) => c.frameEvent(event), false),
     frameHost: guard('frameHost', (cfg: unknown) => c.frameHost(cfg), undefined),
+    framePoster: guard('framePoster', (name: unknown, dataUrl: unknown) => c.framePoster(name, dataUrl), false),
     exportState: guard('exportState', () => c.exportState(), ''),
+    settled: async (timeoutMs?: unknown): Promise<Settled> => {
+      try {
+        return await settled(timeoutMs)
+      } catch (error) {
+        hostLog('error', `settled: ${error instanceof Error ? error.message : String(error)}`)
+        return { settled: false, waitedMs: 0, pending: { images: 0, frames: 0 } }
+      }
+    },
     importLegacy: async (payload: unknown): Promise<ImportResult> => {
       try {
         const out = await c.importLegacy(payload)

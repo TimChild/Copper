@@ -664,15 +664,15 @@ peer are hidden on expiry too. Human collaborators and the shapes' author attrib
 |---|---|---|
 | `canvas_list` | — | `{canvases:[{id,name,kind,open,live,collaborators,url,updatedAt,role?,members?}], cloud}` |
 | `canvas_open` | `id` (or name) \| `name`, `foreground?` | the canvas's summary, once its page is up (background by default) |
-| `canvas_read` | `id?`, `full?` | `{canvas:{id,name,kind}, viewport, shapes:[{id,type,x,y,w,h,color,text\|title\|label\|url,by}], comments:[{id,anchor,resolved,messages}], agents, selection}` |
-| `canvas_apply` | `id?`, `ops` (required), `as?` | `{applied, ids, errors}` |
+| `canvas_read` | `id?`, `full?`, `overview?`, `frame?`, `region?`, `ids?`, `types?`, `query?`, `limit?`, `cursor?` | `{canvas:{id,name,kind}, viewport, shapes:[{id,type,x,y,w,h,color,text\|title\|label\|url,by,frame?}], comments:[{id,anchor,resolved,messages}], agents, selection, total, returned, next?}` — a page at a time on a big board ([Reading a big canvas](#reading-a-big-canvas)) |
+| `canvas_apply` | `id?`, `ops` (required, ≤ 1000), `as?` | `{applied, ids, errors}` |
 | `canvas_select` | `id?`, `shapeIds` | — |
 | `canvas_focus` | `id?`, `shapeIds` | — (zooms the view to them) |
 | `canvas_create` | `name` | the new canvas's summary (shared when signed in, local otherwise) |
 | `canvas_invite` | `id`, `email` | — (cloud only; Personal and local canvases refuse with a reason) |
 | `canvas_share_link` | `id` | `{link, webLink}` — makes the canvas's invite link once, then reuses it |
 | `canvas_join` | `link` | opens a `copper://canvas/join/...` or `https://<cloud>/join/...` link in this window, as if it had been clicked |
-| `canvas_screenshot` | `id?` | PNG of the canvas tab |
+| `canvas_screenshot` | `id?` | PNG of the canvas tab, taken once the pictures and live frames on screen have come in (`copperCanvas.settled`, 2.5 s at most; the text line names what was still loading) |
 
 `id?` omitted means the canvas tab in front, else Personal. Every schema also takes `reason`.
 Each call leaves its one line in `Tools.summary` — *220 operations applied on Roadmap*, *Read 7
@@ -689,8 +689,118 @@ label?}`, `comment {on, text}`, `reply {thread, text}`, `resolve {thread, resolv
 copper tools | grep canvas_
 copper call canvas_apply '{"reason":"jot it down","ops":[{"op":"add","shape":{"type":"sticky","text":"hello"}}]}'
 copper call canvas_read '{"reason":"what is on the board"}'
+copper call canvas_read '{"reason":"outline first","id":"Roadmap","overview":true}'
+copper call canvas_read '{"reason":"one slide","id":"Roadmap","frame":"fr07"}'
 copper call canvas_share_link '{"reason":"invite a teammate","id":"Roadmap"}'
 ```
+
+### Reading a big canvas
+
+A board of a few dozen shapes reads in one answer, exactly as it always has (plus `total` and
+`returned`). One of thousands — forty slides, live sites, pictures — would be half a megabyte of
+JSON, more than an agent can take in one gulp, so `canvas_read` answers it a page at a time and
+lets the agent ask for just the part it wants. The page does it (`Canvas/src/read-pages.ts`,
+called by `readCanvas` in `ops.ts`), from the document, never the DOM — a shape the board hasn't
+drawn because it is off screen reads like any other — so macOS and Linux answer alike.
+
+| option | |
+|---|---|
+| `overview: true` | no `shapes`: `total`, `counts` by type (`sticky`, `text`, `frame`, `arrow`, `image`, `link`, `web` for a live link, `checklist`, `timeline`), `bounds {x,y,w,h}`, `frames [{id, title, x, y, w, h, shapes}]` (up to 300, then `moreFrames`), `comments {threads, open}`, `agents`, `selection`, a `note`. A few KB for any board: read this first. |
+| `frame: <id>` | the frame and the shapes lying wholly inside it |
+| `region: {x,y,w,h}` | the shapes that intersect that board rectangle |
+| `ids: [...]` | exactly these shapes |
+| `types: [...]` | only these kinds, as the read reports them (a checklist card is `checklist` though stored as a sticky; `link` takes live ones too, `web` only those) — an unknown one is an error that lists them |
+| `query: "…"` | case-insensitive substring of a shape's text, title, label, url or checklist rows |
+| `limit` | shapes per answer: default 200, at most 500 |
+| `cursor` | the `next` of the answer before |
+| `full` | as ever: whole texts instead of the first 500 characters |
+
+The options combine (`frame` + `query` is one slide's matches); `overview` takes them too and
+counts only what matches, while its frame list still names every frame in the area with how many
+matches each holds.
+
+**Paging.** An answer holds at most `limit` shapes and stops short of about 48 KB of JSON; while
+more remain it carries `next`, and the agent calls again with `cursor` set to it — alone, or with
+the very same filters (other filters with a cursor are refused, as is one from another canvas) —
+until an answer has no `next`. The reading order is fixed: frames first, then everything else,
+each by `y`, then `x`, then `id`. The cursor holds the last sort key read and the filters (and
+page size) it was read under, not a position, so shapes added or deleted between pages never make
+an unchanged shape repeat or go missing: one added behind the cursor waits for the next full
+read, one added ahead of it turns up on a later page, one deleted is simply not there. `total` is
+how many match now, `returned` how many this answer has; a `note` says "Showing 201–400 of 1450
+shapes…". A shape bigger than the budget on its own still comes, one to a page. Comment threads
+ride with the page that holds their shape; a thread whose shape is gone comes on the first page.
+The first page of an un-narrowed read also carries `frames` (the overview's list) and the note
+"Showing 1–N of T shapes. Pass cursor to continue, or overview / frame / region / types / query to
+narrow." On a canvas with chat, the last 50 messages ride on a whole answer as before, the last
+10 on a first page, none on later pages or an overview.
+
+The tool's description and the server's instructions say the same to the agent: on a big canvas,
+`overview` first, then a `frame` or `region`, or follow `next`. The schema and wording are
+identical in Copper for Linux (`crates/copper-app/src/canvas/mcp.rs`).
+
+### When the board takes a while to come up
+
+Every tool that needs the page (`canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`,
+`canvas_focus`, `canvas_screenshot`) waits for it the same way, and works whether the canvas's
+tab is closed, asleep, restored and never woken since launch, or still loading — and however many
+calls arrive at once:
+
+- **Backstage first.** A canvas tab nobody is looking at is hung in the agent's backstage window
+  (Backstage.swift) before anything else, and held there while the agent works. Before, it was
+  an ordinary background tab: the sleep sweep (memory pressure, or more pages loaded than the
+  Mac's budget — every few seconds on a busy laptop) put it back to sleep under the agent, and the
+  wait, which woke it once, sat out its 15 s and failed (*the canvas page didn't come up within
+  15 s*: 4 calls in 32 under a simulated sweep, all fine now). A view with no window also waits a
+  second before it even starts to load (`Tab.loadAndVerify`), lays out at no size (a screenshot of
+  a woken tab failed outright), and WebKit may suspend one left idle out of sight; in the
+  backstage window it loads, draws and runs at once, and it is not put to sleep while the agent
+  works in it, nor for five minutes after (`Browser.awake(because:)`: *an agent is working in it*).
+- **Stages, not a clock.** `CanvasHost.waitReady` follows the page through *waking its tab →
+  giving its tab the canvas page → loading the canvas page → waiting for the page to start →
+  handing the board to the page → ready*, nudging a stage that stalls (waking, loading a view
+  that holds nothing, adopting a page that came up without saying `ready`, loading again one that
+  never starts or whose `init` threw), within one overall bound of 60 s (`readyBound`) — a 20 MB
+  board takes seconds to hand over, and the old 15 s/1 s timers gave up on it. If the bound is
+  ever reached the error names the stage: *the canvas page for Big QA didn't come up within 60 s:
+  stuck handing the board to the page for 41 s (after waking its tab 0.1 s, loading the canvas
+  page 0.4 s)*. `bench canvas hosts` shows each host's `stage`.
+- **One bring-up.** Parallel calls share one wait. A page's `init` is never started twice over:
+  the "adopt a page that didn't say ready" check used to fire two seconds into every waiting call
+  and re-run `init` on a big board still taking the first one — one re-init per waiting call.
+- **Nothing pulled out from under a call.** A reload the host wants (a room that changed under
+  the page) waits until the calls on the page are done. Each call first checks, in the same turn,
+  that the page in the view is the one the host initialised (`window.__copperCanvasHost`): a view
+  keeps its "ready" across a reload, the page in it doesn't. If it isn't, nothing ran, and the call
+  waits for the page and goes again; a read, select, focus or screenshot that loses its page
+  mid-way (a crash) goes once more too. An apply is never run twice.
+- **canvas_apply** takes up to 1000 ops in one transaction (the page took 500 while the tool
+  allowed 1000, so a 501–1000-op call failed whole). Placing shapes with no `x`/`y` reads the board
+  once per batch, not once per shape; the free-spot search walks precomputed rings, checks a grid
+  of nearby boxes instead of every box, and in a batch starts each same-size search where the last
+  one found room (`placement.ts`, same spots as before): 100 unplaced notes on the 1,450-shape test
+  board went from 2.1 s to 34 ms.
+- **The MCP server** answers on a keep-alive socket in the order the requests came, sends every
+  answer it owes before closing on a client that shut its side, and takes requests up to 32 MB;
+  `copper call` waits 120 s for a canvas tool.
+
+### Posters for live frames
+
+A live frame the board has unloaded (off screen, too small, over its live budget) is drawn from a
+poster — a picture of how the site last looked — which only the host can take: the page can't read
+a cross-site frame's pixels. The page posts `{type:'framePoster', name, id, url, rect:{x,y,w,h},
+maxWidth}` (the iframe's `window.name`, the shape, its address, its content box in CSS px of the
+board's viewport) once the frame has settled fully on screen with nothing drawn over its page that
+must not be in the picture (no tool bar, panel, menu, cursor or handle: `Canvas/src/canvas/poster-view.ts`
+tests every element painted above it by its box and shadow; arrows and opaque notes may be in it,
+and the page drops such a picture once they or the frame change); Copper snapshots that rect of the
+board's view (`WKWebView.takeSnapshot`, the last painted frame), scales it to at most `maxWidth`
+(≤ 1280) px wide, encodes a JPEG at 0.7 off the main thread and answers
+`window.copperCanvas.framePoster(name, 'data:image/jpeg;base64,…')`, or `null` when there is no
+picture to be had (the rect mostly off the view, WebKit gave none within 4 s). At most one per
+frame every 5 s, and none while that frame's last is still being made — the page asks far less
+often than that anyway. An older page never asks; a page on an older Copper keeps its cards.
+`CanvasPosters.swift`; `bench canvas hosts` reports the counts and the last one sent.
 
 ## Sharing a canvas (invite links, Share sheet, join flow)
 

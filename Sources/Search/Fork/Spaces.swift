@@ -1479,7 +1479,8 @@ extension Spaces {
     func cloudClose(_ tab: Tab, browser: Browser) {
         if let viewer = browsers.first(where: { $0.tabs.contains { $0.id == tab.id } }) {
             if tab.pin != nil { viewer.unpin(tab) }
-            viewer.close(tab)
+            // Gone from another Mac is gone: out of Saved, not put down.
+            Sections.shared.closeForGood(tab, in: viewer)
             return
         }
         guard let from = spaceID(of: tab) else { return }

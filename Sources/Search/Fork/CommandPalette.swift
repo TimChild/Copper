@@ -31,8 +31,8 @@ struct CommandPalette: View {
     @State private var place = WindowRuler.Place()
     /// The site marks, arriving a moment after the rows they belong to.
     @ObservedObject private var marks = Marks.ticker
-    /// ⌘T's groups and their headings (Fork/Launcher).
-    @ObservedObject private var launcher = Launcher.shared
+    /// The sections' headings, ⌘T's and ⌘K's alike (Fork/CardSections).
+    @ObservedObject private var sections = CardSections.shared
     /// What is typed and offered. The browser no longer announces it to
     /// every view it has; see `Browser.Field`.
     @ObservedObject private var state: Browser.Field
@@ -133,43 +133,33 @@ struct CommandPalette: View {
         .frame(height: 56)
     }
 
-    @ViewBuilder
+    /// The rows, in their sections, each under a small heading — ⌘T's and
+    /// ⌘K's the same way, so Tab means the same thing in both. Taller than
+    /// the window allows, the list scrolls, and follows the arrow keys.
     private var rows: some View {
-        if browser.launching {
-            grouped
-        } else {
-            VStack(spacing: 1) {
-                ForEach(Array(browser.offers.enumerated()), id: \.offset) { index, offer in
-                    Row(offer: offer, picked: browser.picked == index, tint: tint, stamp: marks.landed)
-                        .contentShape(Rectangle())
-                        .onTapGesture { browser.take(offer) }
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
-        }
-    }
-
-    /// ⌘T's rows, in their groups, each group under a small heading. Taller
-    /// than the window allows, the list scrolls, and follows the arrow keys.
-    private var grouped: some View {
         ScrollViewReader { reader in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(Array(browser.offers.enumerated()), id: \.offset) { index, offer in
-                        if let heading = launcher.headings[index] {
-                            Text(heading)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Palette.muted)
-                                .padding(.horizontal, 12)
-                                .frame(height: CommandPalette.headingHeight, alignment: .bottomLeading)
-                                .padding(.bottom, 2)
+                        // A section's heading and its first row scroll as
+                        // one, so Tab back round to the top shows the label
+                        // too, not just the row under it.
+                        VStack(alignment: .leading, spacing: 1) {
+                            if let heading = sections.headings[index] {
+                                Text(heading)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Palette.muted)
+                                    .padding(.horizontal, 12)
+                                    .frame(height: CommandPalette.headingHeight, alignment: .bottomLeading)
+                                    .padding(.bottom, 2)
+                                    .accessibilityAddTraits(.isHeader)
+                            }
+                            Row(offer: offer, picked: browser.picked == index, tint: tint, stamp: marks.landed,
+                                aside: browser.launching && browser.picked == index ? Launcher.aside(for: offer, in: browser) : "")
+                                .contentShape(Rectangle())
+                                .onTapGesture { browser.take(offer) }
                         }
-                        Row(offer: offer, picked: browser.picked == index, tint: tint, stamp: marks.landed,
-                            aside: browser.picked == index ? Launcher.aside(for: offer, in: browser) : "")
-                            .contentShape(Rectangle())
-                            .onTapGesture { browser.take(offer) }
-                            .id(index)
+                        .id(index)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -186,7 +176,7 @@ struct CommandPalette: View {
     /// As tall as the rows, and no taller than the window below the card.
     private var groupedHeight: CGFloat {
         let rows = CGFloat(browser.offers.count)
-        let headings = CGFloat(launcher.headings.keys.filter { $0 < browser.offers.count }.count)
+        let headings = CGFloat(sections.headings.keys.filter { $0 < browser.offers.count }.count)
         let natural = rows * (CommandPalette.rowHeight + 1) + headings * (CommandPalette.headingHeight + 3) + 16
         let room = place.height > 0 ? place.height * (1 - CommandPalette.drop) - 56 - 40 : 480
         return min(natural, max(room, 200))

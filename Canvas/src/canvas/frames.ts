@@ -91,40 +91,39 @@ export function makeNonce(): string {
 
 // ---- which frames get an iframe ---------------------------------------------------
 
-/** At most this many iframes at once; the rest show their card. */
+/** At most this many iframes at once; the rest show their poster or card. */
 export const MAX_MOUNTED = 6
 /** A frame narrower than this on screen shows its card (and a mounted one keeps its iframe down to KEEP_PX). */
 export const MOUNT_PX = 260
 export const KEEP_PX = 200
+/** New iframes are only made once the view has been still this long. */
+export const LIVE_SETTLE_MS = 200
+/** A frame that stops being wanted (off screen, too small) keeps its page this long, so panning back doesn't reload it. */
+export const LIVE_KEEP_MS = 8000
 
 export interface MountInput extends Box {
   id: string
 }
 
 /**
- * Which live frames have a real iframe right now: the one in use always;
- * then those on screen and big enough to read, nearest the middle first, up
- * to `max`. Frames already mounted keep theirs a little longer (a margin
- * around the view, a smaller size) so a frame at the edge doesn't reload
- * every time the board moves a pixel.
+ * The live frames worth an iframe right now, best first, uncapped: on screen
+ * and big enough to read, nearest the middle first. Frames already mounted
+ * rank first and keep theirs a little longer (a margin around the view, a
+ * smaller size) so a frame at the edge doesn't reload every time the board
+ * moves a pixel. The one in use is not ranked: it always has its page.
  */
-export function framesToMount(
+export function rankFrames(
   frames: readonly MountInput[],
-  ctx: { visible: Box; zoom: number; active: string | null; mounted: ReadonlySet<string>; max?: number }
-): Set<string> {
-  const max = ctx.max ?? MAX_MOUNTED
+  ctx: { visible: Box; zoom: number; active: string | null; mounted: ReadonlySet<string> | ReadonlyMap<string, unknown> }
+): string[] {
   const { visible, zoom } = ctx
   const cx = visible.x + visible.w / 2
   const cy = visible.y + visible.h / 2
   const margin = Math.max(visible.w, visible.h) * 0.25
   const wide = { x: visible.x - margin, y: visible.y - margin, w: visible.w + margin * 2, h: visible.h + margin * 2 }
-  const out = new Set<string>()
   const candidates: { id: string; d: number; kept: boolean }[] = []
   for (const f of frames) {
-    if (f.id === ctx.active) {
-      out.add(f.id)
-      continue
-    }
+    if (f.id === ctx.active) continue
     const kept = ctx.mounted.has(f.id)
     const onScreen = boxesOverlap(kept ? wide : visible, f)
     const px = f.w * zoom
@@ -133,11 +132,99 @@ export function framesToMount(
     candidates.push({ id: f.id, d, kept })
   }
   candidates.sort((a, b) => Number(b.kept) - Number(a.kept) || a.d - b.d || (a.id < b.id ? -1 : 1))
-  for (const c of candidates) {
+  return candidates.map(c => c.id)
+}
+
+/**
+ * Which live frames have a real iframe right now, ignoring time: the one in
+ * use always, then the best ranked (`rankFrames`) up to `max`.
+ */
+export function framesToMount(
+  frames: readonly MountInput[],
+  ctx: { visible: Box; zoom: number; active: string | null; mounted: ReadonlySet<string>; max?: number }
+): Set<string> {
+  const max = ctx.max ?? MAX_MOUNTED
+  const out = new Set<string>()
+  if (ctx.active && frames.some(f => f.id === ctx.active)) out.add(ctx.active)
+  for (const id of rankFrames(frames, ctx)) {
     if (out.size >= max) break
-    out.add(c.id)
+    out.add(id)
   }
   return out
+}
+
+/** A mounted frame: when it got its page, and when it was last wanted. */
+export interface LiveEntry {
+  since: number
+  lastWanted: number
+}
+
+export interface LivePlan {
+  /** The frames with an iframe after this step, best first. */
+  mounted: Map<string, LiveEntry>
+  /** Frames that had one and lose it now. */
+  dropped: string[]
+  /** When a kept-alive frame runs out (ask again then), or null. */
+  next: number | null
+}
+
+/**
+ * One step of the live-frame budget, with time: what `framesToMount` wants,
+ * plus the rules that keep pages from thrashing.
+ *
+ * - The frame in use (the one typed in) always keeps its page, and counts
+ *   against the budget; so does a `pinned` one (its poster being taken).
+ * - New iframes are made only when the view has `settled`; while it moves,
+ *   frames keep what they have.
+ * - A frame no longer wanted (it left the screen, or got too small to read)
+ *   keeps its page for `keepMs`, while there is room: a wanted frame takes
+ *   the slot of the one wanted longest ago first.
+ */
+export function planLiveFrames(
+  frames: readonly MountInput[],
+  ctx: {
+    visible: Box
+    zoom: number
+    active: string | null
+    pinned?: ReadonlySet<string>
+    settled: boolean
+    now: number
+    prev: ReadonlyMap<string, LiveEntry>
+    max?: number
+    keepMs?: number
+  }
+): LivePlan {
+  const max = ctx.max ?? MAX_MOUNTED
+  const keepMs = ctx.keepMs ?? LIVE_KEEP_MS
+  const { now, prev } = ctx
+  const exists = new Set(frames.map(f => f.id))
+  const mounted = new Map<string, LiveEntry>()
+  const take = (id: string, wanted: boolean) => {
+    const was = prev.get(id)
+    mounted.set(id, { since: was?.since ?? now, lastWanted: wanted ? now : (was?.lastWanted ?? now) })
+  }
+  // In use: always, budget or not. Pinned for a moment (its picture being
+  // taken before it goes): kept, but not wanted any more than it was.
+  if (ctx.active && exists.has(ctx.active)) take(ctx.active, true)
+  for (const id of ctx.pinned ?? []) if (exists.has(id) && !mounted.has(id)) take(id, false)
+  const ranked = rankFrames(frames, { visible: ctx.visible, zoom: ctx.zoom, active: ctx.active, mounted: prev })
+  // Wanted and already live, then (once settled) wanted and new.
+  for (const id of ranked) if (mounted.size < max && prev.has(id) && !mounted.has(id)) take(id, true)
+  if (ctx.settled) for (const id of ranked) if (mounted.size < max && !mounted.has(id)) take(id, true)
+  // No longer wanted: kept a while, most recently wanted first, while there is room.
+  const wanted = new Set(ranked)
+  const spare = [...prev.entries()]
+    .filter(([id, e]) => exists.has(id) && !mounted.has(id) && !wanted.has(id) && now - e.lastWanted < keepMs)
+    .sort((a, b) => b[1].lastWanted - a[1].lastWanted)
+  let next: number | null = null
+  for (const [id, e] of spare) {
+    if (mounted.size >= max) break
+    mounted.set(id, e)
+    const ends = e.lastWanted + keepMs
+    next = next === null ? ends : Math.min(next, ends)
+  }
+  const dropped = [...prev.keys()].filter(id => !mounted.has(id))
+  return { mounted, dropped, next }
 }
 
 // ---- the URL both people share ------------------------------------------------------

@@ -61,6 +61,8 @@ function startLoop(
   const draw = (): boolean => {
     if (!ctx || disposed) return false
     painted = drawLaser(ctx, trails, getView(), dpr, Date.now())
+    // Something on it: a live frame's picture is not taken through it (canvas/poster-view.ts).
+    if (painted !== canvas.hasAttribute('data-lit')) canvas.toggleAttribute('data-lit', painted)
     return painted
   }
   const frame = (): void => {

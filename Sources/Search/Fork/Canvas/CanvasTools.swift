@@ -37,9 +37,7 @@ enum CanvasTools {
                 "id": which, "name": string("Canvas name, if you have no id"),
                 "foreground": bool("Bring its tab to the front; default false"),
             ]),
-            tool("canvas_read", "Read a canvas: {canvas, viewport, shapes:[{id,type,x,y,w,h,color,text|title|label|url,live?,by}], agents, selection}; a checklist card (a sticky with view:'checklist') also has title, columns, rows:[{label,pick,by?,at?,note?,noteBy?,noteAt?,assignees?:[{name,id?,email?}]}] (note: the row's comment, when it has one; assignees: who the row is assigned to, id their Copper Cloud user id) and tally {column: count}; a timeline (view:'timeline') has title, start, end, step and items:[{date, end?, label, text?, color?, kind:'note'|'bubble'|'section'}]; comments:[{id, anchor (shape id), anchorDeleted?, resolved, resolvedBy?, messages:[{id, by, at, text, edited?}]}] lists the comment threads people left on shapes (a frame is often a slide). Text is cut at 500 characters unless full is true. Read before you write.", [
-                "id": which, "full": bool("Whole texts instead of the first 500 characters"),
-            ]),
+            tool("canvas_read", readDescription, readProperties),
             tool("canvas_apply", "Change a canvas in one transaction (opens its tab in the background if needed). Returns {applied, ids, errors}. Ops: {op:'add', shape:{type:'sticky'|'text'|'frame'|'arrow'|'image'|'link'|'checklist'|'timeline', id?, x?, y?, w?, h?, color?, text?|title?|url?|from?/to?|label?}} (omit x/y to place it in free space near the view; give it your own id, e.g. 'n1', to connect it later in the same call). A link with live:true (or type:'web') shows the site itself on the board, an iframe everyone on the board can browse — each person signed in as themselves; it defaults to 960×640 and needs an http(s) url; update {live:false} turns it back into a card. A checklist is a clickable RSVP / to-do card: {type:'checklist', title, columns?:['Yes','No'] (1–4; one column = to-do boxes), rows:['Ann', …] (≤60), picks?:{'Ann':'Yes'}, notes?:{'Ann':'Back at 6'}, assignees?:{'Fix login':['Grace Hopper','ann@example.com']}} — it is stored as a sticky with view:'checklist' whose text is the list ('### Title' then '- [ ] Ann' / '- [x] Ann · No' lines, a row's comment as indented '  > …' lines under it, then one indented '  @Name' line per assignee), so older Coppers show it as a note with task boxes; each row has at most one pick and one comment (multi-line text, shown collapsed under the row) and up to 12 assignees (people on the canvas named by name, email or id — each newly assigned one is notified like a chat @mention; anyone else by a name of their own); in update, picks, notes and assignees name a row by label, null clears it (assignees replace the row's list), and rows/columns/title replace them in the text (rows keep their picks, comments and assignees by label). {op:'update', id, patch:{view:'checklist', columns?}} turns a sticky that holds a heading and a task list into a card, ticks kept; view:null turns it back into a note. A timeline: {type:'timeline', title?, start:'YYYY-MM-DD', end, step?:'day'|'week'|'month'|'quarter'|'year', items?:[{date, end?, label, text?, color?}]} (text makes a bubble, end a section), stored as a sticky with view:'timeline' whose text is the timeline; update takes the same (items replaces the list) plus addItems:[…] and editItems:{ref: patch|null} (ref: 'YYYY-MM-DD · label', a label, a date or an index; null removes). {op:'update', id, patch:{…}}; {op:'move', id, dx, dy}; {op:'resize', id, w, h}; {op:'delete', id}; {op:'connect', from:id, to:id, label?} (an arrow); comment threads on a shape, Figma-style: {op:'comment', on:shapeId, text} starts one (its ids[i] is the thread id), {op:'reply', thread, text} adds onto one (a resolved thread opens again), {op:'resolve', thread, resolved:true|false} resolves or reopens; {op:'clear', confirm:true} only when the user explicitly asked to wipe the board.", [
                 "id": which,
                 "ops": ["type": "array", "items": ["type": "object"], "description": "The operations, applied in order in one transaction"] as [String: Any],
@@ -64,7 +62,36 @@ enum CanvasTools {
         ]
     }
 
-    static let instructions = "Canvases are the user's whiteboards — each is a copper://canvas/<id> tab; Personal always exists and is private. Use canvas_* tools, never browser_* clicks, to change one. Coordinates are board units: x grows right, y grows down, (0,0) is arbitrary; shapes have x, y (top-left), w, h. Always canvas_read first: reuse its ids, place new shapes beside existing ones (or omit x/y to auto-place near the view), and change a shape with update/move/resize instead of re-adding it. canvas_apply runs every op in one transaction and returns {applied, ids, errors}; colors are yellow, pink, blue, green, purple, gray, white or #hex; connect draws an arrow between two shapes; clear needs confirm:true and only on an explicit request. For a big batch (dozens of shapes) send several canvas_apply calls of at most 40 ops each rather than one huge call, and give added shapes your own ids (shape.id) so connect ops can name them."
+    // The canvas_read text and schema, word for word the same as Copper for
+    // Linux's (crates/copper-app/src/canvas/mcp.rs) — docs/canvas.md has them.
+    static let readDescription = "Read a canvas: {canvas, viewport, shapes:[{id,type,x,y,w,h,color,text|title|label|url,live?,by,frame?}], agents, selection, total, returned, next?}; a checklist card (a sticky with view:'checklist') also has title, columns, rows:[{label,pick,by?,at?,note?,noteBy?,noteAt?,assignees?:[{name,id?,email?}]}] (note: the row's comment, when it has one; assignees: who the row is assigned to, id their Copper Cloud user id) and tally {column: count}; a timeline (view:'timeline') has title, start, end, step and items:[{date, end?, label, text?, color?, kind:'note'|'bubble'|'section'}]; comments:[{id, anchor (shape id), anchorDeleted?, resolved, resolvedBy?, messages:[{id, by, at, text, edited?}]}] lists the comment threads people left on shapes (a frame is often a slide). Text is cut at 500 characters unless full is true. A big canvas comes a page at a time — at most limit shapes (default 200) and about 48 KB per answer, frames first, then by y, x and id, each comment thread with its shape: while the answer has next, call again with cursor set to it (the cursor keeps the filters) until next is absent; total is how many shapes match. On a big canvas start with overview:true (counts by type, bounds, the frames with their ids, titles and shape counts, comment counts — no shapes), then read one frame (frame:<id>) or one area (region), or narrow with ids, types or query. Read before you write."
+
+    static let readProperties: [String: Any] = [
+        "id": which,
+        "full": bool("Whole texts instead of the first 500 characters"),
+        "overview": bool("No shapes: total, counts by type, bounds, frames [{id, title, x, y, w, h, shapes}], comments {threads, open}, agents and selection. Read this first on a big canvas"),
+        "frame": string("A frame's shape id (from overview): the frame and the shapes inside it"),
+        "region": ["type": "object", "description": "Board-unit rectangle: the shapes that intersect it",
+                   "properties": ["x": ["type": "number"], "y": ["type": "number"], "w": ["type": "number"], "h": ["type": "number"]] as [String: Any],
+                   "required": ["x", "y", "w", "h"]] as [String: Any],
+        "ids": ids("Exactly these shapes"),
+        "types": ["type": "array", "description": "Only shapes of these types, as read reports them",
+                  "items": ["type": "string", "enum": ["sticky", "text", "frame", "arrow", "image", "link", "web", "checklist", "timeline"]] as [String: Any]] as [String: Any],
+        "query": string("Case-insensitive text to find in text, titles, labels and urls"),
+        "limit": ["type": "integer", "minimum": 1, "maximum": 500, "description": "Shapes per answer; default 200, at most 500"] as [String: Any],
+        "cursor": string("The next value of the previous answer, to read the page after it"),
+    ]
+
+    /// What canvas_read hands the page: the options it knows, as given.
+    static func readOptions(_ args: [String: Any]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for key in ["full", "overview", "frame", "region", "ids", "types", "query", "limit", "cursor"] {
+            if let value = args[key], !(value is NSNull) { out[key] = value }
+        }
+        return out
+    }
+
+    static let instructions = "Canvases are the user's whiteboards — each is a copper://canvas/<id> tab; Personal always exists and is private. Use canvas_* tools, never browser_* clicks, to change one. Coordinates are board units: x grows right, y grows down, (0,0) is arbitrary; shapes have x, y (top-left), w, h. Always canvas_read first — on a big canvas read overview:true first, then a frame or region, or follow next a page at a time: reuse its ids, place new shapes beside existing ones (or omit x/y to auto-place near the view), and change a shape with update/move/resize instead of re-adding it. canvas_apply runs every op in one transaction and returns {applied, ids, errors}; colors are yellow, pink, blue, green, purple, gray, white or #hex; connect draws an arrow between two shapes; clear needs confirm:true and only on an explicit request. For a big batch (dozens of shapes) send several canvas_apply calls of at most 40 ops each rather than one huge call, and give added shapes your own ids (shape.id) so connect ops can name them."
 
     // MARK: - dispatch
 
@@ -78,6 +105,8 @@ enum CanvasTools {
             throw Tools.Failure(text: failure.text)
         } catch let failure as Cloud.Failure {
             throw Tools.Failure(text: failure.message)
+        } catch let failure as Tools.Page.Failure {
+            throw Tools.Failure(text: failure.text)
         }
     }
 
@@ -96,17 +125,22 @@ enum CanvasTools {
         case "canvas_open":
             let entry = try resolve(args, in: browser, fallbackToActive: false)
             let foreground = (args["foreground"] as? Bool) ?? false
-            let host = try await open(entry, in: browser, foreground: foreground)
-            try await host.waitReady()
+            _ = try await open(entry, in: browser, foreground: foreground)
             Tools.summary?.line = "Opened \(entry.name)"
             return [.text(json(summary(entry, in: browser)))]
 
         case "canvas_read":
             let entry = try resolve(args, in: browser)
             let host = try await open(entry, in: browser, foreground: false)
-            let read = try await host.read(full: (args["full"] as? Bool) ?? false)
-            let shapes = (read["shapes"] as? [Any])?.count ?? 0
-            Tools.summary?.line = "Read \(shapes) shape\(shapes == 1 ? "" : "s") on \(entry.name)"
+            let read = try await host.read(readOptions(args))
+            let total = (read["total"] as? NSNumber)?.intValue
+            if read["overview"] as? Bool == true {
+                Tools.summary?.line = "Overview of \(entry.name): \(total ?? 0) shape\(total == 1 ? "" : "s")"
+            } else {
+                let shapes = (read["shapes"] as? [Any])?.count ?? 0
+                let of = total.map { $0 != shapes ? " of \($0)" : "" } ?? ""
+                Tools.summary?.line = "Read \(shapes)\(of) shape\(shapes == 1 && of.isEmpty ? "" : "s") on \(entry.name)\(read["next"] != nil ? " (more to read)" : "")"
+            }
             return [.text(json(read))]
 
         case "canvas_apply":
@@ -188,9 +222,11 @@ enum CanvasTools {
         case "canvas_screenshot":
             let entry = try resolve(args, in: browser)
             let host = try await open(entry, in: browser, foreground: false)
-            let data = try await host.picture()
+            let shot = try await host.picture()
             Tools.summary?.line = "Screenshot of \(entry.name)"
-            return [.image(data, mime: "image/png"), .text("Canvas · \(entry.name)")]
+            // Taken after the pictures on screen came in (2.5 s at most); if some hadn't, it says so.
+            let line = shot.pending.map { "Canvas · \(entry.name) — still loading when taken: \($0)" } ?? "Canvas · \(entry.name)"
+            return [.image(shot.data, mime: "image/png"), .text(line)]
 
         case CanvasChat.toolName:
             return try await CanvasChat.runTool(args, in: browser)
@@ -214,21 +250,37 @@ enum CanvasTools {
         return Canvases.shared.personal
     }
 
-    /// The canvas's tab, made if there is none, and its host once the page has one.
+    /// The canvas's tab, made if there is none, and its host once its page is
+    /// ready (CanvasHost.waitReady: progress-driven, up to `readyBound`).
+    ///
+    /// A tab nobody is looking at is hung backstage first (Backstage.swift):
+    /// in a window, its page loads, lays out and runs at once — a view with no
+    /// window waits a second before it even starts loading, and WebKit
+    /// suspends one that sits idle out of sight — and it is not put to sleep
+    /// while the agent is working in it, nor for a few minutes after.
     @MainActor
     static func open(_ entry: Canvases.Entry, in browser: Browser, foreground: Bool) async throws -> CanvasHost {
+        let started = Date()
         let tab = CanvasHost.show(entry.id, in: browser, foreground: foreground)
-        let deadline = Date().addingTimeInterval(15)
-        var nudged = false
-        while Date() < deadline {
-            if let host = CanvasHost.host(for: tab) { return host }
-            if !nudged {
-                nudged = true
+        Backstage.shared.stage(tab)
+        var nudged: Date?
+        while true {
+            if let host = CanvasHost.host(for: tab) {
+                try await host.waitReady(timeout: max(10, CanvasHost.readyBound - Date().timeIntervalSince(started)))
+                return host
+            }
+            // No host yet: the page hasn't begun to load into the tab.
+            let waited = Date().timeIntervalSince(started)
+            if nudged.map({ Date().timeIntervalSince($0) > 5 }) ?? true {
+                nudged = Date()
                 if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() } else if tab.built == nil { _ = tab.web; tab.revive() }
             }
-            try await Task.sleep(nanoseconds: 60_000_000)
+            guard waited < CanvasHost.readyBound else {
+                let state = tab.asleep ? "asleep" : tab.built == nil ? "no view" : tab.hollow ? "an empty view" : "showing \(tab.built?.url?.absoluteString ?? "nothing")"
+                throw Failure(text: "the canvas tab for \(entry.name) never started loading its page in \(Int(waited)) s (the tab: \(state))")
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
         }
-        throw Failure(text: "the canvas tab for \(entry.name) didn't open")
     }
 
     @MainActor

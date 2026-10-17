@@ -27,14 +27,22 @@ enum CloudApply {
         var out: [Kept] = []
         for space in spaces.all {
             let row = space.id == spaces.current ? browser.tabs : (spaces.parkedRow(space.id) ?? [])
-            for tab in row where !tab.shy && !tab.bench {
-                guard let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true else { continue }
-                let pinned = tab.pin != nil
-                guard pinned || Sections.shared.isSaved(tab) else { continue }
-                out.append(Kept(tab: tab, space: space.id, pinned: pinned, url: url))
+            for tab in row {
+                guard let url = keptURL(of: tab, saved: Sections.shared.isSaved(tab)) else { continue }
+                out.append(Kept(tab: tab, space: space.id, pinned: tab.pin != nil, url: url))
             }
         }
         return out
+    }
+
+    /// The address a row is kept under in the document, or nil for one that
+    /// isn't kept: a favourite or a Saved row on a web page, asleep or awake
+    /// — a Saved tab closed with ⌘W is put down, not closed, and stays kept
+    /// (Fork/Sections.swift); only taking it out of Saved deletes it.
+    static func keptURL(of tab: Tab, saved: Bool) -> URL? {
+        guard !tab.shy, !tab.bench, tab.pin != nil || saved,
+              let url = tab.pending ?? tab.address, url.scheme?.hasPrefix("http") == true else { return nil }
+        return url
     }
 
     private static func stem(space: UUID, pinned: Bool, url: URL) -> String {

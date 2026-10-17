@@ -127,6 +127,44 @@ export function arrowBox(path: ArrowPath): Box {
   return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y }
 }
 
+/** Does the drawn path (its stroke and head: `reach` around it) cross `box`? */
+export function arrowCrosses(path: ArrowPath, box: Box, reach: number): boolean {
+  const l = box.x - reach
+  const t = box.y - reach
+  const r = box.x + box.w + reach
+  const b = box.y + box.h + reach
+  const pts = arrowPoints(path, 24)
+  for (let i = 1; i < pts.length; i++) {
+    // Liang–Barsky: clip the segment to the box.
+    const p = pts[i - 1]!
+    const q = pts[i]!
+    const dx = q.x - p.x
+    const dy = q.y - p.y
+    let t0 = 0
+    let t1 = 1
+    let hit = true
+    for (const [d, e] of [
+      [-dx, p.x - l],
+      [dx, r - p.x],
+      [-dy, p.y - t],
+      [dy, b - p.y],
+    ] as const) {
+      if (d === 0) {
+        if (e < 0) hit = false
+        continue
+      }
+      const u = e / d
+      if (d < 0) {
+        if (u > t1) hit = false
+        else if (u > t0) t0 = u
+      } else if (u < t0) hit = false
+      else if (u < t1) t1 = u
+    }
+    if (hit && t0 <= t1) return true
+  }
+  return false
+}
+
 /** Points along the path, for hit tests against a curve. */
 export function arrowPoints(path: ArrowPath, steps = 16): Point[] {
   const p0 = { x: path.seg.x1, y: path.seg.y1 }

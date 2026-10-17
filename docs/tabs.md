@@ -4,9 +4,9 @@
 In **Settings › Tabs**, **⌃Tab switches to** chooses whether Control-Tab follows
 the next tab in the row or the tabs used most recently. Plain `Tab` never
 switches tabs: on a page it is the page's (moving between fields, a site's own
-Tab-to-accept, code editors), and in the address field, `⌘T` and `⌘K` it takes
-the completion on offer — the text goes in the field with the caret after it,
-and nothing opens until Return.
+Tab-to-accept, code editors), and in the address field (`⌘L`) it takes the
+completion on offer — the text goes in the field with the caret after it, and
+nothing opens until Return.
 
 In **Most recent tab** mode, `⌃Tab` walks older tabs and `⌃⇧Tab` walks back
 toward newer ones. The list belongs to the current space. It is frozen while
@@ -17,6 +17,29 @@ same walk as a small strip over the page; a quick press does not flash it.
 Tab renaming keeps its existing Tab behaviour.
 Closing a tab removes it from the list, and changing spaces rebuilds the list
 from that space's row.
+
+## The ⌘T and ⌘K card
+
+The card's rows come in sections, always in this order: **Open Tabs**,
+**History**, then **Bookmarks**, **Canvases** and **Commands** when anything
+matches, and **Search** (the Google search for what you typed, then Google's
+completions) last. A section only shows while it has rows, under a quiet
+heading; within one, rows keep their ranking. With nothing typed, ⌘T shows
+**Recent Tabs** and **Recently Closed**.
+
+The first row is highlighted as the card opens and on every keystroke, so
+Return takes the best open tab or page you have been to, and searches only
+when nothing else answers. An address typed in full — `github.com`,
+`localhost:3000`, an `https://` link — leads the card under no heading and
+opens on Return. In ⌘T, a query starting with `/` lists commands only.
+
+`Tab` and `⇧Tab` move the highlight to the first row of the next or previous
+section, round the end; `↑` and `↓` still walk row by row across sections. The
+keyboard stays in the field. `→` at the end of what you typed puts the
+highlighted row's address (or a search's words) into the field to edit, which
+is what Tab did here before. `./bench newtab TEXT --keys "⇥⇧⇥↓"` and
+`./bench summon TEXT --keys …` press these keys in a probe world's card
+(`Fork/CardSections.swift`).
 
 ## Links from other apps
 

@@ -226,6 +226,19 @@ final class CanvasHost {
     /// The last live-frame reports handed to the page (CanvasFrames), for the bench.
     var frameEvents: [[String: Any]] = []
 
+    /// The `ready` whose `init` is running right now (0: none) — so a page
+    /// still taking a big board is never re-initialised under itself.
+    private var initTicket = 0
+    /// The last `init` that threw: its ticket and what the page said.
+    private var initFailure: (ticket: Int, text: String)?
+    /// One bring-up at a time, however many tool calls are waiting on it.
+    private var bringing: Task<Void, Error>?
+    /// Tool calls on the page right now. A reload asked for meanwhile (a room
+    /// that changed under the page) waits for them, rather than pulling the
+    /// page out from under an agent's read or write.
+    private var busy = 0
+    private var restartWanted = false
+
     var entry: Canvases.Entry? { Canvases.shared.entry(canvasId) }
     var store: CanvasStore { CanvasStore.store(for: storeKey) }
     var isReady: Bool { initialized > 0 && initialized == generation && readyWeb != nil && readyWeb === tab?.built }
@@ -568,6 +581,8 @@ final class CanvasHost {
                   let browser = browser ?? Windows.all.first
             else { return }
             if let id = CanvasLinks.id(from: url) { CanvasHost.show(id, in: browser) } else { browser.open(url, foreground: true) }
+        case "framePoster":
+            CanvasPosters.shared.take(body, from: web, host: self)
         case "log":
             let level = body["level"] as? String ?? "debug"
             let text = String(describing: body["msg"] ?? "")
@@ -620,6 +635,8 @@ final class CanvasHost {
     private func ready() async {
         generation += 1
         let ticket = generation
+        initTicket = ticket
+        defer { if initTicket == ticket { initTicket = 0 } }
         guard let tab, let web = tab.built else { return }
         tab.icon = CanvasPage.icon
         watchAppearance(web)
@@ -669,10 +686,12 @@ final class CanvasHost {
         } catch {
             CanvasHost.log.error("init failed: \(String(describing: error), privacy: .public)")
             lastError = "\(error)"
+            initFailure = (ticket, (error as? Failure)?.text ?? "\(error)")
             return
         }
         guard ticket == generation else { return }
         initialized = ticket
+        initFailure = nil
         lastSnapshot = Date()
         // Asked for while this page was coming up: the answer may have changed.
         if Canvases.shared.room(for: entry) != roomId { restartPage(); return }
@@ -733,41 +752,191 @@ final class CanvasHost {
         }
     }
 
+    /// What `pageCall` throws when the page in the view is not the one this host initialised.
+    static let notInitialised = "copper-canvas-page-not-initialised"
+
+    /// `call`, for a tool's work: first checks, in the same turn, that the page
+    /// is the one this host gave the board to (`init` leaves its ticket on
+    /// `window.__copperCanvasHost`). A view keeps its host's ready state across
+    /// a reload; the page in it doesn't — this is how a call finds out.
+    @discardableResult
+    func pageCall(_ body: String, _ arguments: [String: Any] = [:]) async throws -> Any? {
+        var arguments = arguments
+        arguments["__copperTicket"] = initialized
+        return try await call("if (window.__copperCanvasHost !== __copperTicket || !window.copperCanvas) throw new Error('\(CanvasHost.notInitialised)');\n" + body, arguments)
+    }
+
     /// A page that is up and running but never said `ready` to this host
     /// (restored from the page cache, or loaded before the host existed) is
     /// given its state now, as if it had.
     func adoptIfLive(after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, !self.isReady, let web = self.tab?.built, CanvasPage.isPage(web.url) else { return }
+            // Never while an init is running: on a big board that takes a while,
+            // and a second `ready` threw the first one's work away.
+            guard let self, !self.isReady, self.initTicket == 0, let web = self.tab?.built, CanvasPage.isPage(web.url) else { return }
             web.evaluateJavaScript("!!(window.copperCanvas && typeof window.copperCanvas.init === 'function')") { [weak self] value, _ in
                 MainActor.assumeIsolated {
-                    guard let self, value as? Bool == true, !self.isReady, self.tab?.built === web else { return }
+                    guard let self, value as? Bool == true, !self.isReady, self.initTicket == 0, self.tab?.built === web else { return }
                     self.received(["type": "ready"], from: web)
                 }
             }
         }
     }
 
+    /// How long a tool waits, at most, for a board to come up. A big one —
+    /// thousands of shapes, a 20 MB history — takes seconds; the wait follows
+    /// the page through its stages (CanvasHost.Stage) rather than giving up
+    /// on a clock that assumes a small one.
+    nonisolated static let readyBound: TimeInterval = 60
+
+    /// Where a page is on its way to being ready: what a wait watches, and
+    /// what its error names when it runs out.
+    enum Stage: String {
+        case asleep = "waking its tab"
+        case tab = "giving its tab the canvas page"
+        case loading = "loading the canvas page"
+        case script = "waiting for the page to start"
+        case doc = "handing the board to the page"
+        case ready = "ready"
+    }
+
+    var stage: Stage {
+        if isReady { return .ready }
+        guard let tab else { return .tab }
+        if tab.asleep { return .asleep }
+        guard let web = tab.built, !tab.hollow else { return .tab }
+        if initTicket != 0 || (readyWeb === web && generation > initialized && initFailure?.ticket != generation) { return .doc }
+        if web.isLoading { return .loading }
+        guard CanvasPage.isPage(web.url) else { return .tab }
+        return .script
+    }
+
     /// Until the page has sent `ready` and been given its state. A tab that is
-    /// asleep, or was never built, is woken for it.
-    func waitReady(timeout: TimeInterval = 15) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        let started = Date()
-        var nudged = false
-        var adopted = false
-        while Date() < deadline {
-            if isReady { return }
-            if let tab, !nudged {
-                nudged = true
-                if tab.asleep { _ = tab.wake() } else if tab.hollow { tab.revive() }
+    /// asleep, or was never built, is woken for it; any number of callers
+    /// share one bring-up.
+    func waitReady(timeout: TimeInterval = CanvasHost.readyBound) async throws {
+        while !isReady {
+            if let bringing {
+                try await bringing.value
+                continue
             }
-            if !adopted, Date().timeIntervalSince(started) > 2 {
-                adopted = true
-                adoptIfLive(after: 0)
+            let task = Task { @MainActor [weak self] in
+                guard let self else { throw Failure(text: "the canvas tab closed") }
+                try await self.bringUp(timeout: timeout)
             }
-            try await Task.sleep(nanoseconds: 80_000_000)
+            bringing = task
+            defer { if bringing == task { bringing = nil } }
+            try await task.value
         }
-        throw Failure(text: "the canvas page didn't come up within \(Int(timeout)) s\(lastError.map { " (\($0))" } ?? "")")
+    }
+
+    /// Watches the page through its stages, nudging each one that stalls:
+    /// waking a sleeping tab, loading a view that holds nothing, adopting a
+    /// page that came up without saying so, reloading one that never starts
+    /// or whose init threw. The error, if the bound is reached, names the
+    /// stage it stopped at and how long each one before it took.
+    private func bringUp(timeout: TimeInterval) async throws {
+        let started = Date()
+        var stage = self.stage
+        var since = started
+        var nudged: Date?
+        var adopted = false
+        var reloads = 0
+        var passed: [String] = []
+        let name = entry?.name ?? canvasId
+        func seconds(_ t: TimeInterval) -> String { t < 10 ? String(format: "%.1f s", t) : "\(Int(t)) s" }
+        while !isReady {
+            guard entry != nil else { throw Failure(text: "That canvas isn't here any more.") }
+            guard let tab else { throw Failure(text: "the canvas tab for \(name) closed") }
+            let now = Date()
+            let current = self.stage
+            if current != stage {
+                passed.append("\(stage.rawValue) \(seconds(now.timeIntervalSince(since)))")
+                stage = current
+                since = now
+                nudged = nil
+                adopted = false
+            }
+            let waited = now.timeIntervalSince(started)
+            if waited >= timeout {
+                let after = passed.isEmpty ? "" : " (after \(passed.joined(separator: ", ")))"
+                throw Failure(text: "the canvas page for \(name) didn't come up within \(Int(timeout)) s: stuck \(stage.rawValue) for \(seconds(now.timeIntervalSince(since)))\(after)\(lastError.map { "; the page said: \($0)" } ?? "")")
+            }
+            let inStage = now.timeIntervalSince(since)
+            let quiet = nudged.map { now.timeIntervalSince($0) } ?? .infinity
+            switch stage {
+            case .asleep:
+                if quiet > 5 { nudged = now; _ = tab.wake() }
+            case .tab:
+                // Nothing loading the page: load it (a view with nothing in it,
+                // or one never built) — after a moment, since a load just asked
+                // for shows no address yet, and every 5 s at most, so a load
+                // just begun is never cut off by the next.
+                if inStage > 1.5, quiet > 5, !(tab.built?.isLoading ?? false) { nudged = now; load() }
+            case .loading:
+                // A load that goes nowhere for 20 s is started again, twice at most.
+                if inStage > 20, quiet > 20, reloads < 2 { nudged = now; reloads += 1; load() }
+            case .script:
+                // Up and running without having said `ready` to this host (the
+                // page cache, a load that began before the host was there): adopted.
+                // One that still says nothing is loaded again.
+                if !adopted, inStage > 1 { adopted = true; adoptIfLive(after: 0) }
+                if inStage > 12, quiet > 12, reloads < 2 { nudged = now; reloads += 1; load() }
+            case .doc:
+                // A `ready` whose init never started (superseded, then nothing): adopted.
+                if initTicket == 0, inStage > 5, !adopted { adopted = true; adoptIfLive(after: 0) }
+            case .ready:
+                return
+            }
+            if let failure = initFailure, failure.ticket == generation, initTicket == 0 {
+                // The page couldn't take the board: once more from a fresh page, then say why.
+                guard reloads < 1 else { throw Failure(text: "the canvas page for \(name) couldn't open the board: \(failure.text)") }
+                reloads += 1
+                initFailure = nil
+                load()
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    /// A tool's work on the page: once it is ready, with any reload held off
+    /// until it is done. `retry`: the work can safely run twice, so a page
+    /// that went away under it (a crash, a reload) is waited for and asked again.
+    @discardableResult
+    private func onPage<T>(retry: Bool, _ work: () async throws -> T) async throws -> T {
+        busy += 1
+        defer {
+            busy -= 1
+            if busy == 0, restartWanted { restartWanted = false; restartPage() }
+        }
+        try await waitReady()
+        let ticket = generation
+        let web = tab?.built
+        do {
+            return try await work()
+        } catch let failure as Failure where failure.text.contains(CanvasHost.notInitialised) {
+            // The page there is not the one this host gave the board to (it
+            // reloaded, or WebKit brought back another): nothing ran. Up again, then the work.
+            if readyWeb === web { readyWeb = nil }
+            try await waitReady()
+            return try await work()
+        } catch let failure as Failure where retry && (ticket != generation || web !== tab?.built || !isReady) {
+            CanvasHost.log.info("page went away under a tool call (\(failure.text, privacy: .public)); once more")
+            try await waitReady()
+            return try await work()
+        }
+    }
+
+    /// `settled`'s answer as words when it timed out with something pending, else nil.
+    static func pendingText(_ answer: [String: Any]?) -> String? {
+        guard let answer, answer["settled"] as? Bool == false else { return nil }
+        let pending = answer["pending"] as? [String: Any] ?? [:]
+        let images = (pending["images"] as? NSNumber)?.intValue ?? 0
+        let frames = (pending["frames"] as? NSNumber)?.intValue ?? 0
+        var parts: [String] = []
+        if images > 0 { parts.append(images == 1 ? "1 image" : "\(images) images") }
+        if frames > 0 { parts.append(frames == 1 ? "1 web frame" : "\(frames) web frames") }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
     }
 
     /// Decoded from a JSON string, or taken as it is when the page answered with an object.
@@ -780,15 +949,16 @@ final class CanvasHost {
     }
 
     func apply(_ ops: [Any], as agent: CanvasAgent) async throws -> [String: Any] {
-        try await waitReady()
         // `{ops, as}` as one JSON string: the page attributes every shape the
         // batch touches to `as` and shows the agent (writing, then idle) where
-        // it last wrote.
+        // it last wrote. Never run twice: a page lost mid-call may have taken it.
         let data = try JSONSerialization.data(withJSONObject: ["ops": ops, "as": agent.json] as [String: Any])
-        let raw = try await call("""
-            const out = await window.copperCanvas.apply(input);
-            return typeof out === 'string' ? out : JSON.stringify(out);
-            """, ["input": String(decoding: data, as: UTF8.self)])
+        let raw = try await onPage(retry: false) {
+            try await pageCall("""
+                const out = await window.copperCanvas.apply(input);
+                return typeof out === 'string' ? out : JSON.stringify(out);
+                """, ["input": String(decoding: data, as: UTF8.self)])
+        }
         guard var result = CanvasHost.object(raw) else { throw Failure(text: "the canvas page gave back no result") }
         if result["applied"] == nil { result["applied"] = 0 }
         if result["ids"] == nil { result["ids"] = [String]() }
@@ -796,13 +966,22 @@ final class CanvasHost {
         return result
     }
 
-    func read(full: Bool) async throws -> [String: Any] {
-        try await waitReady()
-        let raw = try await call("""
-            const out = await window.copperCanvas.read(opts);
-            return typeof out === 'string' ? out : JSON.stringify(out);
-            """, ["opts": "{\"full\":\(full ? "true" : "false")}"])
+    /// A whole read, for the bench (a big board comes back as its first page).
+    func read(full: Bool) async throws -> [String: Any] { try await read(full ? ["full": true] : [:]) }
+
+    /// `copperCanvas.read(opts)`: the options as the tool was given them
+    /// (CanvasTools.readOptions) — paging, narrowing and overview are the page's.
+    func read(_ options: [String: Any]) async throws -> [String: Any] {
+        let opts = String(decoding: try JSONSerialization.data(withJSONObject: options), as: UTF8.self)
+        let raw = try await onPage(retry: true) {
+            try await pageCall("""
+                const out = await window.copperCanvas.read(opts);
+                return typeof out === 'string' ? out : JSON.stringify(out);
+                """, ["opts": opts])
+        }
         guard var result = CanvasHost.object(raw) else { throw Failure(text: "the canvas page gave back nothing to read") }
+        // The page refused the options (an unknown frame, a stale cursor): its words are the answer.
+        if let error = result["error"] as? String, result["shapes"] == nil, result["overview"] == nil { throw Failure(text: error) }
         if let entry, var canvas = result["canvas"] as? [String: Any] {
             // The host's names win: the registry is what the tools list.
             canvas["id"] = entry.id
@@ -817,14 +996,12 @@ final class CanvasHost {
     }
 
     func select(_ ids: [String]) async throws {
-        try await waitReady()
-        try await call("window.copperCanvas.select(ids)", ["ids": ids])
+        try await onPage(retry: true) { try await pageCall("window.copperCanvas.select(ids)", ["ids": ids]) }
         selection = ids
     }
 
     func zoom(to ids: [String]) async throws {
-        try await waitReady()
-        try await call("window.copperCanvas.zoomTo(ids)", ["ids": ids])
+        try await onPage(retry: true) { try await pageCall("window.copperCanvas.zoomTo(ids)", ["ids": ids]) }
     }
 
     /// The room as `copperCanvas.presence()` reports it right now — used by
@@ -839,11 +1016,33 @@ final class CanvasHost {
         return value
     }
 
-    /// The board as it looks, for an agent that wants to see it.
-    func picture() async throws -> Data {
-        try await waitReady()
-        guard let web = tab?.built else { throw Failure(text: "the canvas page isn't loaded") }
-        return try await Tools.Page.screenshot(web, rect: nil, fullPage: false, jpeg: false)
+    /// What a screenshot waits for, at most: the page's pictures and live frames in view (`copperCanvas.settled`).
+    static let settleMs = 2500
+
+    /// The board as it looks, for an agent that wants to see it, and — when
+    /// the page's pictures were still coming in after `settleMs` — what was
+    /// still pending ("3 images, 1 web frame").
+    func picture() async throws -> (data: Data, pending: String?) {
+        try await onPage(retry: true) {
+            guard let web = tab?.built else { throw Failure(text: "the canvas page isn't loaded") }
+            guard web.window != nil, web.bounds.width >= 1, web.bounds.height >= 1 else {
+                throw Failure(text: "the canvas tab has nowhere to be drawn (no window)")
+            }
+            // `ready` comes as soon as the doc is applied: a cold board's pictures
+            // decode after it. Wait (bounded by the page) for those on screen;
+            // an older page without `settled` is taken as it is.
+            let raw = try? await call("""
+                const c = window.copperCanvas;
+                if (!c || typeof c.settled !== 'function') return null;
+                return JSON.stringify(await c.settled(ms));
+                """, ["ms": CanvasHost.settleMs])
+            let pending = CanvasHost.pendingText(CanvasHost.object(raw))
+            do {
+                return (try await Tools.Page.screenshot(web, rect: nil, fullPage: false, jpeg: false), pending)
+            } catch let failure as Tools.Page.Failure {
+                throw Failure(text: "couldn't take the canvas's picture: \(failure.text)")
+            }
+        }
     }
 
     // MARK: keeping the log short
@@ -923,6 +1122,7 @@ final class CanvasHost {
     /// document is checkpointed to disk, then the page reloads and starts
     /// (or doesn't start) its provider for what is right now.
     func restartPage() {
+        guard busy == 0 else { restartWanted = true; return }
         guard !restarting else { return }
         restarting = true
         stopRoom()
@@ -1163,7 +1363,7 @@ final class CanvasHost {
             for tab in browser.tabs where (tab.pending ?? tab.address).flatMap(CanvasLinks.id(from:)) == id {
                 // A favourite is only put down by Close; it has to come out.
                 if tab.pin != nil { browser.unpin(tab) }
-                browser.close(tab)
+                Sections.shared.closeForGood(tab, in: browser) // a Saved row is only put down by a close (Fork/Sections.swift)
             }
         }
         for tab in Spaces.shared.parkedTabs where (tab.pending ?? tab.address).flatMap(CanvasLinks.id(from:)) == id {
@@ -1191,7 +1391,7 @@ final class CanvasHost {
             "canvas": canvasId, "ready": isReady, "generation": generation, "online": online,
             "room": roomOpen, "synced": roomSynced, "roomId": roomId ?? NSNull(), "status": status,
             "collaborators": collaborators, "selection": selection, "store": store.describe,
-            "clients": peers.count,
+            "clients": peers.count, "stage": stage.rawValue, "busy": busy, "posters": CanvasPosters.shared.report,
         ]
         if let tab { out["tab"] = String(tab.id.uuidString.prefix(8)).lowercased(); out["address"] = tab.address?.absoluteString ?? "" }
         if let lastError { out["lastError"] = lastError }

@@ -122,7 +122,10 @@ enum Fork {
             let started = DispatchTime.now().uptimeNanoseconds
             browser.summon()
             browser.typed = request["text"] as? String ?? ""
-            let rows = browser.offers.map { ["key": $0.key, "title": $0.title, "kind": "\($0.kind)", "url": $0.url.absoluteString, "badge": $0.badge, "detail": $0.detail] }
+            let rows = browser.offers.enumerated().map { index, row in
+                ["key": row.key, "title": row.title, "kind": "\(row.kind)", "url": row.url.absoluteString, "badge": row.badge, "detail": row.detail,
+                 "heading": CardSections.shared.headings[index] ?? ""]
+            }
             let completion = browser.ending ?? ""
             if request["go"] as? Bool == true, !browser.offers.isEmpty { browser.picked = 0; browser.submit() }
             else { browser.editing = false; browser.typed = "" }
@@ -532,9 +535,26 @@ enum Fork {
             return ["path": path, "size": [image.width, image.height]]
         case "summon":
             // ⌘K left open with this text in it, for a look at the bar itself.
-            browser.summon()
-            browser.typed = request["text"] as? String ?? ""
-            return ["offers": browser.offers.count]
+            // With `keys` and the bar already up on this text, the keys are
+            // pressed in its field instead (Fork/CardSections.press): the
+            // field takes the keyboard a moment after the bar opens.
+            let text = request["text"] as? String ?? ""
+            let keys = request["keys"] as? String
+            if keys == nil || !(browser.summoning && !browser.launching && browser.typed == text) {
+                browser.summon()
+                browser.typed = text
+            }
+            var out: [String: Any] = ["offers": browser.offers.count]
+            if let keys {
+                let pressed = CardSections.press(keys, in: browser)
+                out["keys"] = pressed.steps
+                out["keysVia"] = pressed.via
+            }
+            out["rows"] = browser.offers.enumerated().map { index, row in
+                ["index": index, "key": row.key, "kind": "\(row.kind)", "heading": CardSections.shared.headings[index] ?? ""] as [String: Any]
+            }
+            out["picked"] = browser.picked ?? -1
+            return out
         case "window":
             // The whole window as the compositor shows it — sidebar, page,
             // panels — to a PNG. An app may always picture its own windows.

@@ -111,16 +111,17 @@ enum CommandBar {
         return list
     }
 
-    /// The rows for what was typed. Open pages first — this space's, then the
-    /// ones parked in other spaces — then bookmarks and places you have been,
-    /// then the browser's own commands, and a search last, so ⌘K-Return is
-    /// still "back to the page I was just on".
+    /// The rows for what was typed, in the card's sections (Fork/CardSections,
+    /// the same order as ⌘T's): open pages first — this space's, then the
+    /// ones parked in other spaces — then places you have been, bookmarks,
+    /// canvases, the browser's own commands, and a search last, so ⌘K-Return
+    /// is still "back to the page I was just on".
     ///
     /// An empty field is not empty: it is the pages you have open and a few
     /// things you might do, which is what a command bar is for.
     @MainActor static func offers(for typed: String, open: [Suggestion], in browser: Browser) -> [Suggestion] {
         let needle = typed.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !needle.isEmpty else { return dressed(open + resting(browser)) }
+        guard !needle.isEmpty else { return sectioned(dressed(open + resting(browser))) }
         let commandNeedle = needle.hasPrefix("/") ? String(needle.dropFirst()) : needle
         var ranked: [(row: Suggestion, score: Double)] = []
 
@@ -176,17 +177,17 @@ enum CommandBar {
 
         // Canvases, by name (Fork/Canvas), matched their own way: "canvas"
         // alone lists them, "canvas plan" narrows to names with "plan" in
-        // them. Below bookmarks, above history; a canvas already open is the
-        // open-page row above and this one folds into it.
+        // them. Below bookmarks; a canvas already open is the open-page row
+        // above and this one folds into it.
         for (index, row) in CanvasTabs.offers(for: typed).enumerated() {
             ranked.append((row, 650 - Double(index)))
         }
 
         // History has already combined match position, visit count and
-        // recency. Keep its six best rows, then let the same score compete
-        // with open pages, bookmarks and commands instead of appending a
-        // history block at the bottom.
-        let been = browser.history.suggestions(for: typed, limit: 6).map { row in
+        // recency; its four best rows, in that order, under the open pages.
+        // Four, not six, now that the section sits above bookmarks: the
+        // card's eight rows still have room for the shelves below it.
+        let been = browser.history.suggestions(for: typed, limit: 4).map { row in
             Suggestion(key: row.title.isEmpty ? row.key : row.title,
                        title: row.key, url: row.url, kind: row.kind)
         }
@@ -206,7 +207,14 @@ enum CommandBar {
 
         var list: [Suggestion] = []
         var seen = Set<String>()
-        for candidate in ranked.sorted(by: { $0.score == $1.score ? $0.row.key < $1.row.key : $0.score > $1.score }) {
+        // Section first, in the card's fixed order; the score orders the rows
+        // within one. A page open and visited both is the open tab.
+        let ordered = ranked.sorted { a, b in
+            let (left, right) = (CardSection.of(a.row), CardSection.of(b.row))
+            if left != right { return left < right }
+            return a.score == b.score ? a.row.key < b.row.key : a.score > b.score
+        }
+        for candidate in ordered {
             let url = canonical(candidate.row.url)
             guard seen.insert(url).inserted else { continue }
             list.append(candidate.row)
@@ -217,7 +225,15 @@ enum CommandBar {
         if let asked = Google.url(for: typed) {
             list.append(Suggestion(key: typed, title: Google.name, url: asked, kind: .search))
         }
-        return dressed(Array(list.prefix(limit)))
+        return sectioned(dressed(Array(list.prefix(limit))))
+    }
+
+    /// The rows cut into the card's sections, their headings handed to the
+    /// card (Fork/CardSections) — which Tab and ⇧Tab jump between.
+    @MainActor private static func sectioned(_ rows: [Suggestion]) -> [Suggestion] {
+        let laid = CardSections.group(rows, by: CardSection.of)
+        CardSections.shared.show(laid.headings)
+        return laid.rows
     }
 
     @MainActor private static func keptBoost(_ tab: Tab) -> Double {

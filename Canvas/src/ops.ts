@@ -114,7 +114,8 @@ import {
 import { addMonths, cleanIso, dayOf, timelineMarkdown, todayIso, type ItemFields, type Step } from './canvas/timeline-text'
 import { LIVE_SIZE, frameUrl } from './canvas/frames'
 import { frameSizeFor, imageSizeFor, MAX_DATA_URL } from './canvas/images'
-import { findFreeSpot, occupied } from './placement'
+import { findFreeSpot, occupied, type SearchHint } from './placement'
+import { readScope, typeMatches, type CanvasOverview, type FrameListing } from './read-pages'
 import {
   SHAPE_SIZE,
   isRefEndpoint,
@@ -128,7 +129,7 @@ import {
   type ShapeType,
 } from './canvas/types'
 
-export const MAX_OPS = 500
+export const MAX_OPS = 1000
 const ID = /^[A-Za-z0-9_:.-]{1,64}$/
 const MAX_TEXT = 20_000
 const MAX_TITLE = 500
@@ -550,7 +551,7 @@ function addChecklistNote(type: 'sticky' | 'checklist', raw: Record<string, unkn
   shape.w = size.w
   shape.h = size.h
   if (props.x === undefined || props.y === undefined) {
-    const spot = findFreeSpot(boxesOf(ctx.store), size, ctx.viewportCenter(), { gap: 24, step: 32 })
+    const spot = placeFree(ctx, size)
     if (props.x === undefined) shape.x = spot.x
     if (props.y === undefined) shape.y = spot.y
   }
@@ -772,7 +773,7 @@ function addTimelineNote(raw: Record<string, unknown>, ctx: OpsContext, as: Acto
   shape.w = w
   shape.h = h
   if (props.x === undefined || props.y === undefined) {
-    const spot = findFreeSpot(boxesOf(ctx.store), { w, h }, ctx.viewportCenter(), { gap: 24, step: 32 })
+    const spot = placeFree(ctx, { w, h })
     if (props.x === undefined) shape.x = spot.x
     if (props.y === undefined) shape.y = spot.y
   }
@@ -826,11 +827,32 @@ function checkEnd(end: Endpoint, store: CanvasStore, key: string, selfId?: strin
   if (target!.type === 'arrow') fail(`\`${key}\`: ${end.ref} is an arrow; arrows join boxes`)
 }
 
-const boxesOf = (store: CanvasStore, except?: string): Box[] =>
+const boxesOf = (store: CanvasStore, except?: string): Box[] => {
+  // One read of the board per batch, not one per placed shape (applyOps keeps it current).
+  if (placing?.store === store && except === undefined) return (placing.boxes ??= liveBoxes(store))
+  return liveBoxes(store, except)
+}
+const liveBoxes = (store: CanvasStore, except?: string): Box[] =>
   store
     .liveAll()
     .filter(s => s.type !== 'arrow' && s.id !== except)
     .map(occupied)
+/** The occupied boxes of the board an applyOps batch is placing shapes on (null until a placement needs
+ * them), and where each run of same-size placements around the same centre left off (placement.ts). */
+let placing: { store: CanvasStore; boxes: Box[] | null; hints: Map<string, SearchHint> } | null = null
+
+/** A free spot near the view for a shape of `size`. */
+function placeFree(ctx: OpsContext, size: { w: number; h: number }): Point {
+  const around = ctx.viewportCenter()
+  const boxes = boxesOf(ctx.store)
+  let hint: SearchHint | undefined
+  if (placing?.store === ctx.store && placing.boxes) {
+    const key = `${size.w}x${size.h}@${around.x},${around.y}`
+    hint = placing.hints.get(key)
+    if (!hint) placing.hints.set(key, (hint = { ring: 0 }))
+  }
+  return findFreeSpot(boxes, size, around, { gap: 24, step: 32 }, hint)
+}
 
 /** Shapes lying wholly inside a frame (not the frame, not arrows). */
 export function frameChildren(shapes: readonly Shape[], frame: Box & { id: string }): Shape[] {
@@ -907,7 +929,7 @@ function opAdd(op: Record<string, unknown>, ctx: OpsContext, as: Actor | null): 
   input.w = size.w
   input.h = size.h
   if (props.x === undefined || props.y === undefined) {
-    const spot = findFreeSpot(boxesOf(ctx.store), size, ctx.viewportCenter(), { gap: 24, step: 32 })
+    const spot = placeFree(ctx, size)
     if (props.x === undefined) input.x = spot.x
     if (props.y === undefined) input.y = spot.y
   }
@@ -1136,9 +1158,12 @@ export function applyOps(ctx: OpsContext, raw: unknown): ApplyOutcome {
     result.errors.push({ index: -1, op: '', error: `at most ${MAX_OPS} ops per call (got ${ops.length})` })
     return result
   }
+  // Only applyOps places shapes, and it starts every batch afresh: no stale list outlives one.
+  placing = { store: ctx.store, boxes: null, hints: new Map() }
   ctx.store.transact(() => {
     ops.forEach((op, index) => {
       const name = opName(op)
+      if (placing) keepPlacing(ctx.store, op, false)
       try {
         if (!isObject(op)) fail('an op must be an object like {op:"add", …}')
         const o = op as Record<string, unknown>
@@ -1195,13 +1220,39 @@ export function applyOps(ctx: OpsContext, raw: unknown): ApplyOutcome {
         }
         result.ids.push(id)
         result.applied++
+        if (placing && id) keepPlacing(ctx.store, op, true, id)
       } catch (e) {
+        if (placing) {
+          placing.boxes = null
+          placing.hints.clear()
+        }
         result.ids.push(null)
         result.errors.push({ index, op: name, error: messageOf(e) })
       }
     })
   }, AGENT)
+  placing = null
   return result
+}
+
+/**
+ * The batch's placement boxes stay true to the board: an add (or connect) puts
+ * its box on the list; anything that can move, resize or remove a shape —
+ * or an op that failed half-way — has them read again when next needed.
+ */
+function keepPlacing(store: CanvasStore, op: unknown, done: boolean, id?: string) {
+  if (!placing?.boxes) return
+  const kind = opName(op)
+  if (!done) {
+    if (kind !== 'add' && kind !== 'connect' && kind !== 'comment' && kind !== 'reply' && kind !== 'resolve') {
+      placing.boxes = null
+      placing.hints.clear()
+    }
+    return
+  }
+  if (kind !== 'add' || !id) return
+  const s = store.live(id)
+  if (s && s.type !== 'arrow') placing.boxes.push(occupied(s))
 }
 
 const opName = (op: unknown) => (isObject(op) && typeof op.op === 'string' ? op.op : '')
@@ -1295,6 +1346,15 @@ export interface CanvasRead {
   canvas: { id: string; name: string; kind: string }
   viewport?: { x: number; y: number; w: number; h: number; zoom: number }
   shapes: ShapeSummary[]
+  /** Shapes matching the read's filters, and how many of them this answer holds (read-pages.ts). */
+  total?: number
+  returned?: number
+  /** Present while more remain: pass it back as `cursor`. */
+  next?: string
+  note?: string
+  /** The first page of an un-narrowed paged read: the frames, as an overview lists them. */
+  frames?: FrameListing[]
+  moreFrames?: number
   /** Comment threads, oldest first; with `ids`/`types`/`inView`, only those on the shapes returned. */
   comments: CommentSummary[]
   agents: (Omit<CanvasAgent, 'cursor'> & { cursor: Point | null })[]
@@ -1336,9 +1396,19 @@ export function describeSrc(src: string, full = false): string {
 
 const r = (n: number) => Math.round(n)
 
-/** The board as an agent should see it (see the spec's read format). */
+/** `copperCanvas.read`: the board's shapes (readCanvas), or with `overview: true` only its outline (read-pages.ts). */
+export function readBoard(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead | CanvasOverview {
+  return readShapes(ctx, rawOpts, true)
+}
+
+/** The board as an agent should see it (see the spec's read format), narrowed and paged by read-pages.ts. */
 export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead {
-  const opts = parseReadOptions(rawOpts)
+  return readShapes(ctx, rawOpts, false) as CanvasRead
+}
+
+function readShapes(ctx: ReadContext, rawOpts: unknown, overview: boolean): CanvasRead | CanvasOverview {
+  const scope = readScope(ctx, rawOpts, parseReadOptions(rawOpts), overview)
+  const opts = scope.opts
   const full = !!opts.full
   const all = [...ctx.store.getShapes().values()]
   const byId = new Map(all.map(s => [s.id, s] as const))
@@ -1360,13 +1430,14 @@ export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead 
   const out: ShapeSummary[] = []
   for (const s of all) {
     if (ids && !ids.has(s.id)) continue
-    if (types && !types.has(s.type) && !(s.view === VIEW_CHECKLIST && types.has('checklist')) && !(s.view === VIEW_TIMELINE && types.has('timeline'))) continue
+    if (types && !typeMatches(types, s)) continue
     let box: Box = { x: s.x, y: s.y, w: s.w, h: s.h }
     if (s.type === 'arrow') {
       const path = arrowPath(s, boxOf)
       box = path ? arrowBox(path) : { x: 0, y: 0, w: 0, h: 0 }
     }
     if (opts.inView && ctx.viewport && !boxesOverlap(ctx.viewport, box)) continue
+    if (!scope.accepts(s, box)) continue
     const sum: ShapeSummary = {
       id: s.id,
       type: s.type,
@@ -1430,7 +1501,7 @@ export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead 
   }
   out.sort((a, b) => a.y - b.y || a.x - b.x || (a.id < b.id ? -1 : 1))
   const now = ctx.now ?? Date.now()
-  const filtered = !!(ids || types || (opts.inView && ctx.viewport))
+  const filtered = !!(ids || types || (opts.inView && ctx.viewport)) || scope.located
   const returned = new Set(out.map(s => s.id))
   const comments: CommentSummary[] = []
   for (const t of ctx.store.comments.getThreads()) {
@@ -1463,5 +1534,5 @@ export function readCanvas(ctx: ReadContext, rawOpts: unknown = {}): CanvasRead 
       h: r(ctx.viewport.h),
       zoom: Math.round(ctx.viewport.zoom * 1000) / 1000,
     }
-  return read
+  return scope.finish(read)
 }

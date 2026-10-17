@@ -124,6 +124,7 @@ copperCanvas.presence()                       // [{id,name,color,kind,cursor:{x,
 copperCanvas.theme("dark")                  // "light" | "dark" | "system" (default: system)
 copperCanvas.frameEvent({ name, kind: "nav", url, title, icon }) // a live frame's report (also "escape", "blank"); → true if a frame took it
 copperCanvas.frameHost({ reports: true })   // the host reports every frame: one that never does didn't load
+copperCanvas.framePoster(name, "data:image/jpeg;base64,…" | null)  // the picture a framePoster asked for (see Staying fast); → true if asked
 
 await copperCanvas.importLegacy({           // an Easels board onto this canvas (see below)
   doc: "AVji…",                             // base64 of the board's doc.yjs
@@ -246,6 +247,7 @@ from `init.me`, which is also published in awareness.
 | `{"type":"wsOpen","url"}` / `{"type":"wsClose"}` | open / close the relayed socket |
 | `{"type":"openUrl","url"}` | a link card was opened or a link in a note clicked (the page never navigates) |
 | `{"type":"log","level","msg"}` | diagnostics |
+| `{"type":"framePoster","name","id","url","rect":{x,y,w,h},"maxWidth"}` | a live frame's site could be pictured now (its iframe's content box, CSS px of the page's viewport, fully on screen, nothing but arrows drawn over it); answer with `copperCanvas.framePoster(name, dataUrl)` or don't |
 
 ## Document schema
 
@@ -313,6 +315,57 @@ __canvasDebug.seed({ stickies: 150, frames: 12, arrows: 50 })
 __canvasDebug.perf.start(); /* pan, drag, … */ __canvasDebug.perf.stop()
 // → { frames, p50, p95, max, over16, over33, boardRenders, shapeRenders }
 ```
+
+On any build, `window.__canvasCounters` has the running render counts (board, shapes, the whole
+shape layer) and `performance.getEntriesByType('mark')` has `canvas:ready`, `canvas:init`,
+`canvas:board` and `canvas:painted`. The big-board bench is `docs/fixtures/canvas-big`.
+
+**Big boards** (≈ 1,500 shapes, dozens of live frames and images) stay light because the board
+only draws what it needs, always deciding from the doc, never the DOM — so search, marquee,
+snapping, frames' children, zoom-to-fit, keyboard moves, comments and the tools see every shape:
+
+- *Culling* (`canvas/culling.ts`). Only shapes meeting the visible world plus half a viewport on
+  each side are mounted, with what must stay (selection up to 64, the shape being edited, the
+  frame in use, an open comment's or menu's shape, live frames keeping their page). The rect is
+  recomputed in batches — when less than a quarter viewport of margin is left, or on settle —
+  and while the view moves a re-cull mounts at most 150 new shapes a frame, nearest the middle
+  first. Arrows are drawn from the doc's boxes, so one to an unmounted shape still lands on it.
+- *One transformed layer, no per-shape work per frame.* The shape layer (`ShapeLayer.tsx`) is
+  memoised as a whole; a pan or zoom changes its transform and nothing it renders. Its `--z` is
+  the zoom the view last *settled* at (changing an inherited property restyles every shape); the
+  few things that must stay the same size on screen through a zoom (frame titles, a live frame's
+  ring) get the exact zoom as their own `--zx`. The view has settled 200 ms after it last moved.
+- *Low-zoom LOD* (`canvas/lod.ts`, `Lod.tsx`). A note, text, checklist or timeline whose text
+  would be under 4 px on screen draws its colour block and its first line (a checklist its rows
+  as one line each), same box, same `data-id`. The LOD zoom goes down in 8 % steps mid-gesture,
+  up only once the zoom has doubled, and exactly on settle.
+- *Images* (`canvas/thumbs.ts`). An image drawn at under half its natural width draws a
+  downscaled copy (96–768 px buckets, made two at a time on a canvas, kept as object URLs, LRU
+  ≤ 64 MB decoded); a picture first seen zoomed out is never decoded at full size. Zooming back
+  in draws the source again.
+- *Live frames* (`canvas/frames.ts` `planLiveFrames`). At most 6 iframes: the frame in use always;
+  then frames on screen and ≥ 260 px wide on screen (kept down to 200 px), nearest the middle
+  first. New ones mount only once the view has settled; one no longer wanted keeps its page 8 s
+  (while there is room), so panning back doesn't reload it.
+- *Posters* (`canvas/posters.ts`). A frame without its page shows the last picture of its site
+  under its normal title bar. The page can't draw a cross-origin frame, so it asks the host
+  (`framePoster`, above) once a live frame has been still for 2 s, at most every 30 s, and once
+  more right before it unloads a frame that is still fully on screen (holding the page ≤ 1.2 s
+  for it). The host's picture is of the board's view, so a frame is asked only while nothing is
+  drawn over its page that must not be in it (`canvas/poster-view.ts`): every element painted
+  above it — tool bar, zoom bar, panels, chat, menus, popovers, toasts, pins, cursors, handles,
+  rings, the laser — is tested by its box, shadow, outline or ring against the iframe's box, not
+  by sampling points. Arrows crossing the page and shapes with an opaque box (a note, a card, an
+  image) may be in the picture: the board draws them again exactly over their copies at any zoom,
+  and drops the picture the moment one of them or the frame changes (`PosterScene`). A selected
+  arrow, text (it shows through), a frame's page or anything drawing outside its own box keeps
+  the frame from being pictured until it is clear. An answer is kept only if the page is still
+  clear and the view hasn't moved when it comes. Pictures are cached in memory by shape id + URL
+  (LRU ≤ 40 MB; a frame whose URL moved on drops its own). A fresh page stays under its poster
+  until it has painted, so nothing flashes.
+  A host that never answers leaves frames on their card (title, favicon, host), and after three
+  unanswered asks is no longer waited for before an unload.
+- `ready` is posted when the API is installed, before any shape, frame or image loads.
 
 Not in this version: comments/reactions (the `comments` map is left alone), multi-shape resize,
 alignment guides.

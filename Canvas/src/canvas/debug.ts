@@ -10,11 +10,24 @@
 export const counters = {
   boardRenders: 0,
   shapeRenders: 0,
+  /** Renders of the whole shape layer (`ShapeLayer`): a pan or zoom should cause none. */
+  layerRenders: 0,
+  /** Time from the board's render starting to its commit (ms, summed). */
+  boardMs: 0,
 }
 
+let boardStart = 0
+
 /** Count one render of `what` (a call, so components never mutate module state in render). */
-export function countRender(what: keyof typeof counters) {
+export function countRender(what: 'boardRenders' | 'shapeRenders' | 'layerRenders') {
   counters[what]++
+  if (what === 'boardRenders') boardStart = performance.now()
+}
+
+/** The board committed: add the time since its render began. */
+export function countCommit() {
+  if (boardStart) counters.boardMs += performance.now() - boardStart
+  boardStart = 0
 }
 
 export interface FrameStats {

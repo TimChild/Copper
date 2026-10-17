@@ -25,6 +25,7 @@ import { hueOf } from '../colors'
 import { FRAME } from '../doc'
 import { drawnWidth, imageBucket } from '../lod'
 import { POSTER_SETTLE_MS } from '../posters'
+import { posterPlace, type PosterPlace } from '../poster-view'
 import {
   BAR_H,
   FRAME_ALLOW,
@@ -418,36 +419,45 @@ export const WebFrame = memo(function WebFrame({ shape, selected, active, mounte
     }
   }, [showPage, epoch])
 
-  /** The iframe's box in the board's viewport, when all of it shows and nothing lies on it; else null. */
-  const posterRect = (): DOMRect | null => {
+  /**
+   * The iframe's box in the board's viewport and what of the board may be in
+   * its picture (arrows, opaque shapes), when all of it shows and nothing else
+   * is drawn over it (tool bar, panels, menus…: `poster-view.ts`); else null.
+   */
+  const posterBox = (): PosterPlace | null => {
     const el = frame.current
     if (!el || document.visibilityState !== 'visible') return null
-    const r = el.getBoundingClientRect()
-    if (r.width < 48 || r.height < 32) return null
-    const app = el.closest('[role="application"]')?.getBoundingClientRect()
-    if (!app || r.left < app.left || r.top < app.top || r.right > app.right || r.bottom > app.bottom) return null
-    const body = el.closest('[data-part="web-body"]')
-    if (!body || body.matches(':hover')) return null
-    // The tool bar, a panel, a popover, another shape: whatever is on top would be in the picture.
-    for (const fx of [0.03, 0.5, 0.97])
-      for (const fy of [0.03, 0.5, 0.97]) {
-        const hit = document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy)
-        if (!hit || !body.contains(hit)) return null
-      }
-    return r
+    return posterPlace(el)
   }
   /** Ask the host for a picture now, if the page has settled and is all on screen. */
   const askPoster = (why: 'tick' | 'unload'): Promise<boolean> | null => {
     const t = timing.current
     const now = performance.now()
-    if (!showPage || !frame.current || loading || trouble || !revealed) return null
+    if (!showPage || !frame.current || loading || trouble || !revealed || busy) return null
     if (!t.pageAt || now - t.pageAt < POSTER_SETTLE_MS || now - board.motion.lastMove < POSTER_STILL_MS) return null
     const have = posters.cache.peek(shape.id, navUrl)
     if (why === 'tick' && !posters.due(shape.id, now)) return null
     if (why === 'unload' && (posters.silent || (have && Date.now() - have.at < POSTER_FRESH_MS))) return null
-    const rect = posterRect()
-    if (!rect || (why === 'unload' && have && rect.width < POSTER_MIN_RETAKE_PX)) return null
-    return posters.ask({ name, id: shape.id, url: navUrl, alias: shape.url, rect: { x: rect.left, y: rect.top, w: rect.width, h: rect.height } }, now)
+    const place = posterBox()
+    if (!place || (why === 'unload' && have && place.rect.width < POSTER_MIN_RETAKE_PX)) return null
+    const { rect, over } = place
+    const scene = board.posterScene(shape.id, over)
+    const iframe = frame.current
+    // When the answer comes: the picture is kept only if what it shows is still what was asked for.
+    const verify = () => {
+      if (board.motion.lastMove > now) return false
+      if (scene && board.posterScene(shape.id, scene.over)?.key !== scene.key) return false
+      // Its page is gone (the board held it for this picture as long as it would): it was clear when asked.
+      if (frame.current !== iframe || !iframe.isConnected) return true
+      const again = posterBox()
+      if (!again) return false
+      const moved = Math.max(Math.abs(again.rect.left - rect.left), Math.abs(again.rect.top - rect.top), Math.abs(again.rect.width - rect.width), Math.abs(again.rect.height - rect.height))
+      return moved <= 1 && (board.posterScene(shape.id, again.over)?.key ?? null) === (scene?.key ?? null)
+    }
+    return posters.ask(
+      { name, id: shape.id, url: navUrl, alias: shape.url, rect: { x: rect.left, y: rect.top, w: rect.width, h: rect.height }, ...(scene ? { scene } : {}), verify },
+      now
+    )
   }
   const askRef = useRef(askPoster)
   useEffect(() => {

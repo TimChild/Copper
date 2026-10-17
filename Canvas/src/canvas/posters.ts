@@ -8,9 +8,16 @@
  *                (`rect`: the iframe's content box, CSS px of the board's viewport)
  *   host → page  copperCanvas.framePoster(name, 'data:image/jpeg;base64,…' | null)
  *
- * Asked while the frame is live, fully on screen, unobstructed and settled
- * (≥ 2 s after a load or navigation), at most once per frame per 30 s, and
- * once more right before a deliberate unload when it is still on screen.
+ * Asked while the frame is live, fully on screen, settled (≥ 2 s after a load
+ * or navigation) and nothing is drawn over its page that must not be in its
+ * picture (`poster-view.ts`: the host's picture is of the board's view, so a
+ * tool bar, panel or menu over the page would be in it), at most once per frame
+ * per 30 s, and once more right before a deliberate unload when it is still
+ * on screen. An answer is kept only if that still holds when it comes (the
+ * view hasn't moved, nothing came over the page). A picture with arrows or
+ * opaque shapes in it keeps what they were (`PosterScene`), and the board
+ * drops it once one of them, or the frame, has changed: what it draws over the
+ * poster would no longer hide its copy.
  * Pictures are kept in memory (LRU, ≤ ~40 MB of data URL) by shape id + url:
  * a frame whose url moved on drops its picture. A host that never answers
  * leaves every frame on its card (`components/WebFrame.tsx`), and stops
@@ -35,6 +42,43 @@ export const POSTER_HOLD_MS = 1_200
 /** Unanswered asks (with no answer ever) after which the host is taken not to make posters. */
 export const POSTER_SILENT_AFTER = 3
 
+/**
+ * What of the board was drawn over a frame's page when its picture was taken
+ * (`over`: arrows, opaque shapes — `poster-view.ts`), and `key`: where they and
+ * the frame were (`posterSceneKey`). The live drawing lies exactly on its copy
+ * in the picture only while that key holds.
+ */
+export interface PosterScene {
+  over: string[]
+  key: string
+}
+
+/**
+ * The frame's box and order, and each of `over` by its signature (null: gone
+ * from the board): a picture with them in it is good while this is unchanged.
+ */
+export function posterSceneKey(
+  frame: { x: number; y: number; w: number; h: number; z?: number } | null | undefined,
+  over: readonly { id: string; sig?: string | null }[]
+): string {
+  const parts = [frame ? `${frame.x},${frame.y},${frame.w},${frame.h},${frame.z ?? 0}` : '-']
+  for (const o of [...over].sort((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0))) parts.push(`${o.id}|${o.sig ?? '-'}`)
+  return parts.join('\n')
+}
+
+/** A shape's record as a short, stable string: every field, long values (image data) by their length and ends. */
+export function shapeSig(shape: object): string {
+  const rec = shape as Record<string, unknown>
+  return JSON.stringify(
+    Object.keys(rec)
+      .sort()
+      .map(k => {
+        const v = rec[k]
+        return [k, typeof v === 'string' && v.length > 256 ? `${v.length}:${v.slice(0, 64)}…${v.slice(-64)}` : v]
+      })
+  )
+}
+
 export interface Poster {
   url: string
   /** The shape's own url when it was taken, if the page had moved on from it (a redirect): it matches too. */
@@ -44,6 +88,8 @@ export interface Poster {
   w: number
   h: number
   at: number
+  /** What of the board was drawn over the page in the picture, when anything was. */
+  scene?: PosterScene
 }
 
 type Listener = () => void
@@ -103,6 +149,11 @@ export class PosterCache {
     for (const key of evicted) this.notify(key)
   }
 
+  /** Drop every picture with something of the board in it that `fresh` says no longer matches the board. */
+  dropStale(fresh: (id: string, scene: PosterScene) => boolean) {
+    for (const [id, p] of [...this.entries]) if (p.scene && !fresh(id, p.scene)) this.delete(id)
+  }
+
   delete(id: string) {
     const p = this.entries.get(id)
     if (!p) return
@@ -133,9 +184,13 @@ export interface PosterRequest {
   /** The shape's url, when it isn't where the page is now (never sent). */
   alias?: string
   rect: { x: number; y: number; w: number; h: number }
+  /** What of the board is over the page (never sent): kept with the picture. */
+  scene?: PosterScene
+  /** Asked when the answer comes (never sent): is the picture still good to keep? */
+  verify?: () => boolean
 }
 
-export interface PosterMessage extends Omit<PosterRequest, 'alias'> {
+export interface PosterMessage extends Omit<PosterRequest, 'alias' | 'scene' | 'verify'> {
   type: 'framePoster'
   maxWidth: number
 }
@@ -144,6 +199,8 @@ interface Pending {
   id: string
   url: string
   alias?: string
+  scene?: PosterScene
+  verify?: () => boolean
   at: number
   timer: ReturnType<typeof setTimeout>
   waiters: ((got: boolean) => void)[]
@@ -157,6 +214,15 @@ export function isPosterData(v: unknown): v is string {
   const head = POSTER_HEAD.exec(v)
   if (!head || v.length < head[0].length + 16) return false
   return /^[A-Za-z0-9+/=]*$/.test(v.slice(head[0].length, head[0].length + 4096))
+}
+
+const still = (verify: (() => boolean) | undefined) => {
+  if (!verify) return true
+  try {
+    return verify()
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -204,6 +270,8 @@ export class PosterBroker {
         id: req.id,
         url: req.url,
         ...(req.alias && !sameUrl(req.alias, req.url) ? { alias: req.alias } : {}),
+        ...(req.scene ? { scene: req.scene } : {}),
+        ...(req.verify ? { verify: req.verify } : {}),
         at: now,
         waiters: [resolve],
         timer: setTimeout(() => {
@@ -234,10 +302,18 @@ export class PosterBroker {
     this.pending.delete(name)
     clearTimeout(entry.timer)
     this.answered++
-    const ok = isPosterData(data)
+    const ok = isPosterData(data) && still(entry.verify)
     if (ok) {
       const size = this.sizeOf(data) ?? { w: 0, h: 0 }
-      this.cache.set(entry.id, { url: entry.url, ...(entry.alias ? { alias: entry.alias } : {}), src: data, w: size.w, h: size.h, at: now })
+      this.cache.set(entry.id, {
+        url: entry.url,
+        ...(entry.alias ? { alias: entry.alias } : {}),
+        src: data,
+        w: size.w,
+        h: size.h,
+        at: now,
+        ...(entry.scene ? { scene: entry.scene } : {}),
+      })
     }
     for (const w of entry.waiters) w(ok)
     return true

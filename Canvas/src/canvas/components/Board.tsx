@@ -20,7 +20,7 @@ import { controller, type Session } from '../../controller'
 import { hasNativeHost, postToHost } from '../../host-bridge'
 import { findFreeSpot, occupied } from '../../placement'
 import { frameChildren, hostOf } from '../../ops'
-import { arrowBox, arrowPath, type ArrowPath } from '../arrows'
+import { arrowBox, arrowCrosses, arrowPath, type ArrowPath } from '../arrows'
 import { readAgents } from '../agents'
 import { LOCAL, newId, type ShapeInput } from '../doc'
 import {
@@ -45,10 +45,10 @@ import { gridBackground } from '../grid'
 import { growFor } from '../overflow'
 import { imageFile, imageFromFile, imageFromUrl, imageSizeFor, isUrlText, looksLikeImageUrl, urlFrom } from '../images'
 import { MIN_SIZE, isResizable, minSizeOf, resizeBox, resizeBoxKeepAspect, type Handle } from '../resize'
-import { LIVE_SETTLE_MS, LIVE_SIZE, frameUrl, planLiveFrames, type LiveEntry } from '../frames'
+import { BAR_H, LIVE_SETTLE_MS, LIVE_SIZE, frameUrl, planLiveFrames, type LiveEntry } from '../frames'
 import { admit, arrowsToDraw, nextCull, shapesToMount } from '../culling'
 import { nextLodZoom } from '../lod'
-import { POSTER_HOLD_MS } from '../posters'
+import { POSTER_HOLD_MS, posterSceneKey, shapeSig, type PosterScene } from '../posters'
 import { COMMENT_REF, arrowLabelBox, revealView, type SearchResult } from '../search'
 import { isShown, type CommentAuthor } from '../comments'
 import { statusView } from '../status'
@@ -349,6 +349,16 @@ export function Board({ session }: { session: Session }) {
     }
     return { list, byId, boxOf, arrows, arrowById: new Map(arrows.map(a => [a.shape.id, a.path] as const)) }
   }, [shapes, placed])
+
+  // Live frames' pictures with arrows or shapes in them (canvas/posters.ts) stay good while those
+  // and the frame are as they were; once one has changed, what the board draws over the picture
+  // would no longer hide its copy: the picture goes, before that frame is painted.
+  const liveNow = useRef(live)
+  const posterScene = useCallback((frameId: string, over: readonly string[]) => sceneOf(liveNow.current, frameId, over), [])
+  useLayoutEffect(() => {
+    liveNow.current = live
+    controller.posters.cache.dropStale((id, scene) => sceneKeyOf(live, id, scene.over) === scene.key)
+  }, [live])
 
   /** The box a shape occupies: its own, or its path's bounds for an arrow. */
   const boundsOf = useCallback(
@@ -720,9 +730,10 @@ export function Board({ session }: { session: Session }) {
       editPart,
       frameHandles,
       motion,
+      posterScene,
       zoomVars,
     }),
-    [store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky, editPart, frameHandles, motion, zoomVars]
+    [store, me, readOnly, openUrl, endEdit, sibling, autoHeight, growSticky, editPart, frameHandles, motion, posterScene, zoomVars]
   )
 
   // ---- acting on the selection ------------------------------------------------
@@ -2248,6 +2259,41 @@ export function Board({ session }: { session: Session }) {
       </div>
     </BoardContext.Provider>
   )
+}
+
+type LiveShapes = { byId: ReadonlyMap<string, Shape>; arrowById: ReadonlyMap<string, ArrowPath> }
+
+/** `posterSceneKey` of a frame and what is over its page, as the board has them now. */
+function sceneKeyOf(live: LiveShapes, frameId: string, over: readonly string[]) {
+  return posterSceneKey(
+    live.byId.get(frameId),
+    over.map(id => {
+      const s = live.byId.get(id)
+      if (!s) return { id }
+      if (s.type !== 'arrow') return { id, sig: shapeSig(s) }
+      const d = live.arrowById.get(id)?.d
+      return { id, sig: d ? `${d}|${shapeSig(s)}` : null }
+    })
+  )
+}
+
+/** A label's reach around its arrow's middle (board px): about its widest and tallest, halved. */
+const LABEL_REACH = { x: 150, y: 16 }
+
+/** Of `over` (found on screen by their boxes), what is really over the frame's page — an arrow's path may only pass near — with its key. */
+function sceneOf(live: LiveShapes, frameId: string, over: readonly string[]): PosterScene | null {
+  const f = live.byId.get(frameId)
+  if (!f) return null
+  const page = { x: f.x, y: f.y + BAR_H, w: f.w, h: Math.max(0, f.h - BAR_H) }
+  const kept = over.filter(id => {
+    const s = live.byId.get(id)
+    if (!s || s.type !== 'arrow') return true
+    const path = live.arrowById.get(id)
+    if (!path) return true
+    if (arrowCrosses(path, page, 6)) return true
+    return !!s.label && Math.abs(path.mid.x - (page.x + page.w / 2)) < page.w / 2 + LABEL_REACH.x && Math.abs(path.mid.y - (page.y + page.h / 2)) < page.h / 2 + LABEL_REACH.y
+  })
+  return kept.length ? { over: kept, key: sceneKeyOf(live, frameId, kept) } : null
 }
 
 /** Frame label size on screen (mirrors FrameView). */

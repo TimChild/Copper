@@ -7,8 +7,11 @@ import {
   PosterBroker,
   PosterCache,
   isPosterData,
+  posterSceneKey,
+  shapeSig,
   type PosterMessage,
 } from '../posters'
+import { arrowCrosses } from '../arrows'
 import { Controller } from '../../controller'
 import { createApi } from '../../api'
 
@@ -139,5 +142,59 @@ describe('copperCanvas.framePoster', () => {
     expect(api.framePoster(undefined, undefined)).toBe(false)
     void c.posters.ask({ name: 'copper-frame:f2:n', id: 'f2', url: 'https://c.d/', rect }, 0)
     expect(api.framePoster({ name: 'copper-frame:f2:n', dataUrl: jpeg() }, undefined)).toBe(true)
+  })
+})
+
+describe('pictures with arrows or shapes in them', () => {
+  const frame = { x: 0, y: 0, w: 960, h: 640, z: 3 }
+  const ar = (d = 'M-100,300 L1100,320', label = '') => ({ id: 'ar-1399', sig: `${d}|${shapeSig({ id: 'ar-1399', color: 'gray', label })}` })
+  const st = (text = 'Chen — spike: 2 days', x = 900) => ({ id: 'st-0214', sig: shapeSig({ id: 'st-0214', type: 'sticky', x, y: -20, w: 160, h: 70, text }) })
+  const scene = { over: ['ar-1399', 'st-0214'], key: posterSceneKey(frame, [ar(), st()]) }
+
+  it('know where the frame and each of them were', () => {
+    expect(posterSceneKey({ ...frame }, [st(), ar()])).toBe(scene.key)
+    expect(posterSceneKey({ ...frame, x: 10 }, [ar(), st()])).not.toBe(scene.key)
+    expect(posterSceneKey({ ...frame, z: 9 }, [ar(), st()])).not.toBe(scene.key)
+    expect(posterSceneKey(frame, [ar('M-100,300 L1100,330'), st()])).not.toBe(scene.key)
+    expect(posterSceneKey(frame, [ar(undefined, 'flows to'), st()])).not.toBe(scene.key)
+    expect(posterSceneKey(frame, [ar(), st('Chen — spike: 3 days')])).not.toBe(scene.key)
+    expect(posterSceneKey(frame, [ar(), st(undefined, 901)])).not.toBe(scene.key)
+    expect(posterSceneKey(frame, [{ id: 'ar-1399' }, st()])).not.toBe(scene.key)
+  })
+
+  it('sign a shape by every field, long data by its length and ends', () => {
+    expect(shapeSig({ b: 1, a: 'x' })).toBe(shapeSig({ a: 'x', b: 1 }))
+    const big = `data:image/jpeg;base64,${'A'.repeat(100_000)}`
+    expect(shapeSig({ src: big }).length).toBeLessThan(300)
+    expect(shapeSig({ src: big })).not.toBe(shapeSig({ src: `${big}B` }))
+  })
+
+  it('are dropped once one of them or the frame has changed; others stay', () => {
+    const cache = new PosterCache()
+    cache.set('wf-0215', { ...poster('https://a/'), scene })
+    cache.set('wf-0216', poster('https://b/'))
+    const seen: string[] = []
+    cache.subscribe('wf-0215', () => seen.push('wf-0215'))
+    cache.dropStale((_, s) => s.key === scene.key)
+    expect(cache.count).toBe(2)
+    cache.dropStale(() => false)
+    expect(cache.peek('wf-0215', 'https://a/')).toBeNull()
+    expect(cache.peek('wf-0216', 'https://b/')).not.toBeNull()
+    expect(seen).toEqual(['wf-0215'])
+  })
+})
+
+describe('an arrow over a frame’s page', () => {
+  const page = { x: 0, y: 36, w: 960, h: 604 }
+  const line = (x1: number, y1: number, x2: number, y2: number) => ({ seg: { x1, y1, x2, y2 }, d: '', mid: { x: (x1 + x2) / 2, y: (y1 + y2) / 2 } })
+  it('crosses it when its path does, not when only its bounds do', () => {
+    expect(arrowCrosses(line(-200, 300, 1200, 320), page, 6)).toBe(true)
+    expect(arrowCrosses(line(500, -400, 500, 0), page, 6)).toBe(false)
+    expect(arrowCrosses(line(500, -400, 500, 32), page, 6)).toBe(true)
+    // A long diagonal whose bounds hold the page, passing by its corner.
+    expect(arrowCrosses(line(-500, 200, 200, -500), page, 6)).toBe(false)
+    expect(arrowCrosses(line(-500, 600, 600, -500), page, 6)).toBe(true)
+    // A curve bowing into the page.
+    expect(arrowCrosses({ ...line(-300, -100, 1300, -100), c1: { x: 200, y: 400 }, c2: { x: 800, y: 400 } }, page, 6)).toBe(true)
   })
 })

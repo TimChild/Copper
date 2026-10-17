@@ -247,7 +247,7 @@ from `init.me`, which is also published in awareness.
 | `{"type":"wsOpen","url"}` / `{"type":"wsClose"}` | open / close the relayed socket |
 | `{"type":"openUrl","url"}` | a link card was opened or a link in a note clicked (the page never navigates) |
 | `{"type":"log","level","msg"}` | diagnostics |
-| `{"type":"framePoster","name","id","url","rect":{x,y,w,h},"maxWidth"}` | a live frame's site could be pictured now (its iframe's content box, CSS px of the page's viewport, fully on screen and unobstructed); answer with `copperCanvas.framePoster(name, dataUrl)` or don't |
+| `{"type":"framePoster","name","id","url","rect":{x,y,w,h},"maxWidth"}` | a live frame's site could be pictured now (its iframe's content box, CSS px of the page's viewport, fully on screen, nothing but arrows drawn over it); answer with `copperCanvas.framePoster(name, dataUrl)` or don't |
 
 ## Document schema
 
@@ -351,8 +351,18 @@ snapping, frames' children, zoom-to-fit, keyboard moves, comments and the tools 
   under its normal title bar. The page can't draw a cross-origin frame, so it asks the host
   (`framePoster`, above) once a live frame has been still for 2 s, at most every 30 s, and once
   more right before it unloads a frame that is still fully on screen (holding the page ≤ 1.2 s
-  for it). Pictures are cached in memory by shape id + URL (LRU ≤ 40 MB; a frame whose URL moved
-  on drops its own). A fresh page stays under its poster until it has painted, so nothing flashes.
+  for it). The host's picture is of the board's view, so a frame is asked only while nothing is
+  drawn over its page that must not be in it (`canvas/poster-view.ts`): every element painted
+  above it — tool bar, zoom bar, panels, chat, menus, popovers, toasts, pins, cursors, handles,
+  rings, the laser — is tested by its box, shadow, outline or ring against the iframe's box, not
+  by sampling points. Arrows crossing the page and shapes with an opaque box (a note, a card, an
+  image) may be in the picture: the board draws them again exactly over their copies at any zoom,
+  and drops the picture the moment one of them or the frame changes (`PosterScene`). A selected
+  arrow, text (it shows through), a frame's page or anything drawing outside its own box keeps
+  the frame from being pictured until it is clear. An answer is kept only if the page is still
+  clear and the view hasn't moved when it comes. Pictures are cached in memory by shape id + URL
+  (LRU ≤ 40 MB; a frame whose URL moved on drops its own). A fresh page stays under its poster
+  until it has painted, so nothing flashes.
   A host that never answers leaves frames on their card (title, favicon, host), and after three
   unanswered asks is no longer waited for before an unload.
 - `ready` is posted when the API is installed, before any shape, frame or image loads.

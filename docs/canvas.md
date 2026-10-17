@@ -790,7 +790,10 @@ A live frame the board has unloaded (off screen, too small, over its live budget
 poster — a picture of how the site last looked — which only the host can take: the page can't read
 a cross-site frame's pixels. The page posts `{type:'framePoster', name, id, url, rect:{x,y,w,h},
 maxWidth}` (the iframe's `window.name`, the shape, its address, its content box in CSS px of the
-board's viewport) once the frame has settled fully on screen; Copper snapshots that rect of the
+board's viewport) once the frame has settled fully on screen with nothing drawn over its page that
+must not be in the picture (no tool bar, panel, menu, cursor or handle: `Canvas/src/canvas/poster-view.ts`
+tests every element painted above it by its box and shadow; arrows and opaque notes may be in it,
+and the page drops such a picture once they or the frame change); Copper snapshots that rect of the
 board's view (`WKWebView.takeSnapshot`, the last painted frame), scales it to at most `maxWidth`
 (≤ 1280) px wide, encodes a JPEG at 0.7 off the main thread and answers
 `window.copperCanvas.framePoster(name, 'data:image/jpeg;base64,…')`, or `null` when there is no

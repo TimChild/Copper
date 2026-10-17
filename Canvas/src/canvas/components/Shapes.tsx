@@ -445,7 +445,8 @@ const HALO_WIDTH = 'calc(2px + 6px / var(--z, 1))'
 const ArrowView = memo(function ArrowView({ shape, path, on }: { shape: Shape; path: ArrowPath; on: boolean }) {
   const stroke = arrowStroke(shape)
   return (
-    <g data-id={shape.id} data-kind="arrow">
+    // `data-on`: its halo is drawn (a live frame's picture is not taken with it: `poster-view.ts`).
+    <g data-id={shape.id} data-kind="arrow" data-on={on ? '' : undefined}>
       <path d={path.d} fill="none" stroke="transparent" style={{ strokeWidth: HIT_WIDTH, pointerEvents: 'stroke' }} />
       {on && <path d={path.d} fill="none" stroke="var(--accent)" strokeOpacity={0.28} strokeLinecap="round" style={{ strokeWidth: HALO_WIDTH }} />}
       <path d={path.d} fill="none" stroke={stroke} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
@@ -482,6 +483,7 @@ export const ArrowLabel = memo(function ArrowLabel({
     <div
       data-id={shape.id}
       data-kind="arrow-label"
+      data-on={selected || editing ? '' : undefined}
       className="absolute left-0 top-0"
       style={{ transform: `translate(${path.mid.x}px, ${path.mid.y}px) translate(-50%, -50%)` }}
     >

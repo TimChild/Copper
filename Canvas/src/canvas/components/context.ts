@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext } from 'react'
 import type { CanvasStore } from '../doc'
+import type { PosterScene } from '../posters'
 import type { Me } from '../types'
 
 /** Field of a shape being edited in place. */
@@ -28,6 +29,13 @@ export interface BoardActions {
   frameHandles: Map<string, FrameHandle>
   /** When the view last moved; read, never rendered on. */
   motion: ViewMotion
+  /**
+   * What of `over` (arrows and shapes drawn over a live frame's page,
+   * `poster-view.ts`) is really over it, and where it and the frame are now
+   * (`posterSceneKey`): a picture taken with them in it stays good while that
+   * holds (`canvas/posters.ts`). Null when nothing is.
+   */
+  posterScene: (frameId: string, over: readonly string[]) => PosterScene | null
   /** The exact zoom, for the few elements that must keep their size on screen every frame of a zoom. */
   zoomVars: ZoomVars
 }

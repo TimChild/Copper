@@ -57,6 +57,7 @@ enum Fork {
         switch verb {
         case "flow": return Flow.shared.bench(request, in: browser)
         case "pace": return Pace.bench(request) // Fork/Pace.swift
+        case "stage": return StageReport.report() // Fork/StageBench.swift
         case "history": return Flow.shared.bench(request, in: browser)
         case "spaces": return Spaces.shared.bench(request, in: browser)
         case "ext-manager": return ExtensionManager.shared.bench(request, in: browser)
@@ -567,7 +568,11 @@ enum Fork {
             // only this isolated process forward before asking WindowServer
             // for its pixels; otherwise the PNG can be a stale surface.
             // With several browser windows, the one asked for alone. (Fork: windows)
-            let hasPopover = nth == nil && NSApp.windows.contains { $0 !== window && $0.isVisible && $0.level == .normal && Windows.owner(of: $0) == nil }
+            // Never the off-screen Backstage window (Fork/MCP/Backstage.swift):
+            // it is ordered in while an agent holds a tab, and counted as a
+            // popover it was laid over the picture and kept the window from
+            // being brought forward — a stale stage in every PNG.
+            let hasPopover = nth == nil && NSApp.windows.contains { $0 !== window && $0.isVisible && $0.level == .normal && Windows.owner(of: $0) == nil && !($0 is Backstage.Window) }
             if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
             // Making the main window key dismisses SwiftUI's popover. Leave
             // the already-visible door popover alone for its evidence shot.
@@ -580,7 +585,7 @@ enum Fork {
             // SwiftUI popovers are sibling windows rather than child windows;
             // include the visible one so a probe picture is the same thing a
             // person sees, not just the page beneath its door.
-            for other in NSApp.windows where other !== window && other.isVisible && other.level == .normal && Windows.owner(of: other) == nil {
+            for other in NSApp.windows where other !== window && other.isVisible && other.level == .normal && Windows.owner(of: other) == nil && !(other is Backstage.Window) {
                 ids.append(CGWindowID(other.windowNumber))
             }
             let list = ids.reversed().map { NSNumber(value: $0) } as CFArray

@@ -250,6 +250,10 @@ final class Backstage {
             }
             return
         }
+        // A tab some window has just been told to show is its stage's to take,
+        // never this window's: hung here between the selection and the stage's
+        // next pass, the page would wait backstage while the stage stood empty.
+        if Windows.all.contains(where: { $0.activeID == tab.id }) || Split.shared.has(tab.id) { return }
         hang(web, for: tab, focus: focus)
     }
 

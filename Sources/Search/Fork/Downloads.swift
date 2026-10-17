@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import SwiftUI
 import WebKit
 
 // One quiet, session-sized model for downloads. WebKit owns the bytes; this
@@ -33,8 +34,39 @@ final class Downloads: ObservableObject {
 
     @Published private(set) var items: [Item] = []
     @Published private(set) var unseen = 0
-    @Published var popoverOpen = false
+    @Published var popoverOpen = false {
+        didSet { if !popoverOpen { doorWindow = nil } }
+    }
     @Published private(set) var pulsing = false
+
+    /// The window whose door the list hangs from — one list, in one window.
+    /// With every window's door bound to `popoverOpen` itself, two windows
+    /// both presented it, and a press in one closed the other's transient
+    /// popover, the flag and so the one under the pointer before its button
+    /// had the release (the Canvas door's bug, CanvasUI.doorWindow). Nil:
+    /// the window in front.
+    @Published private(set) var doorWindow: ObjectIdentifier?
+
+    func showsDoor(in browser: Browser) -> Bool {
+        popoverOpen && (doorWindow ?? ObjectIdentifier(Windows.current)) == ObjectIdentifier(browser)
+    }
+
+    func toggleDoor(in browser: Browser) {
+        if showsDoor(in: browser) { popoverOpen = false; return }
+        doorWindow = ObjectIdentifier(browser)
+        popoverOpen = true
+    }
+
+    /// Shown only from `browser`'s door; a dismissal there closes only its own list.
+    func door(in browser: Browser) -> Binding<Bool> {
+        Binding(
+            get: { self.showsDoor(in: browser) },
+            set: { open in
+                if open { if !self.showsDoor(in: browser) { self.toggleDoor(in: browser) } }
+                else if self.showsDoor(in: browser) { self.popoverOpen = false }
+            }
+        )
+    }
 
     private var observations: [UUID: [NSKeyValueObservation]] = [:]
     private var samples: [UUID: (done: Int64, at: Date, speed: Double)] = [:]

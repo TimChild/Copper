@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import WebKit
 
 // The 1Password browser extension's two ways in, made reachable in Copper.
@@ -100,10 +101,29 @@ final class OnePasswordExtension: NSObject, ObservableObject, WKNavigationDelega
             if answer?["type"] as? String == "Timeout" { return .refused("1Password didn't answer in three minutes") }
             let data = answer?["data"] as? [String: Any]
             if data?["authorized"] as? Bool == true { return .allowed }
-            return .refused(Self.refusal)
+            return .refused(Self.whyNot ?? Self.refusal)
         } catch {
             return .refused(error.localizedDescription)
         }
+    }
+
+    /// What 1Password's helper turns away before it asks anyone: a browser
+    /// outside /Applications, or one signed ad hoc (a local ./build.sh).
+    static var whyNot: String? {
+        let bundle = Bundle.main.bundleURL
+        if !bundle.path.hasPrefix("/Applications/") {
+            return "1Password only lets a browser in /Applications connect — this \(Fork.name) runs from \(bundle.deletingLastPathComponent().path)"
+        }
+        var code: SecStaticCode?
+        var info: CFDictionary?
+        guard SecStaticCodeCreateWithPath(bundle as CFURL, [], &code) == errSecSuccess, let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let facts = info as? [String: Any] else { return nil }
+        let flags = (facts[kSecCodeInfoFlags as String] as? UInt32) ?? 0
+        if flags & SecCodeSignatureFlags.adhoc.rawValue != 0 || facts[kSecCodeInfoCertificates as String] == nil {
+            return "This \(Fork.name) build isn't signed with a certificate, and 1Password won't consider it — use a release build, or sign the extension in by itself"
+        }
+        return nil
     }
 
     /// What a "no" usually means; 1Password doesn't say which it was.

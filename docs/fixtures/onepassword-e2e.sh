@@ -170,7 +170,14 @@ if [ ${#hosts[@]} -gt 0 ]; then
 else
   sleep 8
   echo "ok asked the real host: $(bench ext-manager onepassword status | jq -c .)"
-  echo "   BrowserSupport said: $(ls -t "$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/logs/BrowserSupport/"*.log 2>/dev/null | head -3 | xargs cat 2>/dev/null | grep -E 'partner|not valid|UnsupportedBrowser' | tail -2 | cut -c1-200)"
+  logs="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/logs/BrowserSupport"
+  ls -t "$logs" 2>/dev/null | head -4 | while read -r f; do cat "$logs/$f"; done | grep -E 'Verifying browser|partner|not valid|UnsupportedBrowser' | sort | tail -4 | cut -c1-220 | sed 's/^/   BrowserSupport: /' || true
+fi
+
+# The Extensions page with 1Password's details open, when asked for.
+if [ -n "${COPPER_1P_PICTURE:-}" ]; then
+  bench ext-manager manage >/dev/null; bench ext-manager expand "$id" >/dev/null; sleep 1.5
+  bench ext-manager picture "$COPPER_1P_PICTURE" >/dev/null && echo "ok drew the Extensions page to $COPPER_1P_PICTURE"
 fi
 
 # 2, checked last: nothing WebKit refused the whole run.

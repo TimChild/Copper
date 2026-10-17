@@ -1,3 +1,5 @@
+With every window closed, clicking Copper in the Dock brings a window back — or opens a new one when none is left. It used to do nothing.
+
 Copper is faster to open, to switch spaces and to come back to. Each space opens on the tab you left it on, and those pages load in the background after launch, so switching lands on a page that is already there; a tab you leave stays loaded unless memory is short or many pages are open, instead of reloading after half an hour; tabs brought back from your last session open from the cache; ⌘R checks with the server and reuses what hasn't changed instead of downloading everything again; a page loading no longer redraws the whole window; and a five-second freeze at launch with an animated space is gone.
 
 Passkeys now keep the relying-party domain the site asks for, rather than substituting the sign-in subdomain. Copper's local authenticator reports internal transport only; it does not offer phone hand-off or iCloud passkey sync.

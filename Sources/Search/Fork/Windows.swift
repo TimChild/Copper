@@ -39,6 +39,8 @@ enum Windows {
 
     /// Set by the first window's view: opens a scene for an id.
     static var opener: ((UUID) -> Void)?
+    /// Set beside it: brings the first window's own scene back.
+    static var primary: (() -> Void)?
     /// The app is on its way out: windows closing now are being kept.
     static var quitting = false
 
@@ -46,6 +48,31 @@ enum Windows {
     static func newWindow() {
         guard let opener else { return }
         opener(UUID())
+    }
+
+    /// The Dock icon clicked with no window on screen (Links'
+    /// `applicationShouldHandleReopen`). A browser window that is still
+    /// around comes back — the one in the Dock first, then the first
+    /// window's, which SwiftUI keeps after its red button — and with none
+    /// left, a new one opens: the first window's scene again, or ⌘N.
+    ///
+    /// It used to order front the first window in `NSApp.windows` with a
+    /// content view, which with pages warming in the background is the
+    /// room parked off every screen (SpaceWarm), so the click did nothing
+    /// anyone could see; and with the first window gone for good there was
+    /// nothing to order front at all.
+    static func reopenFromDock() {
+        let kept = all.compactMap { window(of: $0) } + [Links.window].compactMap { $0 }
+        if let docked = kept.first(where: \.isMiniaturized) {
+            docked.deminiaturize(nil)
+            docked.makeKeyAndOrderFront(nil)
+            return
+        }
+        for window in kept {
+            window.makeKeyAndOrderFront(nil)
+            if window.isVisible { return }
+        }
+        if let primary { primary() } else { newWindow() }
     }
 
     /// The browser for a window scene's id, made the first time it is asked for.
@@ -336,6 +363,7 @@ struct WindowOpener: ViewModifier {
         content.onAppear {
             guard Windows.opener == nil else { return }
             Windows.opener = { id in openWindow(id: "window", value: id) }
+            Windows.primary = { openWindow(id: "browser") }
             // The ones open at the last quit, a moment after the first window
             // is up so it keeps its place in front.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -352,6 +380,7 @@ extension Windows {
     /// `windows` lists every browser window; `windows new`; `windows open N URL`
     /// (a tab in window N); `windows key N`; `windows space N INDEX`; `windows
     /// select N TAB`; `windows closetab N TAB` (⌘W); `windows close N` (the red button);
+    /// `windows dock` is the Dock icon clicked with no window on screen;
     /// `windows saved` is windows.json as held; `windows quit` is ⌘Q.
     static func bench(_ request: [String: Any]) -> [String: Any] {
         let op = request["op"] as? String ?? ""
@@ -361,6 +390,7 @@ extension Windows {
         func pick() -> Browser? { bits.first.flatMap(Int.init).flatMap { list.indices.contains($0) ? list[$0] : nil } }
         switch op {
         case "new": newWindow()
+        case "dock": reopenFromDock()
         case "open":
             guard let browser = pick(), bits.count > 1, let url = URL(string: bits[1]) else { return ["error": "open N URL"] }
             _ = browser.open(url, foreground: true)

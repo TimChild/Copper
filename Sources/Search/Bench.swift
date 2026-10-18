@@ -666,7 +666,7 @@ final class Bench {
             if let on = request["clearHover"] as? Bool { ClearTabsDividerHover.shared.forced = on }
             answer(["ok": true])
 
-        case "extensions", "ext-add", "ext-folder", "ext-press", "ext-remove", "ext-reload", "ext-page", "ext-popup", "ext-menu", "ext-pin", "ext-shot", "ext-answer", "ext-enable":
+        case "extensions", "ext-add", "ext-folder", "ext-press", "ext-remove", "ext-reload", "ext-page", "ext-popup", "ext-menu", "ext-pin", "ext-shot", "ext-answer", "ext-enable", "ext-worker":
             guard #available(macOS 15.4, *) else {
                 answer(["error": "extensions need macOS 15.4"])
                 return
@@ -769,6 +769,9 @@ final class Bench {
                     answer(["value": Bench.plain(value)])
                 }
             }
+        case "ext-worker":
+            // Fork (extension-worker): JavaScript in its background worker — Fork/ExtensionWorker.swift.
+            ExtensionWorker.bench(request, answer)
         case "ext-page":
             // One of the extension's own pages in a bench tab, where `eval`
             // runs with the extension's APIs.
@@ -903,7 +906,7 @@ final class Bench {
     // MARK: - page-side helpers
 
     /// A JavaScript value the way JSON can carry it.
-    private static func plain(_ value: Any?) -> Any {
+    static func plain(_ value: Any?) -> Any {
         guard let value else { return NSNull() }
         if JSONSerialization.isValidJSONObject(["v": value]) { return value }
         return String(describing: value)

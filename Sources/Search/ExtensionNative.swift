@@ -125,8 +125,11 @@ final class HostPipe: @unchecked Sendable {
     var onExit: (() -> Void)?
     private var waiters: [CheckedContinuation<Any?, Error>] = []
     private var finished = false
+    /// For NativeFrames' log (a probe world's only).
+    private let name: String
 
     init(program: URL, origin: String) {
+        name = program.lastPathComponent
         process.executableURL = program
         process.arguments = [origin]
         process.standardInput = input
@@ -145,8 +148,13 @@ final class HostPipe: @unchecked Sendable {
             }
             self.take(chunk)
         }
-        process.terminationHandler = { [weak self] _ in self?.finish() }
+        process.terminationHandler = { [weak self] ended in
+            // Fork (native-frames): how the host ended, for a probe's log.
+            if let self, NativeFrames.on { NativeFrames.event(self.name, "exited \(ended.terminationStatus)") }
+            self?.finish()
+        }
         try process.run()
+        if NativeFrames.on { NativeFrames.event(name, "started \(process.processIdentifier) \(process.arguments?.joined(separator: " ") ?? "")") }
     }
 
     func stop() {
@@ -160,6 +168,7 @@ final class HostPipe: @unchecked Sendable {
         var length = UInt32(json.count).littleEndian
         var frame = Data(bytes: &length, count: 4)
         frame.append(json)
+        if NativeFrames.on { NativeFrames.note(">", name, json) } // Fork (native-frames)
         try input.fileHandleForWriting.write(contentsOf: frame)
     }
 
@@ -180,8 +189,11 @@ final class HostPipe: @unchecked Sendable {
             guard buffer.count >= 4 + length else { break }
             let body = buffer.subdata(in: 4..<(4 + length))
             buffer.removeSubrange(0..<(4 + length))
+            if NativeFrames.on { NativeFrames.note("<", name, body) } // Fork (native-frames)
             if let message = try? JSONSerialization.jsonObject(with: body, options: [.fragmentsAllowed]) {
                 messages.append(message)
+            } else if NativeFrames.on {
+                NativeFrames.event(name, "dropped a frame that isn't JSON")
             }
         }
         var handed: [(CheckedContinuation<Any?, Error>, Any)] = []

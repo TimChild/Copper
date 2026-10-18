@@ -702,6 +702,7 @@ final class Bench {
                     },
                     "reported": extensions.errors[item.id] ?? [],
                     "hosts": NativeKeepAlive.counts[item.id] ?? 0, // Fork (native-keepalive)
+                    "background": context.flatMap { ExtensionWorker.view(of: $0) } != nil, // Fork (extension-worker): up, not unloaded
                     "action": action?.label ?? "", "badge": action?.badgeText ?? "",
                     "popup": action?.presentsPopup ?? false,
                     "pinned": item.pinned ?? false, "source": item.source ?? "",

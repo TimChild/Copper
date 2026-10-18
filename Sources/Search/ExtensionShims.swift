@@ -329,6 +329,23 @@ enum ExtensionShims {
           if (wanted.length) return load(...wanted);
         };
       }
+      // Fork (worker-busy): WebKit unloads a worker thirty seconds after the
+      // event that woke it, even while it still owes that event an answer —
+      // 1Password signing in with the account the web page handed it, a
+      // core to start, keys to derive and a vault to fetch. Chrome keeps a
+      // worker up while it answers a message. So while the worker owes a
+      // reply, it asks the browser every fifteen seconds to put the unload
+      // off (`background.keep`), for five minutes at most, as Chrome does.
+      let owing = 0, beat = null;
+      const owe = (delta) => {
+        owing = Math.max(0, owing + delta);
+        if (owing === 0 || beat) return;
+        const since = Date.now();
+        beat = setInterval(() => {
+          if (owing === 0 || Date.now() - since > 300000) { clearInterval(beat); beat = null; return; }
+          native("background.keep", []).catch(() => {});
+        }, 15000);
+      };
       const gather = (event) => {
         if (!event || typeof event.addListener !== "function") return;
         const add = event.addListener.bind(event);
@@ -336,8 +353,8 @@ enum ExtensionShims {
         const listeners = new Set();
         let attached = false;
         const dispatch = function (message, sender, respond) {
-          let settled = false, keep = false;
-          const sendResponse = (value) => { if (!settled) { settled = true; respond(value); } };
+          let settled = false, keep = false, owed = false;
+          const sendResponse = (value) => { if (!settled) { settled = true; if (owed) { owed = false; owe(-1); } respond(value); } };
           // Only the worker answers; any other page stays out of it.
           if (message && message.__searchPing === true) {
             if (background) { sendResponse("pong"); return; }
@@ -353,6 +370,7 @@ enum ExtensionShims {
             if (result === true) keep = true;
             else if (result && typeof result.then === "function") { keep = true; result.then(sendResponse, () => sendResponse(undefined)); }
           }
+          if (background && keep && !settled) { owed = true; owe(1); }
           if (keep || settled) return keep && !settled ? true : undefined;
           // Nothing here answers it. In Chrome that leaves the question to
           // the extension's other pages and its worker; WebKit takes the
@@ -2137,6 +2155,11 @@ enum ExtensionShims {
             }
 
         // MARK: the worker, up before a page talks to it
+        case "background.keep":
+            // Fork (worker-busy): still answering a message; WebKit's own
+            // call puts its unload off again, and starts nothing.
+            try? await context.loadBackgroundContent()
+            return nil
         case "background.wake":
             guard context.webExtension.hasBackgroundContent else { return nil }
             // WebKit sometimes fails to start a worker again after unloading

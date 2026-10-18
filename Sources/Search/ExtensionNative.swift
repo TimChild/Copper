@@ -97,6 +97,14 @@ enum ExtensionNative {
         }
         port.disconnectHandler = { _ in pipe.stop() }
         Live.keep(pipe)
+        // Fork (native-keepalive): the worker stays up while the host is
+        // connected, as in Chrome — Fork/NativeKeepAlive.swift.
+        NativeKeepAlive.hold(pipe, for: extensionID)
+        let kept = pipe.onExit
+        pipe.onExit = {
+            kept?()
+            DispatchQueue.main.async { MainActor.assumeIsolated { NativeKeepAlive.release(pipe, for: extensionID) } }
+        }
     }
 
     /// Hosts that are connected, held until they end.
@@ -151,11 +159,20 @@ final class HostPipe: @unchecked Sendable {
         process.terminationHandler = { [weak self] ended in
             // Fork (native-frames): how the host ended, for a probe's log.
             if let self, NativeFrames.on { NativeFrames.event(self.name, "exited \(ended.terminationStatus)") }
-            self?.finish()
+            // Fork (native-last-word): a host that answers and exits at once
+            // (1Password's BrowserSupport after PartnerBrowserAuthorization…)
+            // can be seen to end before its last frame is read; ending the
+            // port now would drop that answer. The output's own end, read
+            // after every frame, finishes it; this is only the fallback for
+            // an output a child of the host still holds open.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) { self?.finish() }
         }
         try process.run()
         if NativeFrames.on { NativeFrames.event(name, "started \(process.processIdentifier) \(process.arguments?.joined(separator: " ") ?? "")") }
     }
+
+    /// Fork (native-keepalive): a host that already ended keeps nothing alive.
+    var running: Bool { process.isRunning }
 
     func stop() {
         output.fileHandleForReading.readabilityHandler = nil

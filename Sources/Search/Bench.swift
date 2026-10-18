@@ -701,6 +701,7 @@ final class Bench {
                         return e.localizedDescription + under + (e.userInfo.isEmpty ? "" : " \(e.userInfo.filter { $0.key != NSLocalizedDescriptionKey && $0.key != NSUnderlyingErrorKey })")
                     },
                     "reported": extensions.errors[item.id] ?? [],
+                    "hosts": NativeKeepAlive.counts[item.id] ?? 0, // Fork (native-keepalive)
                     "action": action?.label ?? "", "badge": action?.badgeText ?? "",
                     "popup": action?.presentsPopup ?? false,
                     "pinned": item.pinned ?? false, "source": item.source ?? "",

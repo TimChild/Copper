@@ -465,6 +465,48 @@ enum ExtensionShims {
         });
       }
 
+      // Fork (port-own-disconnect): Chrome tells only the OTHER end of a port
+      // that it was disconnected; WebKit also runs the closing end's own
+      // onDisconnect listeners, inside `port.disconnect()`. Code that closes
+      // a port once its answer has arrived — 1Password's partner-browser
+      // request disconnects, then settles with the answer — hears itself
+      // first and settles for "unexpectedly disconnected". WebKit's
+      // `runtime.connectNative` can't be replaced (its own property ignores
+      // a redefinition), so the mend is on what every port shares: its
+      // prototype's `disconnect` notes the port while it closes, and a
+      // listener called with that port as its only news is not called.
+      // The prototype is reached through a port to the browser itself,
+      // which answers it and nothing else (Extensions.swift, connectUsing).
+      (() => {
+        let probe;
+        try { probe = typeof runtime.connectNative === "function" ? runtime.connectNative("search") : null; } catch (e) { return; }
+        if (!probe) return;
+        const portProto = Object.getPrototypeOf(probe);
+        const eventProto = probe.onDisconnect && Object.getPrototypeOf(probe.onDisconnect);
+        try { probe.disconnect(); } catch (e) {}
+        const close = portProto && portProto.disconnect;
+        if (typeof close !== "function" || !eventProto || typeof eventProto.addListener !== "function") return;
+        const closing = new WeakSet();
+        const wrapped = new WeakMap();
+        const quiet = (f) => {
+          if (typeof f !== "function") return f;
+          let g = wrapped.get(f);
+          if (!g) {
+            g = function (...args) { if (args.length === 1 && args[0] && closing.has(args[0])) return; return f.apply(this, args); };
+            wrapped.set(f, g);
+          }
+          return g;
+        };
+        const { addListener, removeListener, hasListener } = eventProto;
+        put(portProto, "disconnect", function (...args) {
+          closing.add(this);
+          try { return close.apply(this, args); } finally { closing.delete(this); }
+        });
+        put(eventProto, "addListener", function (f, ...rest) { return addListener.call(this, quiet(f), ...rest); });
+        put(eventProto, "removeListener", function (f, ...rest) { return removeListener.call(this, wrapped.get(f) || f, ...rest); });
+        if (typeof hasListener === "function") put(eventProto, "hasListener", function (f, ...rest) { return hasListener.call(this, wrapped.get(f) || f, ...rest); });
+      })();
+
       gather(runtime && runtime.onMessage);
       gather(runtime && runtime.onMessageExternal);
 

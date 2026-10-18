@@ -329,6 +329,23 @@ enum ExtensionShims {
           if (wanted.length) return load(...wanted);
         };
       }
+      // Fork (worker-busy): WebKit unloads a worker thirty seconds after the
+      // event that woke it, even while it still owes that event an answer —
+      // 1Password signing in with the account the web page handed it, a
+      // core to start, keys to derive and a vault to fetch. Chrome keeps a
+      // worker up while it answers a message. So while the worker owes a
+      // reply, it asks the browser every fifteen seconds to put the unload
+      // off (`background.keep`), for five minutes at most, as Chrome does.
+      let owing = 0, beat = null;
+      const owe = (delta) => {
+        owing = Math.max(0, owing + delta);
+        if (owing === 0 || beat) return;
+        const since = Date.now();
+        beat = setInterval(() => {
+          if (owing === 0 || Date.now() - since > 300000) { clearInterval(beat); beat = null; return; }
+          native("background.keep", []).catch(() => {});
+        }, 15000);
+      };
       const gather = (event) => {
         if (!event || typeof event.addListener !== "function") return;
         const add = event.addListener.bind(event);
@@ -336,8 +353,8 @@ enum ExtensionShims {
         const listeners = new Set();
         let attached = false;
         const dispatch = function (message, sender, respond) {
-          let settled = false, keep = false;
-          const sendResponse = (value) => { if (!settled) { settled = true; respond(value); } };
+          let settled = false, keep = false, owed = false;
+          const sendResponse = (value) => { if (!settled) { settled = true; if (owed) { owed = false; owe(-1); } respond(value); } };
           // Only the worker answers; any other page stays out of it.
           if (message && message.__searchPing === true) {
             if (background) { sendResponse("pong"); return; }
@@ -353,6 +370,7 @@ enum ExtensionShims {
             if (result === true) keep = true;
             else if (result && typeof result.then === "function") { keep = true; result.then(sendResponse, () => sendResponse(undefined)); }
           }
+          if (background && keep && !settled) { owed = true; owe(1); }
           if (keep || settled) return keep && !settled ? true : undefined;
           // Nothing here answers it. In Chrome that leaves the question to
           // the extension's other pages and its worker; WebKit takes the
@@ -464,6 +482,48 @@ enum ExtensionShims {
           return port;
         });
       }
+
+      // Fork (port-own-disconnect): Chrome tells only the OTHER end of a port
+      // that it was disconnected; WebKit also runs the closing end's own
+      // onDisconnect listeners, inside `port.disconnect()`. Code that closes
+      // a port once its answer has arrived — 1Password's partner-browser
+      // request disconnects, then settles with the answer — hears itself
+      // first and settles for "unexpectedly disconnected". WebKit's
+      // `runtime.connectNative` can't be replaced (its own property ignores
+      // a redefinition), so the mend is on what every port shares: its
+      // prototype's `disconnect` notes the port while it closes, and a
+      // listener called with that port as its only news is not called.
+      // The prototype is reached through a port to the browser itself,
+      // which answers it and nothing else (Extensions.swift, connectUsing).
+      (() => {
+        let probe;
+        try { probe = typeof runtime.connectNative === "function" ? runtime.connectNative("search") : null; } catch (e) { return; }
+        if (!probe) return;
+        const portProto = Object.getPrototypeOf(probe);
+        const eventProto = probe.onDisconnect && Object.getPrototypeOf(probe.onDisconnect);
+        try { probe.disconnect(); } catch (e) {}
+        const close = portProto && portProto.disconnect;
+        if (typeof close !== "function" || !eventProto || typeof eventProto.addListener !== "function") return;
+        const closing = new WeakSet();
+        const wrapped = new WeakMap();
+        const quiet = (f) => {
+          if (typeof f !== "function") return f;
+          let g = wrapped.get(f);
+          if (!g) {
+            g = function (...args) { if (args.length === 1 && args[0] && closing.has(args[0])) return; return f.apply(this, args); };
+            wrapped.set(f, g);
+          }
+          return g;
+        };
+        const { addListener, removeListener, hasListener } = eventProto;
+        put(portProto, "disconnect", function (...args) {
+          closing.add(this);
+          try { return close.apply(this, args); } finally { closing.delete(this); }
+        });
+        put(eventProto, "addListener", function (f, ...rest) { return addListener.call(this, quiet(f), ...rest); });
+        put(eventProto, "removeListener", function (f, ...rest) { return removeListener.call(this, wrapped.get(f) || f, ...rest); });
+        if (typeof hasListener === "function") put(eventProto, "hasListener", function (f, ...rest) { return hasListener.call(this, wrapped.get(f) || f, ...rest); });
+      })();
 
       gather(runtime && runtime.onMessage);
       gather(runtime && runtime.onMessageExternal);
@@ -2095,6 +2155,11 @@ enum ExtensionShims {
             }
 
         // MARK: the worker, up before a page talks to it
+        case "background.keep":
+            // Fork (worker-busy): still answering a message; WebKit's own
+            // call puts its unload off again, and starts nothing.
+            try? await context.loadBackgroundContent()
+            return nil
         case "background.wake":
             guard context.webExtension.hasBackgroundContent else { return nil }
             // WebKit sometimes fails to start a worker again after unloading

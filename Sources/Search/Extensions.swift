@@ -961,8 +961,27 @@ extension Extensions: WKWebExtensionControllerDelegate {
         }
     }
 
-    func webExtensionController(_ controller: WKWebExtensionController, connectUsing port: WKWebExtension.MessagePort, for extensionContext: WKWebExtensionContext) async throws {
-        try ExtensionNative.connect(port, from: extensionContext.uniqueIdentifier)
+    /// `runtime.connectNative`. Answered before this call returns, never
+    /// after a hop: until WebKit hears back, what the extension posts on the
+    /// port is queued, and WebKit (macOS 15.4–26) hands its queue back to the
+    /// extension's own `port.onMessage` instead of to the host. An extension
+    /// that writes at once after connecting — 1Password's NmRequestAccounts
+    /// and NmAuthorizePartnerBrowser — then hears its own question, which
+    /// never reaches the app (`t.content is not an Object`). Fork
+    /// (native-connect-sync); docs/passwords.md.
+    func webExtensionController(_ controller: WKWebExtensionController, connectUsing port: WKWebExtension.MessagePort, for extensionContext: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
+        // The shim's port to the browser itself, made only to reach the
+        // prototype every port shares (port-own-disconnect); it closes it.
+        if port.applicationIdentifier == ExtensionShims.application {
+            completionHandler(nil)
+            return
+        }
+        do {
+            try ExtensionNative.connect(port, from: extensionContext.uniqueIdentifier)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
     }
 }
 

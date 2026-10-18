@@ -354,12 +354,62 @@ two different clients. Settings › Extensions › 1Password › Details has a
   1Password › Settings › Browser. A build signed ad hoc (`./build.sh` with no
   certificate, any test world) is turned away earlier: BrowserSupport logs
   `parent browser was not valid` / `UnsupportedBrowser`. Copper never changes
-  1Password's files or settings; the answer is the person's, in 1Password.
+  1Password's files or settings; the answer is the person's, in 1Password. A test
+  build in /Applications signed with a made-up certificate got
+  `PartnerBrowserAuthorizationFailure` back within 30 ms, with no prompt
+  shown (2026-10-18, 1Password 8 locked or unlocked unknown); whether the
+  release build is asked instead is not yet confirmed. Copper then says it
+  was refused, with what to check.
 
 Native messaging reads the hosts Chrome reads (`NativeMessagingHosts` under
 Chrome, Chromium, Edge, Brave and Arc). A test world can point it at a
 folder of its own with `SEARCH_NATIVE_HOSTS=<folder>`, so a probe talks to a
 stand-in host instead of the apps on the Mac.
+
+**Where WebKit differs from Chrome, and what Copper does about it.** Each of
+these stopped 1Password reaching its app until 2026-10-18:
+
+- *Messages posted before the connect is answered.* WebKit queues what an
+  extension posts on a new `runtime.connectNative` port until the browser has
+  accepted the connection, then delivers that queue to the extension's own
+  `port.onMessage` instead of to the host (macOS 15.4 to 26; WebKit's
+  `sendQueuedNativePortMessagesIfNeeded` calls the port's `sendMessage`).
+  1Password writes the moment it connects, so its `NmRequestAccounts` and
+  `NmAuthorizePartnerBrowser` came back to it as answers (*t.content is not
+  an Object*) and never reached BrowserSupport, which sat waiting. Copper
+  answers the connect synchronously, before WebKit can queue anything.
+- *A port hears its own disconnect.* WebKit runs the closing end's own
+  `onDisconnect` listeners inside `port.disconnect()`; Chrome tells only the
+  other end. 1Password closes the port after BrowserSupport answers and then
+  settles with the answer, so it settled for "unexpectedly disconnected"
+  first. Copper's shim keeps a closing port's own listeners quiet (it
+  reaches the port prototype through a port to Copper itself,
+  `connectNative("search")`, which the browser answers and the shim closes).
+- *A host's last word.* BrowserSupport answers and exits in the same breath;
+  Copper reads everything the host wrote before it tells the extension the
+  port closed.
+- *The worker's lifetime.* WebKit unloads a worker 30 s after the event that
+  woke it unless the worker itself posted on an open port in the last two
+  minutes; a request it is still answering doesn't count, nor does what a
+  host sends. Chrome keeps a worker up while a native port is open and while
+  it owes a message an answer. Copper does too: while a host is connected it
+  puts WebKit's unload off every 20 s (`Fork/NativeKeepAlive.swift`, which
+  also stops a host whose worker is gone), and while the worker owes a
+  `runtime.onMessage` answer it asks every 15 s, for five minutes at most
+  (`background.keep`). 1Password still calls its core from its toolbar-icon
+  code when a tab event restarts its worker before the core has started
+  ("WASM is not initialized" in the extension's errors) — as in Chrome; it
+  is harmless, and rare while the extension is linked to the app.
+
+To see the traffic: a test world started with `SEARCH_NATIVE_LOG=<file>`
+writes one line per frame (`>` to the host, `<` from it, `!` started/exited,
+the length and the first `SEARCH_NATIVE_LOG_BYTES` bytes, 160 by default); a
+released Copper never logs. `./bench ext-worker ID 'return …'` runs JavaScript
+in the page that holds an extension's worker (`navigator.serviceWorker`
+reaches the worker itself; its CSP forbids `eval` inside), and `./bench
+extensions` shows `hosts` (connected native hosts) and `background` (worker
+up or unloaded). `docs/fixtures/onepassword-host.py` answers as BrowserSupport
+does for a browser it hasn't been told to trust.
 
 ## Agent access
 

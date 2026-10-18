@@ -16,13 +16,26 @@
 #      (B5SignInSucceeded) reaches the worker with its tab, and the worker
 #      takes it as far as 1Password's servers, which turn the made-up
 #      Secret Key down (the copy's logging is unredacted for this).
-#   6. Use the 1Password App… sends the extension's partner-browser request
-#      (NmAuthorizePartnerBrowser) to the native host.
+#   6. Use the 1Password App…: the partner-browser request
+#      (NmAuthorizePartnerBrowser) reaches the host, the host's answer reaches
+#      the extension as the very object the host wrote — never the
+#      extension's own question echoed back — and the extension is allowed.
+#   7. The worker stays up while 1Password waits on the app (40 s here) and
+#      while it owes a message an answer (40 s): Chrome's rules, not WebKit's
+#      thirty seconds.
+#   8. 1Password's core (WebAssembly) answers after startup, and again after
+#      WebKit unloaded the worker and a message started it afresh, with no
+#      "WASM is not initialized".
+#
+# The host is docs/fixtures/onepassword-host.py, which answers as the real
+# BrowserSupport does (frames captured with SEARCH_NATIVE_LOG); Copper's side
+# of every frame is in $tmp/frames.log (kept with COPPER_1P_KEEP=1).
 #
 # Needs the network (my.1password.com) and the extension installed in the
 # main Copper (or COPPER_1P_EXTENSION=folder). COPPER_1P_REAL_HOST=1 talks to
 # the real 1Password BrowserSupport instead of the stand-in (step 6 then shows
-# up in 1Password's own BrowserSupport log; a dev build is refused there).
+# what it answered; a build outside /Applications is refused, steps 7–8 are
+# skipped).
 # ./build.sh first unless COPPER_SKIP_BUILD=1.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -36,7 +49,8 @@ cleanup() {
   if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
   defaults delete "com.officecommun.search.test.$world" >/dev/null 2>&1 || true
   rm -f "$HOME/Library/Preferences/com.officecommun.search.test.$world.plist"
-  rm -rf "$HOME/Library/Application Support/Copper ($world)" "$tmp"
+  rm -rf "$HOME/Library/Application Support/Copper ($world)"
+  if [ "${COPPER_1P_KEEP:-0}" = 1 ]; then echo "kept $tmp"; else rm -rf "$tmp"; fi
   local hash=2166136261 i byte
   for ((i = 0; i < ${#world}; i++)); do
     printf -v byte '%d' "'${world:i:1}"
@@ -58,18 +72,13 @@ fi
 app="$root/build/Copper.app/Contents/MacOS/Copper"
 [ -x "$app" ] || fail "build: no Copper executable at $app"
 
-# The stand-in host: notes how it was run and every byte it is sent, and
-# never answers — what BrowserSupport does for a browser it doesn't know.
+# The stand-in host (docs/fixtures/onepassword-host.py), its frames in $tmp.
 mkdir -p "$tmp/hosts"
-cat >"$tmp/hosts/stand-in.sh" <<EOF
-#!/bin/bash
-echo "\$@" >>"$tmp/host-args.log"
-exec cat >>"$tmp/host-frames.log"
-EOF
-chmod +x "$tmp/hosts/stand-in.sh"
+cp "$root/docs/fixtures/onepassword-host.py" "$tmp/hosts/stand-in"
+chmod +x "$tmp/hosts/stand-in"
 printf '{"name":"com.1password.1password","path":"%s","type":"stdio","allowed_origins":["chrome-extension://%s/"]}\n' \
-  "$tmp/hosts/stand-in.sh" "$id" >"$tmp/hosts/com.1password.1password.json"
-hosts=(SEARCH_NATIVE_HOSTS="$tmp/hosts")
+  "$tmp/hosts/stand-in" "$id" >"$tmp/hosts/com.1password.1password.json"
+hosts=(SEARCH_NATIVE_HOSTS="$tmp/hosts" STANDIN_LOG="$tmp")
 [ "${COPPER_1P_REAL_HOST:-0}" = 1 ] && hosts=()
 
 # The copy, under its real id (the native host lets only that origin in).
@@ -88,12 +97,19 @@ text = open(path, encoding="utf-8").read()
 old = 'console.error("[Background]",`${a} Error handling request: ${v(m)}`)'
 new = '(setTimeout(()=>{throw new Error("UNREDACTED "+String(m&&(m.message||m))+" "+(()=>{try{return JSON.stringify(m)}catch(e){return ""}})())},0),' + old + ')'
 if text.count(old) != 1: sys.exit(1)
-open(path, "w", encoding="utf-8").write(text.replace(old, new))
+text = text.replace(old, new)
+# What the partner-browser request's port is handed, word for word (step 6).
+port = 'onMessage=e=>{let t=e;if("callbackId"in t.content)'
+if text.count(port) == 1:
+    text = text.replace(port, 'onMessage=e=>{let t=e;console.warn("COPPER-PORT "+(typeof e)+" "+JSON.stringify(e));if("callbackId"in t.content)')
+# A message answered only after ms milliseconds (step 7).
+text += '\nchrome.runtime.onMessage.addListener((m, s, reply) => { if (!m || m.copperSlow !== true) return; setTimeout(() => reply({ late: true }), m.ms || 40000); return true; });\n'
+open(path, "w", encoding="utf-8").write(text)
 PY
 
 defaults write "com.officecommun.search.test.$world" bench -bool true
 defaults write "com.officecommun.search.test.$world" welcomed -bool true
-env ${hosts[@]+"${hosts[@]}"} SEARCH_PROBE="$world" SEARCH_HEADLESS=1 "$app" >"$tmp/copper.log" 2>&1 &
+env ${hosts[@]+"${hosts[@]}"} SEARCH_NATIVE_LOG="$tmp/frames.log" SEARCH_NATIVE_LOG_BYTES=600 SEARCH_PROBE="$world" SEARCH_HEADLESS=1 "$app" >"$tmp/copper.log" 2>&1 &
 pid=$!
 bench() { "$root/bench" --world "$world" "$@"; }
 for _ in {1..60}; do bench tabs >/dev/null 2>&1 && break; sleep 0.5; done
@@ -115,6 +131,21 @@ if [ ${#hosts[@]} -gt 0 ]; then
 else
   echo "ok 1Password $version loaded as $id (real native host)"
 fi
+
+# 8. 1Password's core (its WebAssembly) answers once the worker has started:
+#    a request the worker hands straight to the core, from one of the
+#    extension's own pages.
+page=$(bench ext-page "$id" credits.html)
+core() {
+  bench eval "$page" 'window.__core = null; chrome.runtime.sendMessage({ name: "get-naked-domains-for-urls", data: ["https://accounts.google.com/x"] }).then((r) => { window.__core = r; }, (e) => { window.__core = { threw: String(e) }; }); 1' >/dev/null
+  local v=null
+  for _ in {1..120}; do v=$(bench eval "$page" 'JSON.stringify(window.__core)' 2>/dev/null || echo null); [ "$v" != null ] && break; sleep 0.25; done
+  echo "$v"
+}
+answer=$(core)
+grep -q '"type":"Success"' <<<"$answer" || fail "1Password's core didn't answer after startup: $answer"
+if reported | grep -q 'WASM is not initialized'; then fail "WASM is not initialized after startup: $(reported | grep -m1 'WASM is not' | cut -c1-200)"; fi
+echo "ok 1Password's core answers after startup ($answer)"
 
 # 2. A canvas tab beside it.
 bench canvas open >/dev/null
@@ -161,18 +192,65 @@ grep -q "SecretKeyIdOrFormatIsWrong\|_handleStartAuthResponse" <<<"$seen" \
   && echo "ok the hand-over reached the worker with its tab and went to 1Password's servers, which refused the made-up Secret Key" \
   || echo "ok the hand-over reached the worker (it answered: ${why:-redacted})"
 
-# 6. Use the 1Password App… — the partner-browser request.
+# 6. Use the 1Password App… — the partner-browser request, and the answer.
 bench ext-manager onepassword connect "$id" >/dev/null
 if [ ${#hosts[@]} -gt 0 ]; then
-  for _ in {1..40}; do grep -qa "NmAuthorizePartnerBrowser" "$tmp/host-frames.log" 2>/dev/null && break; sleep 0.25; done
-  grep -qa "NmAuthorizePartnerBrowser" "$tmp/host-frames.log" 2>/dev/null || fail "Use the 1Password App… sent no partner-browser request to the host"
-  echo "ok Use the 1Password App… sends NmAuthorizePartnerBrowser to the native host"
+  status=""
+  for _ in {1..80}; do status=$(bench ext-manager onepassword status | jq -r .onepassword); [ "$status" != asking ] && break; sleep 0.25; done
+  grep -qa '^IN .*NmAuthorizePartnerBrowser' "$tmp/host-frames.log" 2>/dev/null || fail "Use the 1Password App… sent no partner-browser request to the host (WebKit's queued-message echo?)"
+  grep -qa '> stand-in [0-9]* .*NmAuthorizePartnerBrowser' "$tmp/frames.log" || fail "Copper's frame log has no partner-browser request"
+  answer=$(grep -a '^OUT .*"type":"BrowserSupport"' "$tmp/host-frames.log" | tail -1 | cut -d' ' -f3-)
+  [ -n "$answer" ] || fail "the stand-in never answered"
+  grep -qaF "< stand-in ${#answer} " "$tmp/frames.log" || fail "Copper read no ${#answer}-byte answer from the host"
+  heard=$(reported | grep -F "COPPER-PORT " || true)
+  grep -qF "COPPER-PORT object $answer" <<<"$heard" || fail "the extension wasn't handed the host's answer as that object (it heard: $(tail -1 <<<"$heard" | cut -c1-200))"
+  if grep -q '"invocation"' <<<"$heard"; then fail "the extension heard its own request echoed back: $(grep -m1 '"invocation"' <<<"$heard" | cut -c1-200)"; fi
+  if reported | grep -q 't.content is not an Object'; then fail "the extension choked on a port message (t.content is not an Object)"; fi
+  [ "$status" = allowed ] || fail "Use the 1Password App… ended $status: $(bench ext-manager onepassword status | jq -r .detail)"
+  echo "ok Use the 1Password App…: NmAuthorizePartnerBrowser reached the host, its ${#answer}-byte answer reached the extension as the host wrote it, and the extension was allowed"
 else
-  sleep 8
+  for _ in {1..60}; do [ "$(bench ext-manager onepassword status | jq -r .onepassword)" != asking ] && break; sleep 0.5; done
   echo "ok asked the real host: $(bench ext-manager onepassword status | jq -c .)"
-  logs="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/logs/BrowserSupport"
-  ls -t "$logs" 2>/dev/null | head -4 | while read -r f; do cat "$logs/$f"; done | grep -E 'Verifying browser|partner|not valid|UnsupportedBrowser' | sort | tail -4 | cut -c1-220 | sed 's/^/   BrowserSupport: /' || true
+  grep -a ' 1Password-BrowserSupport ' "$tmp/frames.log" | tail -4 | cut -c1-260 | sed 's/^/   frame: /'
 fi
+
+# 7. The worker kept up: while 1Password waits on the app, and while it owes
+#    a page an answer — 40 s each, past WebKit's 30 s unload.
+origin() { bench ext-worker "$id" 'return String(performance.timeOrigin)'; }
+if [ ${#hosts[@]} -gt 0 ]; then
+  echo 40 >"$tmp/delay"
+  before=$(origin)
+  bench ext-manager onepassword connect "$id" >/dev/null
+  status=""
+  for _ in {1..70}; do status=$(bench ext-manager onepassword status | jq -r .onepassword); [ "$status" != asking ] && break; sleep 1; done
+  rm -f "$tmp/delay"
+  [ "$status" = allowed ] || fail "with 1Password answering after 40 s, Use the 1Password App… ended $status"
+  [ "$(origin)" = "$before" ] || fail "the worker was unloaded while 1Password was still answering"
+  echo "ok the worker stayed up the 40 s 1Password took to answer, and the answer arrived"
+fi
+before=$(origin)
+bench eval "$page" 'window.__slow = null; chrome.runtime.sendMessage({ copperSlow: true, ms: 40000 }).then((r) => { window.__slow = r; }); 1' >/dev/null
+slow=null
+for _ in {1..60}; do slow=$(bench eval "$page" 'JSON.stringify(window.__slow)'); [ "$slow" != null ] && break; sleep 1; done
+[ "$slow" = '{"late":true}' ] || fail "an answer 40 s in the making never arrived (got $slow)"
+[ "$(origin)" = "$before" ] || fail "the worker was unloaded while it owed a page an answer"
+echo "ok the worker stayed up while it owed a page an answer for 40 s"
+
+# 8. The core again, after WebKit unloads the worker and a message starts it
+#    afresh. The web pages go first: their tab events would wake it too, and
+#    1Password's own icon code calls the core before it has started then
+#    (as it does in Chrome when its worker restarts).
+bench close "$signin" >/dev/null 2>&1 || true
+up=true
+for _ in {1..90}; do up=$(bench extensions | jq -r --arg id "$id" '.extensions[] | select(.id == $id) | .background'); [ "$up" = false ] && break; sleep 1; done
+[ "$up" = false ] || fail "WebKit never unloaded the idle worker (or Copper kept it up for nothing)"
+before=$(reported | grep -c 'WASM is not initialized' || true)
+answer=$(core)
+grep -q '"type":"Success"' <<<"$answer" || fail "after a restart the core didn't answer: $answer"
+sleep 3
+after=$(reported | grep -c 'WASM is not initialized' || true)
+[ "$after" = "$before" ] || fail "WASM is not initialized after the worker restarted"
+echo "ok after WebKit unloaded the idle worker, a message started it again and the core answered ($answer)"
 
 # The Extensions page with 1Password's details open, when asked for.
 if [ -n "${COPPER_1P_PICTURE:-}" ]; then

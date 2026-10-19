@@ -675,7 +675,9 @@ enum Passkeys {
     private static func authenticatorData(rpId: String, flags: UInt8, counter: UInt32, credential: PasskeyStore.Credential? = nil, key: P256.Signing.PrivateKey? = nil) -> Data {
         var data = Data(SHA256.hash(data: Data(rpId.utf8)))
         data.append(flags)
-        data.append(contentsOf: [UInt8(counter >> 24), UInt8(counter >> 16), UInt8(counter >> 8), UInt8(counter)])
+        // Big-endian, each byte truncated: UInt8(counter) traps from 256 up.
+        data.append(contentsOf: [UInt8(truncatingIfNeeded: counter >> 24), UInt8(truncatingIfNeeded: counter >> 16),
+                                 UInt8(truncatingIfNeeded: counter >> 8), UInt8(truncatingIfNeeded: counter)])
         guard let credential, let key else { return data }
         data.append(aaguid)
         data.append(UInt8(credential.id.count >> 8)); data.append(UInt8(credential.id.count & 0xff)); data.append(credential.id)
@@ -707,11 +709,11 @@ enum Passkeys {
         }
 
         private func head(_ type: UInt8, _ value: UInt64) -> Data {
-            if value < 24 { return Data([type << 5 | UInt8(value)]) }
+            if value < 24 { return Data([type << 5 | UInt8(truncatingIfNeeded: value)]) }
             if value <= 0xff { return Data([type << 5 | 24, UInt8(value)]) }
-            if value <= 0xffff { return Data([type << 5 | 25, UInt8(value >> 8), UInt8(value)]) }
-            if value <= 0xffffffff { return Data([type << 5 | 26, UInt8(value >> 24), UInt8(value >> 16), UInt8(value >> 8), UInt8(value)]) }
-            return Data([type << 5 | 27, UInt8(value >> 56), UInt8(value >> 48), UInt8(value >> 40), UInt8(value >> 32), UInt8(value >> 24), UInt8(value >> 16), UInt8(value >> 8), UInt8(value)])
+            if value <= 0xffff { return Data([type << 5 | 25, UInt8(truncatingIfNeeded: value >> 8), UInt8(truncatingIfNeeded: value)]) }
+            if value <= 0xffffffff { return Data([type << 5 | 26, UInt8(truncatingIfNeeded: value >> 24), UInt8(truncatingIfNeeded: value >> 16), UInt8(truncatingIfNeeded: value >> 8), UInt8(truncatingIfNeeded: value)]) }
+            return Data([type << 5 | 27, UInt8(truncatingIfNeeded: value >> 56), UInt8(truncatingIfNeeded: value >> 48), UInt8(truncatingIfNeeded: value >> 40), UInt8(truncatingIfNeeded: value >> 32), UInt8(truncatingIfNeeded: value >> 24), UInt8(truncatingIfNeeded: value >> 16), UInt8(truncatingIfNeeded: value >> 8), UInt8(truncatingIfNeeded: value)])
         }
     }
 }

@@ -38,35 +38,53 @@ fi
 app="$root/build/Copper.app/Contents/MacOS/Copper"
 [ -x "$app" ] || fail "build the dev app first"
 
-# Four synthetic P-256 keys: PKCS#8 for the vault (base64url, as Bitwarden
+# Synthetic P-256 keys: PKCS#8 for the vault (base64url, as Bitwarden
 # writes it — B in plain base64, which Copper also reads), SPKI for WebCrypto.
-for k in a b c d; do
+for k in a b c d e f g; do
   openssl ecparam -name prime256v1 -genkey -noout -out "$tmp/$k.pem" 2>/dev/null
   openssl pkcs8 -topk8 -nocrypt -in "$tmp/$k.pem" -outform DER 2>/dev/null | base64 | tr -d '\n' >"$tmp/$k.pkcs8"
   openssl ec -in "$tmp/$k.pem" -pubout -outform DER 2>/dev/null | base64 | tr -d '\n' >"$tmp/$k.spki"
 done
 
-python3 - "$tmp/port" <<'PY' >"$tmp/server.log" 2>&1 &
-import http.server, pathlib, sys
+# Two ports: the page, and a second localhost origin whose /frame page asks
+# for a passkey from inside an iframe (same site, another origin) and posts
+# the outcome to its parent.
+python3 - "$tmp/port" "$tmp/port2" <<'PY' >"$tmp/server.log" 2>&1 &
+import http.server, json, pathlib, sys, threading, urllib.parse
+FRAME = """<!doctype html><meta charset="utf-8"><script>
+navigator.credentials.get({publicKey: {challenge: new Uint8Array([3]), rpId: 'localhost', userVerification: 'preferred'}})
+  .then(function (c) { parent.postMessage({frame: NAME, ok: true, id: c.id}, '*'); },
+        function (e) { parent.postMessage({frame: NAME, error: e.name, message: e.message}, '*'); });
+</script>"""
 class Page(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        data=b'<!doctype html><meta charset="utf-8"><title>Synthetic Bitwarden passkey check</title><p>No real credentials.</p>'
+        url = urllib.parse.urlparse(self.path)
+        if url.path == '/frame':
+            name = urllib.parse.parse_qs(url.query).get('n', ['frame'])[0]
+            data = FRAME.replace('NAME', json.dumps(name)).encode()
+        else:
+            data=b'<!doctype html><meta charset="utf-8"><title>Synthetic Bitwarden passkey check</title><p>No real credentials.</p>'
         self.send_response(200); self.send_header('Content-Type','text/html'); self.end_headers(); self.wfile.write(data)
     def log_message(self, *args): pass
-server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Page)
-pathlib.Path(sys.argv[1]).write_text(str(server.server_port))
-server.serve_forever()
+servers=[http.server.ThreadingHTTPServer(('127.0.0.1',0),Page) for _ in range(2)]
+threading.Thread(target=servers[1].serve_forever, daemon=True).start()
+pathlib.Path(sys.argv[2]).write_text(str(servers[1].server_port))
+pathlib.Path(sys.argv[1]).write_text(str(servers[0].server_port))
+servers[0].serve_forever()
 PY
 server=$!
 for _ in {1..40}; do [ -s "$tmp/port" ] && break; sleep 0.1; done
-[ -s "$tmp/port" ] || fail "localhost server"
-port=$(<"$tmp/port")
+[ -s "$tmp/port" ] && [ -s "$tmp/port2" ] || fail "localhost server"
+port=$(<"$tmp/port"); port2=$(<"$tmp/port2")
 mcp_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 
 # The vault: alice (discoverable, in the Agents folder, counter 0), bob
 # (discoverable, b64.-style id, counter 5, not shared), carol (not
-# discoverable), dave's on another relying party, and frank's login with a
-# password and no passkey.
+# discoverable), dave's on another relying party, frank's login with a
+# password and no passkey, kim (counter at UInt32.max), lena (Agents folder
+# but master-password reprompt on), ivan's login holding an EdDSA passkey
+# Copper cannot sign with (so the cache leaves it out), and judy's
+# password-only login owned by an organization.
 mkdir -p "$tmp/bw"
 python3 - "$tmp" "$port" <<'PY'
 import base64, json, pathlib, sys
@@ -78,15 +96,17 @@ def passkey(cid, kv, rp, user, handle, counter, discoverable):
             "keyValue": kv, "rpId": rp, "userHandle": base64.urlsafe_b64encode(handle).decode().rstrip("="),
             "userName": user, "counter": counter, "rpName": "Synthetic", "userDisplayName": user.title(),
             "discoverable": discoverable, "creationDate": "2026-09-01T12:00:00.000Z"}
-def item(iid, user, folder, pk, rp="localhost"):
+def item(iid, user, folder, pk, rp="localhost", reprompt=0):
     return {"object": "item", "id": iid, "type": 1, "name": f"{rp} ({user})", "folderId": folder,
-            "notes": None, "favorite": False, "fields": [], "reprompt": 0,
+            "notes": None, "favorite": False, "fields": [], "reprompt": reprompt,
             "login": {"username": user, "password": "synthetic-not-a-password", "totp": None,
                       "uris": [{"uri": f"http://{rp}:{port}" if rp == "localhost" else f"https://{rp}", "match": None}],
                       "fido2Credentials": [pk]}}
 bob_id = base64.urlsafe_b64encode(b"bob-credential-id-0001").decode().rstrip("=")
 ids = {"a": "6f1b3a52-1c0e-4a37-9c55-2d1f0e9a7b01", "b": "b64." + bob_id,
-       "c": "0c9d2e11-5b7a-4f3e-8d21-7a6b5c4d3e02", "d": "d4e5f6a7-0b1c-4d2e-9f30-415263748596"}
+       "c": "0c9d2e11-5b7a-4f3e-8d21-7a6b5c4d3e02", "d": "d4e5f6a7-0b1c-4d2e-9f30-415263748596",
+       "e": "e1e2e3e4-0b1c-4d2e-9f30-415263748597", "f": "f1f2f3f4-0b1c-4d2e-9f30-415263748598",
+       "g": "a7a7a7a7-0b1c-4d2e-9f30-415263748599"}
 items = [
     item("item-alice", "alice", "folder-agents", passkey(ids["a"], url("a"), "localhost", "alice", b"alice-handle", "0", "true")),
     item("item-bob", "bob", None, passkey(ids["b"], key("b"), "localhost", "bob", b"bob-handle", "5", "true")),
@@ -97,6 +117,15 @@ items = [
 frank = item("item-frank", "frank", None, None)
 frank["login"]["fido2Credentials"] = []
 items.append(frank)
+items.append(item("item-kim", "kim", None, passkey(ids["e"], url("e"), "localhost", "kim", b"kim-handle", "4294967295", "false")))
+items.append(item("item-lena", "lena", "folder-agents", passkey(ids["f"], url("f"), "localhost", "lena", b"lena-handle", "0", "true"), reprompt=1))
+ivan_pk = passkey(ids["g"], url("g"), "localhost", "ivan", b"ivan-handle", "0", "true")
+ivan_pk["keyAlgorithm"], ivan_pk["keyCurve"] = "EdDSA", "Ed25519"
+items.append(item("item-ivan", "ivan", None, ivan_pk))
+judy = item("item-judy", "judy", None, None)
+judy["login"]["fido2Credentials"] = None
+judy["organizationId"], judy["collectionIds"] = "org-synthetic", ["collection-synthetic"]
+items.append(judy)
 state = {"password": "synthetic-master", "status": "locked", "email": "probe@example.invalid",
          "folders": [{"object": "folder", "id": "folder-agents", "name": "Agents"}], "items": items}
 (tmp / "bw" / "state.json").write_text(json.dumps(state, indent=1))
@@ -118,24 +147,25 @@ bench tabs >/dev/null || fail "headless bench"
 bench bw unlock synthetic-master >/dev/null
 for _ in {1..80}; do
   bench passkeys count >"$tmp/count.json" 2>/dev/null || true
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["bitwarden"]==4' "$tmp/count.json" 2>/dev/null && break
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["bitwarden"]==6' "$tmp/count.json" 2>/dev/null && break
   sleep 0.25
 done
 python3 - "$tmp/count.json" <<'PY' || fail "vault passkeys not listed: $(cat "$tmp/count.json")"
 import json,sys
-d=json.load(open(sys.argv[1])); assert d["count"]==0 and d["bitwarden"]==4, d
+d=json.load(open(sys.argv[1])); assert d["count"]==0 and d["bitwarden"]==6, d
 PY
 bench passkeys list >"$tmp/list.json"
 python3 - "$tmp/list.json" <<'PY'
 import json,sys
 rows=[r for r in json.load(open(sys.argv[1]))["credentials"] if r["source"]=="bitwarden"]
 by={r["userName"]: r for r in rows}
-assert set(by)=={"alice","bob","carol","dave"}, rows
+assert set(by)=={"alice","bob","carol","dave","kim","lena"}, rows
 assert by["alice"]["agent"] is True and by["bob"]["agent"] is False, rows
+assert by["lena"]["agent"] is False, "a reprompt login's passkey must not be an agent's"
 assert by["carol"]["discoverable"] is False and by["bob"]["counter"]==5, rows
 assert all("key" not in k.lower() for r in rows for k in r), rows
 PY
-ok "Settings/bench list: four vault passkeys, source Bitwarden, metadata only"
+ok "Settings/bench list: six vault passkeys (the EdDSA one left out), source Bitwarden, metadata only; reprompt lena not an agent's"
 bench bw candidates localhost >"$tmp/candidates.json"
 python3 -c 'import json,sys; c={x["user"]: x for x in json.load(open(sys.argv[1]))["candidates"] if x["source"]=="bitwarden"}; assert c["alice"]["passkey"] and c["carol"]["passkey"] and not c["frank"]["passkey"], c' "$tmp/candidates.json" \
   || fail "picker rows do not say passkey: $(cat "$tmp/candidates.json")"
@@ -179,12 +209,25 @@ window.__verify = async function (got, spki) {
           type: client.type, origin: client.origin,
           id: got.id, user: got.response.userHandle ? new TextDecoder().decode(got.response.userHandle) : null};
 };
-window.__get = function (name, allow, spki) {
+window.__frame = function (name, port) {
+  window.__pk[name] = {running: true};
+  if (!window.__frames) {
+    window.__frames = true;
+    window.addEventListener('message', function (e) {
+      if (e.data && e.data.frame) window.__pk[e.data.frame] = Object.assign({running: false}, e.data);
+    });
+  }
+  var f = document.createElement('iframe');
+  f.src = 'http://localhost:' + port + '/frame?n=' + encodeURIComponent(name);
+  document.body.appendChild(f);
+  return 'started';
+};
+window.__get = function (name, allow, spki, uv) {
   window.__pk[name] = {running: true};
   (async function () {
     try {
       var got = await navigator.credentials.get({publicKey: {challenge: crypto.getRandomValues(new Uint8Array(16)), rpId: 'localhost',
-        userVerification: 'required', allowCredentials: allow.map(function (id) { return {type: 'public-key', id: window.__bytes(id)}; })}});
+        userVerification: uv || 'required', allowCredentials: allow.map(function (id) { return {type: 'public-key', id: window.__bytes(id)}; })}});
       var spkis = typeof spki === 'string' ? {only: spki} : spki, out = {running: false};
       for (var k in spkis) { var r = await window.__verify(got, window.__bytes(spkis[k])); if (r.verified || !out.id) { out = Object.assign({running: false, key: k}, r); } }
       window.__pk[name] = out;
@@ -213,7 +256,7 @@ JS
 bench eval "$id" "$lib" >/dev/null
 ids_json=$(<"$tmp/ids.json")
 spki() { tr '+/' '-_' <"$tmp/$1.spki" | tr -d '='; }
-keys_json="{\"alice\":\"$(spki a)\",\"bob\":\"$(spki b)\",\"carol\":\"$(spki c)\"}"
+keys_json="{\"alice\":\"$(spki a)\",\"bob\":\"$(spki b)\",\"carol\":\"$(spki c)\",\"kim\":\"$(spki e)\"}"
 idof() { python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$ids_json" "$1"; }
 wait_result() { # tab name file
   for _ in {1..150}; do
@@ -252,12 +295,12 @@ r=json.load(open(sys.argv[1])); offered=json.load(open(sys.argv[2]))["offered"]
 state=json.load(open(sys.argv[3]))
 assert not r.get("error"), r
 assert r["key"]=="bob" and r["verified"] and r["uv"] and r["counter"]==6 and r["user"]=="bob-handle", r
-assert sorted(offered)==["alice · Bitwarden","bob · Bitwarden"], offered
+assert sorted(offered)==["alice · Bitwarden","bob · Bitwarden","lena · Bitwarden"], offered
 counters={i["id"]: i["login"]["fido2Credentials"][0]["counter"] for i in state["items"] if i["login"]["fido2Credentials"]}
 assert counters["item-bob"]=="6" and counters["item-alice"]=="0", counters
 PY
 grep -q '"argv": \["edit", "item", "item-bob"\], "env": \[[^]]*\], "stdin": [1-9]' "$tmp/bw/calls.log" || fail "counter edit did not go on stdin"
-ok "discoverable selection: chooser offered alice+bob (not carol), picked bob; counter 5→6 in authData and the vault (edit on stdin)"
+ok "discoverable selection: chooser offered alice+bob+lena (not carol/kim), picked bob; counter 5→6 in authData and the vault (edit on stdin)"
 
 # 3. alice by id: counter 0 stays 0, and the vault item is not edited.
 bench eval "$id" "window.__get('alice', ['$(idof a)'], $keys_json)" >/dev/null
@@ -289,10 +332,16 @@ ok "another RP's vault passkey is never offered"
 # 6. An agent in its own background tab, over MCP: the chooser and Touch ID
 #    are set to answer bob / no, so a pass proves neither was consulted.
 token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$folder/agent.json")
-mcp() { # json-body → reply on stdout
+mcp() { # json-body → reply on stdout; every reply is kept in mcp-all.log
   curl -s --max-time 30 -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-    -H 'Accept: application/json, text/event-stream' -H "Mcp-Session-Id: $sid" "http://127.0.0.1:$mcp_port/mcp" -d "$1"
+    -H 'Accept: application/json, text/event-stream' -H "Mcp-Session-Id: $sid" "http://127.0.0.1:$mcp_port/mcp" -d "$1" \
+    | tee -a "$tmp/mcp-all.log"
+  echo >>"$tmp/mcp-all.log"
 }
+# Whether an agent's tool result carried this passkey refusal reason.
+told() { grep -q "Passkey sign-in refused on this tab: [^\"]*$1" "$tmp/mcp-all.log"; }
+# The standard WebAuthn wording, all a page may learn from a refusal.
+standard="The operation either timed out or was not allowed"
 sid=""
 for _ in {1..40}; do
   sid=$(curl -s -D - -o /dev/null --max-time 5 -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
@@ -324,25 +373,47 @@ done
 [ "$(inner "$tmp/mcp-ready.json" 2>/dev/null)" = true ] || fail "agent tab not ready: $(cat "$tmp/mcp-ready.json")"
 bench passkeys answer no >/dev/null
 bench passkeys pick bob >/dev/null
-evaluate "() => { $(tr '\n' ' ' <<<"$lib") return window.__get('agent', [], $keys_json); }" >"$tmp/mcp-start.json"
-for _ in {1..150}; do
-  evaluate "() => JSON.stringify(window.__pk.agent)" >"$tmp/mcp-agent.json"
-  settled "$tmp/mcp-agent.json" && break; sleep 0.1
-done
-evaluate "() => { window.__get('agent-bob', ['$(idof b)'], $keys_json); return 'started'; }" >/dev/null
-for _ in {1..150}; do
-  evaluate "() => JSON.stringify(window.__pk['agent-bob'])" >"$tmp/mcp-agent-bob.json"
-  settled "$tmp/mcp-agent-bob.json" && break; sleep 0.1
-done
-inner "$tmp/mcp-agent.json" >"$tmp/agent.json"; inner "$tmp/mcp-agent-bob.json" >"$tmp/agent-bob.json"
-python3 - "$tmp/agent.json" "$tmp/agent-bob.json" <<'PY'
+agent_wait() { # name → the page's result in $tmp/<name>.json
+  for _ in {1..150}; do
+    evaluate "() => JSON.stringify(window.__pk['$1'])" >"$tmp/mcp-$1.json"
+    settled "$tmp/mcp-$1.json" && break; sleep 0.1
+  done
+  inner "$tmp/mcp-$1.json" >"$tmp/$1.json"
+}
+# Discoverable, UV preferred: lena is in the Agents folder too, but her
+# login has Bitwarden's reprompt on, so alice is the one shared passkey.
+evaluate "() => { $(tr '\n' ' ' <<<"$lib") return window.__get('agent', [], $keys_json, 'preferred'); }" >"$tmp/mcp-start.json"
+agent_wait agent
+evaluate "() => { window.__get('agent-bob', ['$(idof b)'], $keys_json, 'preferred'); return 'started'; }" >/dev/null
+agent_wait agent-bob
+python3 - "$tmp/agent.json" "$tmp/agent-bob.json" "$standard" <<'PY'
 import json,sys
 a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
-assert not a.get("error") and a["key"]=="alice" and a["verified"] and a["uv"], a
-assert b.get("error")=="NotAllowedError" and "not shared with agents" in (b.get("message") or ""), b
+assert not a.get("error") and a["key"]=="alice" and a["verified"], a
+assert a["up"] and not a["uv"], ("an agent's assertion claims presence only", a)
+assert b.get("error")=="NotAllowedError" and b["message"].startswith(sys.argv[3]), b
+assert "shared" not in b["message"] and "bob" not in b["message"] and "Bitwarden" not in b["message"], b
 PY
+told "a Bitwarden passkey for localhost exists but is not shared with agents" || fail "the agent was not told why bob was refused"
+ok "agent tab: shared alice signs with no chooser/Touch ID, UP without UV; reprompt lena not used; unshared bob → bare NotAllowedError on the page, the Agent access hint in the agent's next result"
+
+# userVerification required: nobody can verify for an agent → refused.
+before=$(gets)
+evaluate "() => { window.__get('agent-uv', ['$(idof a)'], $keys_json, 'required'); return 'started'; }" >/dev/null
+agent_wait agent-uv
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("error")=="NotAllowedError" and r["message"].startswith(sys.argv[2]), r' "$tmp/agent-uv.json" "$standard" \
+  || fail "agent with UV required: $(cat "$tmp/agent-uv.json")"
+told "requires user verification" || fail "the agent was not told UV is required"
+[ "$(gets)" = "$before" ] || fail "the vault key was read for a UV-required agent request"
+# A frame of another origin in the agent's tab is not the agent's page.
+evaluate "() => window.__frame('agent-frame', $port2)" >/dev/null
+agent_wait agent-frame
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("error")=="NotAllowedError" and r["message"].startswith(sys.argv[2]), r' "$tmp/agent-frame.json" "$standard" \
+  || fail "agent tab, cross-origin frame: $(cat "$tmp/agent-frame.json")"
+told "in a frame" || fail "the agent was not told the frame was refused"
+[ "$(gets)" = "$before" ] || fail "the vault key was read for a frame's request"
 bench passkeys answer yes >/dev/null
-ok "agent tab: shared (Agents folder) alice signs with no chooser/Touch ID; unshared bob refused with the Agent access hint"
+ok "agent tab: UV required → refused (no key read); a cross-origin iframe's request → refused; reasons reach the agent only"
 
 # 6b. browser_sign_in what=passkey arms one sign-in; it reads no key itself.
 signin() { # json-args → the tool's text (or the error text) on stdout
@@ -379,18 +450,32 @@ python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("error
   || fail "a held, on-screen tab signed without the person: $(cat "$tmp/held.json")"
 signin '{"what":"passkey","account":"alice"}' >"$tmp/signin-armed.txt"
 grep -q '"armed":true' "$tmp/signin-armed.txt" || fail "arm the person's tab: $(cat "$tmp/signin-armed.txt")"
-bench eval "$id" "window.__get('armed', [], $keys_json)" >/dev/null
+# Armed for this page: a frame of another origin inside it does not get the
+# grant (it is the person's request, and Touch ID says no), nor use it up.
+bench eval "$id" "window.__frame('armed-frame', $port2)" >/dev/null
+wait_result "$id" armed-frame "$tmp/armed-frame.json"
+bench eval "$id" "window.__get('armed', [], $keys_json, 'preferred')" >/dev/null
 wait_result "$id" armed "$tmp/armed.json"
-bench eval "$id" "window.__get('rearmed', ['$(idof a)'], $keys_json)" >/dev/null
+bench eval "$id" "window.__get('rearmed', ['$(idof a)'], $keys_json, 'preferred')" >/dev/null
 wait_result "$id" rearmed "$tmp/rearmed.json"
-python3 - "$tmp/armed.json" "$tmp/rearmed.json" <<'PY2'
+python3 - "$tmp/armed-frame.json" "$tmp/armed.json" "$tmp/rearmed.json" <<'PY2'
 import json,sys
-a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
-assert not a.get("error") and a["key"]=="alice" and a["verified"] and a["uv"] and a["user"]=="alice-handle", a
+f=json.load(open(sys.argv[1])); a=json.load(open(sys.argv[2])); b=json.load(open(sys.argv[3]))
+assert f.get("error")=="NotAllowedError", ("a frame used the page's grant", f)
+assert not a.get("error") and a["key"]=="alice" and a["verified"] and a["up"] and not a["uv"] and a["user"]=="alice-handle", a
 assert b.get("error")=="NotAllowedError", b
 PY2
+# Armed, but the site requires UV: the person decides (Touch ID says no),
+# and the agent is told why.
+signin '{"what":"passkey","account":"alice"}' >"$tmp/signin-armed-uv.txt"
+grep -q '"armed":true' "$tmp/signin-armed-uv.txt" || fail "re-arm: $(cat "$tmp/signin-armed-uv.txt")"
+bench eval "$id" "window.__get('armed-uv', ['$(idof a)'], $keys_json, 'required')" >/dev/null
+wait_result "$id" armed-uv "$tmp/armed-uv.json"
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("error")=="NotAllowedError", r' "$tmp/armed-uv.json" || fail "armed + UV required signed: $(cat "$tmp/armed-uv.json")"
+evaluate "() => 'after'" >/dev/null
+told "requires user verification.*asked the person" || fail "the agent was not told the armed request went to the person"
 bench passkeys answer yes >/dev/null
-ok "on-screen tab an agent holds: person's Touch ID still decides; armed → alice signs once without a prompt (discoverable), then the person's again"
+ok "on-screen tab an agent holds: person's Touch ID still decides; armed → a cross-origin frame neither gets nor spends the grant, the page's own request signs once (UP, no UV), then the person's again; armed + UV required → the person's"
 
 # 7. Save new passkeys to Bitwarden: a passkey made here lands in the vault,
 #    not the keychain stand-in, and signs straight away from there.
@@ -407,11 +492,13 @@ assert len(made)==1, made
 pk=made[0]["login"]["fido2Credentials"][0]
 assert pk["rpId"]=="localhost" and pk["keyAlgorithm"]=="ECDSA" and pk["keyCurve"]=="P-256" and pk["discoverable"]=="true", pk
 assert pk["counter"]=="0" and pk["userName"]=="erin" and pk["rpName"]=="Synthetic RP" and len(pk["keyValue"])>100, {k: v for k, v in pk.items() if k!="keyValue"}
+import uuid
+assert uuid.UUID(pk["credentialId"]).version==4 and str(uuid.UUID(pk["credentialId"]))==pk["credentialId"], pk["credentialId"]
 PY
 bench passkeys count >"$tmp/count2.json"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["count"]==0 and d["bitwarden"]==5, d' "$tmp/count2.json" || fail "count after create: $(cat "$tmp/count2.json")"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["count"]==0 and d["bitwarden"]==7, d' "$tmp/count2.json" || fail "count after create: $(cat "$tmp/count2.json")"
 grep -q '"argv": \["create", "item"\], "env": \[[^]]*\], "stdin": [1-9]' "$tmp/bw/calls.log" || fail "create did not go on stdin"
-ok "create with Bitwarden as the save target: new vault login with an ES256 fido2Credential (stdin), none in the keychain; get() signs with it"
+ok "create with Bitwarden as the save target: new vault login with an ES256 fido2Credential (stdin, a v4 GUID id), none in the keychain; get() signs with it"
 
 # 7b. A new passkey for an account the site's login already names joins that
 #     login (Bitwarden keeps one passkey per login) instead of a second item.
@@ -428,6 +515,89 @@ assert len(pks)==1 and pks[0]["userName"]=="frank" and mine[0]["login"]["passwor
 PY2
 grep -q '"argv": \["edit", "item", "item-frank"\], "env": \[[^]]*\], "stdin": [1-9]' "$tmp/bw/calls.log" || fail "join did not edit on stdin"
 ok "a new passkey joins the site's password-only login for the same account (edit on stdin), password kept"
+
+# 7d. ivan's login already holds a passkey the cache leaves out (EdDSA): a
+#     new one must not replace it — it becomes a login of its own.
+bench eval "$id" "window.__create('ivan', 'ivan')" >/dev/null
+wait_result "$id" ivan "$tmp/ivan.json"
+# 7e. judy's login belongs to an organization: joining would share the new
+#     key with its collection, so it is a new personal login instead.
+bench eval "$id" "window.__create('judy', 'judy')" >/dev/null
+wait_result "$id" judy "$tmp/judy.json"
+python3 - "$tmp/ivan.json" "$tmp/judy.json" "$tmp/bw/state.json" <<'PY2'
+import json,sys
+ivan=json.load(open(sys.argv[1])); judy=json.load(open(sys.argv[2])); state=json.load(open(sys.argv[3]))
+assert not ivan.get("error") and ivan["verified"] and not judy.get("error") and judy["verified"], (ivan, judy)
+by={}
+for i in state["items"]: by.setdefault(i["login"]["username"], []).append(i)
+old=[i for i in by["ivan"] if i["id"]=="item-ivan"][0]
+assert [p["keyAlgorithm"] for p in old["login"]["fido2Credentials"]]==["EdDSA"], "ivan's existing passkey was replaced"
+assert len(by["ivan"])==2, [i["id"] for i in by["ivan"]]
+org=[i for i in by["judy"] if i["id"]=="item-judy"][0]
+assert not org["login"]["fido2Credentials"], "a new passkey was added to an organization's login"
+mine=[i for i in by["judy"] if i["id"]!="item-judy"]
+assert len(mine)==1 and mine[0]["organizationId"] is None and mine[0]["login"]["fido2Credentials"][0]["userName"]=="judy", mine
+PY2
+grep -q '"edit", "item", "item-ivan"' "$tmp/bw/calls.log" && fail "ivan's login was edited"
+grep -q '"edit", "item", "item-judy"' "$tmp/bw/calls.log" && fail "judy's organization login was edited"
+ok "save: a login whose fresh copy has any passkey, or an organization's login, is never joined — a new personal login instead"
+
+# 7f. A create that lands but reports a failure (a timed-out CLI call):
+#     Copper finds it in the vault and keeps no second copy in the keychain.
+python3 - "$tmp/bw/state.json" <<'PY2'
+import fcntl, json, sys
+lock=open(sys.argv[1] + ".lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)
+state=json.load(open(sys.argv[1])); state["fail_after_create"]=True
+json.dump(state, open(sys.argv[1], "w"), indent=1)
+PY2
+bench eval "$id" "window.__create('hana', 'hana')" >/dev/null
+wait_result "$id" hana "$tmp/hana.json"
+bench passkeys count >"$tmp/count-hana.json"
+python3 - "$tmp/hana.json" "$tmp/count-hana.json" "$tmp/bw/state.json" <<'PY2'
+import json,sys
+r=json.load(open(sys.argv[1])); c=json.load(open(sys.argv[2])); state=json.load(open(sys.argv[3]))
+assert not r.get("error") and r["verified"], r
+assert "fail_after_create" not in state, "the fault was not exercised"
+assert len([i for i in state["items"] if i["login"]["username"]=="hana"])==1
+assert c["count"]==0, ("a duplicate went to the keychain", c)
+PY2
+grep -q 'holds the new passkey; not kept twice' "$tmp/copper.log" || fail "no log line for the landed create"
+ok "create that landed but reported a timeout: one vault copy, none in the keychain"
+
+# 7g. Counters: two sign-ins on one item at once get distinct counters; one
+#     at UInt32.max stays there (no wrap to 0) and is not rewritten; a write
+#     that loses the passkey stops further writes to that item.
+bench eval "$id" "window.__get('bob-1', ['$(idof b)'], $keys_json); window.__get('bob-2', ['$(idof b)'], $keys_json)" >/dev/null
+wait_result "$id" bob-1 "$tmp/bob-1.json"; wait_result "$id" bob-2 "$tmp/bob-2.json"
+bench eval "$id" "window.__get('kim', ['$(idof e)'], $keys_json)" >/dev/null
+wait_result "$id" kim "$tmp/kim.json"
+python3 - "$tmp/bob-1.json" "$tmp/bob-2.json" "$tmp/kim.json" "$tmp/bw/state.json" <<'PY2'
+import json,sys
+b1, b2, kim = (json.load(open(p)) for p in sys.argv[1:4]); state=json.load(open(sys.argv[4]))
+assert b1["verified"] and b2["verified"], (b1, b2)
+assert sorted([b1["counter"], b2["counter"]])==[7, 8], (b1["counter"], b2["counter"])
+by={i["id"]: i for i in state["items"]}
+assert by["item-bob"]["login"]["fido2Credentials"][0]["counter"]=="8", by["item-bob"]["login"]["fido2Credentials"][0]["counter"]
+assert kim["verified"] and kim["counter"]==4294967295, kim
+assert by["item-kim"]["login"]["fido2Credentials"][0]["counter"]=="4294967295"
+PY2
+grep -q '"edit", "item", "item-kim"' "$tmp/bw/calls.log" && fail "a saturated counter was rewritten"
+python3 - "$tmp/bw/state.json" <<'PY2'
+import fcntl, json, sys
+lock=open(sys.argv[1] + ".lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)
+state=json.load(open(sys.argv[1])); state["hide_after_edit"]=["item-bob"]
+json.dump(state, open(sys.argv[1], "w"), indent=1)
+PY2
+bench eval "$id" "window.__get('bob-3', ['$(idof b)'], $keys_json)" >/dev/null
+wait_result "$id" bob-3 "$tmp/bob-3.json"
+edits=$(grep -c '"edit", "item", "item-bob"' "$tmp/bw/calls.log")
+bench eval "$id" "window.__get('bob-4', ['$(idof b)'], $keys_json)" >/dev/null
+wait_result "$id" bob-4 "$tmp/bob-4.json"
+python3 -c 'import json,sys; a,b=(json.load(open(p)) for p in sys.argv[1:3]); assert a["verified"] and a["counter"]==9 and b["verified"], (a, b)' "$tmp/bob-3.json" "$tmp/bob-4.json" \
+  || fail "bob after the lost write: $(cat "$tmp/bob-3.json" "$tmp/bob-4.json")"
+[ "$(grep -c '"edit", "item", "item-bob"' "$tmp/bw/calls.log")" = "$edits" ] || fail "counters still written after the passkey went missing"
+grep -q 'missing after its counter write-back' "$tmp/copper.log" || fail "no log line for the lost passkey"
+ok "counters: concurrent signs on one item → 7 and 8 (serialised); UInt32.max saturates, not rewritten; a write-back that loses the passkey stops further writes (logged)"
 
 # 7c. Bitwarden locked: the save target falls back to the keychain, and the
 #     vault's passkeys are no longer offered.
@@ -447,22 +617,38 @@ wait_result "$id" locked "$tmp/locked.json"
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("error")=="NotAllowedError", r' "$tmp/locked.json" || fail "locked vault still signed: $(cat "$tmp/locked.json")"
 ok "Bitwarden locked: a new passkey goes to the keychain; vault passkeys are not offered"
 
+# 9. A backstage agent tab with only one of Copper's own passkeys for the
+#    site: Touch ID would answer yes, but no prompt is shown for a page on no
+#    screen — refused, and the agent told why.
+gina=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["made"])' "$tmp/gina.json")
+mcp "$(call browser_tabs "$new_tab")" >"$tmp/mcp-new2.json"
+for _ in {1..40}; do
+  evaluate "() => String(document.readyState === 'complete' && !!window.__copperPasskeys)" >"$tmp/mcp-ready.json"
+  [ "$(inner "$tmp/mcp-ready.json" 2>/dev/null)" = true ] && break; sleep 0.15
+done
+evaluate "() => { $(tr '\n' ' ' <<<"$lib") return window.__get('agent-own', ['$gina'], $keys_json, 'preferred'); }" >/dev/null
+agent_wait agent-own
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("error")=="NotAllowedError" and r["message"].startswith(sys.argv[2]), r' "$tmp/agent-own.json" "$standard" \
+  || fail "backstage tab used Copper's own passkey: $(cat "$tmp/agent-own.json")"
+told "Copper's own passkeys there need the person's Touch ID" || fail "the agent was not told about the person's passkey"
+ok "backstage agent tab: Copper's own passkey is never offered through a hidden prompt; refused, reason to the agent"
+
 # 8. No private key anywhere Copper or an agent could read it back.
 python3 - "$tmp" "$folder" <<'PY'
 import base64, glob, json, os, sys
 tmp, folder = sys.argv[1], sys.argv[2]
 secrets = []
-for k in "abc":
+for k in "abcefg":
     std = open(os.path.join(tmp, k + ".pkcs8")).read().strip()
     secrets += [std, std.replace("+", "-").replace("/", "_").rstrip("=")]
 state = json.load(open(os.path.join(tmp, "bw", "state.json")))
 for item in state["items"]:
-    if item["login"]["username"] in ("erin", "frank"):
-        secrets.append(item["login"]["fido2Credentials"][0]["keyValue"])
+    for pk in item["login"].get("fido2Credentials") or []:
+        secrets.append(pk["keyValue"])
 # Long enough slices that a match is not chance.
 needles = [s[40:80] for s in secrets]
 paths = [p for p in glob.glob(os.path.join(tmp, "*")) if os.path.isfile(p) and not p.endswith((".pem", ".pkcs8"))]
-paths += [os.path.join(tmp, "bw", "calls.log")]
+paths += [os.path.join(tmp, "bw", "calls.log"), os.path.join(tmp, "mcp-all.log")]
 paths += [p for p in glob.glob(os.path.join(folder, "**", "*"), recursive=True) if os.path.isfile(p)]
 leaks = []
 for p in paths:
@@ -475,4 +661,4 @@ print(f"     scanned {len(paths)} files")
 PY
 ok "no vault private key in bench/MCP output, calls.log argv, the Copper log or the probe world's files"
 
-echo "PASS: Bitwarden passkeys — allowCredentials, discoverable chooser, ES256 verify, counters, UV required, agent rule (backstage + armed browser_sign_in) without key exposure, save-to-Bitwarden"
+echo "PASS: Bitwarden passkeys — allowCredentials, discoverable chooser, ES256 verify, counters (serialised, saturating, read-back), UV required, agent rule (backstage + origin-bound armed browser_sign_in, UP only, reprompt excluded) with bare page errors, no off-screen prompts, save-to-Bitwarden (fresh, personal-only join; landed-timeout dedupe) without key exposure"

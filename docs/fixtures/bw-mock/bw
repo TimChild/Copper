@@ -17,6 +17,14 @@ The state ($BW_MOCK_STATE) is written by the test:
     {"password": "...", "status": "locked", "email": "...",
      "folders": [{"id": "...", "name": "Agents"}], "items": [ {bw item JSON}, ... ]}
 
+Fault switches a test may set in the state, each used once:
+
+    "fail_after_create": true      `create item` saves the item, then fails
+                                   the way a timed-out CLI call does
+    "hide_after_edit": ["ITEM"]    after `edit item ITEM`, the next
+                                   `get item ITEM` shows no fido2Credentials
+                                   (another client changed it meanwhile)
+
 Every call is appended to calls.log beside it: argv (an encoded item argument
 as its length only), the names of BW_* variables, and the stdin byte count —
 never stdin itself or a variable's value — so a test can prove no key went on
@@ -122,6 +130,12 @@ def main():
         need_session()
         for item in state.get("items", []):
             if item.get("id") == argv[2]:
+                hidden = state.get("hidden_once", [])
+                if argv[2] in hidden:
+                    hidden.remove(argv[2])
+                    save(state)
+                    item = json.loads(json.dumps(item))
+                    item["login"]["fido2Credentials"] = []
                 return out(item)
         die("Not found.")
     if argv[:2] in (["edit", "item"], ["create", "item"]):
@@ -138,13 +152,20 @@ def main():
                     item["id"] = argv[2]
                     item["object"] = "item"
                     items[i] = item
+                    hide = state.get("hide_after_edit", [])
+                    if argv[2] in hide:
+                        hide.remove(argv[2])
+                        state.setdefault("hidden_once", []).append(argv[2])
                     save(state)
                     return out(item)
             die("Not found.")
         item["id"] = str(uuid.uuid4())
         item["object"] = "item"
         items.append(item)
+        failing = state.pop("fail_after_create", False)
         save(state)
+        if failing:
+            die("Request timed out.")
         return out(item)
     die("mock bw: unsupported command " + " ".join(argv))
 

@@ -93,13 +93,19 @@ forward; the pane opens itself only for work on the page on screen.
 ### Saved sign-in (no-secret contract)
 
 `browser_sign_in` fills a saved account on the current tab in-process. Its
-arguments are `account` (optional username), `what` (`password` by default or
-`otp`), and `submit` (true by default). With more than one shared match, omit
+arguments are `account` (optional username), `what` (`password` by default,
+`otp`, or `passkey`), and `submit` (true by default). `what: "passkey"` fills
+nothing: it arms the tab so the site's next WebAuthn sign-in (within 60 s, once)
+is signed with that account's shared Bitwarden passkey, with no prompt, and
+returns `armed`, `account`, `host`, `source`; click the site's passkey button
+next. A passkey request in a tab the agent drives backstage (on no screen) is
+signed the same way without arming; one in a tab on screen is the person's
+unless armed ([passkeys.md](passkeys.md#bitwarden-passkeys)). With more than one shared match, omit
 `account` to get a username-only `candidates` list, or name the username. The
 result reports only `filled`, `account`, `host`, `source` (for password fills),
 `what` (for OTP), and `submitted`; the password, one-time code, and Bitwarden
 session key never appear in the MCP result, CLI output, or Jev trace.
-`copper signin [--account USER] [--otp] [--no-submit] [--json]` is the CLI
+`copper signin [--account USER] [--otp|--passkey] [--no-submit] [--json]` is the CLI
 equivalent (`--json` may be placed with the command).
 
 Jev's fast path exposes a `SIGN_IN` control labelled “Sign in with the saved

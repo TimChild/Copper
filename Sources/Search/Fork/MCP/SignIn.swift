@@ -174,6 +174,9 @@ enum SignIn {
         let chosen: [BitwardenPasskeys.Match]
         if let account, !account.isEmpty {
             chosen = permitted.filter { named($0, account) }
+            if chosen.isEmpty, all.contains(where: { named($0, account) }) {
+                throw Failure(message: "passkey for \(account) on \(host) exists but is not shared with agents — enable it in Settings › Passwords › Agent access")
+            }
             if chosen.isEmpty {
                 throw Failure(message: "no shared passkey named \(account) for \(host); saved: \(permitted.map(\.label).joined(separator: ", "))")
             }

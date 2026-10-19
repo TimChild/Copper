@@ -441,7 +441,9 @@ broad switch can also be set by the owner from the shell or the headless Mac pag
 they do not return a password, TOTP code, or Bitwarden session key. A Bitwarden
 login's passkey follows its login's switch: `browser_sign_in` with
 `what: "passkey"` (`copper signin --passkey`) arms the tab, and the site's next
-passkey sign-in is signed in-process with no prompt; the key never leaves
+passkey sign-in from that page is signed in-process with no prompt (user
+presence only; a site requiring user verification, and a login with
+master-password reprompt on, take the person's Touch ID); the key never leaves
 Copper ([Passkeys › Agents](passkeys.md#bitwarden-passkeys)). Private
 (`shy`) tabs are refused. With `--no-submit`, the secret remains in the page by
 design, so do not immediately ask ordinary page-reading tools to inspect that

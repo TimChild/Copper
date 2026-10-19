@@ -100,7 +100,13 @@ is signed with that account's shared Bitwarden passkey, with no prompt, and
 returns `armed`, `account`, `host`, `source`; click the site's passkey button
 next. A passkey request in a tab the agent drives backstage (on no screen) is
 signed the same way without arming; one in a tab on screen is the person's
-unless armed ([passkeys.md](passkeys.md#bitwarden-passkeys)). With more than one shared match, omit
+unless armed. Only the tab's own page (main frame, the origin it showed when
+armed) is signed; the answer claims user presence, not verification, so a site
+that sets `userVerification: "required"` is refused for an agent; a login with
+Bitwarden's reprompt on is never an agent's. When a passkey request is refused,
+the page gets a bare `NotAllowedError` and your next tool result on that tab
+carries the reason ("Passkey sign-in refused on this tab: …")
+([passkeys.md](passkeys.md#bitwarden-passkeys)). With more than one shared match, omit
 `account` to get a username-only `candidates` list, or name the username. The
 result reports only `filled`, `account`, `host`, `source` (for password fills),
 `what` (for OTP), and `submitted`; the password, one-time code, and Bitwarden

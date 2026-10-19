@@ -33,8 +33,18 @@ then the vault's whose `rpId` is exactly the request's relying-party id. When
 the site sends `allowCredentials`, only those ids match (a vault id is a GUID —
 its 16 bytes — or `b64.` + base64url for an imported one); when it leaves the
 list empty, only passkeys marked `discoverable`. One match goes straight to
-user verification; several show a chooser (account · source) first — a sheet
-on the tab's window, Cancel is `NotAllowedError`.
+user verification; several show a chooser (account · source, with the login's
+name added where two rows would read the same) first — a sheet on the tab's
+window, Cancel is `NotAllowedError`. A page on no visible window gets no
+chooser and no prompt: the request is refused.
+
+**What the page learns from a refusal.** Only the error's name, with the
+standard WebAuthn wording (`NotAllowedError`: "The operation either timed out
+or was not allowed…"). Why Copper refused — which accounts exist, that a
+passkey exists but is not shared, that Bitwarden is locked, what `bw` said —
+would fingerprint the person's vault to any site, so it goes to the log and,
+once, to the agent's next tool result on that tab ("Passkey sign-in refused on
+this tab: …"), never to the page.
 
 **User verification.** Every person-driven sign-in asks for Touch ID (or the
 Mac login password) through the same prompt as Copper's own passkeys —
@@ -47,47 +57,78 @@ the prompt, Copper reads that one item with `bw get item`, decodes the PKCS#8
 ES256 key in memory, signs `authenticatorData ‖ SHA-256(clientDataJSON)`, and
 overwrites the item JSON and key bytes it holds before answering. CryptoKit
 zeroes its own key storage when the key goes. Nothing is written to disk, the
-keychain, a log, the bench or MCP. (Foundation's parsed JSON strings are
-released, not overwritten — a limit of reading `bw`'s JSON in Swift.) Only
-`ECDSA` / `P-256` passkeys are listed; others are left out rather than failing.
+keychain, a log, the bench or MCP. Private keys do pass through Copper's
+memory at other times too: on **every cache refresh** (`bw list items` returns
+every item with its passkeys' keys; the buffer is overwritten once decoded),
+and in the reply to `bw edit item` / `bw create item` (the whole item; also
+overwritten). Foundation's parsed JSON strings are released, not overwritten —
+a limit of reading `bw`'s JSON in Swift. Only `ECDSA` / `P-256` passkeys are
+listed; others are left out rather than failing.
 
 **Counter.** Bitwarden leaves most passkey counters at 0 and so does Copper:
 0 is signed as 0 and the item is not touched. A non-zero counter is advanced by
 one in `authenticatorData` and written back with `bw edit item` (the encoded
 item on stdin, never argv) before the answer goes to the site; if the write
-fails the sign-in still stands and the log says so.
+fails the sign-in still stands and the log says so. The counter stops at
+4294967295 rather than wrap to 0 (and is then not rewritten). Sign-ins with
+passkeys on the same item run one at a time, so two at once get consecutive
+counters. `bw edit item` replaces the whole item, so Copper reads it back
+afterwards: if the passkey it advanced is gone (another client changed the item
+in between), it logs one line and writes no more counters to that item for the
+rest of the run.
 
 **Saving new passkeys to Bitwarden.** With Settings › Passwords › *Save new
 passwords to* set to Bitwarden **and** Bitwarden unlocked (the same rule as
 password saves), a passkey a site creates goes into the vault instead of the
-keychain: it joins the site's login for the same account when that login has no
-passkey yet (Bitwarden keeps one per login), otherwise it becomes a new login
-named after the site. It is written in Bitwarden's own shape (GUID id, base64url
-PKCS#8, `counter` "0", `discoverable` "true") with `bw edit item` / `bw create
-item` on stdin, and the cache is refreshed so the next sign-in sees it. If
-Bitwarden is locked, set to another target, or refuses the write, the passkey
-is kept in the keychain as before — a site mid-registration never gets a
-failure because of the vault. `excludeCredentials` is checked against both.
+keychain. It joins the site's login for the same account only when that login,
+read fresh with `bw get item` (not the cache, which leaves out passkeys Copper
+cannot sign with and may be minutes old), has no passkey of any kind —
+Bitwarden keeps one per login — **and** belongs to no organization (a passkey
+added to an organization's login would share its private key with that
+login's collections). Otherwise it becomes a new personal login named after the
+site. It is written in Bitwarden's own shape (a random version-4 GUID id,
+base64url PKCS#8, `counter` "0", `discoverable` "true") with `bw edit item` /
+`bw create item` on stdin; it is in Copper's cache at once, so the next sign-in
+sees it, and the vault's own copy is fetched afterwards without holding up the
+site. If Bitwarden is locked, set to another target, or refuses the write, the
+passkey is kept in the keychain as before — a site mid-registration never gets
+a failure because of the vault. A write that reports a failure (a timeout, say)
+is checked first: when the vault already holds the new passkey, no second copy
+goes to the keychain. `excludeCredentials` is checked against both.
 
 **Agents.** An agent signs in with a Bitwarden passkey under the same rule as a
 Bitwarden password (Settings › Passwords › Agent access: a per-item toggle,
 share-everything, the `Agents` folder, `copper-agent: deny` always wins), and
-never receives key material — the result is the site's own sign-in. A request
-counts as the agent's, and is signed with no chooser or prompt, only when:
+never receives key material — the result is the site's own sign-in. A login
+with Bitwarden's master-password **reprompt** on is never shared with agents,
+whatever the switch says: its passkey always takes the person's Touch ID. A
+request counts as the agent's, and is signed with no chooser or prompt, only
+when it comes from the tab's own page (its main frame, at the tab's origin —
+never a frame of another origin inside it) and:
 
 - the agent armed the tab with `browser_sign_in` `what: "passkey"` (`copper
-  signin --passkey`) — one request, within 60 s, with the named (or only)
-  shared account — and then clicked the site's passkey button; or
+  signin --passkey`) — one request, within 60 s, from the origin the tab showed
+  when it was armed, with the named (or only) shared account — and then clicked
+  the site's passkey button; or
 - the tab is one only the agent can be driving: held backstage, on no screen.
 
 A tab on screen that an agent has merely touched lately is still the person's:
-a passkey request there gets the person's chooser and Touch ID. Private tabs
-are never signed for an agent. With several shared passkeys and none named,
-the request is refused with their account names; an unshared one is refused
-with the Agent access hint. Copper's own keychain passkeys are never used for
-an agent without the person's prompt. The vault being unlocked stands in for
-user verification on the agent path (the UV flag is set), as it does for
-Bitwarden's own authenticator.
+a passkey request there gets the person's chooser and Touch ID. A backstage tab
+never shows a chooser or Touch ID — nobody could see it — so a request there
+that the agent path cannot sign (none shared, several shared, Copper's own
+keychain passkey) is refused. Private tabs are never signed for an agent.
+
+**User verification on the agent path.** Nobody verifies anything when an
+agent signs, so its assertion sets **user presence only** (flags UP, BE, BS =
+0x19; no UV bit), and a request that says `userVerification: "required"` is not
+signed for an agent: refused in a backstage tab, handed to the person's Touch
+ID in an armed tab on screen. Sites that only *prefer* UV accept the
+presence-only answer.
+
+Each refusal reason (several shared passkeys and their account names, the Agent
+access hint, UV required, a frame, a locked vault) reaches the agent in its
+next tool result on that tab, and the log; the page sees a bare
+`NotAllowedError`.
 
 **Where they show.** Settings › Passwords › Passkeys lists them after Copper's
 own, marked *In Bitwarden* (remove them in Bitwarden). The password picker's
@@ -221,19 +262,26 @@ for the keychain, a loopback MCP port of its own, and `SEARCH_BW_PATH` pointed
 at the mock CLI, which answers `bw`'s commands from a JSON file seeded with
 synthetic P-256 `fido2Credentials` for `localhost` and logs every call's argv
 (an encoded item only as its length), `BW_*` variable names and stdin size. It
-checks the Settings/bench listing (metadata only) and the picker's passkey
-flag; an `allowCredentials` sign-in with a non-discoverable passkey whose
+checks the Settings/bench listing (metadata only; an EdDSA passkey left out; a
+reprompt login not an agent's) and the picker's passkey flag; an `allowCredentials` sign-in with a non-discoverable passkey whose
 ES256 signature WebCrypto verifies against the synthetic public key, with RP
 hash, UP and UV; discoverable selection through the chooser (non-discoverable
 left out); a non-zero counter advanced in authData and the vault (edit on
 stdin) and a zero counter left alone; a refused Touch ID → `NotAllowedError`
 with no `bw get item`; another RP's passkey never offered; the agent paths
 (a backstage tab signs a shared passkey with the chooser and Touch ID set to
-refuse, an unshared one is refused with the hint; `browser_sign_in
-what=passkey` arms without reading the vault; an on-screen tab the agent holds
-stays the person's until armed, and an arm is used once); save-to-Bitwarden
-(a new login, joining a password-only login, and the keychain when the vault is
-locked); and finally that no private key appears in any bench/MCP output,
+refuse, presence only; an unshared one, a UV-required request and a
+cross-origin iframe's request are refused with the standard page message and
+the reason in the agent's next result; Copper's own passkey in a backstage tab
+is refused rather than prompted; `browser_sign_in what=passkey` arms without
+reading the vault; an on-screen tab the agent holds stays the person's until
+armed, an iframe neither gets nor spends the arm, and an arm is used once);
+save-to-Bitwarden (a new login, joining a password-only login, never joining a
+login whose fresh copy holds a passkey the cache left out or an organization's
+login, a v4 GUID id, a create that lands but reports a timeout kept once, and
+the keychain when the vault is locked); counters (two concurrent sign-ins get
+consecutive values, UInt32.max saturates, a write-back that loses the passkey
+stops further writes); and finally that no private key appears in any bench/MCP output,
 calls.log, the Copper log or the world's files. It does not exercise the real
 `bw` CLI, a real vault, a real Touch ID prompt or a live site.
 

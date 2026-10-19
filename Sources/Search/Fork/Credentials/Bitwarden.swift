@@ -79,6 +79,8 @@ final class Bitwarden: ObservableObject {
         let fields: [Field]
         /// Passkeys on this login, metadata only.
         var passkeys: [Passkey] = []
+        /// Bitwarden's master-password reprompt is on for this item.
+        var reprompt = false
 
         init(id: String, type: Int = 1, name: String, folderId: String?, username: String,
              uris: [URI], hasTOTP: Bool, hasNotes: Bool = false, fields: [Field], passkeys: [Passkey] = []) {
@@ -836,11 +838,14 @@ final class Bitwarden: ObservableObject {
         let card: RawCard?
         let identity: RawIdentity?
         let fields: [RawField]?
+        let reprompt: Int?
     }
 
     func items() async throws -> [Item] {
         try await requireUnlocked()
-        let data = try await run(["list", "items"])
+        // Every item, passkey keys included: cleared once decoded.
+        var data = try await run(["list", "items"])
+        defer { data.resetBytes(in: 0..<data.count) }
         let rows = try JSONDecoder().decode([RawItem].self, from: data)
         var fresh: [String: Secret] = [:]
         var identities: [AutofillIdentity] = []
@@ -930,11 +935,13 @@ final class Bitwarden: ObservableObject {
                 || !secret.hiddenFields.isEmpty {
                 fresh[id] = secret
             }
-            return Item(id: id, type: type, name: row.name ?? "", folderId: row.folderId,
-                        username: row.login?.username ?? "", uris: uris,
-                        hasTOTP: !(row.login?.totp?.isEmpty ?? true),
-                        hasNotes: secret.notes != nil, fields: fields,
-                        passkeys: (row.login?.fido2Credentials ?? []).compactMap(\.passkey))
+            var item = Item(id: id, type: type, name: row.name ?? "", folderId: row.folderId,
+                            username: row.login?.username ?? "", uris: uris,
+                            hasTOTP: !(row.login?.totp?.isEmpty ?? true),
+                            hasNotes: secret.notes != nil, fields: fields,
+                            passkeys: (row.login?.fido2Credentials ?? []).compactMap(\.passkey))
+            item.reprompt = (row.reprompt ?? 0) != 0
+            return item
         }
         cachedItems = result
         cachedIdentities = identities
@@ -942,6 +949,18 @@ final class Bitwarden: ObservableObject {
         secrets = fresh
         cacheVersion += 1
         return result
+    }
+
+    /// A passkey Copper just wrote to the vault, in the cache at once: the
+    /// page's next sign-in must not wait for a full `bw list items`. The
+    /// refresh that follows replaces it with the vault's own copy.
+    func cache(_ passkey: Passkey, on id: String, otherwise item: Item) {
+        if !id.isEmpty, let at = cachedItems.firstIndex(where: { $0.id == id }) {
+            cachedItems[at].passkeys.append(passkey)
+        } else {
+            cachedItems.append(item)
+        }
+        cacheVersion += 1
     }
 
     private func clearCache() {

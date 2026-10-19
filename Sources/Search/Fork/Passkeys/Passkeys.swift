@@ -89,9 +89,20 @@ enum Passkeys {
         try { return new DOMException(message || name, name); }
         catch (_) { var e = new Error(message || name); e.name = name; return e; }
       }
+      // Only the error's name reaches the page, with the standard wording:
+      // why Copper refused (which accounts exist, whether the vault is
+      // locked, what bw said) would fingerprint the person's vault to any
+      // site. The reason stays with Copper and the agent (Passkeys.note).
+      var messages = {
+        NotAllowedError: 'The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.',
+        InvalidStateError: 'The authenticator was previously registered.',
+        NotSupportedError: 'The operation is not supported.',
+        SecurityError: 'The operation is insecure.',
+        UnknownError: 'The operation failed for an unknown transient reason.'
+      };
       function fail(result) {
-        var name = result && result.error ? result.error : 'NotAllowedError';
-        throw domError(name, result && result.message);
+        var name = result && messages[result.error] ? result.error : 'NotAllowedError';
+        throw domError(name, messages[name]);
       }
       // Credentials and responses inherit from the page's own WebAuthn
       // classes (WebKit's when it exposes them), so `instanceof
@@ -308,7 +319,7 @@ enum Passkeys {
         return url.scheme?.lowercased() == "http" && (host == "localhost" || host == "127.0.0.1" || host == "[::1]")
     }
 
-    private static func allowedRP(_ rp: String, for host: String) -> Bool {
+    static func allowedRP(_ rp: String, for host: String) -> Bool {
         let rp = rp.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let host = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
         return rp == host || (host.hasSuffix("." + rp) && Vault.registrable(host) == Vault.registrable(rp))
@@ -423,18 +434,54 @@ enum Passkeys {
     }
 
     /// browser_sign_in what=passkey: the next sign-in request in this tab,
-    /// within a minute, may use these shared vault passkeys with no prompt.
+    /// within a minute, from the page that was showing when it was armed
+    /// (its origin, in its own frame), may use these shared vault passkeys
+    /// with no prompt.
     private struct Grant {
         let ids: Set<Data>
+        let origin: String
         let until: Date
     }
     private static var grants: [Tab.ID: Grant] = [:]
 
-    /// Arm one agent sign-in in `tab` (SignIn.swift). Used once, by the
-    /// next get() there; a later one is the person's again.
-    static func grant(_ matches: [BitwardenPasskeys.Match], tab: Tab.ID, for seconds: TimeInterval = 60) {
+    /// Arm one agent sign-in in `tab` (SignIn.swift) for the page at
+    /// `origin`. Used once, by the next get() there; a later one is the
+    /// person's again. A request from another origin or a frame leaves it.
+    static func grant(_ matches: [BitwardenPasskeys.Match], tab: Tab.ID, origin: String, for seconds: TimeInterval = 60) {
         grants = grants.filter { $0.value.until > Date() }
-        grants[tab] = Grant(ids: Set(matches.map(\.id)), until: Date().addingTimeInterval(seconds))
+        grants[tab] = Grant(ids: Set(matches.map(\.id)), origin: origin, until: Date().addingTimeInterval(seconds))
+    }
+
+    /// An address's origin the way PasskeyRelay spells a frame's:
+    /// scheme://host, and the port only when it is not the scheme's own.
+    static func origin(of url: URL?) -> String? {
+        guard let url, let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        var text = "\(scheme)://\(host)"
+        let standard = scheme == "https" ? 443 : scheme == "http" ? 80 : -1
+        if let port = url.port, port != standard { text += ":\(port)" }
+        return text
+    }
+
+    /// Why Copper last refused a sign-in in a tab. The page only ever sees
+    /// a bare NotAllowedError; the reason goes to the log and, once, to the
+    /// agent's next tool result on that tab (Tools.call).
+    private struct Refusal {
+        let detail: String
+        let at: Date
+    }
+    private static var refusals: [Tab.ID: Refusal] = [:]
+
+    private static func note(_ detail: String?, tab: Tab.ID?, origin: String) {
+        guard let detail else { return }
+        NSLog("%@", "Copper: passkey sign-in on \(origin) refused: \(detail)")
+        if let tab { refusals[tab] = Refusal(detail: detail, at: Date()) }
+    }
+
+    /// The reason for the last passkey refusal in `tab`, within five
+    /// minutes, handed out once.
+    static func takeRefusal(_ tab: Tab.ID) -> String? {
+        refusals = refusals.filter { $0.value.at > Date().addingTimeInterval(-300) }
+        return refusals.removeValue(forKey: tab)?.detail
     }
 
     /// Test-only answer for the passkey chooser: an account name or a
@@ -448,67 +495,81 @@ enum Passkeys {
         let allow = (body["allowCredentials"] as? [[String: Any]] ?? []).compactMap { bytes($0["id"]) }
         let own = PasskeyStore.credentials(for: rpId).filter { allow.isEmpty || allow.contains($0.id) }
             .sorted { ($0.lastUsed ?? $0.created) > ($1.lastUsed ?? $1.created) }
-        var vault = BitwardenPasskeys.matching(rpId: rpId, allow: allow)
+        let vault = BitwardenPasskeys.matching(rpId: rpId, allow: allow)
         let request = Request(challenge: challenge, origin: origin, rpId: rpId,
-                              crossOrigin: body["crossOrigin"] as? Bool ?? false, reply: reply)
+                              crossOrigin: body["crossOrigin"] as? Bool ?? false, tab: tab?.id, reply: reply)
+        grants = grants.filter { $0.value.until > Date() }
 
         // An agent signs in the way browser_sign_in fills a password: only
         // with a login the person shared with agents, no prompt, never in a
         // private tab, and the key never leaves this process. The sharing
-        // switch is the consent; the unlocked vault stands in for user
-        // verification, as it does for Bitwarden's own authenticator.
+        // switch is the consent. Nobody is there to verify, so the answer
+        // claims user presence only (UP, not UV), and a site that requires
+        // user verification is refused rather than told otherwise.
         //
-        // Which requests are the agent's: one in a tab the agent armed with
-        // browser_sign_in what=passkey (once, within a minute), or one in a
-        // tab only the agent can be driving — held backstage, on no screen.
-        // A tab on screen that an agent merely touched lately is still the
-        // person's: their click there gets their Touch ID, not a free pass.
+        // Which requests are the agent's: one from the page of a tab the
+        // agent armed with browser_sign_in what=passkey (once, within a
+        // minute, same origin, its own frame), or one in a tab only the
+        // agent can be driving — held backstage, on no screen — from that
+        // tab's own page. A tab on screen that an agent merely touched
+        // lately is still the person's: their click there gets their Touch
+        // ID, not a free pass. A tab off screen never shows a prompt.
         if let tab {
-            let grant = grants.removeValue(forKey: tab.id).flatMap { $0.until > Date() ? $0 : nil }
             let backstage = Backstage.shared.holds(tab.id) && !AgentTabs.onScreen(tab)
+            let ownFrame = !request.crossOrigin && Self.origin(of: tab.address) == origin
+            var grant: Grant?
+            if let armed = grants[tab.id], ownFrame, armed.origin == origin {
+                grant = armed
+                grants[tab.id] = nil
+            }
             if grant != nil || backstage {
-                let shared = tab.shy ? [] : vault.filter(BitwardenPasskeys.sharedWithAgents)
-                    .filter { grant?.ids.contains($0.id) ?? true }
-                if shared.count == 1 { signVault(shared[0], request); return }
-                if shared.count > 1 {
-                    let names = shared.map(\.label).joined(separator: ", ")
-                    let refusal: [String: Any] = ["error": "NotAllowedError",
-                                                  "message": "Several shared Bitwarden passkeys for \(rpId) (\(names)) \u{2014} name one with browser_sign_in what=passkey account=USER, then ask again"]
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { reply(refusal, nil) }
-                    return
-                }
-                // Nobody can answer a prompt on a page off screen; one on
-                // screen falls through to the person at the Mac.
-                if backstage {
-                    vault = []
-                    if own.isEmpty {
-                        var refusal: [String: Any] = ["error": "NotAllowedError"]
-                        if !BitwardenPasskeys.matching(rpId: rpId, allow: allow).isEmpty {
-                            refusal["message"] = "A Bitwarden passkey for \(rpId) exists but is not shared with agents \u{2014} Settings \u{203A} Passwords \u{203A} Agent access"
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { reply(refusal, nil) }
-                        return
+                let why: String
+                var outright = backstage
+                if !ownFrame {
+                    why = "the request came from \(origin) in a frame, not the tab's own page; an agent's passkey sign-in is only for the page itself"
+                } else if tab.shy {
+                    why = "a private tab never uses a passkey for an agent"
+                } else if (body["userVerification"] as? String)?.lowercased() == "required" {
+                    why = "\(rpId) requires user verification, which only the person can give (Touch ID); an agent's sign-in proves presence only"
+                } else {
+                    let shared = vault.filter(BitwardenPasskeys.sharedWithAgents).filter { grant?.ids.contains($0.id) ?? true }
+                    if shared.count == 1 { signVault(shared[0], request, agent: true); return }
+                    if shared.count > 1 {
+                        outright = true
+                        why = "several shared Bitwarden passkeys for \(rpId) (\(shared.map(\.label).joined(separator: ", "))) \u{2014} name one with browser_sign_in what=passkey account=USER, then ask again"
+                    } else if !vault.isEmpty {
+                        why = "a Bitwarden passkey for \(rpId) exists but is not shared with agents \u{2014} Settings \u{203A} Passwords \u{203A} Agent access"
+                    } else {
+                        why = "no Bitwarden passkey for \(rpId) is shared with agents" + (own.isEmpty ? "" : "; Copper's own passkeys there need the person's Touch ID")
                     }
                 }
+                if outright { refuse(request, why); return }
+                // On screen: the person at the Mac decides, as for any request.
+                note(why + "; asked the person instead", tab: tab.id, origin: origin)
             }
         }
 
         let choices = own.map(Choice.copper) + vault.map(Choice.bitwarden)
-        guard !choices.isEmpty else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { reply(["error": "NotAllowedError"], nil) }
-            return
-        }
+        guard !choices.isEmpty else { refuse(request, nil); return }
         choose(choices, rpId: rpId, tab: tab) { choice in
-            guard let choice else { reply(["error": "NotAllowedError"], nil); return }
+            guard let choice else { refuse(request, nil); return }
             let kind = choice.source == "Bitwarden" ? "your Bitwarden passkey" : "your passkey"
             prove("Sign in to \(rpId) with \(kind) (\(choice.label))") { ok in
-                guard ok else { reply(["error": "NotAllowedError"], nil); return }
+                guard ok else { request.reply(["error": "NotAllowedError"], nil); return }
                 switch choice {
                 case .copper(let credential): signCopper(credential, request)
-                case .bitwarden(let match): signVault(match, request)
+                case .bitwarden(let match): signVault(match, request, agent: false)
                 }
             }
         }
+    }
+
+    /// A bare NotAllowedError for the page, a moment later (the way an
+    /// authenticator with nothing to offer answers); the reason, if any,
+    /// for the log and the agent.
+    private static func refuse(_ request: Request, _ detail: String?) {
+        note(detail, tab: request.tab, origin: request.origin)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { request.reply(["error": "NotAllowedError"], nil) }
     }
 
     private struct Request {
@@ -516,6 +577,7 @@ enum Passkeys {
         let origin: String
         let rpId: String
         let crossOrigin: Bool
+        let tab: Tab.ID?
         let reply: (Any?, String?) -> Void
 
         var client: Data { Passkeys.clientData(type: "webauthn.get", challenge: challenge, origin: origin, crossOrigin: crossOrigin) }
@@ -532,25 +594,29 @@ enum Passkeys {
                        "signature": signature.base64URL, "userHandle": credential.userHandle.base64URL], nil)
     }
 
-    private static func signVault(_ match: BitwardenPasskeys.Match, _ request: Request) {
+    /// UP|UV|BE|BS after the person's Touch ID; UP|BE|BS (0x19) for an
+    /// agent, which nobody verified.
+    private static func signVault(_ match: BitwardenPasskeys.Match, _ request: Request, agent: Bool) {
         let client = request.client
         let rpId = request.rpId
+        let flags: UInt8 = agent ? 0x19 : 0x1D
         Task { @MainActor in
             do {
                 let assertion = try await BitwardenPasskeys.sign(match, clientDataHash: Data(SHA256.hash(data: client))) { counter in
-                    authenticatorData(rpId: rpId, flags: 0x1D, counter: counter)
+                    authenticatorData(rpId: rpId, flags: flags, counter: counter)
                 }
                 request.reply(["id": match.id.base64URL, "clientDataJSON": client.base64URL,
                                "authenticatorData": assertion.authenticatorData.base64URL,
                                "signature": assertion.signature.base64URL, "userHandle": match.userHandle.base64URL], nil)
             } catch {
-                request.reply(["error": "NotAllowedError", "message": error.localizedDescription], nil)
+                refuse(request, "Bitwarden: \(error.localizedDescription)")
             }
         }
     }
 
     /// One passkey goes straight through; several ask which, the way a
-    /// platform authenticator's account sheet does. The page waits.
+    /// platform authenticator's account sheet does, as a sheet on the tab's
+    /// own window. A page on no visible window gets no chooser at all.
     private static func choose(_ choices: [Choice], rpId: String, tab: Tab?, _ done: @escaping (Choice?) -> Void) {
         lastOffered = choices.map { "\($0.label) · \($0.source)" }
         guard choices.count > 1 else { done(choices.first); return }
@@ -560,22 +626,49 @@ enum Passkeys {
         }
         // A Mac nobody sits at has no one to ask.
         if Headless.on { done(choices.first); return }
+        guard let window = tab?.built?.window, window.isVisible, !(window is Backstage.Window) else {
+            NSLog("%@", "Copper: passkey chooser for \(rpId) not shown; the page is on no visible window")
+            done(nil); return
+        }
         let alert = NSAlert()
         alert.messageText = "Sign in to \(rpId)"
         alert.informativeText = "Choose the passkey to use."
+        // Menu items carry their row as a tag: NSPopUpButton's addItems(withTitles:)
+        // folds equal titles into one, and the index would then point at
+        // the wrong passkey.
         let menu = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 26), pullsDown: false)
-        menu.addItems(withTitles: lastOffered)
+        menu.removeAllItems()
+        for (row, title) in titles(choices).enumerated() {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.tag = row
+            menu.menu?.addItem(item)
+        }
+        menu.select(menu.menu?.items.first)
         alert.accessoryView = menu
         alert.addButton(withTitle: "Continue")
         alert.addButton(withTitle: "Cancel")
-        let answer: (NSApplication.ModalResponse) -> Void = { response in
-            let row = menu.indexOfSelectedItem
+        alert.beginSheetModal(for: window) { response in
+            let row = menu.selectedItem?.tag ?? -1
             done(response == .alertFirstButtonReturn && choices.indices.contains(row) ? choices[row] : nil)
         }
-        if let window = tab?.built?.window, window.isVisible, !(window is Backstage.Window) {
-            alert.beginSheetModal(for: window, completionHandler: answer)
-        } else {
-            answer(alert.runModal())
+    }
+
+    /// The chooser's rows, each one different: equal "account · source"
+    /// rows say which login (or site) they come from, then a number.
+    private static func titles(_ choices: [Choice]) -> [String] {
+        let plain = choices.map { "\($0.label) · \($0.source)" }
+        var seen: [String: Int] = [:]
+        return choices.enumerated().map { row, choice in
+            var title = plain[row]
+            if plain.filter({ $0 == title }).count > 1 {
+                switch choice {
+                case .bitwarden(let match): title += " (\(match.item.name.isEmpty ? match.passkey.rpName : match.item.name))"
+                case .copper(let credential): title += " (\(credential.rpId))"
+                }
+            }
+            seen[title, default: 0] += 1
+            if seen[title]! > 1 { title += " #\(seen[title]!)" }
+            return title
         }
     }
 

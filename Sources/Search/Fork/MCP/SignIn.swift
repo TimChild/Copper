@@ -185,7 +185,12 @@ enum SignIn {
         } else {
             return ["candidates": permitted.map(\.label), "host": host, "what": "passkey"]
         }
-        Passkeys.grant(chosen, tab: tab.id)
+        // Bound to the page showing now: a request from another origin, or a
+        // frame inside it, is not the one the agent armed for.
+        guard let origin = Passkeys.origin(of: tab.address) else {
+            throw Failure(message: "the tab has no page to sign in to")
+        }
+        Passkeys.grant(chosen, tab: tab.id, origin: origin)
         return ["armed": true, "what": "passkey", "account": chosen[0].label, "host": host, "source": "bitwarden",
                 "next": "click the site's passkey sign-in button within 60 s; Copper signs that request in-process"]
     }

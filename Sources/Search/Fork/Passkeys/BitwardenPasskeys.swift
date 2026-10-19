@@ -8,6 +8,9 @@ import Foundation
 // site, account, credential id, counter. The private key is read from
 // `bw get item` at the moment a sign-in has been chosen and verified, used
 // in memory, and the buffers Copper holds are overwritten before it returns.
+// Keys also pass through memory on every cache refresh (`bw list items`
+// returns them; that buffer is cleared once decoded, and the decoder never
+// copies `keyValue`) and in `bw edit`/`bw create` replies (cleared too).
 // Nothing here writes a vault key to disk, the keychain, a log or a reply.
 //
 // Bitwarden keeps one shape for every passkey: ES256 (keyAlgorithm ECDSA,
@@ -64,19 +67,22 @@ enum BitwardenPasskeys {
 
     /// The vault passkeys a page on `host` could ask for: its own relying
     /// party or a parent domain's (an explicit rpId may name either).
+    /// The same rule the authenticator applies to the request (Passkeys.allowedRP:
+    /// the host itself or a parent within its registrable domain); SignIn
+    /// hands over the host without `www.`, so that form is tried too.
     static func usable(on host: String) -> [Match] {
-        var host = host.lowercased()
-        if host.hasPrefix("www.") { host.removeFirst(4) }
+        let host = host.lowercased()
         return all().filter { match in
-            let rp = match.passkey.rpId
-            return host == rp || host.hasSuffix("." + rp) || "www." + host == rp
+            Passkeys.allowedRP(match.passkey.rpId, for: host) || Passkeys.allowedRP(match.passkey.rpId, for: "www." + host)
         }
     }
 
     /// Whether the person shared this passkey's login with agents — the same
-    /// rule, and the same switch, as its password (AgentAccess).
+    /// rule, and the same switch, as its password (AgentAccess). A login
+    /// with Bitwarden's master-password reprompt is never an agent's: its
+    /// passkey always takes the person's Touch ID.
     static func sharedWithAgents(_ match: Match) -> Bool {
-        AgentAccess.isAllowed(Credentials.credential(bitwarden: match.item))
+        !match.item.reprompt && AgentAccess.isAllowed(Credentials.credential(bitwarden: match.item))
     }
 
     // MARK: - ids
@@ -108,51 +114,99 @@ enum BitwardenPasskeys {
         let signature: Data
     }
 
+    /// Items whose counter write-back lost the passkey it was advancing (a
+    /// read-back after `bw edit item` did not find it): Copper stops writing
+    /// counters there for the rest of the run rather than rewrite the item
+    /// again. Said once in the log.
+    private static var counterless: Set<String> = []
+    /// Signs in flight per item, and those waiting: `bw get item` → sign →
+    /// `bw edit item` is one read-modify-write, so two at once on the same
+    /// item would hand out the same counter and the later edit would undo
+    /// the earlier.
+    private static var signing: Set<String> = []
+    private static var waiting: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    private static func serially<T>(_ id: String, _ body: () async throws -> T) async throws -> T {
+        if signing.contains(id) {
+            await withCheckedContinuation { waiting[id, default: []].append($0) }
+        } else {
+            signing.insert(id)
+        }
+        defer {
+            if var queue = waiting[id], !queue.isEmpty {
+                let next = queue.removeFirst()
+                waiting[id] = queue.isEmpty ? nil : queue
+                next.resume()
+            } else {
+                signing.remove(id)
+            }
+        }
+        return try await body()
+    }
+
     /// Sign one assertion with the vault key. `authenticatorData` is built by
     /// the caller from the counter handed to it, which comes from the item
     /// as `bw get item` returns it now, not the cache. Bitwarden leaves most
-    /// counters at zero and so does this; a non-zero counter is advanced and
-    /// written back to the item before the answer goes to the site.
+    /// counters at zero and so does this; a non-zero counter is advanced
+    /// (saturating at UInt32.max, never wrapping to zero) and written back to
+    /// the item before the answer goes to the site.
     static func sign(_ match: Match, clientDataHash: Data,
-                     authenticatorData: (UInt32) -> Data) async throws -> Assertion {
+                     authenticatorData: @escaping (UInt32) -> Data) async throws -> Assertion {
         try await Bitwarden.shared.requireUnlocked()
-        var raw = try await Bitwarden.shared.run(["get", "item", match.item.id])
-        defer { raw.resetBytes(in: 0..<raw.count) }
-        guard var object = try JSONSerialization.jsonObject(with: raw) as? [String: Any],
-              var login = object["login"] as? [String: Any],
-              var entries = login["fido2Credentials"] as? [[String: Any]],
-              let at = entries.firstIndex(where: { ($0["credentialId"] as? String) == match.passkey.credentialId }),
-              let keyText = entries[at]["keyValue"] as? String
-        else { throw Failure(message: "Bitwarden no longer has that passkey") }
+        let id = match.item.id
+        return try await serially(id) {
+            var raw = try await Bitwarden.shared.run(["get", "item", id])
+            defer { raw.resetBytes(in: 0..<raw.count) }
+            guard var object = try JSONSerialization.jsonObject(with: raw) as? [String: Any],
+                  var login = object["login"] as? [String: Any],
+                  var entries = login["fido2Credentials"] as? [[String: Any]],
+                  let at = entries.firstIndex(where: { ($0["credentialId"] as? String) == match.passkey.credentialId }),
+                  let keyText = entries[at]["keyValue"] as? String
+            else { throw Failure(message: "Bitwarden no longer has that passkey") }
 
-        let stored = counter(entries[at]["counter"])
-        let next: UInt32 = stored == 0 ? 0 : stored &+ 1
-        let auth = authenticatorData(next)
-        var der = Data(base64URL: keyText) ?? Data(base64Encoded: keyText) ?? Data()
-        defer { der.resetBytes(in: 0..<der.count) }
-        let signature: Data
-        do {
-            let key = try P256.Signing.PrivateKey(derRepresentation: der)
-            signature = try key.signature(for: auth + clientDataHash).derRepresentation
-        } catch {
-            throw Failure(message: "Bitwarden's passkey key could not be read")
-        }
-
-        if stored != 0 {
-            // Keep the vault's spelling: the CLI writes a string.
-            entries[at]["counter"] = entries[at]["counter"] is NSNumber ? NSNumber(value: next) : String(next)
-            login["fido2Credentials"] = entries
-            object["login"] = login
+            let stored = counter(entries[at]["counter"])
+            let next = advanced(stored)
+            let auth = authenticatorData(next)
+            var der = Data(base64URL: keyText) ?? Data(base64Encoded: keyText) ?? Data()
+            defer { der.resetBytes(in: 0..<der.count) }
+            let signature: Data
             do {
-                try await edit(match.item.id, object)
+                let key = try P256.Signing.PrivateKey(derRepresentation: der)
+                signature = try key.signature(for: auth + clientDataHash).derRepresentation
             } catch {
-                // The sign-in still stands; the next one repeats this count,
-                // which a site that checks may refuse. Said, not hidden.
-                NSLog("Copper: could not advance the Bitwarden passkey counter: \(error.localizedDescription)")
+                throw Failure(message: "Bitwarden's passkey key could not be read")
             }
-            Task { await Bitwarden.shared.refreshCacheIfPossible() }
+
+            if next != stored, !counterless.contains(id) {
+                // Keep the vault's spelling: the CLI writes a string.
+                entries[at]["counter"] = entries[at]["counter"] is NSNumber ? NSNumber(value: next) : String(next)
+                login["fido2Credentials"] = entries
+                object["login"] = login
+                do {
+                    try await edit(id, object)
+                    // `bw edit item` replaces the whole item: if anything
+                    // else changed it since the read above, the passkey
+                    // could be gone. Look, and stop rewriting if so.
+                    if try await !holds(id, credential: match.passkey.credentialId) {
+                        counterless.insert(id)
+                        NSLog("%@", "Copper: a Bitwarden passkey was missing after its counter write-back; Copper no longer writes counters to that item")
+                    }
+                } catch {
+                    // The sign-in still stands; the next one repeats this count,
+                    // which a site that checks may refuse. Said, not hidden.
+                    NSLog("%@", "Copper: could not advance the Bitwarden passkey counter: \(error.localizedDescription)")
+                }
+                Task { await Bitwarden.shared.refreshCacheIfPossible() }
+            }
+            return Assertion(authenticatorData: auth, signature: signature)
         }
-        return Assertion(authenticatorData: auth, signature: signature)
+    }
+
+    /// A counter's next value: zero stays zero (Bitwarden's own choice), any
+    /// other advances by one and stops at the top rather than wrap to zero,
+    /// which a relying party reads as "counters not supported".
+    nonisolated static func advanced(_ stored: UInt32) -> UInt32 {
+        stored == 0 || stored == .max ? stored : stored + 1
     }
 
     private static func counter(_ value: Any?) -> UInt32 {
@@ -161,30 +215,66 @@ enum BitwardenPasskeys {
         return 0
     }
 
+    /// Whether the vault item still carries this credential, read fresh.
+    private static func holds(_ id: String, credential: String) async throws -> Bool {
+        var raw = try await Bitwarden.shared.run(["get", "item", id])
+        defer { raw.resetBytes(in: 0..<raw.count) }
+        let object = try JSONSerialization.jsonObject(with: raw) as? [String: Any]
+        let entries = (object?["login"] as? [String: Any])?["fido2Credentials"] as? [[String: Any]] ?? []
+        return entries.contains { ($0["credentialId"] as? String) == credential }
+    }
+
     // MARK: - writing
 
-    /// `bw edit item ID` with the encoded item on stdin, never in argv where
-    /// any process on the Mac could read it.
-    private static func edit(_ id: String, _ object: [String: Any]) async throws {
+    /// `bw edit item ID` / `bw create item` with the encoded item on stdin,
+    /// never in argv where any process on the Mac could read it. The CLI
+    /// answers with the whole item, keys included: that buffer is cleared
+    /// too, after the new item's id is read from it.
+    @discardableResult
+    private static func write(_ args: [String], _ object: [String: Any]) async throws -> String? {
         var json = try JSONSerialization.data(withJSONObject: object, options: [])
         defer { json.resetBytes(in: 0..<json.count) }
         var encoded = Data(json.base64EncodedString().utf8)
         defer { encoded.resetBytes(in: 0..<encoded.count) }
-        _ = try await Bitwarden.shared.run(["edit", "item", id], stdin: encoded, timeout: 30)
+        var answer = try await Bitwarden.shared.run(args, stdin: encoded, timeout: 30)
+        defer { answer.resetBytes(in: 0..<answer.count) }
+        return (try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["id"] as? String
+    }
+
+    private static func edit(_ id: String, _ object: [String: Any]) async throws {
+        try await write(["edit", "item", id], object)
+    }
+
+    /// Whether an organization owns this item: a passkey added to it would
+    /// be shared with everyone in the item's collections.
+    private static func organizationOwned(_ object: [String: Any]) -> Bool {
+        guard let org = object["organizationId"], !(org is NSNull) else { return false }
+        return !((org as? String)?.isEmpty ?? false)
+    }
+
+    /// A login with no passkey at all, as the vault has it now — not the
+    /// cache, which drops passkeys Copper cannot sign with and is minutes
+    /// old. Anything that is not an empty list counts as a passkey.
+    private static func passkeyFree(_ login: [String: Any]) -> Bool {
+        guard let value = login["fido2Credentials"], !(value is NSNull) else { return true }
+        return (value as? [Any])?.isEmpty ?? false
     }
 
     /// A passkey made in Copper, saved to the vault instead of the keychain
-    /// (Save new passwords to: Bitwarden). It joins the site's login for the
-    /// same account when that login has no passkey yet — Bitwarden keeps one
-    /// per login — and is a new login otherwise.
+    /// (Save new passwords to: Bitwarden). It joins the site's personal
+    /// login for the same account when, read fresh, that login has no
+    /// passkey of any kind — Bitwarden keeps one per login — and is a new
+    /// personal login otherwise. An organization's login is never joined:
+    /// its collections would share the new key.
     static func save(_ credential: PasskeyStore.Credential, key: P256.Signing.PrivateKey, rpName: String) async throws {
         try await Bitwarden.shared.requireUnlocked()
         var pkcs8 = key.derRepresentation
         defer { pkcs8.resetBytes(in: 0..<pkcs8.count) }
         let stamp = ISO8601DateFormatter()
         stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let credentialID = vaultID(credential.id)
         let entry: [String: Any] = [
-            "credentialId": vaultID(credential.id),
+            "credentialId": credentialID,
             "keyType": "public-key",
             "keyAlgorithm": "ECDSA",
             "keyCurve": "P-256",
@@ -198,40 +288,62 @@ enum BitwardenPasskeys {
             "discoverable": "true",
             "creationDate": stamp.string(from: credential.created),
         ]
+        let metadata = Bitwarden.Passkey(
+            credentialId: credentialID, rpId: credential.rpId.lowercased(),
+            userHandle: credential.userHandle.isEmpty ? nil : credential.userHandle.base64URL,
+            userName: credential.userName, userDisplayName: credential.displayName,
+            rpName: rpName.isEmpty ? credential.rpId : rpName, counter: 0, discoverable: true, created: credential.created)
 
-        let joining = Credentials.itemsMatching(host: credential.rpId).first {
-            $0.passkeys.isEmpty && !credential.userName.isEmpty
-                && $0.username.caseInsensitiveCompare(credential.userName) == .orderedSame
+        let candidates = credential.userName.isEmpty ? [] : Credentials.itemsMatching(host: credential.rpId).filter {
+            $0.type == 1 && $0.username.caseInsensitiveCompare(credential.userName) == .orderedSame
         }
-        if let joining {
-            var raw = try await Bitwarden.shared.run(["get", "item", joining.id])
-            defer { raw.resetBytes(in: 0..<raw.count) }
-            guard var object = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
-                throw Failure(message: "Bitwarden returned an invalid item")
+        do {
+            var joined: Bitwarden.Item?
+            for candidate in candidates.prefix(3) {
+                var raw = try await Bitwarden.shared.run(["get", "item", candidate.id])
+                defer { raw.resetBytes(in: 0..<raw.count) }
+                guard var object = try JSONSerialization.jsonObject(with: raw) as? [String: Any],
+                      !organizationOwned(object) else { continue }
+                var login = object["login"] as? [String: Any] ?? [:]
+                guard passkeyFree(login) else { continue }
+                login["fido2Credentials"] = [entry]
+                object["login"] = login
+                try await edit(candidate.id, object)
+                joined = candidate
+                break
             }
-            var login = object["login"] as? [String: Any] ?? [:]
-            login["fido2Credentials"] = [entry]
-            object["login"] = login
-            try await edit(joining.id, object)
-        } else {
-            let object: [String: Any] = [
-                "organizationId": NSNull(), "collectionIds": NSNull(), "folderId": NSNull(),
-                "type": 1, "name": credential.rpId, "notes": NSNull(), "favorite": false,
-                "fields": [], "reprompt": 0,
-                "login": [
-                    "username": credential.userName.isEmpty ? NSNull() : credential.userName,
-                    "password": NSNull(), "totp": NSNull(),
-                    "uris": [["uri": "\(OnePassword.scheme(for: credential.rpId))://\(credential.rpId)", "match": NSNull()]],
-                    "fido2Credentials": [entry],
-                ] as [String: Any],
-            ]
-            var json = try JSONSerialization.data(withJSONObject: object, options: [])
-            defer { json.resetBytes(in: 0..<json.count) }
-            var encoded = Data(json.base64EncodedString().utf8)
-            defer { encoded.resetBytes(in: 0..<encoded.count) }
-            _ = try await Bitwarden.shared.run(["create", "item"], stdin: encoded, timeout: 30)
+            if let joined {
+                Bitwarden.shared.cache(metadata, on: joined.id, otherwise: joined)
+            } else {
+                let object: [String: Any] = [
+                    "organizationId": NSNull(), "collectionIds": NSNull(), "folderId": NSNull(),
+                    "type": 1, "name": credential.rpId, "notes": NSNull(), "favorite": false,
+                    "fields": [], "reprompt": 0,
+                    "login": [
+                        "username": credential.userName.isEmpty ? NSNull() : credential.userName,
+                        "password": NSNull(), "totp": NSNull(),
+                        "uris": [["uri": "\(OnePassword.scheme(for: credential.rpId))://\(credential.rpId)", "match": NSNull()]],
+                        "fido2Credentials": [entry],
+                    ] as [String: Any],
+                ]
+                let made = try await write(["create", "item"], object)
+                let uri = Bitwarden.URI(uri: "\(OnePassword.scheme(for: credential.rpId))://\(credential.rpId)", match: nil)
+                Bitwarden.shared.cache(metadata, on: made ?? "", otherwise: Bitwarden.Item(
+                    id: made ?? "pending-\(credentialID)", name: credential.rpId, folderId: nil, username: credential.userName,
+                    uris: [uri], hasTOTP: false, fields: [], passkeys: [metadata]))
+            }
+        } catch {
+            // A write that timed out may still have landed. Look before the
+            // caller keeps a second copy of the same passkey in the keychain.
+            await Bitwarden.shared.refreshCacheIfPossible()
+            if all().contains(where: { $0.passkey.credentialId == credentialID }) {
+                NSLog("%@", "Copper: Bitwarden reported \(error.localizedDescription) but holds the new passkey; not kept twice")
+                return
+            }
+            throw error
         }
-        // The next sign-in looks in the cache; it has to see this one.
-        await Bitwarden.shared.refreshCacheIfPossible()
+        // The page's next sign-in reads the cache, which already has this
+        // one; the vault's own copy follows without holding up the reply.
+        Task { await Bitwarden.shared.refreshCacheIfPossible() }
     }
 }

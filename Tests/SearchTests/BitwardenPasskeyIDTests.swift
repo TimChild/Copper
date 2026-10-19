@@ -25,4 +25,26 @@ struct BitwardenPasskeyIDTests {
         #expect(BitwardenPasskeys.vaultID(long).hasPrefix("b64."))
         #expect(BitwardenPasskeys.rawID(BitwardenPasskeys.vaultID(long)) == long)
     }
+
+    /// A passkey made here and saved to the vault has a valid v4 GUID id.
+    @Test @MainActor func madeIDsAreVersion4UUIDs() throws {
+        for _ in 0..<8 {
+            let made = PasskeyStore.make(rpId: "example.test", userHandle: Data([1]), userName: "u", displayName: "U")
+            #expect(made.id.count == 16)
+            let text = BitwardenPasskeys.vaultID(made.id)
+            let uuid = try #require(UUID(uuidString: text))
+            let bytes = withUnsafeBytes(of: uuid.uuid) { Array($0) }
+            #expect(bytes[6] >> 4 == 4)
+            #expect(bytes[8] & 0xC0 == 0x80)
+            #expect(BitwardenPasskeys.rawID(text) == made.id)
+        }
+    }
+
+    /// Counters advance by one, never wrap to zero, and zero stays zero.
+    @Test func countersSaturate() {
+        #expect(BitwardenPasskeys.advanced(0) == 0)
+        #expect(BitwardenPasskeys.advanced(5) == 6)
+        #expect(BitwardenPasskeys.advanced(UInt32.max - 1) == UInt32.max)
+        #expect(BitwardenPasskeys.advanced(UInt32.max) == UInt32.max)
+    }
 }

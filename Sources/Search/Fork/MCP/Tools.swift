@@ -209,8 +209,14 @@ enum Tools {
         // one breadcrumb each — the name, the tab, the time, ok or not.
         let started = Date()
         do {
-            let content = try await pinnedCall(name, args, in: browser)
-            Breadcrumbs.tool(name, tab: AgentTabs.peek(args, in: browser, caller: AgentTabs.callerKey)?.id, started: started, error: nil)
+            var content = try await pinnedCall(name, args, in: browser)
+            let tab = AgentTabs.peek(args, in: browser, caller: AgentTabs.callerKey)?.id
+            Breadcrumbs.tool(name, tab: tab, started: started, error: nil)
+            // Fork: bitwarden-passkeys — the page got a bare NotAllowedError;
+            // the agent gets why, once, on its next call on that tab.
+            if let tab, let why = Passkeys.takeRefusal(tab) {
+                content.append(.text("Passkey sign-in refused on this tab: \(why)"))
+            }
             return content
         } catch {
             Breadcrumbs.tool(name, tab: AgentTabs.peek(args, in: browser, caller: AgentTabs.callerKey)?.id, started: started, error: error)

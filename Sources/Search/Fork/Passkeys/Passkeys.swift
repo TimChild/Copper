@@ -422,6 +422,21 @@ enum Passkeys {
         }
     }
 
+    /// browser_sign_in what=passkey: the next sign-in request in this tab,
+    /// within a minute, may use these shared vault passkeys with no prompt.
+    private struct Grant {
+        let ids: Set<Data>
+        let until: Date
+    }
+    private static var grants: [Tab.ID: Grant] = [:]
+
+    /// Arm one agent sign-in in `tab` (SignIn.swift). Used once, by the
+    /// next get() there; a later one is the person's again.
+    static func grant(_ matches: [BitwardenPasskeys.Match], tab: Tab.ID, for seconds: TimeInterval = 60) {
+        grants = grants.filter { $0.value.until > Date() }
+        grants[tab] = Grant(ids: Set(matches.map(\.id)), until: Date().addingTimeInterval(seconds))
+    }
+
     /// Test-only answer for the passkey chooser: an account name or a
     /// 1-based row. Read only in a test world, like `autoProve`.
     static var autoPick: String?
@@ -437,26 +452,43 @@ enum Passkeys {
         let request = Request(challenge: challenge, origin: origin, rpId: rpId,
                               crossOrigin: body["crossOrigin"] as? Bool ?? false, reply: reply)
 
-        // An agent working in this tab (Backstage holds it) signs in the way
-        // browser_sign_in fills a password: only with a login the person
-        // shared with agents, no prompt, never in a private tab, and the key
-        // never leaves this process. The sharing switch is the consent; the
-        // unlocked vault stands in for user verification, as it does for
-        // Bitwarden's own authenticator.
-        if let tab, Backstage.shared.holds(tab.id) {
-            let shared = tab.shy ? [] : vault.filter(BitwardenPasskeys.sharedWithAgents)
-            if let match = shared.first { signVault(match, request); return }
-            // Nobody can answer a prompt on a page off screen; one on screen
-            // falls through to the person at the Mac.
-            if !AgentTabs.onScreen(tab) {
-                vault = []
-                if own.isEmpty {
-                    var refusal: [String: Any] = ["error": "NotAllowedError"]
-                    if !BitwardenPasskeys.matching(rpId: rpId, allow: allow).isEmpty {
-                        refusal["message"] = "A Bitwarden passkey for \(rpId) exists but is not shared with agents \u{2014} Settings \u{203A} Passwords \u{203A} Agent access"
-                    }
+        // An agent signs in the way browser_sign_in fills a password: only
+        // with a login the person shared with agents, no prompt, never in a
+        // private tab, and the key never leaves this process. The sharing
+        // switch is the consent; the unlocked vault stands in for user
+        // verification, as it does for Bitwarden's own authenticator.
+        //
+        // Which requests are the agent's: one in a tab the agent armed with
+        // browser_sign_in what=passkey (once, within a minute), or one in a
+        // tab only the agent can be driving — held backstage, on no screen.
+        // A tab on screen that an agent merely touched lately is still the
+        // person's: their click there gets their Touch ID, not a free pass.
+        if let tab {
+            let grant = grants.removeValue(forKey: tab.id).flatMap { $0.until > Date() ? $0 : nil }
+            let backstage = Backstage.shared.holds(tab.id) && !AgentTabs.onScreen(tab)
+            if grant != nil || backstage {
+                let shared = tab.shy ? [] : vault.filter(BitwardenPasskeys.sharedWithAgents)
+                    .filter { grant?.ids.contains($0.id) ?? true }
+                if shared.count == 1 { signVault(shared[0], request); return }
+                if shared.count > 1 {
+                    let names = shared.map(\.label).joined(separator: ", ")
+                    let refusal: [String: Any] = ["error": "NotAllowedError",
+                                                  "message": "Several shared Bitwarden passkeys for \(rpId) (\(names)) \u{2014} name one with browser_sign_in what=passkey account=USER, then ask again"]
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { reply(refusal, nil) }
                     return
+                }
+                // Nobody can answer a prompt on a page off screen; one on
+                // screen falls through to the person at the Mac.
+                if backstage {
+                    vault = []
+                    if own.isEmpty {
+                        var refusal: [String: Any] = ["error": "NotAllowedError"]
+                        if !BitwardenPasskeys.matching(rpId: rpId, allow: allow).isEmpty {
+                            refusal["message"] = "A Bitwarden passkey for \(rpId) exists but is not shared with agents \u{2014} Settings \u{203A} Passwords \u{203A} Agent access"
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { reply(refusal, nil) }
+                        return
+                    }
                 }
             }
         }

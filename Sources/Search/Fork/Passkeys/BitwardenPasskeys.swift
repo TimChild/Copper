@@ -62,6 +62,17 @@ enum BitwardenPasskeys {
         }
     }
 
+    /// The vault passkeys a page on `host` could ask for: its own relying
+    /// party or a parent domain's (an explicit rpId may name either).
+    static func usable(on host: String) -> [Match] {
+        var host = host.lowercased()
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return all().filter { match in
+            let rp = match.passkey.rpId
+            return host == rp || host.hasSuffix("." + rp) || "www." + host == rp
+        }
+    }
+
     /// Whether the person shared this passkey's login with agents — the same
     /// rule, and the same switch, as its password (AgentAccess).
     static func sharedWithAgents(_ match: Match) -> Bool {

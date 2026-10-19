@@ -123,9 +123,9 @@ enum Tools {
                 "url": string("Address to open, for new"),
                 "focus": bool("Also show the tab to the user (switch their window to it). Default false — leave the user where they are"),
             ], required: ["action"]),
-            tool("browser_sign_in", "Sign in on the current tab with a saved account the user has shared with agents. Fills (and by default submits) the password in-process; you never receive the secret. what=otp fills the account's one-time code.", [
+            tool("browser_sign_in", "Sign in on the current tab with a saved account the user has shared with agents. Fills (and by default submits) the password in-process; you never receive the secret. what=otp fills the account's one-time code. what=passkey arms the account's shared Bitwarden passkey for the site's next passkey sign-in (then click the site's passkey button); the key never leaves Copper.", [
                 "account": string("Username to use when several are saved"),
-                "what": string("password (default) or otp", ["enum": ["password", "otp"]]),
+                "what": string("password (default), otp, or passkey", ["enum": ["password", "otp", "passkey"]]),
                 "submit": bool("Whether to submit after filling; defaults to true"),
             ]),
             tool("browser_autofill", "Fill a saved card, identity (name/address/contact), or a custom field from the user's vault into the current tab's form, in-process; you never receive the values. kind=card fills number/holder/expiry/code; kind=identity fills name, address, email, phone, company; kind=field fills the custom field called name.", [

@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import Foundation
 import WebKit
@@ -297,7 +298,7 @@ enum Passkeys {
         }
         switch op {
         case "create": create(body, origin: origin, rpId: rp, reply: reply)
-        case "get": get(body, origin: origin, rpId: rp, reply: reply)
+        case "get": get(body, origin: origin, rpId: rp, tab: tab, reply: reply)
         default: reply(["error": "NotSupportedError"], nil)
         }
     }
@@ -328,7 +329,7 @@ enum Passkeys {
         Vault.prove(reason, done)
     }
 
-    private static func clientData(type: String, challenge: Data, origin: String, crossOrigin: Bool = false) -> Data {
+    nonisolated private static func clientData(type: String, challenge: Data, origin: String, crossOrigin: Bool = false) -> Data {
         let value: [String: Any] = ["type": type, "challenge": challenge.base64URL, "origin": origin, "crossOrigin": crossOrigin]
         return (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data()
     }
@@ -345,51 +346,204 @@ enum Passkeys {
         let excluded = (body["excludeCredentials"] as? [[String: Any]] ?? []).compactMap { bytes($0["id"]) }
         // Compare exclude ids only within this relying party; an id from a
         // different site must not make registration fail.
-        let existing = PasskeyStore.credentials(for: rpId)
-        if excluded.contains(where: { id in existing.contains { $0.id == id } }) {
+        let existing = PasskeyStore.credentials(for: rpId).map(\.id) + BitwardenPasskeys.all()
+            .filter { $0.passkey.rpId.caseInsensitiveCompare(rpId) == .orderedSame }.map(\.id)
+        if excluded.contains(where: existing.contains) {
             reply(["error": "InvalidStateError"], nil); return
         }
         let name = userName.isEmpty ? displayName : userName
         prove("Create a passkey for \(rpId) as \(name)") { ok in
             guard ok else { reply(["error": "NotAllowedError"], nil); return }
             let credential = PasskeyStore.make(rpId: rpId, userHandle: userHandle, userName: userName, displayName: displayName)
-            guard PasskeyStore.save(credential), let key = credential.key else { reply(["error": "UnknownError"], nil); return }
-            let client = clientData(type: "webauthn.create", challenge: challenge, origin: origin, crossOrigin: body["crossOrigin"] as? Bool ?? false)
-            let auth = authenticatorData(rpId: rpId, flags: 0x5D, counter: credential.counter, credential: credential, key: key)
-            let attestation = CBOR.map([(.text("fmt"), .text("none")), (.text("attStmt"), .map([])), (.text("authData"), .bytes(auth))]).encoded
-            var result: [String: Any] = [
-                "id": credential.id.base64URL,
-                "clientDataJSON": client.base64URL,
-                "authenticatorData": auth.base64URL,
-                "attestationObject": attestation.base64URL,
-                "publicKey": key.publicKey.derRepresentation.base64URL,
-            ]
-            if let requested = body["extensions"] as? [String: Any], requested["credProps"] != nil {
-                result["extensions"] = ["credProps": ["rk": true]]
+            guard let key = credential.key else { reply(["error": "UnknownError"], nil); return }
+            let rpName = (body["rp"] as? [String: Any])?["name"] as? String ?? ""
+            store(credential, key: key, rpName: rpName) { saved in
+                guard saved else { reply(["error": "UnknownError"], nil); return }
+                attest(credential, key: key, body: body, challenge: challenge, origin: origin, rpId: rpId, reply: reply)
             }
-            // userVerification=discouraged still proves once by design.
-            reply(result, nil)
         }
     }
 
-    private static func get(_ body: [String: Any], origin: String, rpId: String, reply: @escaping (Any?, String?) -> Void) {
+    /// Where a new passkey is kept: Bitwarden when it is where new
+    /// passwords go and it takes the item, otherwise the keychain.
+    private static func store(_ credential: PasskeyStore.Credential, key: P256.Signing.PrivateKey, rpName: String,
+                              _ done: @escaping (Bool) -> Void) {
+        guard Credentials.saveTarget == .bitwarden else { done(PasskeyStore.save(credential)); return }
+        Task { @MainActor in
+            do {
+                try await BitwardenPasskeys.save(credential, key: key, rpName: rpName)
+                done(true)
+            } catch {
+                // The site is mid-registration: a passkey kept here beats
+                // a failed one. Settings lists it under Copper.
+                NSLog("Copper: Bitwarden did not take the new passkey (\(error.localizedDescription)); kept in the keychain")
+                done(PasskeyStore.save(credential))
+            }
+        }
+    }
+
+    private static func attest(_ credential: PasskeyStore.Credential, key: P256.Signing.PrivateKey, body: [String: Any],
+                               challenge: Data, origin: String, rpId: String, reply: @escaping (Any?, String?) -> Void) {
+        let client = clientData(type: "webauthn.create", challenge: challenge, origin: origin, crossOrigin: body["crossOrigin"] as? Bool ?? false)
+        let auth = authenticatorData(rpId: rpId, flags: 0x5D, counter: credential.counter, credential: credential, key: key)
+        let attestation = CBOR.map([(.text("fmt"), .text("none")), (.text("attStmt"), .map([])), (.text("authData"), .bytes(auth))]).encoded
+        var result: [String: Any] = [
+            "id": credential.id.base64URL,
+            "clientDataJSON": client.base64URL,
+            "authenticatorData": auth.base64URL,
+            "attestationObject": attestation.base64URL,
+            "publicKey": key.publicKey.derRepresentation.base64URL,
+        ]
+        if let requested = body["extensions"] as? [String: Any], requested["credProps"] != nil {
+            result["extensions"] = ["credProps": ["rk": true]]
+        }
+        // userVerification=discouraged still proves once by design.
+        reply(result, nil)
+    }
+
+    /// A passkey a sign-in may use: one of Copper's own (keychain) or one
+    /// kept in Bitwarden. The picker lists both, Copper's first.
+    enum Choice {
+        case copper(PasskeyStore.Credential)
+        case bitwarden(BitwardenPasskeys.Match)
+
+        var label: String {
+            switch self {
+            case .copper(let credential): return credential.label
+            case .bitwarden(let match): return match.label
+            }
+        }
+
+        var source: String {
+            switch self {
+            case .copper(let credential): return credential.origin ?? "Copper"
+            case .bitwarden: return "Bitwarden"
+            }
+        }
+    }
+
+    /// Test-only answer for the passkey chooser: an account name or a
+    /// 1-based row. Read only in a test world, like `autoProve`.
+    static var autoPick: String?
+    /// The rows the chooser last offered ("label · source"), for the bench.
+    private(set) static var lastOffered: [String] = []
+
+    private static func get(_ body: [String: Any], origin: String, rpId: String, tab: Tab?, reply: @escaping (Any?, String?) -> Void) {
         guard let challenge = bytes(body["challenge"]) else { reply(["error": "InvalidStateError"], nil); return }
-        let all = PasskeyStore.credentials(for: rpId)
         let allow = (body["allowCredentials"] as? [[String: Any]] ?? []).compactMap { bytes($0["id"]) }
-        let candidates = allow.isEmpty ? all : all.filter { allow.contains($0.id) }
-        guard let credential = candidates.sorted(by: { ($0.lastUsed ?? $0.created) > ($1.lastUsed ?? $1.created) }).first else {
+        let own = PasskeyStore.credentials(for: rpId).filter { allow.isEmpty || allow.contains($0.id) }
+            .sorted { ($0.lastUsed ?? $0.created) > ($1.lastUsed ?? $1.created) }
+        var vault = BitwardenPasskeys.matching(rpId: rpId, allow: allow)
+        let request = Request(challenge: challenge, origin: origin, rpId: rpId,
+                              crossOrigin: body["crossOrigin"] as? Bool ?? false, reply: reply)
+
+        // An agent working in this tab (Backstage holds it) signs in the way
+        // browser_sign_in fills a password: only with a login the person
+        // shared with agents, no prompt, never in a private tab, and the key
+        // never leaves this process. The sharing switch is the consent; the
+        // unlocked vault stands in for user verification, as it does for
+        // Bitwarden's own authenticator.
+        if let tab, Backstage.shared.holds(tab.id) {
+            let shared = tab.shy ? [] : vault.filter(BitwardenPasskeys.sharedWithAgents)
+            if let match = shared.first { signVault(match, request); return }
+            // Nobody can answer a prompt on a page off screen; one on screen
+            // falls through to the person at the Mac.
+            if !AgentTabs.onScreen(tab) {
+                vault = []
+                if own.isEmpty {
+                    var refusal: [String: Any] = ["error": "NotAllowedError"]
+                    if !BitwardenPasskeys.matching(rpId: rpId, allow: allow).isEmpty {
+                        refusal["message"] = "A Bitwarden passkey for \(rpId) exists but is not shared with agents \u{2014} Settings \u{203A} Passwords \u{203A} Agent access"
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { reply(refusal, nil) }
+                    return
+                }
+            }
+        }
+
+        let choices = own.map(Choice.copper) + vault.map(Choice.bitwarden)
+        guard !choices.isEmpty else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { reply(["error": "NotAllowedError"], nil) }
             return
         }
-        prove("Sign in to \(rpId) with your passkey (\(credential.label))") { ok in
-            guard ok, let key = credential.key else { reply(["error": "NotAllowedError"], nil); return }
-            let client = clientData(type: "webauthn.get", challenge: challenge, origin: origin, crossOrigin: body["crossOrigin"] as? Bool ?? false)
-            let auth = authenticatorData(rpId: rpId, flags: 0x1D, counter: credential.counter)
-            let digestInput = auth + Data(SHA256.hash(data: client))
-            guard let signature = try? key.signature(for: digestInput).derRepresentation else { reply(["error": "UnknownError"], nil); return }
-            PasskeyStore.touch(credential)
-            reply(["id": credential.id.base64URL, "clientDataJSON": client.base64URL, "authenticatorData": auth.base64URL,
-                   "signature": signature.base64URL, "userHandle": credential.userHandle.base64URL], nil)
+        choose(choices, rpId: rpId, tab: tab) { choice in
+            guard let choice else { reply(["error": "NotAllowedError"], nil); return }
+            let kind = choice.source == "Bitwarden" ? "your Bitwarden passkey" : "your passkey"
+            prove("Sign in to \(rpId) with \(kind) (\(choice.label))") { ok in
+                guard ok else { reply(["error": "NotAllowedError"], nil); return }
+                switch choice {
+                case .copper(let credential): signCopper(credential, request)
+                case .bitwarden(let match): signVault(match, request)
+                }
+            }
+        }
+    }
+
+    private struct Request {
+        let challenge: Data
+        let origin: String
+        let rpId: String
+        let crossOrigin: Bool
+        let reply: (Any?, String?) -> Void
+
+        var client: Data { Passkeys.clientData(type: "webauthn.get", challenge: challenge, origin: origin, crossOrigin: crossOrigin) }
+    }
+
+    private static func signCopper(_ credential: PasskeyStore.Credential, _ request: Request) {
+        guard let key = credential.key else { request.reply(["error": "NotAllowedError"], nil); return }
+        let client = request.client
+        let auth = authenticatorData(rpId: request.rpId, flags: 0x1D, counter: credential.counter)
+        let digestInput = auth + Data(SHA256.hash(data: client))
+        guard let signature = try? key.signature(for: digestInput).derRepresentation else { request.reply(["error": "UnknownError"], nil); return }
+        PasskeyStore.touch(credential)
+        request.reply(["id": credential.id.base64URL, "clientDataJSON": client.base64URL, "authenticatorData": auth.base64URL,
+                       "signature": signature.base64URL, "userHandle": credential.userHandle.base64URL], nil)
+    }
+
+    private static func signVault(_ match: BitwardenPasskeys.Match, _ request: Request) {
+        let client = request.client
+        let rpId = request.rpId
+        Task { @MainActor in
+            do {
+                let assertion = try await BitwardenPasskeys.sign(match, clientDataHash: Data(SHA256.hash(data: client))) { counter in
+                    authenticatorData(rpId: rpId, flags: 0x1D, counter: counter)
+                }
+                request.reply(["id": match.id.base64URL, "clientDataJSON": client.base64URL,
+                               "authenticatorData": assertion.authenticatorData.base64URL,
+                               "signature": assertion.signature.base64URL, "userHandle": match.userHandle.base64URL], nil)
+            } catch {
+                request.reply(["error": "NotAllowedError", "message": error.localizedDescription], nil)
+            }
+        }
+    }
+
+    /// One passkey goes straight through; several ask which, the way a
+    /// platform authenticator's account sheet does. The page waits.
+    private static func choose(_ choices: [Choice], rpId: String, tab: Tab?, _ done: @escaping (Choice?) -> Void) {
+        lastOffered = choices.map { "\($0.label) · \($0.source)" }
+        guard choices.count > 1 else { done(choices.first); return }
+        if Store.testing, let answer = autoPick {
+            if let row = Int(answer), choices.indices.contains(row - 1) { done(choices[row - 1]); return }
+            done(choices.first { $0.label.caseInsensitiveCompare(answer) == .orderedSame }); return
+        }
+        // A Mac nobody sits at has no one to ask.
+        if Headless.on { done(choices.first); return }
+        let alert = NSAlert()
+        alert.messageText = "Sign in to \(rpId)"
+        alert.informativeText = "Choose the passkey to use."
+        let menu = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 26), pullsDown: false)
+        menu.addItems(withTitles: lastOffered)
+        alert.accessoryView = menu
+        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Cancel")
+        let answer: (NSApplication.ModalResponse) -> Void = { response in
+            let row = menu.indexOfSelectedItem
+            done(response == .alertFirstButtonReturn && choices.indices.contains(row) ? choices[row] : nil)
+        }
+        if let window = tab?.built?.window, window.isVisible, !(window is Backstage.Window) {
+            alert.beginSheetModal(for: window, completionHandler: answer)
+        } else {
+            answer(alert.runModal())
         }
     }
 
